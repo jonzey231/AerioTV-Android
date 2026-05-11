@@ -1,0 +1,40 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Android Studio / IntelliJ — ignore everything except shared project settings
+.idea/*
+!.idea/dictionaries/
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# Kotlin
+.kotlin/
+
+# Keys / signing
+*.jks
+*.keystore
+keystore.properties
+
+# Logs
+*.log
+
+# Generated
+/app/release/
+/app/debug/
+
+# Misc
+*.bak
+*.orig
+*.swp
