@@ -27,7 +27,6 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
 
 @Composable
 fun UrlEntryScreen(
-    onChannelsLoaded: () -> Unit,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -98,8 +97,4 @@ fun UrlEntryScreen(
         }
     }
 
-    // When channels become available, advance to the channel list.
-    if (state.channels.isNotEmpty() && !state.isLoading) {
-        onChannelsLoaded()
-    }
 }

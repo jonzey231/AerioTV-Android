@@ -3,8 +3,8 @@ package com.aeriotv.android.feature.playlist
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.M3UChannel
-import com.aeriotv.android.core.network.PlaylistFetcher
-import com.aeriotv.android.core.parser.M3UParser
+import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.repository.PlaylistRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,19 +14,25 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * App-scoped state for the M3U-thin-slice flow:
- *   UrlEntryScreen → load → ChannelListScreen → tap → PlayerScreen.
+ * App-scoped state for the playlist flow:
+ *   Splash → (existing playlist? auto-refresh : UrlEntry → load) →
+ *   ChannelList → tap → Player.
  *
- * Phase 2b will replace this in-memory state with a Room-backed repository and
- * promote channels to a real entity. For now keep it dead simple.
+ * Persistence is in [PlaylistRepository] (Room PlaylistEntity row). Channels
+ * themselves are kept only in memory and re-parsed on every refresh — same as
+ * iOS Aerio.
  */
 @HiltViewModel
 class PlaylistViewModel @Inject constructor(
-    private val fetcher: PlaylistFetcher,
+    private val repository: PlaylistRepository,
 ) : ViewModel() {
 
+    enum class Phase { Bootstrapping, NeedsUrl, ChannelsReady }
+
     data class UiState(
+        val phase: Phase = Phase.Bootstrapping,
         val url: String = "",
+        val playlist: PlaylistEntity? = null,
         val channels: List<M3UChannel> = emptyList(),
         val isLoading: Boolean = false,
         val error: String? = null,
@@ -34,6 +40,51 @@ class PlaylistViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    init {
+        bootstrap()
+    }
+
+    private fun bootstrap() {
+        viewModelScope.launch {
+            val saved = repository.activePlaylist()
+            if (saved == null) {
+                _state.update { it.copy(phase = Phase.NeedsUrl) }
+                return@launch
+            }
+            // Found a saved playlist; refresh channels in the background and surface
+            // them when ready. UI can show the channel screen immediately with a
+            // loading indicator if we want — for v1 we just wait.
+            _state.update {
+                it.copy(
+                    playlist = saved,
+                    url = saved.urlString,
+                    isLoading = true,
+                )
+            }
+            repository.refresh(saved).fold(
+                onSuccess = { channels ->
+                    _state.update {
+                        it.copy(
+                            phase = Phase.ChannelsReady,
+                            channels = channels,
+                            isLoading = false,
+                            error = null,
+                        )
+                    }
+                },
+                onFailure = { t ->
+                    _state.update {
+                        it.copy(
+                            phase = Phase.NeedsUrl,
+                            isLoading = false,
+                            error = "Failed to refresh saved playlist: ${t.message ?: t::class.simpleName}",
+                        )
+                    }
+                }
+            )
+        }
+    }
 
     fun onUrlChange(value: String) {
         _state.update { it.copy(url = value, error = null) }
@@ -57,15 +108,14 @@ class PlaylistViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
-            runCatching {
-                val bytes = fetcher.fetchBytes(url)
-                M3UParser.parseBytes(bytes)
-            }.fold(
-                onSuccess = { channels ->
+            repository.loadAndPersist(url = url, existingId = _state.value.playlist?.id).fold(
+                onSuccess = { (entity, channels) ->
                     _state.update {
                         it.copy(
-                            isLoading = false,
+                            phase = Phase.ChannelsReady,
+                            playlist = entity,
                             channels = channels,
+                            isLoading = false,
                             error = if (channels.isEmpty()) "No channels found. Check the URL." else null,
                         )
                     }
@@ -80,6 +130,16 @@ class PlaylistViewModel @Inject constructor(
                     }
                 }
             )
+        }
+    }
+
+    /** Clear the saved playlist and return to URL entry. */
+    fun clearPlaylist() {
+        viewModelScope.launch {
+            repository.clear()
+            _state.update {
+                UiState(phase = Phase.NeedsUrl)
+            }
         }
     }
 }

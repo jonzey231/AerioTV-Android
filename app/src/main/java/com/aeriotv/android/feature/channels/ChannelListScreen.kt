@@ -14,7 +14,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -37,6 +41,7 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
 @Composable
 fun ChannelListScreen(
     onChannelClick: (M3UChannel) -> Unit,
+    onChangePlaylist: () -> Unit,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -44,10 +49,20 @@ fun ChannelListScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = {
+                val playlistName = state.playlist?.name?.takeIf { it.isNotBlank() } ?: "Channels"
                 Text(
-                    text = "${state.channels.size} channels",
+                    text = "$playlistName  •  ${state.channels.size}",
                     style = MaterialTheme.typography.titleMedium,
                 )
+            },
+            actions = {
+                IconButton(onClick = onChangePlaylist) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Change playlist",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
             },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.background,
