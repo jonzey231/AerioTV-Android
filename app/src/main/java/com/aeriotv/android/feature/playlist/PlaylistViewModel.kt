@@ -46,6 +46,7 @@ class PlaylistViewModel @Inject constructor(
         val isEpgLoading: Boolean = false,
         val searchQuery: String = "",
         val selectedGroup: String = ALL_GROUPS,
+        val sortMode: SortMode = SortMode.ByNumber,
         val isLoading: Boolean = false,
         val error: String? = null,
     )
@@ -131,6 +132,10 @@ class PlaylistViewModel @Inject constructor(
     }
     fun onGroupSelected(group: String) {
         _state.update { it.copy(selectedGroup = group) }
+    }
+
+    fun onSortModeChange(mode: SortMode) {
+        _state.update { it.copy(sortMode = mode) }
     }
 
     /** Pre-fill an M3U URL pair and immediately load. Debug-only path used by --es intent extras. */
@@ -273,3 +278,13 @@ class PlaylistViewModel @Inject constructor(
 /** Find the programme containing `now` for a given channel. */
 fun List<EPGProgramme>.nowPlaying(now: Long = System.currentTimeMillis()): EPGProgramme? =
     firstOrNull { it.startMillis <= now && now < it.endMillis }
+
+/**
+ * Channel-list sort options. Mirrors iOS sort menu (16:44:33 screenshot):
+ * By Number / By Name / Favorites First.
+ */
+enum class SortMode(val label: String) {
+    ByNumber("By Number"),
+    ByName("By Name"),
+    FavoritesFirst("Favorites First"),
+}
