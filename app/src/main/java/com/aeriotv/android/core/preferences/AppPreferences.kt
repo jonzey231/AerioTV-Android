@@ -49,6 +49,27 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_SELECTED_THEME] = theme.name }
     }
 
+    /**
+     * Custom accent override (iOS ThemeManager useCustomAccent parity). When
+     * the user enables this in Appearance, AerioTVTheme replaces the selected
+     * preset's accentPrimary with this hex. Per iOS canon: a 6-char uppercase
+     * hex string (without leading '#'). Empty string falls back to the preset's
+     * own accent.
+     */
+    val useCustomAccent: Flow<Boolean> = store.data.map { it[KEY_USE_CUSTOM_ACCENT] ?: false }
+    suspend fun setUseCustomAccent(value: Boolean) {
+        store.edit { it[KEY_USE_CUSTOM_ACCENT] = value }
+    }
+
+    val customAccentHex: Flow<String> = store.data.map { it[KEY_CUSTOM_ACCENT_HEX] ?: "" }
+    suspend fun setCustomAccentHex(value: String) {
+        store.edit { prefs ->
+            val clean = value.trim().removePrefix("#").uppercase().take(6)
+            if (clean.isBlank()) prefs.remove(KEY_CUSTOM_ACCENT_HEX)
+            else prefs[KEY_CUSTOM_ACCENT_HEX] = clean
+        }
+    }
+
     /** iOS `displayScaleMovies` parity. 0.85 .. 1.25. Default 1.0. */
     val displayScaleMovies: Flow<Float> = store.data.map {
         (it[KEY_DISPLAY_SCALE_MOVIES] ?: 1.0).toFloat()
@@ -417,6 +438,8 @@ class AppPreferences @Inject constructor(
 
     private companion object {
         val KEY_SELECTED_THEME = stringPreferencesKey("selected_theme")
+        val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
+        val KEY_CUSTOM_ACCENT_HEX = stringPreferencesKey("custom_accent_hex")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")
         val KEY_SKIP_LOADING_SCREEN = booleanPreferencesKey("app_behaviors_skip_loading_screen")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")

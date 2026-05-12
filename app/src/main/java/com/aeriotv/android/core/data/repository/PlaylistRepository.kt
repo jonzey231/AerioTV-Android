@@ -118,13 +118,16 @@ class PlaylistRepository @Inject constructor(
             lastRefreshedAt = System.currentTimeMillis(),
             isActive = true,
         )
-        // New / re-loaded playlist becomes the active one — deactivate every
-        // other row first so the bootstrap invariant (≤1 active) holds. Skip
-        // when editing the already-active row.
+        // New / re-loaded playlist becomes the active one. Mirrors iOS commit
+        // f72b942 — wrap "deactivate others + upsert" in a transactional DAO
+        // method so two concurrent server-add calls can't interleave between
+        // the deactivate pass and the upsert, leaving zero or two active rows.
+        // Editing the already-active row skips the deactivate step.
         if (existingId == null || dao.byId(existingId)?.isActive != true) {
-            dao.setAllInactive()
+            dao.upsertAsActive(entity)
+        } else {
+            dao.upsert(entity)
         }
-        dao.upsert(entity)
         entity to channels
     }
 

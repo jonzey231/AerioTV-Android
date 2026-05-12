@@ -33,6 +33,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setDisplayScaleMovies(value) }
     }
 
+    val useCustomAccent: Flow<Boolean> = prefs.useCustomAccent
+    fun setUseCustomAccent(value: Boolean) {
+        viewModelScope.launch { prefs.setUseCustomAccent(value) }
+    }
+
+    val customAccentHex: Flow<String> = prefs.customAccentHex
+    fun setCustomAccentHex(value: String) {
+        viewModelScope.launch { prefs.setCustomAccentHex(value) }
+    }
+
     val displayScaleLiveTV: Flow<Float> = prefs.displayScaleLiveTV
     fun setDisplayScaleLiveTV(value: Float) {
         viewModelScope.launch { prefs.setDisplayScaleLiveTV(value) }

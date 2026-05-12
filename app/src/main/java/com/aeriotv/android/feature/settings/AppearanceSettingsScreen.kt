@@ -70,8 +70,11 @@ fun AppearanceSettingsScreen(
     val palette by viewModel.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
     val scaleMovies by viewModel.displayScaleMovies.collectAsStateWithLifecycle(initialValue = 1.0f)
     val scaleLiveTV by viewModel.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
+    val useCustomAccent by viewModel.useCustomAccent.collectAsStateWithLifecycle(initialValue = false)
+    val customAccentHex by viewModel.customAccentHex.collectAsStateWithLifecycle(initialValue = "")
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
+    var accentPickerOpen by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -111,6 +114,15 @@ fun AppearanceSettingsScreen(
                     theme = theme,
                     selected = theme == currentTheme,
                     onClick = { viewModel.setSelectedTheme(theme) },
+                )
+            }
+
+            item {
+                CustomAccentRow(
+                    enabled = useCustomAccent,
+                    hex = customAccentHex,
+                    onToggle = viewModel::setUseCustomAccent,
+                    onPick = { accentPickerOpen = true },
                 )
             }
 
@@ -197,6 +209,24 @@ fun AppearanceSettingsScreen(
             onReset = {
                 viewModel.setCategoryBucketHex(bucket, null)
                 pickerTarget = null
+            },
+        )
+    }
+
+    if (accentPickerOpen) {
+        AccentPickerDialog(
+            current = customAccentHex,
+            preset = currentTheme.accentPrimary,
+            onDismiss = { accentPickerOpen = false },
+            onSave = { hex ->
+                viewModel.setCustomAccentHex(hex)
+                viewModel.setUseCustomAccent(true)
+                accentPickerOpen = false
+            },
+            onReset = {
+                viewModel.setCustomAccentHex("")
+                viewModel.setUseCustomAccent(false)
+                accentPickerOpen = false
             },
         )
     }
@@ -436,3 +466,134 @@ private fun themeSubtitle(theme: AppTheme): String = when (theme) {
     AppTheme.Lavender -> "Purple on near-black"
     AppTheme.Monochrome -> "Greyscale on near-black"
 }
+
+/**
+ * Custom accent color row. Mirrors iOS Appearance > "Custom Accent Color"
+ * toggle + color picker (ThemeManager useCustomAccent / customAccentHex).
+ * Toggle enables the override; tapping the swatch opens the hex picker.
+ */
+@Composable
+private fun CustomAccentRow(
+    enabled: Boolean,
+    hex: String,
+    onToggle: (Boolean) -> Unit,
+    onPick: () -> Unit,
+) {
+    val swatch = if (enabled && hex.length == 6) com.aeriotv.android.core.category.parseHex(hex)
+    else MaterialTheme.colorScheme.primary
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.4f))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Custom Accent Color",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = if (enabled && hex.isNotBlank()) "Override active: #$hex"
+                else "Override the preset accent with your own hex.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (enabled) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(swatch)
+                    .border(
+                        width = 1.5.dp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(50),
+                    )
+                    .clickable(onClick = onPick),
+            )
+            Spacer(Modifier.size(8.dp))
+        }
+        androidx.compose.material3.Switch(checked = enabled, onCheckedChange = { isOn ->
+            onToggle(isOn)
+            if (isOn && hex.isBlank()) onPick()
+        })
+    }
+}
+
+@Composable
+private fun AccentPickerDialog(
+    current: String,
+    preset: androidx.compose.ui.graphics.Color,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+    onReset: () -> Unit,
+) {
+    var input by remember { mutableStateOf(current.uppercase()) }
+    val sanitized = input.trim().removePrefix("#").uppercase()
+    val isValid = sanitized.length == 6 && sanitized.all { it in HEX_CHARS_ACCENT }
+    val preview = if (isValid) com.aeriotv.android.core.category.parseHex(sanitized) else preset
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = { if (isValid) onSave(sanitized) },
+                enabled = isValid,
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                androidx.compose.material3.TextButton(onClick = onReset) { Text("Reset") }
+                androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+        title = { Text("Custom Accent") },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(preview)
+                            .border(
+                                1.5.dp,
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                RoundedCornerShape(8.dp),
+                            ),
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Text(
+                        text = if (isValid) "Preview $sanitized" else "Enter 6-char hex",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = input,
+                    onValueChange = { raw ->
+                        input = raw.removePrefix("#").uppercase().filter { it in HEX_CHARS_ACCENT }.take(6)
+                    },
+                    label = { Text("Hex color (e.g. 1AC4D8)") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Characters,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onBackground,
+        textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private val HEX_CHARS_ACCENT: Set<Char> = (('0'..'9') + ('A'..'F')).toSet()

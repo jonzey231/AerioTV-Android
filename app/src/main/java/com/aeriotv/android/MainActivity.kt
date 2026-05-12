@@ -45,7 +45,19 @@ class MainActivity : ComponentActivity() {
         val initialApiKey = if (BuildConfig.DEBUG) intent?.getStringExtra("apikey") else null
         setContent {
             val theme by appPreferences.selectedTheme.collectAsState(initial = AppTheme.Aerio)
-            AerioTVTheme(appTheme = theme) {
+            val useCustomAccent by appPreferences.useCustomAccent.collectAsState(initial = false)
+            val customAccentHex by appPreferences.customAccentHex.collectAsState(initial = "")
+            val customAccent = if (useCustomAccent && customAccentHex.length == 6) {
+                runCatching {
+                    val n = customAccentHex.toLong(16)
+                    androidx.compose.ui.graphics.Color(
+                        red = ((n shr 16) and 0xFF).toInt(),
+                        green = ((n shr 8) and 0xFF).toInt(),
+                        blue = (n and 0xFF).toInt(),
+                    )
+                }.getOrNull()
+            } else null
+            AerioTVTheme(appTheme = theme, customAccent = customAccent) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

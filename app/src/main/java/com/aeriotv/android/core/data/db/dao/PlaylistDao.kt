@@ -39,6 +39,21 @@ interface PlaylistDao {
         setActiveById(targetId)
     }
 
+    /**
+     * Atomically deactivate every other row and upsert [entity] as the active
+     * playlist. Mirrors iOS commit f72b942 (multi-server-add race fix): two
+     * concurrent saveServer() calls used to interleave between the deactivate
+     * pass and the upsert, leaving stale active rows or skipping the new one
+     * entirely. Wrapping the whole sequence in a Room @Transaction serialises
+     * concurrent inserts so the active-set invariant (exactly one active row)
+     * holds.
+     */
+    @androidx.room.Transaction
+    suspend fun upsertAsActive(entity: PlaylistEntity) {
+        setAllInactive()
+        upsert(entity)
+    }
+
     @Query("UPDATE playlists SET isActive = 0")
     suspend fun setAllInactive()
 
