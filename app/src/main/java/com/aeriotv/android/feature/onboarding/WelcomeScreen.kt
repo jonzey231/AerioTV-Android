@@ -85,7 +85,7 @@ private fun WelcomeSingleColumn(
         Spacer(Modifier.height(36.dp))
         BrandBlock()
         Spacer(Modifier.height(28.dp))
-        SupportedTypesGroup()
+        SupportedTypesGroup(alignStart = false)
         Spacer(Modifier.height(20.dp))
         InfoCardsGroup()
         Spacer(Modifier.height(28.dp))
@@ -118,7 +118,7 @@ private fun WelcomeTwoColumn(
         ) {
             BrandBlock(alignStart = true)
             Spacer(Modifier.height(20.dp))
-            SupportedTypesGroup()
+            SupportedTypesGroup(alignStart = true)
         }
         // Right column: info cards + CTAs. The Connect button sits in the
         // viewport center on TV so the focus ring lands on it at cold start,
@@ -168,11 +168,11 @@ private fun BrandBlock(alignStart: Boolean = false) {
 }
 
 @Composable
-private fun SupportedTypesGroup() {
+private fun SupportedTypesGroup(alignStart: Boolean = false) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        SupportedTypeRow(icon = Icons.Outlined.Key, label = "Dispatcharr Server Credentials")
-        SupportedTypeRow(icon = Icons.Outlined.Storage, label = "Xtream Codes")
-        SupportedTypeRow(icon = Icons.Outlined.Description, label = "M3U + EPG")
+        SupportedTypeRow(icon = Icons.Outlined.Key, label = "Dispatcharr Server Credentials", alignStart = alignStart)
+        SupportedTypeRow(icon = Icons.Outlined.Storage, label = "Xtream Codes", alignStart = alignStart)
+        SupportedTypeRow(icon = Icons.Outlined.Description, label = "M3U + EPG", alignStart = alignStart)
     }
 }
 
@@ -245,13 +245,16 @@ private fun BrandLogo() {
 }
 
 @Composable
-private fun SupportedTypeRow(icon: ImageVector, label: String) {
+private fun SupportedTypeRow(icon: ImageVector, label: String, alignStart: Boolean = false) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(
+            10.dp,
+            if (alignStart) Alignment.Start else Alignment.CenterHorizontally,
+        ),
     ) {
         Icon(
             imageVector = icon,

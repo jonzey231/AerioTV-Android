@@ -241,8 +241,8 @@ private fun DispatcharrFields(
 ) {
     LabeledField(label = "Name") {
         IconTextField(
-            value = "",
-            onValueChange = { /* TODO Phase 4c: multi-server, currently single-source */ },
+            value = state.name,
+            onValueChange = viewModel::onNameChange,
             placeholder = "My IPTV Server",
             leading = Icons.Outlined.Sell,
             enabled = !state.isLoading,
@@ -321,8 +321,8 @@ private fun DispatcharrFields(
 private fun XtreamFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewModel) {
     LabeledField(label = "Name") {
         IconTextField(
-            value = "",
-            onValueChange = { /* TODO Phase 4c: multi-server */ },
+            value = state.name,
+            onValueChange = viewModel::onNameChange,
             placeholder = "My IPTV Server",
             leading = Icons.Outlined.Sell,
             enabled = !state.isLoading,
@@ -364,8 +364,8 @@ private fun XtreamFields(state: PlaylistViewModel.UiState, viewModel: PlaylistVi
 private fun M3uFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewModel) {
     LabeledField(label = "Name") {
         IconTextField(
-            value = "",
-            onValueChange = { /* TODO Phase 4c: multi-server */ },
+            value = state.name,
+            onValueChange = viewModel::onNameChange,
             placeholder = "My IPTV Server",
             leading = Icons.Outlined.Sell,
             enabled = !state.isLoading,

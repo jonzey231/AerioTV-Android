@@ -35,6 +35,8 @@ class PlaylistViewModel @Inject constructor(
     data class UiState(
         val phase: Phase = Phase.Bootstrapping,
         val sourceType: SourceType = SourceType.M3uUrl,
+        /** User-supplied display name for the playlist (Phase 30 multi-playlist). */
+        val name: String = "",
         /** Generic URL field; M3U URL for [SourceType.M3uUrl], base URL otherwise. */
         val url: String = "",
         val epgUrl: String = "",
@@ -77,6 +79,7 @@ class PlaylistViewModel @Inject constructor(
                 it.copy(
                     playlist = saved,
                     sourceType = sourceType,
+                    name = saved.name.orEmpty(),
                     url = saved.urlString,
                     epgUrl = saved.epgUrl.orEmpty(),
                     apiKey = saved.apiKey.orEmpty(),
@@ -112,6 +115,9 @@ class PlaylistViewModel @Inject constructor(
 
     fun onSourceTypeChange(value: SourceType) {
         _state.update { it.copy(sourceType = value, error = null) }
+    }
+    fun onNameChange(value: String) {
+        _state.update { it.copy(name = value, error = null) }
     }
     fun onUrlChange(value: String) {
         _state.update { it.copy(url = value, error = null) }
@@ -202,7 +208,7 @@ class PlaylistViewModel @Inject constructor(
             _state.update { it.copy(isLoading = true, error = null) }
             val request = PlaylistRepository.SaveRequest(
                 sourceType = s.sourceType,
-                name = null,
+                name = s.name.trim().ifBlank { null },
                 url = url,
                 epgUrl = epgUrl,
                 apiKey = s.apiKey.trim().ifBlank { null },
