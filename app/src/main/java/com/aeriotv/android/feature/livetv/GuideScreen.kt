@@ -73,7 +73,11 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.material.icons.filled.AccessTime
 
 /**
  * EPG Guide grid (channels on Y, time on X). Mirrors iOS EPGGuideView.
@@ -172,6 +176,12 @@ fun GuideScreen(
     val horizontalScrollState = rememberScrollState()
 
     Column(modifier = modifier.fillMaxSize()) {
+        // Jump-to-now scroller. Coroutine-driven so animateScrollTo can
+        // suspend; matches iOS EPGGuideView's "scroll back to now" button
+        // which snaps the time axis so the now-indicator sits ~1/4 of the
+        // way across the viewport.
+        val jumpScope = rememberCoroutineScope()
+        val density = LocalDensity.current
         TopAppBar(
             title = {
                 val playlistName = state.playlist?.name?.takeIf { it.isNotBlank() } ?: "Live TV"
@@ -181,6 +191,37 @@ fun GuideScreen(
                 )
             },
             actions = {
+                // Jump-to-now button. Highlights primary tint when the
+                // horizontal scroll has drifted more than two hours from
+                // the now-indicator, so it visually announces itself only
+                // when actually useful. Matches iOS EPGGuideView nav-bar
+                // "now" affordance.
+                val nowOffsetPx = with(density) {
+                    ((nowMillis - windowStart) / GuideMetrics.MS_PER_DP_LONG).toFloat().dp.toPx()
+                }
+                val visibleCenter = horizontalScrollState.value +
+                    with(density) { GuideMetrics.HOUR_WIDTH.toPx() }
+                val nowOffScreen = kotlin.math.abs(visibleCenter - nowOffsetPx) >
+                    with(density) { (GuideMetrics.HOUR_WIDTH * 2).toPx() }
+                IconButton(onClick = {
+                    jumpScope.launch {
+                        // Land the now-indicator ~1/4 into the viewport so
+                        // the user sees a bit of past + the upcoming block
+                        // of programmes. iOS uses the same offset.
+                        val target = (nowOffsetPx - with(density) { GuideMetrics.HOUR_WIDTH.toPx() / 2f })
+                            .toInt().coerceAtLeast(0)
+                        horizontalScrollState.animateScrollTo(target)
+                    }
+                }) {
+                    Icon(
+                        imageVector = Icons.Filled.AccessTime,
+                        contentDescription = "Jump to now",
+                        tint = if (nowOffScreen)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (canToggleViewMode) {
                     IconButton(onClick = onToggleViewMode) {
                         Icon(
