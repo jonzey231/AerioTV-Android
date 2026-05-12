@@ -22,9 +22,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PictureInPicture
+import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -153,7 +160,11 @@ fun PlayerChromeOverlay(
                     PlayerMoreMenu(
                         expanded = moreOpen,
                         onDismiss = { moreOpen = false },
-                        hasProgramme = nowProgramme != null,
+                        // Record row gated on iOS's `canRecord` equivalent:
+                        // a now-playing program AND a Dispatcharr-managed
+                        // channel (server-side scheduling is Dispatcharr-only).
+                        // Matches the channel long-press menu's gating.
+                        canRecord = nowProgramme != null && channel?.dispatcharrChannelId != null,
                         audioOnly = audioOnly,
                         sleepActive = sleepRemainingMillis != null,
                         onSubtitles = {
@@ -306,7 +317,7 @@ private fun CircleIconButton(
 private fun PlayerMoreMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
-    hasProgramme: Boolean,
+    canRecord: Boolean,
     audioOnly: Boolean,
     sleepActive: Boolean,
     onSubtitles: () -> Unit,
@@ -315,34 +326,91 @@ private fun PlayerMoreMenu(
     onStreamInfo: () -> Unit,
     onAudioOnly: () -> Unit,
 ) {
+    // Each row uses a leading icon for scannability, mirroring iOS's
+    // SwiftUI `Label(text, systemImage:)` pattern in PlayerView.swift
+    // line 2098+. Material 3 DropdownMenuItem natively supports the
+    // leadingIcon slot, so the visual treatment lines up without a
+    // custom row wrapper.
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
         DropdownMenuItem(
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Outlined.ClosedCaption,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            },
             text = { Text("Subtitles") },
             onClick = onSubtitles,
         )
-        if (hasProgramme) {
+        if (canRecord) {
             DropdownMenuItem(
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.FiberManualRecord,
+                        contentDescription = null,
+                        tint = Color(0xFFFF4757),
+                    )
+                },
                 text = { Text("Record Current Program") },
                 onClick = onRecord,
             )
         }
         DropdownMenuItem(
+            leadingIcon = {
+                Icon(
+                    imageVector = if (sleepActive)
+                        Icons.Filled.Bedtime
+                    else
+                        Icons.Outlined.Bedtime,
+                    contentDescription = null,
+                    tint = if (sleepActive)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurface,
+                )
+            },
             text = {
                 Text(if (sleepActive) "Sleep Timer (active)" else "Sleep Timer")
             },
             onClick = onSleepTimer,
         )
         DropdownMenuItem(
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Outlined.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            },
             text = { Text("Stream Info") },
             onClick = onStreamInfo,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         DropdownMenuItem(
-            text = { Text(if (audioOnly) "Audio Only ✓" else "Audio Only") },
+            leadingIcon = {
+                Icon(
+                    imageVector = if (audioOnly)
+                        Icons.Filled.MusicNote
+                    else
+                        Icons.Outlined.MusicNote,
+                    contentDescription = null,
+                    tint = if (audioOnly)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurface,
+                )
+            },
+            text = {
+                // iOS toggles the label to "Show Video" when in Audio
+                // Only mode so the action describes what tapping does,
+                // not what state it shows. Port that.
+                Text(if (audioOnly) "Show Video" else "Audio Only")
+            },
             onClick = onAudioOnly,
         )
     }
