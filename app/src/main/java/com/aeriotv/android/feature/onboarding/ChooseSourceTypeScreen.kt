@@ -51,7 +51,7 @@ fun ChooseSourceTypeScreen(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Add Source", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+            title = { Text("Add Playlist", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(
@@ -134,8 +134,8 @@ fun ChooseSourceTypeScreen(
                     SourceTypeCard(
                         icon = Icons.Outlined.Key,
                         title = "Dispatcharr Direct Connect",
-                        subtitle = "Connect to Dispatcharr with your admin login or a personal API key. " +
-                                "AerioTV is not officially affiliated with the Dispatcharr project.",
+                        subtitle = "Connect to Dispatcharr with your admin login or a personal API key " +
+                                "(*AerioTV is not officially affiliated with the Dispatcharr project)",
                         modifier = Modifier.tappable { onChoose(SourceType.DispatcharrApiKey) },
                     )
                     SourceTypeCard(
