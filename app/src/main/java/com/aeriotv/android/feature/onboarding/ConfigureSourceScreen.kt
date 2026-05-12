@@ -20,10 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.CalendarToday
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
@@ -51,13 +49,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aeriotv.android.R
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.onboarding.components.InfoBanner
 import com.aeriotv.android.feature.onboarding.components.SourceTypeCard
@@ -100,23 +101,27 @@ fun ConfigureSourceScreen(
         )
     }
 
-    val cardIcon: ImageVector
+    // Server-type chooser surfaces use rasterised SF Symbol glyphs (iOS
+    // key.fill / tv.and.hifispeaker.fill / doc.text.fill) so the chosen-type
+    // header on this screen matches the cards on Add Playlist and the iOS
+    // Configure header pixel-for-pixel.
+    val cardIconPainter: Painter
     val cardTitle: String
     val cardSubtitle: String
     when (sourceType) {
         SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass -> {
-            cardIcon = Icons.Filled.Key
+            cardIconPainter = painterResource(id = R.drawable.ic_key_fill)
             cardTitle = "Dispatcharr Direct Connect"
             cardSubtitle = "Connect to Dispatcharr with your admin login or a personal API key " +
                     "(*AerioTV is not officially affiliated with the Dispatcharr project)"
         }
         SourceType.XtreamCodes -> {
-            cardIcon = Icons.Filled.Tv
+            cardIconPainter = painterResource(id = R.drawable.ic_tv_speaker_fill)
             cardTitle = "Xtream Codes"
             cardSubtitle = "Xtream Codes API. Live TV, VOD movies & series."
         }
         SourceType.M3uUrl -> {
-            cardIcon = Icons.Filled.Description
+            cardIconPainter = painterResource(id = R.drawable.ic_doc_text_fill)
             cardTitle = "M3U + EPG"
             cardSubtitle = "Any M3U playlist URL. Works with Dispatcharr, any IPTV provider."
         }
@@ -155,7 +160,7 @@ fun ConfigureSourceScreen(
                 Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            SourceTypeCard(icon = cardIcon, title = cardTitle, subtitle = cardSubtitle)
+            SourceTypeCard(iconPainter = cardIconPainter, title = cardTitle, subtitle = cardSubtitle)
 
             when (sourceType) {
                 SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass -> {
