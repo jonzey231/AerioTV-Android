@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import com.aeriotv.android.core.pip.PipState
 import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.core.system.NotificationPermissionGate
 import com.aeriotv.android.feature.splash.SplashGate
 import com.aeriotv.android.ui.theme.AerioTVTheme
 import com.aeriotv.android.ui.theme.AppTheme
@@ -49,6 +50,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+                    NotificationPermissionGate()
                     SplashGate {
                         AerioTVNavHost(
                             initialUrl = initialUrl,
