@@ -264,10 +264,10 @@ fun GuideScreen(
                     horizontalScrollState = horizontalScrollState,
                     onChannelClick = { onChannelClick(channel) },
                     onProgrammeClick = { programme ->
-                        programInfoTarget = programme.toInfoTarget(channel.name)
+                        programInfoTarget = programme.toInfoTarget(channel.name, channel.dispatcharrChannelId)
                     },
                     onProgrammeRecord = { programme ->
-                        recordTarget = programme.toInfoTarget(channel.name)
+                        recordTarget = programme.toInfoTarget(channel.name, channel.dispatcharrChannelId)
                     },
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)

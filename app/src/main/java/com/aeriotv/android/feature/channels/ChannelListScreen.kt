@@ -467,7 +467,7 @@ private fun ChannelRow(
                         text = { Text("Program Info") },
                         onClick = {
                             menuOpen = false
-                            onShowProgramInfo(nowProgramme.toInfoTarget(channel.name))
+                            onShowProgramInfo(nowProgramme.toInfoTarget(channel.name, channel.dispatcharrChannelId))
                         },
                     )
                 }
@@ -478,7 +478,7 @@ private fun ChannelRow(
                         onClick = {
                             menuOpen = false
                             val now = System.currentTimeMillis()
-                            val target = nowProgramme?.toInfoTarget(channel.name)
+                            val target = nowProgramme?.toInfoTarget(channel.name, channel.dispatcharrChannelId)
                                 ?: ProgramInfoTarget(
                                     channelName = channel.name,
                                     title = "${channel.name} live recording",
@@ -486,6 +486,7 @@ private fun ChannelRow(
                                     endMillis = now + 3_600_000L,
                                     description = "",
                                     category = "",
+                                    channelDispatcharrId = channel.dispatcharrChannelId,
                                 )
                             onShowRecord(target)
                         },
@@ -497,6 +498,7 @@ private fun ChannelRow(
         AnimatedVisibility(visible = isExpanded) {
             ChannelGuidePanel(
                 channelName = channel.name,
+                channelDispatcharrId = channel.dispatcharrChannelId,
                 programmes = programmes,
                 onShowProgramInfo = onShowProgramInfo,
                 onShowRecord = onShowRecord,
@@ -515,6 +517,7 @@ private fun ChannelRow(
 @Composable
 private fun ChannelGuidePanel(
     channelName: String,
+    channelDispatcharrId: Int?,
     programmes: List<EPGProgramme>,
     onShowProgramInfo: (ProgramInfoTarget) -> Unit,
     onShowRecord: (ProgramInfoTarget) -> Unit,
@@ -547,8 +550,8 @@ private fun ChannelGuidePanel(
                     UpcomingProgrammeRow(
                         programme = programme,
                         channelName = channelName,
-                        onTap = { onShowProgramInfo(programme.toInfoTarget(channelName)) },
-                        onShowRecord = { onShowRecord(programme.toInfoTarget(channelName)) },
+                        onTap = { onShowProgramInfo(programme.toInfoTarget(channelName, channelDispatcharrId)) },
+                        onShowRecord = { onShowRecord(programme.toInfoTarget(channelName, channelDispatcharrId)) },
                     )
                 }
             }

@@ -6,6 +6,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.accept
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -21,6 +22,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import javax.inject.Inject
@@ -187,6 +190,70 @@ class DispatcharrClient @Inject constructor() {
         "${baseUrl.trimEnd('/')}/proxy/ts/stream/$channelUuid"
 
     /**
+     * POST /api/channels/recordings/ — schedules a server-side DVR recording.
+     * Mirrors iOS DispatcharrAPI.createRecording (StreamingAPIs.swift:2334).
+     *
+     * The iOS implementation supports an `applyServerOffsets` mode where the
+     * caller embeds a `program` dict and lets Dispatcharr re-apply its own
+     * pre/post-roll defaults. Phase 9a always passes the pre-rolled times
+     * directly so the math is obvious; Phase 9b can revisit when local
+     * recordings need parity.
+     */
+    suspend fun createRecording(
+        baseUrl: String,
+        apiKey: String,
+        channelId: Int,
+        startIso: String,
+        endIso: String,
+        title: String,
+        description: String,
+        comskip: Boolean,
+    ): DispatcharrRecording {
+        val customProps = buildJsonObject {
+            put("title", JsonPrimitive(title))
+            put("description", JsonPrimitive(description))
+            if (comskip) put("comskip", JsonPrimitive(true))
+        }
+        val body = buildJsonObject {
+            put("channel", JsonPrimitive(channelId))
+            put("start_time", JsonPrimitive(startIso))
+            put("end_time", JsonPrimitive(endIso))
+            put("custom_properties", customProps)
+        }
+        val response: HttpResponse = client.post("${baseUrl.trimEnd('/')}/api/channels/recordings/") {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException(
+                "Recording create failed: HTTP ${response.status.value} ${response.status.description}",
+            )
+        }
+        return response.body()
+    }
+
+    /**
+     * GET /api/channels/recordings/ — returns every recording the active user
+     * can see. Client filters by status (scheduled / recording / completed /
+     * failed / stopped) for the DVR tab filter chips.
+     */
+    suspend fun listRecordings(baseUrl: String, apiKey: String): List<DispatcharrRecording> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/recordings/", apiKey)
+
+    /** DELETE /api/channels/recordings/{id}/ — cancels a scheduled recording or removes a completed file. */
+    suspend fun deleteRecording(baseUrl: String, apiKey: String, recordingId: Int) {
+        val response: HttpResponse = client.delete("${baseUrl.trimEnd('/')}/api/channels/recordings/$recordingId/") {
+            applyAuth(apiKey)
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException(
+                "Recording delete failed: HTTP ${response.status.value} ${response.status.description}",
+            )
+        }
+    }
+
+    /**
      * Logo URL for a channel that has a logoID. Dispatcharr serves through
      * `/api/channels/logos/<id>/cache/`. AllowAny on the server, no auth header
      * required (matches Coil's anonymous fetch).
@@ -248,6 +315,34 @@ data class DispatcharrChannel(
 data class EpgGridResponse(
     val data: List<DispatcharrEpgEntry>,
 )
+
+/**
+ * Server-reported recording shape from /api/channels/recordings/. Mirrors
+ * iOS `Recording` (Models.swift:680) on the wire fields. `custom_properties`
+ * is a free-form bag — title, description, comskip flag, and (when present)
+ * the program metadata block live in there per the iOS createRecording call.
+ */
+@Serializable
+data class DispatcharrRecording(
+    val id: Int,
+    val channel: Int? = null,
+    @SerialName("start_time")
+    val startTime: String,
+    @SerialName("end_time")
+    val endTime: String,
+    val status: String? = null,
+    @SerialName("file_size")
+    val fileSize: Long? = null,
+    @SerialName("custom_properties")
+    val customProperties: JsonObject? = null,
+) {
+    val title: String
+        get() = customProperties?.get("title")?.toString()?.trim('"').orEmpty()
+    val description: String
+        get() = customProperties?.get("description")?.toString()?.trim('"').orEmpty()
+    val comskip: Boolean
+        get() = customProperties?.get("comskip")?.toString() == "true"
+}
 
 @Serializable
 data class DispatcharrEpgEntry(

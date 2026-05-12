@@ -15,11 +15,20 @@ data class ProgramInfoTarget(
     val endMillis: Long,
     val description: String,
     val category: String,
+    /**
+     * Dispatcharr's int channel id. Required for server-side recording
+     * scheduling on Dispatcharr playlists; null for M3U / Xtream sources
+     * (whose Record action toasts a "DVR requires Dispatcharr" message).
+     */
+    val channelDispatcharrId: Int? = null,
 ) {
     val id: String get() = "$title-$startMillis-$endMillis"
 }
 
-fun EPGProgramme.toInfoTarget(channelName: String): ProgramInfoTarget =
+fun EPGProgramme.toInfoTarget(
+    channelName: String,
+    channelDispatcharrId: Int? = null,
+): ProgramInfoTarget =
     ProgramInfoTarget(
         channelName = channelName,
         title = title,
@@ -27,4 +36,5 @@ fun EPGProgramme.toInfoTarget(channelName: String): ProgramInfoTarget =
         endMillis = endMillis,
         description = description,
         category = category,
+        channelDispatcharrId = channelDispatcharrId,
     )

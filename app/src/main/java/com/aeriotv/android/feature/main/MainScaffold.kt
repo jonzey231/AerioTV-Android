@@ -21,6 +21,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.feature.dvr.DvrTabContent
 import com.aeriotv.android.feature.livetv.LiveTVTabContent
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.settings.AppBehaviorsSettingsScreen
@@ -113,10 +114,7 @@ fun MainScaffold(
                 tabLabel = "Favorites",
                 hint = "Pin channels for quick access. Coming with the Favorites phase.",
             )
-            AppTab.DVR -> PlaceholderScreen(
-                tabLabel = "DVR",
-                hint = "Schedule and play recordings. Coming with the DVR phase.",
-            )
+            AppTab.DVR -> DvrTabContent(modifier = Modifier.padding(padding))
             AppTab.OnDemand -> PlaceholderScreen(
                 tabLabel = "On Demand",
                 hint = "Movies and series from your server. Coming with the VOD phase.",

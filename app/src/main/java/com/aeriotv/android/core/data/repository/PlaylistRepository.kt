@@ -175,6 +175,7 @@ class PlaylistRepository @Inject constructor(
                         tvgName = ch.name,
                         tvgLogo = ch.logoId?.let { dispatcharrClient.logoUrl(base, it) }.orEmpty(),
                         channelNumber = ch.channelNumber?.toInt(),
+                        dispatcharrChannelId = ch.id,
                     )
                 }
         }

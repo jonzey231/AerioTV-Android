@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,9 +43,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.aeriotv.android.core.data.ProgramInfoTarget
+import com.aeriotv.android.feature.dvr.DvrViewModel
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 /**
  * Bottom-sheet form to schedule a programme recording. Mirrors iOS
@@ -60,9 +64,11 @@ import java.util.Date
 fun RecordProgramSheet(
     target: ProgramInfoTarget,
     onDismiss: () -> Unit,
+    dvrViewModel: DvrViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
 
     val isLive = remember(target) {
         val now = System.currentTimeMillis()
@@ -73,6 +79,7 @@ fun RecordProgramSheet(
     var postRoll by remember { mutableStateOf(0) }
     var destinationServer by remember { mutableStateOf(true) }
     var removeCommercials by remember { mutableStateOf(false) }
+    var submitting by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -104,17 +111,51 @@ fun RecordProgramSheet(
                 )
                 Spacer(Modifier.weight(1f))
                 TextButton(
+                    enabled = !submitting,
                     onClick = {
-                        Toast.makeText(
-                            context,
-                            "DVR scheduling lands with Phase 9.",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                        onDismiss()
+                        val dispatcharrId = target.channelDispatcharrId
+                        if (!destinationServer) {
+                            Toast.makeText(
+                                context,
+                                "Local recording lands with Phase 9b.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            onDismiss()
+                            return@TextButton
+                        }
+                        if (dispatcharrId == null) {
+                            Toast.makeText(
+                                context,
+                                "Recording requires a Dispatcharr playlist.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            onDismiss()
+                            return@TextButton
+                        }
+                        submitting = true
+                        val effectiveStart = target.startMillis - preRoll * 60_000L
+                        val effectiveEnd = target.endMillis + postRoll * 60_000L
+                        scope.launch {
+                            val result = dvrViewModel.scheduleServerRecording(
+                                channelDispatcharrId = dispatcharrId,
+                                startMillis = effectiveStart,
+                                endMillis = effectiveEnd,
+                                title = target.title,
+                                description = target.description,
+                                comskip = removeCommercials,
+                            )
+                            submitting = false
+                            val msg = result.fold(
+                                onSuccess = { "Scheduled: ${target.title.ifBlank { "recording" }}" },
+                                onFailure = { t -> "Schedule failed: ${t.message ?: t::class.simpleName}" },
+                            )
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            onDismiss()
+                        }
                     },
                 ) {
                     Text(
-                        text = "Record",
+                        text = if (submitting) "Scheduling…" else "Record",
                         color = LIVE_RED,
                         fontWeight = FontWeight.Bold,
                     )

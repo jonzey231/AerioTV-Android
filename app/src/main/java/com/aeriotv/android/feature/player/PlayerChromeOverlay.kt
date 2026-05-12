@@ -149,7 +149,7 @@ fun PlayerChromeOverlay(
                         },
                         onRecord = {
                             moreOpen = false
-                            val target = nowProgramme?.toInfoTarget(channel?.name.orEmpty())
+                            val target = nowProgramme?.toInfoTarget(channel?.name.orEmpty(), channel?.dispatcharrChannelId)
                                 ?: channel?.let {
                                     val now = System.currentTimeMillis()
                                     ProgramInfoTarget(
@@ -159,6 +159,7 @@ fun PlayerChromeOverlay(
                                         endMillis = now + 3_600_000L,
                                         description = "",
                                         category = "",
+                                        channelDispatcharrId = it.dispatcharrChannelId,
                                     )
                                 }
                             target?.let(onShowRecord)
