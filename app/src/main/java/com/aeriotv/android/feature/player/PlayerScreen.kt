@@ -28,11 +28,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
+import com.aeriotv.android.core.playback.MPVPlayerHolder
+import com.aeriotv.android.core.playback.PlaybackService
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.multiview.AddToMultiviewSheet
 import com.aeriotv.android.feature.playlist.nowPlaying
 import com.aeriotv.android.feature.settings.SettingsViewModel
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
 import `is`.xyz.mpv.MPV
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
@@ -66,6 +72,12 @@ fun PlayerScreen(
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val appleTVChannelFlip by settingsVm.appleTVChannelFlip.collectAsStateWithLifecycle(initialValue = true)
     val streamBufferSize by settingsVm.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
+    val mpvHolder = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            PlayerScreenEntryPoint::class.java,
+        ).mpvPlayerHolder()
+    }
 
     // Channel-flip state. The MPV view stays alive across flips; only the
     // current channel index changes and we call playFile again with the new URL.
@@ -90,12 +102,30 @@ fun PlayerScreen(
         }
     }
 
-    // System back intercept: instead of fully popping back to MainScaffold and
-    // tearing down the channel context, promote the active channel into the
-    // mini-player row anchored above the bottom nav and call onClose() to
-    // unwind the player nav entry. Tap the row to resume.
+    // Mount-time hook: if we're resuming from the mini-player the background
+    // PlaybackService is still running with the notification surfaced and MPV
+    // in audio-only mode. Stop the service (we're foreground again) and flip
+    // video output back on.
+    LaunchedEffect(Unit) {
+        PlaybackService.stop(context)
+        mpvHolder.setVideoEnabled(true)
+    }
+
+    // System back intercept: promote to the mini-player row above the bottom
+    // nav, start the foreground PlaybackService so audio survives the activity
+    // backgrounding, and switch MPV to audio-only to free the GPU. The held
+    // MPV instance keeps running; AndroidView.onRelease below just detaches
+    // the SurfaceView. Tap the mini-player row to resume.
     androidx.activity.compose.BackHandler {
         miniPlayerVm.showMiniPlayer()
+        currentChannel?.let { ch ->
+            mpvHolder.setVideoEnabled(false)
+            PlaybackService.startBackground(
+                context = context,
+                title = ch.name,
+                subtitle = nowProgramme?.title.orEmpty(),
+            )
+        }
         onClose()
     }
 
@@ -123,62 +153,68 @@ fun PlayerScreen(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                Utils.copyAssets(ctx)
                 val configDir = ctx.filesDir.path
                 val cacheDir = ctx.cacheDir.path
-
-                val view = MPVPlayerView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    this.isLive = isLive
-                    this.caFilePath = "$configDir/cacert.pem"
-                    this.httpHeaders = httpHeaders
-                    this.cachingMs = com.aeriotv.android.feature.settings.bufferMillisFor(streamBufferSize)
-                }
-
-                Log.i(TAG, "Initializing MPV (configDir=$configDir cacheDir=$cacheDir)")
-                view.initialize(configDir, cacheDir)
-
-                view.mpv.addLogObserver(object : MPV.LogObserver {
-                    override fun logMessage(prefix: String, level: Int, text: String) {
-                        Log.i(TAG, "[mpv $prefix/L$level] ${text.trimEnd()}")
-                    }
-                })
-
-                view.mpv.addObserver(object : MPV.EventObserver {
-                    override fun eventProperty(property: String) {}
-                    override fun eventProperty(property: String, value: Long) {}
-                    override fun eventProperty(property: String, value: Boolean) {}
-                    override fun eventProperty(property: String, value: String) {}
-                    override fun eventProperty(property: String, value: Double) {}
-                    override fun eventProperty(property: String, value: MPVNode) {}
-                    override fun event(eventId: Int, data: MPVNode) {
-                        val label = when (eventId) {
-                            MPVEvents.START_FILE -> "START_FILE"
-                            MPVEvents.FILE_LOADED -> "FILE_LOADED"
-                            MPVEvents.END_FILE -> "END_FILE"
-                            MPVEvents.VIDEO_RECONFIG -> "VIDEO_RECONFIG"
-                            MPVEvents.AUDIO_RECONFIG -> "AUDIO_RECONFIG"
-                            MPVEvents.PLAYBACK_RESTART -> "PLAYBACK_RESTART"
-                            MPVEvents.SEEK -> "SEEK"
-                            MPVEvents.SHUTDOWN -> "SHUTDOWN"
-                            else -> "event#$eventId"
+                val cachingMs = com.aeriotv.android.feature.settings.bufferMillisFor(streamBufferSize)
+                val fresh = mpvHolder.view == null
+                val view = mpvHolder.acquireOrCreate(
+                    context = ctx,
+                    caFilePath = "$configDir/cacert.pem",
+                    cachingMs = cachingMs,
+                    isLive = isLive,
+                    httpHeaders = httpHeaders,
+                    configDir = configDir,
+                    cacheDir = cacheDir,
+                )
+                if (fresh) {
+                    view.mpv.addLogObserver(object : MPV.LogObserver {
+                        override fun logMessage(prefix: String, level: Int, text: String) {
+                            Log.i(TAG, "[mpv $prefix/L$level] ${text.trimEnd()}")
                         }
-                        Log.i(TAG, "mpv $label")
+                    })
+                    view.mpv.addObserver(object : MPV.EventObserver {
+                        override fun eventProperty(property: String) {}
+                        override fun eventProperty(property: String, value: Long) {}
+                        override fun eventProperty(property: String, value: Boolean) {}
+                        override fun eventProperty(property: String, value: String) {}
+                        override fun eventProperty(property: String, value: Double) {}
+                        override fun eventProperty(property: String, value: MPVNode) {}
+                        override fun event(eventId: Int, data: MPVNode) {
+                            val label = when (eventId) {
+                                MPVEvents.START_FILE -> "START_FILE"
+                                MPVEvents.FILE_LOADED -> "FILE_LOADED"
+                                MPVEvents.END_FILE -> "END_FILE"
+                                MPVEvents.VIDEO_RECONFIG -> "VIDEO_RECONFIG"
+                                MPVEvents.AUDIO_RECONFIG -> "AUDIO_RECONFIG"
+                                MPVEvents.PLAYBACK_RESTART -> "PLAYBACK_RESTART"
+                                MPVEvents.SEEK -> "SEEK"
+                                MPVEvents.SHUTDOWN -> "SHUTDOWN"
+                                else -> "event#$eventId"
+                            }
+                            Log.i(TAG, "mpv $label")
+                        }
+                    })
+                    Log.i(TAG, "Loading initial stream: $streamUrl")
+                    if (streamUrl.isNotBlank()) {
+                        view.playFile(streamUrl)
+                        mpvHolder.currentChannelId = currentChannel?.id
                     }
-                })
-
-                Log.i(TAG, "Loading initial stream: $streamUrl")
-                if (streamUrl.isNotBlank()) view.playFile(streamUrl)
+                } else if (mpvHolder.currentChannelId != currentChannel?.id && streamUrl.isNotBlank()) {
+                    // Resuming on a different channel than what's held — swap.
+                    view.playFile(streamUrl)
+                    mpvHolder.currentChannelId = currentChannel?.id
+                }
                 mpvView = view
                 view
             },
             onRelease = { view ->
-                Log.i(TAG, "Releasing MPV")
+                // Detach from this composition's frame but DON'T destroy MPV.
+                // Either the user navigated back (BackHandler started the
+                // background service and MPVHolder retains MPV) or the user
+                // hit X-close (handled separately, which calls mpvHolder.destroy).
+                Log.i(TAG, "PlayerScreen composable released; detaching MPV view")
                 mpvView = null
-                view.destroy()
+                mpvHolder.detach()
             },
         )
 
@@ -231,10 +267,13 @@ fun PlayerScreen(
             nowProgramme = nowProgramme,
             chromeVisible = chromeVisible,
             // Explicit X tap = user is done with this channel; clear the mini-player
-            // session so MainScaffold doesn't surface a stale resume affordance.
-            // System back keeps the session and promotes it (handled by BackHandler).
+            // session, destroy the held MPV instance, and stop the background
+            // PlaybackService so the notification disappears. System back keeps
+            // the session + service alive instead (handled by BackHandler above).
             onClose = {
                 miniPlayerVm.dismiss()
+                mpvHolder.destroy()
+                PlaybackService.stop(context)
                 onClose()
             },
             onAddToMultiview = { multiviewPickerOpen = true },
@@ -421,3 +460,13 @@ private fun MPVPlayerView.readCurrentSid(): Int? {
 
 private fun String?.orZero(): String = if (this.isNullOrBlank()) "" else this
 private fun Double.roundToOneDecimal(): String = String.format(Locale.US, "%.1f", this)
+
+/**
+ * EntryPoint accessor so this Composable can grab the MPV singleton without
+ * routing through hiltViewModel (which would create the holder per-instance).
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface PlayerScreenEntryPoint {
+    fun mpvPlayerHolder(): MPVPlayerHolder
+}

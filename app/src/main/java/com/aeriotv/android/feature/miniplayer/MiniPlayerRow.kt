@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,7 +46,9 @@ import com.aeriotv.android.core.data.M3UChannel
 fun MiniPlayerRow(
     channel: M3UChannel,
     nowProgramme: EPGProgramme?,
+    isPaused: Boolean,
     onResume: () -> Unit,
+    onTogglePause: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -105,11 +108,18 @@ fun MiniPlayerRow(
                 )
             }
         }
+        IconButton(onClick = onTogglePause) {
+            Icon(
+                imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                contentDescription = if (isPaused) "Resume audio" else "Pause audio",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
         IconButton(onClick = onResume) {
             Icon(
                 imageVector = Icons.Filled.PlayArrow,
-                contentDescription = "Resume",
-                tint = MaterialTheme.colorScheme.primary,
+                contentDescription = "Return to player",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         IconButton(onClick = onDismiss) {

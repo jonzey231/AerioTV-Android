@@ -22,6 +22,8 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.core.playback.MPVPlayerHolder
+import com.aeriotv.android.core.playback.PlaybackService
 import com.aeriotv.android.feature.dvr.DvrTabContent
 import com.aeriotv.android.feature.favorites.FavoritesTabContent
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
@@ -62,6 +64,24 @@ fun MainScaffold(
     val tabs = visibleTabs(state, hasFavorites = favoritesCount > 0)
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val miniPlayerState by miniPlayerVm.state.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val mpvHolder = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            MainScaffoldEntryPoint::class.java,
+        ).mpvPlayerHolder()
+    }
+    // Poll pause state from the held MPV instance while the mini-player is
+    // visible so the Pause/Play icon stays accurate when the notification
+    // action toggles playback. 500ms cadence is cheap and matches VOD chrome.
+    var miniPaused by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(miniPlayerState) {
+        if (miniPlayerState !is com.aeriotv.android.feature.miniplayer.MiniPlayerSession.State.Active) return@LaunchedEffect
+        while (true) {
+            miniPaused = mpvHolder.isPaused()
+            kotlinx.coroutines.delay(500L)
+        }
+    }
 
     val settingsVm: SettingsViewModel = hiltViewModel()
     val defaultTabPref by settingsVm.defaultTab.collectAsStateWithLifecycle(initialValue = "")
@@ -108,11 +128,20 @@ fun MainScaffold(
                     MiniPlayerRow(
                         channel = channel,
                         nowProgramme = nowProgramme,
+                        isPaused = miniPaused,
                         onResume = {
                             val resumed = miniPlayerVm.resumeChannel()
                             if (resumed != null) onChannelClick(resumed)
                         },
-                        onDismiss = { miniPlayerVm.dismiss() },
+                        onTogglePause = {
+                            mpvHolder.setPaused(!mpvHolder.isPaused())
+                            miniPaused = mpvHolder.isPaused()
+                        },
+                        onDismiss = {
+                            miniPlayerVm.dismiss()
+                            mpvHolder.destroy()
+                            PlaybackService.stop(context)
+                        },
                     )
                 }
                 NavigationBar(
@@ -236,4 +265,12 @@ internal fun visibleTabs(
         if (sourceServesDvrAndVod) add(AppTab.OnDemand)
         add(AppTab.Settings)
     }
+}
+
+/** EntryPoint accessor so MainScaffold can drive pause/destroy on the held
+ * MPV instance without routing through a ViewModel. */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface MainScaffoldEntryPoint {
+    fun mpvPlayerHolder(): MPVPlayerHolder
 }
