@@ -348,9 +348,11 @@ private fun SortMenu(
  * opens the iOS-canon menu (Favorites / Program Info / Record from Now). Chevron
  * toggles an inline upcoming-programmes panel.
  */
+// Phase 57b: bumped to `internal` so the Favorites tab can reuse the
+// same dense row + EPG-aware long-press menu the Live TV list uses.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChannelRow(
+internal fun ChannelRow(
     channel: M3UChannel,
     nowProgramme: EPGProgramme?,
     programmes: List<EPGProgramme>,

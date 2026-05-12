@@ -1,54 +1,53 @@
 package com.aeriotv.android.feature.favorites
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
+import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.data.ProgramInfoTarget
+import com.aeriotv.android.feature.channels.ChannelRow
+import com.aeriotv.android.feature.livetv.ProgramInfoSheet
+import com.aeriotv.android.feature.livetv.RecordProgramSheet
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.playlist.nowPlaying
+import com.aeriotv.android.feature.settings.SettingsViewModel
 
 /**
- * Favorites tab. Mirrors iOS FavoritesView (Aerio/Features/LiveTV/ChannelListView.swift:2596):
- * dense channel list of starred entries. Long-press a row to un-favorite.
- *
- * Phase 13 ships this as a flat list. Manual drag-to-reorder + Edit mode
- * land alongside the iOS-equivalent affordance pass.
+ * Favorites tab. Mirrors iOS FavoritesView (ChannelListView.swift:2596): the
+ * exact same dense row + long-press menu the Live TV tab uses, scoped to
+ * channels the user has starred. Reuses [ChannelRow] (made `internal` for
+ * this share), so the currently-playing EPG line, expandable upcoming-list
+ * chevron, and the Remove from Favorites / Program Info / Record from Now
+ * long-press menu all behave identically on both tabs.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -57,23 +56,30 @@ fun FavoritesTabContent(
     onChannelClick: (M3UChannel) -> Unit,
     favoritesVm: FavoritesViewModel = hiltViewModel(),
     playlistVm: PlaylistViewModel = hiltViewModel(),
+    settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
     val favorites by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
     val playlistState by playlistVm.state.collectAsStateWithLifecycle()
+    val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(
+        initialValue = CategoryPaletteState.Default,
+    )
+    val favoriteIds by remember(favorites) {
+        derivedStateOf { favorites.asSequence().map { it.channelId }.toHashSet() }
+    }
 
-    // Join favourites rows -> currently-loaded M3UChannel objects so each row
-    // has a playable URL and the same logo / number metadata as the Live TV list.
+    // Join the persisted favorites rows against the currently-loaded playlist
+    // channels. Stale rows that no longer match anything fall away here so
+    // the tab body never renders an empty placeholder while the bottom-bar
+    // count says otherwise (Phase 57 handles tab visibility too).
     val channels = remember(favorites, playlistState.channels) {
         val byId = playlistState.channels.associateBy { it.id }
         favorites.mapNotNull { byId[it.channelId] }
     }
 
+    var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
+    var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
+
     Column(modifier = modifier.fillMaxSize()) {
-        // Matches the Phase 50 / 56 tab-header style — centered, titleLarge,
-        // bold — so every dynamic tab top reads as one consistent surface.
-        // Channel count moves out of the title (iOS Live TV doesn't surface
-        // it in the header either) so the bold "Favorites" lines up with
-        // "Live TV", "My Recordings", "On Demand", and "Settings" visually.
         CenterAlignedTopAppBar(
             title = {
                 Text(
@@ -123,93 +129,33 @@ fun FavoritesTabContent(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(items = channels, key = { it.id }) { channel ->
-                FavoriteRow(
+                val programmes = playlistState.epgByChannel[channel.tvgID].orEmpty()
+                val nowProgramme = programmes.nowPlaying()
+                ChannelRow(
                     channel = channel,
-                    onTap = { onChannelClick(channel) },
-                    onLongPress = { favoritesVm.toggle(channel) },
+                    nowProgramme = nowProgramme,
+                    programmes = programmes,
+                    isFavorite = channel.id in favoriteIds,
+                    onPlay = { onChannelClick(channel) },
+                    onToggleFavorite = { favoritesVm.toggle(channel) },
+                    onShowProgramInfo = { programInfoTarget = it },
+                    onShowRecord = { recordTarget = it },
+                    palette = palette,
                 )
             }
         }
     }
-}
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FavoriteRow(
-    channel: M3UChannel,
-    onTap: () -> Unit,
-    onLongPress: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f))
-            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Star,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
+    programInfoTarget?.let { target ->
+        ProgramInfoSheet(
+            target = target,
+            onDismiss = { programInfoTarget = null },
         )
-        Spacer(Modifier.width(8.dp))
-        Box(
-            modifier = Modifier.width(28.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            channel.channelNumber?.let { num ->
-                Text(
-                    text = num.toString(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.width(6.dp))
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.background),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (channel.tvgLogo.isNotBlank()) {
-                AsyncImage(
-                    model = channel.tvgLogo,
-                    contentDescription = null,
-                    modifier = Modifier.size(40.dp),
-                )
-            } else {
-                Text(
-                    text = channel.name.take(2).uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = channel.name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (channel.groupTitle.isNotBlank()) {
-                Text(
-                    text = channel.groupTitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
+    }
+    recordTarget?.let { target ->
+        RecordProgramSheet(
+            target = target,
+            onDismiss = { recordTarget = null },
+        )
     }
 }
