@@ -88,20 +88,20 @@ fun WelcomeScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // Cloud-sync and Home-WiFi tiles are placeholders mirroring iOS layout but
-        // disabled until Phase 9 (Block Store + Drive AppData sync) and Phase 10
-        // (WiFi SSID detection) land. Shown so the welcome surface matches the
-        // iOS App Store screenshot composition.
+        // Cloud-sync + Home-WiFi tiles surface the corresponding feature
+        // entry points. The actual configuration screens live in Settings;
+        // these tiles are info cards on first launch so the user knows the
+        // capabilities exist.
         SourceTypeCard(
             icon = Icons.Filled.CloudOff,
             title = "Sync via Google Account",
-            subtitle = "Coming with cross-device sync (Phase 9). Use if you've enabled AerioTV sync on another device.",
+            subtitle = "After setup, sign in to Drive in Settings > Sync to mirror playlists, watch progress, reminders, and preferences across devices.",
         )
         Spacer(Modifier.height(10.dp))
         SourceTypeCard(
             icon = Icons.Outlined.Wifi,
             title = "Detect Home WiFi",
-            subtitle = "Coming with LAN routing (Phase 10). Let AerioTV recognise your home network and use the server's local URL when you're on it.",
+            subtitle = "After setup, add a LAN URL to your playlist in Settings and AerioTV will switch to it automatically when you're on your home network.",
         )
 
         Spacer(Modifier.height(28.dp))
