@@ -281,12 +281,25 @@ fun AerioTVNavHost(
                     )
                 }
 
+                // Series poster fallback for the episode (episodes don't carry
+                // their own poster on the wire). Look up which series contains
+                // this episode and reuse that show's poster.
+                val parentSeriesPoster = onDemandVm.state.collectAsStateWithLifecycle().value
+                    .let { st ->
+                        val parentSeriesId = st.episodesBySeries.entries
+                            .firstOrNull { (_, list) -> list.any { it.uuid == episodeUuid } }
+                            ?.key
+                        parentSeriesId?.let { id -> st.series.firstOrNull { it.id == id }?.posterUrl }
+                    }
+
                 VODPlayerScreen(
                     streamUrl = resolvedUrl.orEmpty(),
                     title = episode?.displayName ?: "Episode",
                     httpHeaders = headers,
                     onClose = { navController.popBackStack() },
                     loadingMessage = resolveError ?: if (resolvedUrl == null) "Loading…" else null,
+                    videoId = episodeUuid,
+                    posterUrl = parentSeriesPoster,
                 )
             }
 
@@ -335,6 +348,8 @@ fun AerioTVNavHost(
                     httpHeaders = headers,
                     onClose = { navController.popBackStack() },
                     loadingMessage = resolveError ?: if (resolvedUrl == null) "Loading…" else null,
+                    videoId = movieUuid,
+                    posterUrl = movie?.posterUrl,
                 )
             }
         }

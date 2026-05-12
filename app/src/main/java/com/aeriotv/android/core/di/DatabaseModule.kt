@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.aeriotv.android.core.data.db.AerioDatabase
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
+import com.aeriotv.android.core.data.db.dao.WatchProgressDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -25,4 +26,7 @@ object DatabaseModule {
 
     @Provides
     fun providePlaylistDao(db: AerioDatabase): PlaylistDao = db.playlistDao()
+
+    @Provides
+    fun provideWatchProgressDao(db: AerioDatabase): WatchProgressDao = db.watchProgressDao()
 }

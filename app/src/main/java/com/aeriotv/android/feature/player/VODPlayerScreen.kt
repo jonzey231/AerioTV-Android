@@ -43,6 +43,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.settings.bufferMillisFor
+import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import `is`.xyz.mpv.MPV
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
@@ -66,11 +67,24 @@ fun VODPlayerScreen(
     httpHeaders: Map<String, String> = emptyMap(),
     onClose: () -> Unit = {},
     loadingMessage: String? = null,
+    videoId: String? = null,
+    posterUrl: String? = null,
 ) {
     val settingsVm: SettingsViewModel = hiltViewModel()
     val streamBufferSize by settingsVm.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
+    val watchVm: WatchProgressViewModel = hiltViewModel()
 
     var chromeVisible by remember { mutableStateOf(true) }
+    var mpvView by remember { mutableStateOf<MPVPlayerView?>(null) }
+
+    // Saved progress lookup. Null while loading; -1L after a confirmed "no
+    // saved progress" read. Drives the resume-seek LaunchedEffect.
+    var savedPositionMs by remember(videoId) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(videoId) {
+        if (videoId.isNullOrBlank()) return@LaunchedEffect
+        val existing = watchVm.get(videoId)
+        savedPositionMs = existing?.positionMs ?: -1L
+    }
 
     Box(
         modifier = Modifier
@@ -152,13 +166,50 @@ fun VODPlayerScreen(
 
                 Log.i(TAG, "Loading VOD: $streamUrl")
                 if (streamUrl.isNotBlank()) view.playFile(streamUrl)
+                mpvView = view
                 view
             },
             onRelease = { view ->
                 Log.i(TAG, "Releasing VOD MPV")
+                mpvView = null
                 view.destroy()
             },
         )
+
+        // Resume from saved position. Waits 1.5s for MPV to settle into playback
+        // before seeking - seeking before PLAYBACK_RESTART tends to be a no-op
+        // since the demuxer hasn't reported duration yet.
+        LaunchedEffect(mpvView, savedPositionMs) {
+            val view = mpvView ?: return@LaunchedEffect
+            val pos = savedPositionMs ?: return@LaunchedEffect
+            if (pos <= 0L) return@LaunchedEffect
+            delay(1_500L)
+            view.mpv.setPropertyString("time-pos", (pos / 1000.0).toString())
+            Log.i(TAG, "Resumed from ${pos}ms")
+        }
+
+        // Periodic save. Mirrors iOS NowPlayingManager.currentWatchProgress's
+        // ~5s persistence cadence. Bails if the player hasn't reported a
+        // valid position/duration yet (live streams, early-load, etc).
+        LaunchedEffect(mpvView, videoId) {
+            val view = mpvView ?: return@LaunchedEffect
+            if (videoId.isNullOrBlank()) return@LaunchedEffect
+            while (true) {
+                delay(5_000L)
+                val posStr = view.mpv.getPropertyString("time-pos") ?: continue
+                val durStr = view.mpv.getPropertyString("duration") ?: continue
+                val posSecs = posStr.toDoubleOrNull() ?: continue
+                val durSecs = durStr.toDoubleOrNull() ?: continue
+                if (posSecs <= 0.0 || durSecs <= 0.0) continue
+                watchVm.save(
+                    videoId = videoId,
+                    title = title,
+                    posterUrl = posterUrl,
+                    positionMs = (posSecs * 1000).toLong(),
+                    durationMs = (durSecs * 1000).toLong(),
+                )
+            }
+        }
 
         // Tap-to-toggle chrome layer.
         Box(
