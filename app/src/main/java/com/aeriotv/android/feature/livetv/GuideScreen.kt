@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -65,6 +66,7 @@ import com.aeriotv.android.core.data.toInfoTarget
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.reminders.RemindersViewModel
+import com.aeriotv.android.feature.settings.SettingsViewModel
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -107,6 +109,8 @@ fun GuideScreen(
     val favoritesVm: FavoritesViewModel = hiltViewModel()
     val favoritesList by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
     val favoriteIds = remember(favoritesList) { favoritesList.map { it.channelId }.toSet() }
+    val settingsVm: SettingsViewModel = hiltViewModel()
+    val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
@@ -277,6 +281,7 @@ fun GuideScreen(
                     },
                     isFavorite = channel.id in favoriteIds,
                     onToggleFavorite = { favoritesVm.toggle(channel) },
+                    palette = palette,
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
             }
@@ -311,6 +316,7 @@ private fun ChannelGuideRow(
     onProgrammeRecord: (EPGProgramme) -> Unit,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
+    palette: CategoryPaletteState,
 ) {
     val context = LocalContext.current
     var railMenuOpen by remember { mutableStateOf(false) }
@@ -417,6 +423,7 @@ private fun ChannelGuideRow(
                         channelName = channel.name,
                         widthDp = wDp,
                         isLive = isLive,
+                        categoryTint = palette.tintFor(programme.category, isLive = isLive),
                         modifier = Modifier.offset(x = xDp),
                         onClick = { onProgrammeClick(programme) },
                         onRecord = { onProgrammeRecord(programme) },
@@ -445,6 +452,7 @@ private fun ProgrammeCell(
     channelName: String,
     widthDp: androidx.compose.ui.unit.Dp,
     isLive: Boolean,
+    categoryTint: androidx.compose.ui.graphics.Color?,
     modifier: Modifier,
     onClick: () -> Unit,
     onRecord: () -> Unit,
@@ -457,7 +465,7 @@ private fun ProgrammeCell(
     }
     val isReminderSet by remindersVm.observeIsSet(key)
         .collectAsStateWithLifecycle(initialValue = false)
-    val bg = if (isLive)
+    val bg = categoryTint ?: if (isLive)
         MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     else
         MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)

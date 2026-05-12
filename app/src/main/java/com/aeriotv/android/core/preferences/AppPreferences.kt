@@ -9,12 +9,16 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aeriotv.android.core.category.CategoryPaletteState
+import com.aeriotv.android.core.category.CustomCategoryEntry
+import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.ui.theme.AppTheme
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.Json
 
 private val Context.appDataStore: DataStore<Preferences> by preferencesDataStore(name = "aerio_prefs")
 
@@ -151,6 +155,72 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED] = value }
     }
 
+    // ── Category Palette ────────────────────────────────────────────────
+    //
+    // Master enable + per-bucket hex overrides + per-bucket enable + custom
+    // JSON list. Mirrors iOS @AppStorage keys `enableCategoryColors`,
+    // `categoryColor.<suffix>`, `categoryBucketEnabled.<suffix>`,
+    // `customCategoryColors.v1`. The whole snapshot is exposed as a single
+    // Flow so consumers can collectAsState once per screen and call
+    // CategoryPaletteState.tintFor inline without observing 23 separate keys.
+
+    val categoryPalette: Flow<CategoryPaletteState> = store.data.map { prefs ->
+        val master = prefs[KEY_CATEGORY_MASTER_ENABLE] ?: true
+        val overrides = ProgramCategory.entries.mapNotNull { bucket ->
+            prefs[stringPreferencesKey(bucket.hexStorageKey)]?.let { bucket.storageSuffix to it }
+        }.toMap()
+        val enabledFlags = ProgramCategory.entries.mapNotNull { bucket ->
+            prefs[booleanPreferencesKey(bucket.enabledStorageKey)]?.let { bucket.storageSuffix to it }
+        }.toMap()
+        val customRaw = prefs[KEY_CATEGORY_CUSTOM_JSON]
+        val custom: List<CustomCategoryEntry> = if (customRaw.isNullOrBlank()) {
+            emptyList()
+        } else {
+            runCatching { Json.decodeFromString<List<CustomCategoryEntry>>(customRaw) }
+                .getOrDefault(emptyList())
+        }
+        CategoryPaletteState(
+            masterEnabled = master,
+            overrides = overrides,
+            enabledFlags = enabledFlags,
+            custom = custom,
+        )
+    }
+
+    suspend fun setCategoryColorsEnabled(value: Boolean) {
+        store.edit { it[KEY_CATEGORY_MASTER_ENABLE] = value }
+    }
+
+    suspend fun setCategoryBucketHex(bucket: ProgramCategory, hex: String?) {
+        store.edit { prefs ->
+            val key = stringPreferencesKey(bucket.hexStorageKey)
+            if (hex.isNullOrBlank()) prefs.remove(key)
+            else prefs[key] = hex.uppercase().removePrefix("#").take(6)
+        }
+    }
+
+    suspend fun setCategoryBucketEnabled(bucket: ProgramCategory, enabled: Boolean) {
+        store.edit { it[booleanPreferencesKey(bucket.enabledStorageKey)] = enabled }
+    }
+
+    suspend fun resetCategoryPalette() {
+        store.edit { prefs ->
+            ProgramCategory.entries.forEach { bucket ->
+                prefs.remove(stringPreferencesKey(bucket.hexStorageKey))
+            }
+        }
+    }
+
+    suspend fun setCustomCategories(list: List<CustomCategoryEntry>) {
+        store.edit { prefs ->
+            if (list.isEmpty()) {
+                prefs.remove(KEY_CATEGORY_CUSTOM_JSON)
+            } else {
+                prefs[KEY_CATEGORY_CUSTOM_JSON] = Json.encodeToString(list)
+            }
+        }
+    }
+
     // ── DVR ──────────────────────────────────────────────────────────────
 
     /** iOS `dvrMaxLocalStorageMB` parity. Default 10 GB. */
@@ -187,5 +257,7 @@ class AppPreferences @Inject constructor(
         val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")
         val KEY_DVR_DEFAULT_PRE_ROLL = intPreferencesKey("dvr_default_pre_roll_mins")
         val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")
+        val KEY_CATEGORY_MASTER_ENABLE = booleanPreferencesKey(CategoryPaletteState.MASTER_ENABLED_KEY)
+        val KEY_CATEGORY_CUSTOM_JSON = stringPreferencesKey(CategoryPaletteState.CUSTOM_KEY)
     }
 }

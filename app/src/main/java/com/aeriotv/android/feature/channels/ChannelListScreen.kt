@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -75,7 +76,10 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.playlist.SortMode
 import com.aeriotv.android.feature.playlist.nowPlaying
 import com.aeriotv.android.feature.reminders.RemindersViewModel
+import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.core.data.db.entity.reminderKey
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +95,8 @@ fun ChannelListScreen(
     val favoritesVm: FavoritesViewModel = hiltViewModel()
     val favoritesList by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
     val favoriteIds = remember(favoritesList) { favoritesList.map { it.channelId }.toSet() }
+    val settingsVm: SettingsViewModel = hiltViewModel()
+    val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
@@ -238,6 +244,7 @@ fun ChannelListScreen(
                     onToggleFavorite = { favoritesVm.toggle(channel) },
                     onShowProgramInfo = { programInfoTarget = it },
                     onShowRecord = { recordTarget = it },
+                    palette = palette,
                 )
             }
         }
@@ -315,16 +322,29 @@ private fun ChannelRow(
     onToggleFavorite: () -> Unit,
     onShowProgramInfo: (ProgramInfoTarget) -> Unit,
     onShowRecord: (ProgramInfoTarget) -> Unit,
+    palette: CategoryPaletteState,
 ) {
     val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
+    // Category gradient runs cyan-of-card → category-tint when a now-playing
+    // programme has a recognised category and the user has Category Colors on.
+    // Mirrors iPhone canon footer: "cards tint via gradient" — colours the
+    // accent edge without flattening the surface.
+    val tint = palette.tintFor(nowProgramme?.category, isLive = true)
+    val baseSurface = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
+    val cardBrush = if (tint != null) {
+        Brush.horizontalGradient(listOf(tint, baseSurface))
+    } else {
+        Brush.horizontalGradient(listOf(baseSurface, baseSurface))
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)),
+            .background(cardBrush),
     ) {
         Box {
             Row(

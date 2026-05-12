@@ -2,6 +2,9 @@ package com.aeriotv.android.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aeriotv.android.core.category.CategoryPaletteState
+import com.aeriotv.android.core.category.CustomCategoryEntry
+import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.ui.theme.AppTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -99,5 +102,23 @@ class SettingsViewModel @Inject constructor(
     val dvrDefaultPostRollMins: Flow<Int> = prefs.dvrDefaultPostRollMins
     fun setDvrDefaultPostRollMins(value: Int) {
         viewModelScope.launch { prefs.setDvrDefaultPostRollMins(value) }
+    }
+
+    // Category Palette (Phase 15)
+    val categoryPalette: Flow<CategoryPaletteState> = prefs.categoryPalette
+    fun setCategoryColorsEnabled(value: Boolean) {
+        viewModelScope.launch { prefs.setCategoryColorsEnabled(value) }
+    }
+    fun setCategoryBucketHex(bucket: ProgramCategory, hex: String?) {
+        viewModelScope.launch { prefs.setCategoryBucketHex(bucket, hex) }
+    }
+    fun setCategoryBucketEnabled(bucket: ProgramCategory, enabled: Boolean) {
+        viewModelScope.launch { prefs.setCategoryBucketEnabled(bucket, enabled) }
+    }
+    fun resetCategoryPalette() {
+        viewModelScope.launch { prefs.resetCategoryPalette() }
+    }
+    fun setCustomCategories(list: List<CustomCategoryEntry>) {
+        viewModelScope.launch { prefs.setCustomCategories(list) }
     }
 }

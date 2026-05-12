@@ -29,6 +29,7 @@ import com.aeriotv.android.feature.livetv.LiveTVTabContent
 import com.aeriotv.android.feature.ondemand.OnDemandTabContent
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.settings.AppBehaviorsSettingsScreen
+import com.aeriotv.android.feature.settings.AddMoreCategoriesScreen
 import com.aeriotv.android.feature.settings.AppearanceSettingsScreen
 import com.aeriotv.android.feature.settings.DeveloperSettingsScreen
 import com.aeriotv.android.feature.settings.DvrSettingsScreen
@@ -144,20 +145,30 @@ fun MainScaffold(
 @Composable
 private fun SettingsTabContent() {
     var section by remember { mutableStateOf<SettingsSection?>(null) }
-    androidx.activity.compose.BackHandler(enabled = section != null) { section = null }
-    when (section) {
-        null -> SettingsScreen(onSectionClick = { section = it })
-        SettingsSection.Appearance -> AppearanceSettingsScreen(onBack = { section = null })
-        SettingsSection.AppBehaviors -> AppBehaviorsSettingsScreen(onBack = { section = null })
-        SettingsSection.Multiview -> MultiviewSettingsScreen(onBack = { section = null })
-        SettingsSection.Network -> NetworkSettingsScreen(onBack = { section = null })
-        SettingsSection.Sync -> SettingsSubScreenPlaceholder(
+    var addMoreOpen by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = section != null || addMoreOpen) {
+        when {
+            addMoreOpen -> addMoreOpen = false
+            else -> section = null
+        }
+    }
+    when {
+        addMoreOpen -> AddMoreCategoriesScreen(onBack = { addMoreOpen = false })
+        section == null -> SettingsScreen(onSectionClick = { section = it })
+        section == SettingsSection.Appearance -> AppearanceSettingsScreen(
+            onBack = { section = null },
+            onOpenAddMoreCategories = { addMoreOpen = true },
+        )
+        section == SettingsSection.AppBehaviors -> AppBehaviorsSettingsScreen(onBack = { section = null })
+        section == SettingsSection.Multiview -> MultiviewSettingsScreen(onBack = { section = null })
+        section == SettingsSection.Network -> NetworkSettingsScreen(onBack = { section = null })
+        section == SettingsSection.Sync -> SettingsSubScreenPlaceholder(
             title = "Sync",
             body = "Google Drive AppData + Block Store credential sync. Lands with Phase 12 Sync.",
             onBack = { section = null },
         )
-        SettingsSection.DvrSettings -> DvrSettingsScreen(onBack = { section = null })
-        SettingsSection.Developer -> DeveloperSettingsScreen(onBack = { section = null })
+        section == SettingsSection.DvrSettings -> DvrSettingsScreen(onBack = { section = null })
+        section == SettingsSection.Developer -> DeveloperSettingsScreen(onBack = { section = null })
     }
 }
 
