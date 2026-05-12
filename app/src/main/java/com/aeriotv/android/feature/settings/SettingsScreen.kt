@@ -2,6 +2,8 @@ package com.aeriotv.android.feature.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,30 +12,39 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,16 +59,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import java.text.DateFormat
 import java.util.Date
 
 /**
- * Settings root — list of sub-section rows plus the legacy Playlist + About
- * cards retained at the bottom. Mirrors the iOS Settings root layout.
+ * Settings root. Mirrors iOS SettingsView.swift section ordering + grouped-card
+ * presentation (lines 150-496):
  *
- * Section navigation routes through [onSectionClick]; the parent owner
- * (Navigation.kt) decides which composable each section maps to.
+ *  1. Playlists  — inline list of every saved playlist with tap-to-activate,
+ *                  long-press context menu (Edit / Delete), and an Add Playlist
+ *                  row. Footer surfaces the same hints iOS shows
+ *                  ("Tap ○ to set the active playlist" etc.).
+ *  2. App Settings — Appearance / App Behaviors / Multiview / Network rows
+ *                  inside a single grouped card.
+ *  3. Sync       — current cut routes through to the full SyncSettingsScreen.
+ *                  iOS surfaces the toggle inline here; that follow-up lands
+ *                  alongside the Google Drive Sync rewrite that mirrors the
+ *                  iCloud Sync toggle / Sync Now / Clear Data set.
+ *  4. DVR        — single nav row.
+ *  5. Developer  — single nav row.
+ *  6. About      — Device / System / App Version / First Installed /
+ *                  Last Updated + Copy / Developer Website / Report an Issue.
+ *
+ * Each section is a [SettingsSectionGroup] — uppercase header in primary
+ * tint, rounded card containing the rows separated by hairline dividers,
+ * optional footer text in muted-tint below. Mirrors iOS .insetGrouped list
+ * style + sectionHeaderStyle().
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,11 +94,17 @@ fun SettingsScreen(
     onSectionClick: (SettingsSection) -> Unit,
     onOpenPlaylistDetail: () -> Unit = {},
     onOpenPlaylists: () -> Unit = {},
+    onAddPlaylist: () -> Unit = {},
+    onEditPlaylist: (PlaylistEntity) -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var confirmClear by remember { mutableStateOf(false) }
+    val playlists by viewModel.allPlaylists.collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeId = state.playlist?.id
+
+    var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
+
     val packageInfo = remember {
         runCatching {
             val pm = context.packageManager
@@ -99,96 +134,75 @@ fun SettingsScreen(
 
         LazyColumn(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            items(SettingsSection.entries, key = { it.name }) { section ->
-                SectionRow(
-                    section = section,
-                    onClick = { onSectionClick(section) },
+            // MARK: Playlists
+            item("playlists") {
+                PlaylistsSection(
+                    playlists = playlists,
+                    activeId = activeId,
+                    onTap = { pl ->
+                        if (pl.id == activeId) onOpenPlaylistDetail()
+                        else viewModel.switchToPlaylist(pl.id)
+                    },
+                    onEdit = { onEditPlaylist(it) },
+                    onDelete = { pendingDelete = it },
+                    onAdd = onAddPlaylist,
+                    onManage = onOpenPlaylists,
                 )
             }
-            item {
-                Spacer(Modifier.size(8.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                Spacer(Modifier.size(12.dp))
-            }
-            item {
-                SectionLabel("Playlists")
-                Spacer(Modifier.size(8.dp))
-                val playlist = state.playlist
-                if (playlist != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f))
-                            .clickable(onClick = onOpenPlaylistDetail)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = playlist.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                            Text(
-                                text = "${playlist.channelCount} channels • ${playlist.sourceType}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Text(
-                            text = "▸",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    Text(
-                        "No playlist loaded.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.size(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = onOpenPlaylists,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Manage playlists")
-                    }
-                    OutlinedButton(
-                        onClick = { confirmClear = true },
-                        enabled = playlist != null,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Change playlist")
-                    }
-                }
-            }
-            item {
-                Spacer(Modifier.size(16.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                Spacer(Modifier.size(12.dp))
-                SectionLabel("About")
-                Spacer(Modifier.size(8.dp))
-                LabeledValue("Device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim())
-                LabeledValue("System", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
-                LabeledValue("App Version", "$versionName (${packageInfo?.longVersionCode ?: 0})")
-                LabeledValue("First Installed", formatInstallTime(installedAt))
-                LabeledValue(
-                    "Last Updated",
-                    if (updatedAt > 0 && updatedAt != installedAt) formatInstallTime(updatedAt) else "Never",
+
+            // MARK: App Settings
+            item("app-settings") {
+                SettingsSectionGroup(
+                    header = "App Settings",
+                    rows = listOf(
+                        SettingsSection.Appearance,
+                        SettingsSection.AppBehaviors,
+                        SettingsSection.Multiview,
+                        SettingsSection.Network,
+                    ),
+                    onClick = onSectionClick,
                 )
-                Spacer(Modifier.size(12.dp))
-                AboutLinkRow(
-                    label = "Copy to Clipboard",
-                    onClick = {
+            }
+
+            // MARK: Sync
+            item("sync") {
+                SettingsSectionGroup(
+                    header = "Sync",
+                    rows = listOf(SettingsSection.Sync),
+                    onClick = onSectionClick,
+                    footer = "Playlists, preferences, and watch progress sync across all devices " +
+                        "signed into the same Google account. Credentials stay in encrypted Android storage.",
+                )
+            }
+
+            // MARK: DVR
+            item("dvr") {
+                SettingsSectionGroup(
+                    header = "DVR",
+                    rows = listOf(SettingsSection.DvrSettings),
+                    onClick = onSectionClick,
+                )
+            }
+
+            // MARK: Developer
+            item("developer") {
+                SettingsSectionGroup(
+                    header = "Developer",
+                    rows = listOf(SettingsSection.Developer),
+                    onClick = onSectionClick,
+                )
+            }
+
+            // MARK: About
+            item("about") {
+                AboutSection(
+                    versionName = versionName,
+                    versionCode = packageInfo?.longVersionCode ?: 0L,
+                    installedAt = installedAt,
+                    updatedAt = updatedAt,
+                    onCopy = {
                         val text = buildAboutClipboard(
                             versionName,
                             packageInfo?.longVersionCode ?: 0L,
@@ -197,66 +211,268 @@ fun SettingsScreen(
                         )
                         val cm = context.getSystemService(android.content.ClipboardManager::class.java)
                         cm?.setPrimaryClip(android.content.ClipData.newPlainText("AerioTV diagnostics", text))
-                        android.widget.Toast.makeText(context, "Copied diagnostics to clipboard.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(
+                            context,
+                            "Copied diagnostics to clipboard.",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
                     },
-                )
-                AboutLinkRow(
-                    label = "Developer Website",
-                    onClick = {
-                        openUrl(context, "https://github.com/jonzey231/AerioTV-Android")
-                    },
-                )
-                AboutLinkRow(
-                    label = "Report an Issue",
-                    onClick = {
-                        openUrl(context, "https://github.com/jonzey231/AerioTV-Android/issues/new")
-                    },
+                    onOpenWebsite = { openUrl(context, "https://github.com/jonzey231/AerioTV-Android") },
+                    onReportIssue = { openUrl(context, "https://github.com/jonzey231/AerioTV-Android/issues/new") },
                 )
             }
         }
     }
 
-    if (confirmClear) {
+    pendingDelete?.let { pl ->
         AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Change playlist?") },
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete playlist?") },
             text = {
                 Text(
-                    "This will remove the current playlist and EPG. You'll be asked for " +
-                            "a new playlist URL. Your saved preferences are not affected.",
+                    "This removes \"${pl.name}\" and its credentials from this device. " +
+                        if (pl.id == activeId) "The next playlist on the list will be activated." else "",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    confirmClear = false
-                    viewModel.clearPlaylist()
-                }) { Text("Change") }
+                    pendingDelete = null
+                    viewModel.deletePlaylist(pl.id)
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
             },
         )
     }
 }
 
+// MARK: - Playlists section
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SectionRow(
-    section: SettingsSection,
-    onClick: () -> Unit,
+private fun PlaylistsSection(
+    playlists: List<PlaylistEntity>,
+    activeId: String?,
+    onTap: (PlaylistEntity) -> Unit,
+    onEdit: (PlaylistEntity) -> Unit,
+    onDelete: (PlaylistEntity) -> Unit,
+    onAdd: () -> Unit,
+    onManage: () -> Unit,
 ) {
+    Column {
+        SectionHeader("Playlists")
+        Spacer(Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)),
+        ) {
+            if (playlists.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "No playlists added",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                playlists.forEachIndexed { index, pl ->
+                    if (index > 0) RowDivider()
+                    PlaylistRow(
+                        playlist = pl,
+                        isActive = pl.id == activeId,
+                        onTap = { onTap(pl) },
+                        onEdit = { onEdit(pl) },
+                        onDelete = { onDelete(pl) },
+                    )
+                }
+                RowDivider()
+            }
+            // Add Playlist row — iOS calls this out with a cyan plus glyph
+            // (SettingsView line 206-220).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onAdd)
+                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.size(10.dp))
+                Text(
+                    text = "Add Playlist",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            if (playlists.size > 1) {
+                RowDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onManage)
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Manage Playlists",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (playlists.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            SectionFooter("Tap ○ to set the active playlist · Long press to edit or delete")
+            if (playlists.size > 1) {
+                SectionFooter("Tap Manage Playlists to reorder")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PlaylistRow(
+    playlist: PlaylistEntity,
+    isActive: Boolean,
+    onTap: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onTap, onLongClick = { menuOpen = true })
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Active marker — filled cyan check on the active row, empty
+            // ring on the rest. iOS uses the same shape (SettingsView footer
+            // "Tap ○ to set the active playlist").
+            Icon(
+                imageVector = if (isActive) Icons.Filled.Check else Icons.Outlined.RadioButtonUnchecked,
+                contentDescription = if (isActive) "Active" else "Set active",
+                tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.size(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = playlist.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                )
+                val subtitle = buildString {
+                    append("${playlist.channelCount} channels")
+                    val pretty = playlist.sourceType
+                        .replace("Dispatcharr", "Dispatcharr ")
+                        .replace("ApiKey", "API Key")
+                        .replace("UserPass", "Username & Password")
+                        .replace("M3uUrl", "M3U + EPG")
+                        .replace("XtreamCodes", "Xtream Codes")
+                    if (pretty.isNotBlank()) append("  ·  ").append(pretty)
+                }
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Edit") },
+                leadingIcon = {
+                    Icon(Icons.Filled.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                },
+                onClick = { menuOpen = false; onEdit() },
+            )
+            DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = { menuOpen = false; onDelete() },
+            )
+        }
+    }
+}
+
+// MARK: - Generic grouped section
+
+@Composable
+private fun SettingsSectionGroup(
+    header: String,
+    rows: List<SettingsSection>,
+    onClick: (SettingsSection) -> Unit,
+    footer: String? = null,
+) {
+    Column {
+        SectionHeader(header)
+        Spacer(Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)),
+        ) {
+            rows.forEachIndexed { index, section ->
+                if (index > 0) RowDivider()
+                SectionNavRow(section = section, onClick = { onClick(section) })
+            }
+        }
+        footer?.let {
+            Spacer(Modifier.height(8.dp))
+            SectionFooter(it)
+        }
+    }
+}
+
+@Composable
+private fun SectionNavRow(section: SettingsSection, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .size(34.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
             contentAlignment = Alignment.Center,
         ) {
@@ -264,7 +480,7 @@ private fun SectionRow(
                 imageVector = section.icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
         Spacer(Modifier.size(12.dp))
@@ -273,7 +489,7 @@ private fun SectionRow(
                 text = section.title,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Medium,
             )
             Text(
                 text = section.subtitle,
@@ -289,26 +505,75 @@ private fun SectionRow(
     }
 }
 
+// MARK: - About section
+
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
-    )
+private fun AboutSection(
+    versionName: String,
+    versionCode: Long,
+    installedAt: Long,
+    updatedAt: Long,
+    onCopy: () -> Unit,
+    onOpenWebsite: () -> Unit,
+    onReportIssue: () -> Unit,
+) {
+    Column {
+        SectionHeader("About")
+        Spacer(Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)),
+        ) {
+            AboutInfoRow("Device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim())
+            RowDivider()
+            AboutInfoRow("System", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
+            RowDivider()
+            AboutInfoRow("App Version", "$versionName ($versionCode)")
+            RowDivider()
+            AboutInfoRow("First Installed", formatInstallTime(installedAt))
+            RowDivider()
+            AboutInfoRow(
+                "Last Updated",
+                if (updatedAt > 0 && updatedAt != installedAt) formatInstallTime(updatedAt) else "Never",
+            )
+            RowDivider()
+            AboutActionRow("Copy to Clipboard", Icons.Filled.ContentCopy, onClick = onCopy)
+            RowDivider()
+            AboutActionRow(
+                "Developer Website",
+                Icons.Outlined.OpenInNew,
+                onClick = onOpenWebsite,
+                external = true,
+            )
+            RowDivider()
+            AboutActionRow(
+                "Report an Issue",
+                Icons.Outlined.BugReport,
+                onClick = onReportIssue,
+                external = true,
+            )
+        }
+    }
 }
 
 @Composable
-private fun LabeledValue(label: String, value: String) {
-    Column(modifier = Modifier.padding(vertical = 2.dp)) {
+private fun AboutInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
         )
         Text(
-            value,
+            text = value,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onBackground,
         )
@@ -316,26 +581,74 @@ private fun LabeledValue(label: String, value: String) {
 }
 
 @Composable
-private fun AboutLinkRow(label: String, onClick: () -> Unit) {
+private fun AboutActionRow(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    external: Boolean = false,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.size(10.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
-        Text(
-            text = "▸",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (external) {
+            Icon(
+                imageVector = Icons.Outlined.OpenInNew,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
+            )
+        }
     }
+}
+
+// MARK: - Section shell helpers
+
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    )
+}
+
+@Composable
+private fun SectionFooter(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+        modifier = Modifier.padding(horizontal = 4.dp),
+    )
+}
+
+@Composable
+private fun RowDivider() {
+    HorizontalDivider(
+        thickness = 0.5.dp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.20f),
+        modifier = Modifier.padding(start = 14.dp),
+    )
 }
 
 private fun formatInstallTime(ms: Long): String {
@@ -371,8 +684,8 @@ private fun openUrl(context: android.content.Context, url: String) {
 }
 
 /**
- * Settings tree sections, in display order. Carries title/subtitle/icon for
- * the parent SettingsScreen list and a stable identifier for navigation.
+ * Settings tree sub-sections. Each carries its title / subtitle / icon for
+ * the parent [SettingsScreen] rows and a stable identifier for navigation.
  */
 enum class SettingsSection(
     val title: String,
@@ -381,37 +694,37 @@ enum class SettingsSection(
 ) {
     Appearance(
         title = "Appearance",
-        subtitle = "Theme palette, custom accent, category colours",
+        subtitle = "Theme, scale & category colors",
         icon = Icons.Filled.Palette,
     ),
     AppBehaviors(
         title = "App Behaviors",
-        subtitle = "Splash, default tab, channel-flip, auto-resume",
+        subtitle = "Splash, default tab, channel-flip",
         icon = Icons.Outlined.PlayCircle,
     ),
     Multiview(
         title = "Multiview",
-        subtitle = "Audio-focus indicator, tile padding, corners",
+        subtitle = "Audio focus, tile spacing & corners",
         icon = Icons.Filled.GridView,
     ),
     Network(
         title = "Network",
-        subtitle = "Buffer size, timeouts, retries, background refresh",
+        subtitle = "Timeout, buffer, home WiFi & refresh",
         icon = Icons.Filled.Wifi,
     ),
     Sync(
         title = "Sync",
-        subtitle = "Google Drive sync (Block Store + AppData)",
+        subtitle = "Sync playlists, preferences, and watch progress",
         icon = Icons.Filled.Cloud,
     ),
     DvrSettings(
-        title = "DVR Settings",
-        subtitle = "Local storage cap, pre/post-roll defaults, folder",
-        icon = Icons.Filled.Movie,
+        title = "DVR",
+        subtitle = "Recordings, buffers & storage",
+        icon = Icons.Filled.FiberManualRecord,
     ),
     Developer(
         title = "Developer",
-        subtitle = "Diagnostic toggles, debug overlays",
-        icon = Icons.Filled.Build,
+        subtitle = "Debug logging & diagnostics",
+        icon = Icons.Filled.Movie,
     ),
 }
