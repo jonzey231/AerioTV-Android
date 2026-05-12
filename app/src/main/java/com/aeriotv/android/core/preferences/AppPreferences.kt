@@ -151,6 +151,26 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED] = value }
     }
 
+    // ── DVR ──────────────────────────────────────────────────────────────
+
+    /** iOS `dvrMaxLocalStorageMB` parity. Default 10 GB. */
+    val dvrMaxLocalStorageMB: Flow<Int> = store.data.map { it[KEY_DVR_MAX_LOCAL_STORAGE_MB] ?: 10_240 }
+    suspend fun setDvrMaxLocalStorageMB(value: Int) {
+        store.edit { it[KEY_DVR_MAX_LOCAL_STORAGE_MB] = value }
+    }
+
+    /** iOS `dvrDefaultPreRollMins` parity. */
+    val dvrDefaultPreRollMins: Flow<Int> = store.data.map { it[KEY_DVR_DEFAULT_PRE_ROLL] ?: 0 }
+    suspend fun setDvrDefaultPreRollMins(value: Int) {
+        store.edit { it[KEY_DVR_DEFAULT_PRE_ROLL] = value }
+    }
+
+    /** iOS `dvrDefaultPostRollMins` parity. */
+    val dvrDefaultPostRollMins: Flow<Int> = store.data.map { it[KEY_DVR_DEFAULT_POST_ROLL] ?: 0 }
+    suspend fun setDvrDefaultPostRollMins(value: Int) {
+        store.edit { it[KEY_DVR_DEFAULT_POST_ROLL] = value }
+    }
+
     private companion object {
         val KEY_SELECTED_THEME = stringPreferencesKey("selected_theme")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")
@@ -164,5 +184,8 @@ class AppPreferences @Inject constructor(
         val KEY_MULTIVIEW_AUDIO_FOCUS_STYLE = stringPreferencesKey("multiview_audio_focus_style")
         val KEY_MULTIVIEW_TILE_PADDING = booleanPreferencesKey("multiview_tile_padding")
         val KEY_MULTIVIEW_TILE_CORNERS_ROUNDED = booleanPreferencesKey("multiview_tile_corners_rounded")
+        val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")
+        val KEY_DVR_DEFAULT_PRE_ROLL = intPreferencesKey("dvr_default_pre_roll_mins")
+        val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")
     }
 }

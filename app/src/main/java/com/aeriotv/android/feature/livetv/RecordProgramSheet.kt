@@ -48,9 +48,11 @@ import com.aeriotv.android.core.data.ProgramInfoTarget
 import com.aeriotv.android.feature.dvr.DvrViewModel
 import com.aeriotv.android.feature.dvr.LocalRecordingService
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.settings.SettingsViewModel
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Bottom-sheet form to schedule a programme recording. Mirrors iOS
@@ -68,6 +70,7 @@ fun RecordProgramSheet(
     onDismiss: () -> Unit,
     dvrViewModel: DvrViewModel = hiltViewModel(),
     playlistViewModel: PlaylistViewModel = hiltViewModel(),
+    settingsViewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -78,8 +81,14 @@ fun RecordProgramSheet(
         target.startMillis <= now
     }
 
-    var preRoll by remember { mutableStateOf(0) }
-    var postRoll by remember { mutableStateOf(0) }
+    // Pull the user's default pre/post-roll so the radios pre-select correctly.
+    val defaultPreRoll by settingsViewModel.dvrDefaultPreRollMins.collectAsStateWithLifecycle(initialValue = 0)
+    val defaultPostRoll by settingsViewModel.dvrDefaultPostRollMins.collectAsStateWithLifecycle(initialValue = 0)
+    val storageCapMB by settingsViewModel.dvrMaxLocalStorageMB.collectAsStateWithLifecycle(initialValue = 10_240)
+    val dvrState by dvrViewModel.state.collectAsStateWithLifecycle()
+
+    var preRoll by remember(defaultPreRoll) { mutableStateOf(defaultPreRoll) }
+    var postRoll by remember(defaultPostRoll) { mutableStateOf(defaultPostRoll) }
     var destinationServer by remember { mutableStateOf(true) }
     var removeCommercials by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
@@ -118,13 +127,22 @@ fun RecordProgramSheet(
                     onClick = {
                         val dispatcharrId = target.channelDispatcharrId
                         if (!destinationServer) {
-                            // Local recording. We don't have direct access to
-                            // the channel's stream URL from the target; pull
-                            // the active channel context from the playlist VM
-                            // and resolve via channelName fallback. For
-                            // "Record from Now" the channel is the one
-                            // currently playing, so the user has just
-                            // triggered Record from the Player chrome.
+                            // Local recording — check the storage cap before
+                            // committing. usedBytes comes from the existing
+                            // local rows in DvrViewModel state.
+                            val usedBytes = dvrState.recordings
+                                .filter { it.source == DvrViewModel.Source.Local }
+                                .sumOf { it.fileSizeBytes }
+                            val usedMB = (usedBytes / (1024L * 1024L)).toInt()
+                            if (usedMB >= storageCapMB) {
+                                Toast.makeText(
+                                    context,
+                                    "Local storage cap reached. Free space or raise the cap in Settings -> DVR.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                onDismiss()
+                                return@TextButton
+                            }
                             val playlistState = playlistViewModel.state.value
                             val channel = playlistState.channels.firstOrNull {
                                 it.name == target.channelName

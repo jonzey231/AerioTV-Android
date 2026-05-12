@@ -29,6 +29,7 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.settings.AppBehaviorsSettingsScreen
 import com.aeriotv.android.feature.settings.AppearanceSettingsScreen
 import com.aeriotv.android.feature.settings.DeveloperSettingsScreen
+import com.aeriotv.android.feature.settings.DvrSettingsScreen
 import com.aeriotv.android.feature.settings.MultiviewSettingsScreen
 import com.aeriotv.android.feature.settings.NetworkSettingsScreen
 import com.aeriotv.android.feature.settings.SettingsScreen
@@ -151,11 +152,7 @@ private fun SettingsTabContent() {
             body = "Google Drive AppData + Block Store credential sync. Lands with Phase 12 Sync.",
             onBack = { section = null },
         )
-        SettingsSection.DvrSettings -> SettingsSubScreenPlaceholder(
-            title = "DVR Settings",
-            body = "Local-recording storage cap, pre/post-roll defaults, custom folder. Lands with Phase 9 DVR.",
-            onBack = { section = null },
-        )
+        SettingsSection.DvrSettings -> DvrSettingsScreen(onBack = { section = null })
         SettingsSection.Developer -> DeveloperSettingsScreen(onBack = { section = null })
     }
 }

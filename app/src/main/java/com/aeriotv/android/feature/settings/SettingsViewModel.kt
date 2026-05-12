@@ -84,4 +84,20 @@ class SettingsViewModel @Inject constructor(
     fun setMultiviewTileCornersRounded(value: Boolean) {
         viewModelScope.launch { prefs.setMultiviewTileCornersRounded(value) }
     }
+
+    // DVR (Phase 9b-3)
+    val dvrMaxLocalStorageMB: Flow<Int> = prefs.dvrMaxLocalStorageMB
+    fun setDvrMaxLocalStorageMB(value: Int) {
+        viewModelScope.launch { prefs.setDvrMaxLocalStorageMB(value) }
+    }
+
+    val dvrDefaultPreRollMins: Flow<Int> = prefs.dvrDefaultPreRollMins
+    fun setDvrDefaultPreRollMins(value: Int) {
+        viewModelScope.launch { prefs.setDvrDefaultPreRollMins(value) }
+    }
+
+    val dvrDefaultPostRollMins: Flow<Int> = prefs.dvrDefaultPostRollMins
+    fun setDvrDefaultPostRollMins(value: Int) {
+        viewModelScope.launch { prefs.setDvrDefaultPostRollMins(value) }
+    }
 }
