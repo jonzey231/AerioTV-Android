@@ -29,6 +29,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
+import com.aeriotv.android.feature.multiview.AddToMultiviewSheet
 import com.aeriotv.android.feature.playlist.nowPlaying
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import `is`.xyz.mpv.MPV
@@ -80,6 +81,7 @@ fun PlayerScreen(
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var streamInfo by remember { mutableStateOf<StreamInfoSnapshot?>(null) }
     var subtitles by remember { mutableStateOf<SubtitlesState?>(null) }
+    var multiviewPickerOpen by remember { mutableStateOf(false) }
 
     // Sleep timer: stores the wall-clock millis at which the player should close.
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
@@ -205,13 +207,7 @@ fun PlayerScreen(
             nowProgramme = nowProgramme,
             chromeVisible = chromeVisible,
             onClose = onClose,
-            onAddToMultiview = {
-                Toast.makeText(
-                    context,
-                    "Multiview lands with Phase 11.",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            },
+            onAddToMultiview = { multiviewPickerOpen = true },
             onShowRecord = { target -> recordTarget = target },
             onShowStreamInfo = {
                 streamInfo = mpvView?.captureStreamInfo() ?: StreamInfoSnapshot(
@@ -271,6 +267,9 @@ fun PlayerScreen(
             target = target,
             onDismiss = { recordTarget = null },
         )
+    }
+    if (multiviewPickerOpen) {
+        AddToMultiviewSheet(onDismiss = { multiviewPickerOpen = false })
     }
     streamInfo?.let { snapshot ->
         StreamInfoSheet(
