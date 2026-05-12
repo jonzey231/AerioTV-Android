@@ -32,6 +32,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -215,6 +217,17 @@ private fun MoviesSubScreen(
             singleLine = true,
             placeholder = { Text("Search movies") },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+            trailingIcon = if (state.searchQuery.isNotEmpty()) {
+                {
+                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Clear search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else null,
             shape = RoundedCornerShape(14.dp),
             keyboardOptions = com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions(
                 imeAction = androidx.compose.ui.text.input.ImeAction.Search,
@@ -320,6 +333,17 @@ private fun SeriesSubScreen(
             singleLine = true,
             placeholder = { Text("Search series") },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+            trailingIcon = if (state.seriesSearchQuery.isNotEmpty()) {
+                {
+                    IconButton(onClick = { viewModel.setSeriesSearchQuery("") }) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Clear search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else null,
             shape = RoundedCornerShape(14.dp),
             keyboardOptions = com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions(
                 imeAction = androidx.compose.ui.text.input.ImeAction.Search,
