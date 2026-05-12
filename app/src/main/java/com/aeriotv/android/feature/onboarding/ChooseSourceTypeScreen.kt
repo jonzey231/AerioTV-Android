@@ -16,6 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,11 +29,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.aeriotv.android.R
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.onboarding.components.SourceTypeCard
 import com.aeriotv.android.ui.adaptive.rememberViewport
@@ -107,18 +108,10 @@ fun ChooseSourceTypeScreen(
 
                 Spacer(Modifier.height(4.dp))
 
-                // Server-type icons render from PNGs rasterised out of the iOS
-                // SF Symbol glyphs (`key.fill` / `tv.and.hifispeaker.fill` /
-                // `doc.text.fill`) so this screen reads as the iOS Add Playlist
-                // screen pixel-for-pixel. Bundled across density buckets in
-                // res/drawable-{mdpi..xxxhdpi}.
-                val keyIcon = painterResource(id = R.drawable.ic_key_fill)
-                val tvIcon = painterResource(id = R.drawable.ic_tv_speaker_fill)
-                val docIcon = painterResource(id = R.drawable.ic_doc_text_fill)
                 if (rowLayout) {
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         SourceTypeCard(
-                            iconPainter = keyIcon,
+                            icon = Icons.Filled.Key,
                             title = "Dispatcharr Direct Connect",
                             subtitle = "Connect with your admin login or a personal API key.",
                             modifier = Modifier
@@ -126,7 +119,7 @@ fun ChooseSourceTypeScreen(
                                 .tappable { onChoose(SourceType.DispatcharrApiKey) },
                         )
                         SourceTypeCard(
-                            iconPainter = tvIcon,
+                            icon = Icons.Filled.Tv,
                             title = "Xtream Codes",
                             subtitle = "Xtream Codes API. Live TV, VOD movies & series.",
                             modifier = Modifier
@@ -134,7 +127,7 @@ fun ChooseSourceTypeScreen(
                                 .tappable { onChoose(SourceType.XtreamCodes) },
                         )
                         SourceTypeCard(
-                            iconPainter = docIcon,
+                            icon = Icons.Filled.Description,
                             title = "M3U + EPG",
                             subtitle = "Any M3U playlist URL. Works with any IPTV provider.",
                             modifier = Modifier
@@ -144,20 +137,20 @@ fun ChooseSourceTypeScreen(
                     }
                 } else {
                     SourceTypeCard(
-                        iconPainter = keyIcon,
+                        icon = Icons.Filled.Key,
                         title = "Dispatcharr Direct Connect",
                         subtitle = "Connect to Dispatcharr with your admin login or a personal API key " +
                                 "(*AerioTV is not officially affiliated with the Dispatcharr project)",
                         modifier = Modifier.tappable { onChoose(SourceType.DispatcharrApiKey) },
                     )
                     SourceTypeCard(
-                        iconPainter = tvIcon,
+                        icon = Icons.Filled.Tv,
                         title = "Xtream Codes",
                         subtitle = "Xtream Codes API. Live TV, VOD movies & series.",
                         modifier = Modifier.tappable { onChoose(SourceType.XtreamCodes) },
                     )
                     SourceTypeCard(
-                        iconPainter = docIcon,
+                        icon = Icons.Filled.Description,
                         title = "M3U + EPG",
                         subtitle = "Any M3U playlist URL. Works with Dispatcharr, any IPTV provider.",
                         modifier = Modifier.tappable { onChoose(SourceType.M3uUrl) },

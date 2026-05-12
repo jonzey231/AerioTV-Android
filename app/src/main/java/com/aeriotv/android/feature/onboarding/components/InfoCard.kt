@@ -21,8 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -42,44 +40,6 @@ fun SourceTypeCard(
     subtitle: String,
     modifier: Modifier = Modifier,
     trailing: @Composable (() -> Unit)? = null,
-) = SourceTypeCardImpl(
-    title = title,
-    subtitle = subtitle,
-    modifier = modifier,
-    trailing = trailing,
-    iconContent = { tint ->
-        Icon(imageVector = icon, contentDescription = null, tint = tint)
-    },
-)
-
-/**
- * Painter-based overload — used when the card needs a raster drawable (e.g.
- * the SF Symbol PNGs the server-type chooser uses for parity with iOS).
- */
-@Composable
-fun SourceTypeCard(
-    iconPainter: Painter,
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    trailing: @Composable (() -> Unit)? = null,
-) = SourceTypeCardImpl(
-    title = title,
-    subtitle = subtitle,
-    modifier = modifier,
-    trailing = trailing,
-    iconContent = { tint ->
-        Icon(painter = iconPainter, contentDescription = null, tint = tint)
-    },
-)
-
-@Composable
-private fun SourceTypeCardImpl(
-    title: String,
-    subtitle: String,
-    modifier: Modifier,
-    trailing: (@Composable () -> Unit)?,
-    iconContent: @Composable (tint: Color) -> Unit,
 ) {
     val cardBorder = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
     Row(
@@ -99,7 +59,11 @@ private fun SourceTypeCardImpl(
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
-            iconContent(MaterialTheme.colorScheme.primary)
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(

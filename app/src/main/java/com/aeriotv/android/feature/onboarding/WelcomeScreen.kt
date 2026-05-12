@@ -22,6 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Icon
@@ -38,7 +41,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
@@ -186,24 +188,10 @@ private fun BrandBlock(alignStart: Boolean = false) {
 
 @Composable
 private fun SupportedTypesGroup(alignStart: Boolean = false) {
-    // Re-use the rasterised SF Symbol PNGs so the feature pills match the
-    // server-type chooser cards and the iOS WelcomeView line-for-line.
     Column(modifier = Modifier.fillMaxWidth()) {
-        SupportedTypeRow(
-            iconPainter = painterResource(id = R.drawable.ic_key_fill),
-            label = "Dispatcharr Direct Connect",
-            alignStart = alignStart,
-        )
-        SupportedTypeRow(
-            iconPainter = painterResource(id = R.drawable.ic_tv_speaker_fill),
-            label = "Xtream Codes",
-            alignStart = alignStart,
-        )
-        SupportedTypeRow(
-            iconPainter = painterResource(id = R.drawable.ic_doc_text_fill),
-            label = "M3U + EPG",
-            alignStart = alignStart,
-        )
+        SupportedTypeRow(icon = Icons.Filled.Key, label = "Dispatcharr Direct Connect", alignStart = alignStart)
+        SupportedTypeRow(icon = Icons.Filled.Tv, label = "Xtream Codes", alignStart = alignStart)
+        SupportedTypeRow(icon = Icons.Filled.Description, label = "M3U + EPG", alignStart = alignStart)
     }
 }
 
@@ -381,34 +369,18 @@ private fun GradientIcon(
             imageVector = imageVector,
             contentDescription = null,
             tint = Color.White,
-            modifier = Modifier.fillMaxSize().gradientMask(brush),
+            modifier = Modifier
+                .fillMaxSize()
+                .drawWithContent {
+                    drawContent()
+                    drawRect(brush = brush, blendMode = BlendMode.SrcIn)
+                },
         )
     }
 }
 
 @Composable
-private fun GradientIcon(
-    iconPainter: Painter,
-    brush: Brush,
-    modifier: Modifier = Modifier,
-) {
-    Box(modifier = modifier.graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
-        Icon(
-            painter = iconPainter,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.fillMaxSize().gradientMask(brush),
-        )
-    }
-}
-
-private fun Modifier.gradientMask(brush: Brush): Modifier = this.drawWithContent {
-    drawContent()
-    drawRect(brush = brush, blendMode = BlendMode.SrcIn)
-}
-
-@Composable
-private fun SupportedTypeRow(iconPainter: Painter, label: String, alignStart: Boolean = false) {
+private fun SupportedTypeRow(icon: ImageVector, label: String, alignStart: Boolean = false) {
     val gradient = accentBrush()
     Row(
         modifier = Modifier
@@ -421,7 +393,7 @@ private fun SupportedTypeRow(iconPainter: Painter, label: String, alignStart: Bo
         ),
     ) {
         GradientIcon(
-            iconPainter = iconPainter,
+            imageVector = icon,
             brush = gradient,
             modifier = Modifier.size(18.dp),
         )
