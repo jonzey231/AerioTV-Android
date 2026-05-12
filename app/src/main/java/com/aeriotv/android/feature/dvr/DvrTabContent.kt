@@ -172,7 +172,16 @@ fun DvrTabContent(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            // 104dp bottom clears the MainScaffold NavigationBar so the
+            // last recording row stays tappable (otherwise the bottom card
+            // sits underneath the Live TV / DVR / On Demand / Settings nav
+            // when the user has more than 4-5 recordings).
+            contentPadding = PaddingValues(
+                start = 12.dp,
+                end = 12.dp,
+                top = 8.dp,
+                bottom = 104.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(items = state.visible, key = { it.id }) { rec ->

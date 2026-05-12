@@ -125,7 +125,14 @@ fun FavoritesTabContent(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            // 104dp bottom clears the MainScaffold NavigationBar so the
+            // last favorite stays tappable.
+            contentPadding = PaddingValues(
+                start = 12.dp,
+                end = 12.dp,
+                top = 8.dp,
+                bottom = 104.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(items = channels, key = { it.id }) { channel ->
