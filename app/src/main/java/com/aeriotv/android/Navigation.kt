@@ -26,6 +26,7 @@ import com.aeriotv.android.feature.main.MainScaffold
 import com.aeriotv.android.feature.onboarding.ChooseSourceTypeScreen
 import com.aeriotv.android.feature.onboarding.ConfigureSourceScreen
 import com.aeriotv.android.feature.onboarding.WelcomeScreen
+import com.aeriotv.android.feature.multiview.MultiviewScreen
 import com.aeriotv.android.feature.ondemand.OnDemandViewModel
 import com.aeriotv.android.feature.ondemand.SeriesDetailScreen
 import com.aeriotv.android.feature.player.PlayerScreen
@@ -43,6 +44,7 @@ object Routes {
     const val VOD_PLAYER = "vod_player/{movieUuid}"
     const val SERIES_DETAIL = "series_detail/{seriesId}"
     const val VOD_EPISODE_PLAYER = "vod_episode_player/{episodeUuid}"
+    const val MULTIVIEW = "multiview"
 
     fun configure(type: SourceType) = "configure/${type.name}"
     fun player(channelId: String) = "player/${Uri.encode(channelId)}"
@@ -220,6 +222,9 @@ fun AerioTVNavHost(
                     httpHeaders = headers,
                     epgByChannel = state.epgByChannel,
                     onClose = { navController.popBackStack() },
+                    onLaunchMultiview = {
+                        navController.navigate(Routes.MULTIVIEW)
+                    },
                 )
             }
 
@@ -300,6 +305,30 @@ fun AerioTVNavHost(
                     loadingMessage = resolveError ?: if (resolvedUrl == null) "Loading…" else null,
                     videoId = episodeUuid,
                     posterUrl = parentSeriesPoster,
+                )
+            }
+
+            composable(Routes.MULTIVIEW) { entry ->
+                val parent = remember(entry) {
+                    navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
+                }
+                val playlistVm: PlaylistViewModel = hiltViewModel(parent)
+                val playlistState by playlistVm.state.collectAsStateWithLifecycle()
+                val headers = remember(playlistState.playlist?.apiKey, playlistState.playlist?.sourceType) {
+                    val pl = playlistState.playlist
+                    val key = pl?.apiKey?.takeIf { it.isNotBlank() }
+                    val isDispatcharr = pl?.sourceType == SourceType.DispatcharrApiKey.name ||
+                            pl?.sourceType == SourceType.DispatcharrUserPass.name
+                    if (isDispatcharr && key != null) {
+                        mapOf(
+                            "X-API-Key" to key,
+                            "Authorization" to "ApiKey $key",
+                        )
+                    } else emptyMap()
+                }
+                MultiviewScreen(
+                    onClose = { navController.popBackStack() },
+                    httpHeaders = headers,
                 )
             }
 

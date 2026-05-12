@@ -58,6 +58,7 @@ fun PlayerScreen(
     httpHeaders: Map<String, String> = emptyMap(),
     epgByChannel: Map<String, List<EPGProgramme>> = emptyMap(),
     onClose: () -> Unit = {},
+    onLaunchMultiview: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val settingsVm: SettingsViewModel = hiltViewModel()
@@ -269,7 +270,12 @@ fun PlayerScreen(
         )
     }
     if (multiviewPickerOpen) {
-        AddToMultiviewSheet(onDismiss = { multiviewPickerOpen = false })
+        AddToMultiviewSheet(
+            onDismiss = {
+                multiviewPickerOpen = false
+                onLaunchMultiview()
+            },
+        )
     }
     streamInfo?.let { snapshot ->
         StreamInfoSheet(
