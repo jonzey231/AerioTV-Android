@@ -420,6 +420,14 @@ internal fun ChannelRow(
     onShowProgramInfo: (ProgramInfoTarget) -> Unit,
     onShowRecord: (ProgramInfoTarget) -> Unit,
     palette: CategoryPaletteState,
+    /**
+     * Optional leading drag handle, rendered at the very start of the row
+     * before the channel number. Only the Favorites tab passes this (to back
+     * its drag-to-reorder gesture); Live TV leaves it null so the row is
+     * unchanged there. The handle owns the drag gesture so tap-to-play +
+     * long-press-menu on the rest of the row stay intact.
+     */
+    reorderHandle: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
@@ -465,6 +473,10 @@ internal fun ChannelRow(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (reorderHandle != null) {
+                    reorderHandle()
+                    Spacer(Modifier.width(8.dp))
+                }
                 Box(
                     modifier = Modifier.width(28.dp),
                     contentAlignment = Alignment.Center,

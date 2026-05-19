@@ -23,4 +23,18 @@ interface FavoriteChannelDao {
 
     @Query("SELECT COUNT(*) FROM favorite_channel")
     fun observeCount(): Flow<Int>
+
+    @Query("UPDATE favorite_channel SET displayOrder = :order WHERE channelId = :channelId")
+    suspend fun setDisplayOrder(channelId: String, order: Long)
+
+    /**
+     * Persist the user's manual Favorites order in one transaction. Caller
+     * passes channelIds top-to-bottom; we stamp displayOrder 0..n-1. observeAll
+     * sorts by displayOrder ASC so the new order takes effect immediately.
+     * Mirrors PlaylistDao.applyDisplayOrder + iOS `favoriteOrder`.
+     */
+    @androidx.room.Transaction
+    suspend fun applyDisplayOrder(orderedChannelIds: List<String>) {
+        orderedChannelIds.forEachIndexed { index, id -> setDisplayOrder(id, index.toLong()) }
+    }
 }

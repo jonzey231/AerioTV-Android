@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -20,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +43,8 @@ import com.aeriotv.android.feature.livetv.RecordProgramSheet
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.playlist.nowPlaying
 import com.aeriotv.android.feature.settings.SettingsViewModel
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * Favorites tab. Mirrors iOS FavoritesView (ChannelListView.swift:2596): the
@@ -78,6 +83,20 @@ fun FavoritesTabContent(
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
+
+    // Local working copy so the drag preview updates fluidly without hitting
+    // Room on every onMove frame. Committed to the favorites table on drag end
+    // via favoritesVm.applyOrder. Re-synced whenever the derived channel list
+    // changes (toggle elsewhere, playlist reload). Mirrors PlaylistsScreen +
+    // iOS `favoriteOrder`.
+    val lazyListState = rememberLazyListState()
+    var workingOrder by remember(channels) { mutableStateOf(channels) }
+    LaunchedEffect(channels) { workingOrder = channels }
+    val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        workingOrder = workingOrder.toMutableList().apply {
+            add(to.index, removeAt(from.index))
+        }
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         CenterAlignedTopAppBar(
@@ -124,9 +143,10 @@ fun FavoritesTabContent(
         }
 
         LazyColumn(
+            state = lazyListState,
             modifier = Modifier.fillMaxSize(),
             // 104dp bottom clears the MainScaffold NavigationBar so the
-            // last favorite stays tappable.
+            // last favorite stays tappable / draggable.
             contentPadding = PaddingValues(
                 start = 12.dp,
                 end = 12.dp,
@@ -135,20 +155,36 @@ fun FavoritesTabContent(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(items = channels, key = { it.id }) { channel ->
-                val programmes = playlistState.epgByChannel[channel.tvgID].orEmpty()
-                val nowProgramme = programmes.nowPlaying()
-                ChannelRow(
-                    channel = channel,
-                    nowProgramme = nowProgramme,
-                    programmes = programmes,
-                    isFavorite = channel.id in favoriteIds,
-                    onPlay = { onChannelClick(channel) },
-                    onToggleFavorite = { favoritesVm.toggle(channel) },
-                    onShowProgramInfo = { programInfoTarget = it },
-                    onShowRecord = { recordTarget = it },
-                    palette = palette,
-                )
+            items(items = workingOrder, key = { it.id }) { channel ->
+                ReorderableItem(reorderState, key = channel.id) { _ ->
+                    val programmes = playlistState.epgByChannel[channel.tvgID].orEmpty()
+                    val nowProgramme = programmes.nowPlaying()
+                    ChannelRow(
+                        channel = channel,
+                        nowProgramme = nowProgramme,
+                        programmes = programmes,
+                        isFavorite = channel.id in favoriteIds,
+                        onPlay = { onChannelClick(channel) },
+                        onToggleFavorite = { favoritesVm.toggle(channel) },
+                        onShowProgramInfo = { programInfoTarget = it },
+                        onShowRecord = { recordTarget = it },
+                        palette = palette,
+                        reorderHandle = {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "Drag to reorder",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .draggableHandle(
+                                        onDragStopped = {
+                                            favoritesVm.applyOrder(workingOrder.map { it.id })
+                                        },
+                                    )
+                                    .size(24.dp),
+                            )
+                        },
+                    )
+                }
             }
         }
     }

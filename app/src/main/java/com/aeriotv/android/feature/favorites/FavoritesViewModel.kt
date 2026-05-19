@@ -44,4 +44,14 @@ class FavoritesViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Persist a user-chosen Favorites order (top-to-bottom channelIds). Backs
+     * the drag-to-reorder gesture on the Favorites tab; mirrors iOS
+     * `favoriteOrder`. The reorder UI commits on drag-end, not on every
+     * onMove frame, so this hits Room once per gesture.
+     */
+    fun applyOrder(orderedChannelIds: List<String>) {
+        viewModelScope.launch { dao.applyDisplayOrder(orderedChannelIds) }
+    }
 }
