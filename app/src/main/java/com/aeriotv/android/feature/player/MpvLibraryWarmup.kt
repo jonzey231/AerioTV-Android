@@ -57,6 +57,23 @@ object MpvLibraryWarmup {
     private val hasStarted = AtomicBoolean(false)
     @Volatile private var completed: Boolean = false
 
+    /**
+     * The warmed libmpv handle, kept alive for the whole process. This is the
+     * crux of the don't-destroy approach: calling [MPV.destroy] on a throwaway
+     * handle (the Phase 78/82 attempt) runs `nativeDestroy()`, which on
+     * mpv-android-lib 0.1.12 releases JNI globals (JavaVM cache / class refs)
+     * the NEXT `nativeCreate()` needs -- so every subsequent user-facing MPV
+     * instance came up dead (chrome loaded, stream never started). By NEVER
+     * destroying this handle we keep both the JNI globals and libmpv's
+     * one-time codec/protocol/hwdec registrations resident, so the first real
+     * channel tap's create()+init() hits the warm path. The handle is idle
+     * (no loadfile, no render context, no surface) so it costs ~nothing;
+     * libmpv supports many concurrent contexts (multiview runs up to 9).
+     *
+     * Deliberately retained for the process lifetime -- there is no destroy().
+     */
+    @Volatile private var warmHandle: MPV? = null
+
     /** True once the background warm-up has finished (success or failure). */
     val isComplete: Boolean get() = completed
 
@@ -65,10 +82,9 @@ object MpvLibraryWarmup {
      * call from any thread, any number of times -- only the first call
      * does anything. Mirrors iOS [MPVLibraryWarmup.warmUp].
      *
-     * The [appContext] should be the Application context so the throwaway
-     * MPV handle's `create(Context)` doesn't leak an Activity. The handle
-     * is destroyed inside this call regardless, but Application-scoped
-     * is the right semantic.
+     * The [appContext] must be the Application context: the warmed MPV
+     * handle is retained for the whole process (see [warmHandle]), so it must
+     * not hold an Activity reference.
      */
     fun start(appContext: Context) {
         if (!hasStarted.compareAndSet(false, true)) return
@@ -114,7 +130,7 @@ object MpvLibraryWarmup {
     private fun runWarmup(appContext: Context) {
         val total = measureTimeMillis {
             val mpv = MPV()
-            runCatching {
+            val ok = runCatching {
                 // Match the minimum option set the user-facing
                 // MPVPlayerView.initOptions() uses, so the same lazy
                 // registrations fire here:
@@ -124,7 +140,8 @@ object MpvLibraryWarmup {
                 //     bridge + Surface plumbing)
                 // No per-stream config (URL, headers, cache) since we
                 // never call loadfile here -- we're just paying the
-                // global init cost and throwing the handle away.
+                // global init cost. The handle is then retained, not
+                // destroyed, so those registrations stay resident.
                 mpv.create(appContext)
                 mpv.setOptionString("vo", "libmpv")
                 mpv.setOptionString("profile", "fast")
@@ -132,14 +149,19 @@ object MpvLibraryWarmup {
                 mpv.init()
             }.onFailure { t ->
                 Log.w(TAG, "Warm-up create/init failed; first channel tap will hit cold path", t)
+            }.isSuccess
+            // RETAIN the handle on success (don't destroy -- see [warmHandle]).
+            // On failure, also do NOT destroy: nativeDestroy() is the very thing
+            // that corrupts the JNI globals, so a half-initialised handle is
+            // safer left alone than torn down. We just drop our extra options.
+            if (ok) {
+                warmHandle = mpv
+            } else {
+                // Leave the failed handle unreferenced but undestroyed.
+                Log.w(TAG, "Warm-up incomplete; not retaining handle")
             }
-            // Always destroy, even on failure -- the JNI handle was
-            // allocated regardless. iOS does the same with
-            // mpv_terminate_destroy.
-            runCatching { mpv.destroy() }
-                .onFailure { t -> Log.w(TAG, "Warm-up destroy failed (non-fatal)", t) }
         }
         completed = true
-        Log.i(TAG, "Process-wide libmpv warm-up complete in ${total}ms")
+        Log.i(TAG, "Process-wide libmpv warm-up complete in ${total}ms (retained=${warmHandle != null})")
     }
 }

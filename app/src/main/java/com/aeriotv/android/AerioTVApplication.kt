@@ -50,25 +50,15 @@ class AerioTVApplication : Application(), Configuration.Provider {
         // Track foreground state so reminders that fire while the app is open
         // surface as an in-app banner instead of a system notification.
         reminderBannerBus.bind()
-        // MpvLibraryWarmup.start(this) — DISABLED.
-        //
-        // The iOS-canonical pattern (mpv_create + mpv_initialize +
-        // mpv_terminate_destroy on a throwaway handle at app launch)
-        // does not port cleanly to mpv-android-lib 0.1.12. Calling
-        // MPV.destroy() on the throwaway breaks subsequent user-facing
-        // MPV instances on both emulator + physical Samsung devices --
-        // the player chrome loads but the stream never begins, no
-        // events, no first frame. Working theory: mpv-android-lib's
-        // nativeDestroy releases JNI globals or the JavaVM cache that
-        // are then unavailable to the next nativeCreate. Reproducible
-        // 100% with the warmup on, gone 100% with it off.
-        //
-        // Future work: investigate keeping the warmed handle alive
-        // (don't destroy() it -- "leak" the JNI globals deliberately)
-        // OR reuse the warmed handle as the user-facing handle. Both
-        // need API changes in MPVPlayerHolder to thread the existing
-        // MPV instance through instead of always letting BaseMPVView
-        // create its own.
+        // Process-wide libmpv warmup (Phase 94: the "don't-destroy" retry of
+        // the Phase 78/82 attempt). The original warmup called MPV.destroy()
+        // on its throwaway handle, whose nativeDestroy() released JNI globals
+        // the next nativeCreate() needed -- every subsequent stream came up
+        // dead. MpvLibraryWarmup now RETAINS the warmed handle for the process
+        // lifetime instead of destroying it, so the codec/protocol/hwdec
+        // registrations + JNI globals stay resident and the first channel tap
+        // hits libmpv's warm path. See MpvLibraryWarmup.warmHandle.
+        MpvLibraryWarmup.start(this)
         appScope.launch {
             appPreferences.debugLoggingEnabled.collectLatest { enabled ->
                 debugLogger.setEnabled(enabled)
