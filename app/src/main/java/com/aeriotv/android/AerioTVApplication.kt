@@ -7,6 +7,7 @@ import com.aeriotv.android.core.debug.DebugLogger
 import com.aeriotv.android.core.network.DispatcharrWarmupCoordinator
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.feature.player.MpvLibraryWarmup
+import com.aeriotv.android.feature.reminders.ReminderBannerBus
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +35,7 @@ class AerioTVApplication : Application(), Configuration.Provider {
     @Inject lateinit var dispatcharrWarmup: DispatcharrWarmupCoordinator
     @Inject lateinit var debugLogger: DebugLogger
     @Inject lateinit var appPreferences: AppPreferences
+    @Inject lateinit var reminderBannerBus: ReminderBannerBus
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -45,6 +47,9 @@ class AerioTVApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         dispatcharrWarmup.bind()
+        // Track foreground state so reminders that fire while the app is open
+        // surface as an in-app banner instead of a system notification.
+        reminderBannerBus.bind()
         // MpvLibraryWarmup.start(this) — DISABLED.
         //
         // The iOS-canonical pattern (mpv_create + mpv_initialize +

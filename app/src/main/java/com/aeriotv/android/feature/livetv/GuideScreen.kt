@@ -500,6 +500,7 @@ private fun ChannelGuideRow(
                     ProgrammeCell(
                         programme = programme,
                         channelName = channel.name,
+                        channelId = channel.id,
                         widthDp = wDp,
                         isLive = isLive,
                         // Dispatcharr bulk grid drops <category>; fall back
@@ -540,6 +541,7 @@ private fun ChannelGuideRow(
 private fun ProgrammeCell(
     programme: EPGProgramme,
     channelName: String,
+    channelId: String,
     widthDp: androidx.compose.ui.unit.Dp,
     isLive: Boolean,
     categoryTint: androidx.compose.ui.graphics.Color?,
@@ -612,6 +614,7 @@ private fun ProgrammeCell(
                             programTitle = programme.title,
                             startMillis = programme.startMillis,
                             endMillis = programme.endMillis,
+                            channelId = channelId,
                         )
                         Toast.makeText(context, "Reminder set.", Toast.LENGTH_SHORT).show()
                     }

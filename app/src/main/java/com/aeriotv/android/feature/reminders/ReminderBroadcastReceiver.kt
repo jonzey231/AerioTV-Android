@@ -10,18 +10,42 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.aeriotv.android.MainActivity
 import com.aeriotv.android.R
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
 
 /**
- * Fires when an AlarmManager-scheduled reminder hits its trigger time. Posts
- * a notification with the programme title + channel name; tapping it opens
- * the app. Mirrors iOS ReminderManager's UNNotification path.
+ * Fires when an AlarmManager-scheduled reminder hits its trigger time.
+ *
+ * Foreground intercept (iOS ReminderManager parity): if the app is in the
+ * foreground we route the reminder to [ReminderBannerBus] for an in-app
+ * banner overlay instead of a system notification. When backgrounded we post
+ * the notification as before; tapping it opens the app.
  */
 class ReminderBroadcastReceiver : BroadcastReceiver() {
+
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface ReminderReceiverEntryPoint {
+        fun reminderBannerBus(): ReminderBannerBus
+    }
 
     override fun onReceive(context: Context, intent: Intent) {
         val title = intent.getStringExtra(EXTRA_TITLE) ?: return
         val channelName = intent.getStringExtra(EXTRA_CHANNEL_NAME).orEmpty()
+        val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID).orEmpty()
         val key = intent.getStringExtra(EXTRA_REMINDER_KEY) ?: return
+
+        // Foreground -> in-app banner; background -> system notification.
+        val bus = EntryPointAccessors
+            .fromApplication(context.applicationContext, ReminderReceiverEntryPoint::class.java)
+            .reminderBannerBus()
+        if (bus.isForeground) {
+            bus.post(ReminderBannerData(channelId = channelId, channelName = channelName, programTitle = title))
+            return
+        }
+
         ensureChannel(context)
 
         val tapIntent = Intent(context, MainActivity::class.java).apply {
@@ -63,6 +87,7 @@ class ReminderBroadcastReceiver : BroadcastReceiver() {
     companion object {
         const val EXTRA_TITLE = "extra_title"
         const val EXTRA_CHANNEL_NAME = "extra_channel"
+        const val EXTRA_CHANNEL_ID = "extra_channel_id"
         const val EXTRA_REMINDER_KEY = "extra_key"
         private const val CHANNEL_ID = "aeriotv_reminders"
     }

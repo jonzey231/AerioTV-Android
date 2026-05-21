@@ -40,7 +40,13 @@ class RemindersViewModel @Inject constructor(
 
     fun observeIsSet(reminderKey: String): Flow<Boolean> = dao.observeIsSet(reminderKey)
 
-    fun setReminder(channelName: String, programTitle: String, startMillis: Long, endMillis: Long) {
+    fun setReminder(
+        channelName: String,
+        programTitle: String,
+        startMillis: Long,
+        endMillis: Long,
+        channelId: String = "",
+    ) {
         val key = reminderKey(channelName, programTitle, startMillis)
         val triggerAt = (startMillis - 5 * 60 * 1000L).coerceAtLeast(System.currentTimeMillis() + 1_000L)
         val requestCode = key.hashCode()
@@ -56,7 +62,7 @@ class RemindersViewModel @Inject constructor(
                     playlistId = playlistDao.firstActive()?.id,
                 ),
             )
-            scheduleAlarm(key, channelName, programTitle, triggerAt, requestCode)
+            scheduleAlarm(key, channelName, programTitle, channelId, triggerAt, requestCode)
         }
     }
 
@@ -74,6 +80,7 @@ class RemindersViewModel @Inject constructor(
         key: String,
         channelName: String,
         programTitle: String,
+        channelId: String,
         triggerAt: Long,
         requestCode: Int,
     ) {
@@ -82,6 +89,7 @@ class RemindersViewModel @Inject constructor(
             putExtra(ReminderBroadcastReceiver.EXTRA_REMINDER_KEY, key)
             putExtra(ReminderBroadcastReceiver.EXTRA_TITLE, programTitle)
             putExtra(ReminderBroadcastReceiver.EXTRA_CHANNEL_NAME, channelName)
+            putExtra(ReminderBroadcastReceiver.EXTRA_CHANNEL_ID, channelId)
         }
         val pi = PendingIntent.getBroadcast(
             context, requestCode, intent,

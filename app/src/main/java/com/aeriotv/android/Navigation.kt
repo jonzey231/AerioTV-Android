@@ -1,8 +1,13 @@
 package com.aeriotv.android
 
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -34,6 +39,7 @@ import com.aeriotv.android.feature.ondemand.SeriesDetailScreen
 import com.aeriotv.android.feature.player.PlayerScreen
 import com.aeriotv.android.feature.player.VODPlayerScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.reminders.ReminderBannerHost
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -81,6 +87,7 @@ fun AerioTVNavHost(
 ) {
     val navController = rememberNavController()
 
+    Box(modifier = Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = Routes.PLAYLIST_GRAPH) {
         navigation(startDestination = Routes.BOOTSTRAP, route = Routes.PLAYLIST_GRAPH) {
 
@@ -571,6 +578,13 @@ fun AerioTVNavHost(
                 )
             }
         }
+    }
+        // In-app reminder banner overlay. Floats over every screen; the bus
+        // only surfaces a banner when a reminder fires while foregrounded.
+        ReminderBannerHost(
+            onOpenChannel = { channelId -> navController.navigate(Routes.player(channelId)) },
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
     }
 }
 

@@ -697,6 +697,7 @@ internal fun ChannelRow(
         AnimatedVisibility(visible = isExpanded) {
             ChannelGuidePanel(
                 channelName = channel.name,
+                channelId = channel.id,
                 channelDispatcharrId = channel.dispatcharrChannelId,
                 programmes = programmes,
                 onShowProgramInfo = onShowProgramInfo,
@@ -716,6 +717,7 @@ internal fun ChannelRow(
 @Composable
 private fun ChannelGuidePanel(
     channelName: String,
+    channelId: String,
     channelDispatcharrId: Int?,
     programmes: List<EPGProgramme>,
     onShowProgramInfo: (ProgramInfoTarget) -> Unit,
@@ -749,6 +751,7 @@ private fun ChannelGuidePanel(
                     UpcomingProgrammeRow(
                         programme = programme,
                         channelName = channelName,
+                        channelId = channelId,
                         onTap = { onShowProgramInfo(programme.toInfoTarget(channelName, channelDispatcharrId)) },
                         onShowRecord = { onShowRecord(programme.toInfoTarget(channelName, channelDispatcharrId)) },
                     )
@@ -763,6 +766,7 @@ private fun ChannelGuidePanel(
 private fun UpcomingProgrammeRow(
     programme: EPGProgramme,
     channelName: String,
+    channelId: String,
     onTap: () -> Unit,
     onShowRecord: () -> Unit,
     remindersVm: RemindersViewModel = hiltViewModel(),
@@ -839,6 +843,7 @@ private fun UpcomingProgrammeRow(
                             programTitle = programme.title,
                             startMillis = programme.startMillis,
                             endMillis = programme.endMillis,
+                            channelId = channelId,
                         )
                         Toast.makeText(context, "Reminder set.", Toast.LENGTH_SHORT).show()
                     }
