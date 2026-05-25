@@ -21,6 +21,17 @@ val googleDriveWebClientId: String =
         ?: System.getenv("GOOGLE_DRIVE_WEB_CLIENT_ID")
         ?: ""
 
+// Release signing for Play uploads. Reads from keystore.properties (gitignored,
+// never committed). When absent (e.g. a contributor without the upload key),
+// the release signingConfig is simply not created and release builds stay
+// unsigned -- debug builds are unaffected. Play App Signing holds the real
+// app signing key; this is only the upload key (resettable via Play Console).
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val hasReleaseSigning = keystoreProps.getProperty("storeFile") != null
+
 android {
     namespace = "com.aeriotv.android"
     compileSdk = 36
@@ -42,6 +53,17 @@ android {
         )
     }
 
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -49,6 +71,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
