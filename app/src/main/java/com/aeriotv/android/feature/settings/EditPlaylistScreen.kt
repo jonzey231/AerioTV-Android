@@ -12,9 +12,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions
@@ -23,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,6 +86,20 @@ fun EditPlaylistScreen(
         )
     }
 
+    val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+        sourceType == SourceType.DispatcharrUserPass
+    // Selected channel-profile id (null = All Channels). Seeded from the saved
+    // row; re-seeds when the edited playlist changes.
+    var selectedProfileId by remember(playlist?.id) {
+        mutableStateOf(playlist?.dispatcharrProfileId)
+    }
+    // Pull the server's channel profiles once the Dispatcharr row is loaded so
+    // the picker can list them. Re-runs if the user navigates to a different
+    // playlist while this screen is alive.
+    LaunchedEffect(playlist?.id, isDispatcharr) {
+        if (isDispatcharr) viewModel.loadDispatcharrProfiles()
+    }
+
     val canSave = url.trim().isNotEmpty() && name.trim().isNotEmpty() && !state.isLoading
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -117,6 +138,7 @@ fun EditPlaylistScreen(
                                 SourceType.DispatcharrUserPass, SourceType.XtreamCodes -> password
                                 else -> null
                             },
+                            dispatcharrProfileId = if (isDispatcharr) selectedProfileId else null,
                         )
                         onBack()
                     },
@@ -320,6 +342,53 @@ fun EditPlaylistScreen(
                 SourceType.M3uUrl -> { /* no auth */ }
             }
 
+            if (isDispatcharr) {
+                item {
+                    Section(
+                        header = "Channel Profile",
+                        footer = "Limit this playlist to the channels in a Dispatcharr profile. " +
+                            "\"All Channels\" shows everything on the server.",
+                    ) {
+                        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                            if (state.profilesLoading && state.availableProfiles.isEmpty()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(
+                                        "Loading profiles...",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else {
+                                ProfileRow(
+                                    label = "All Channels",
+                                    detail = null,
+                                    selected = selectedProfileId == null,
+                                    onClick = { selectedProfileId = null },
+                                )
+                                state.availableProfiles.forEach { profile ->
+                                    ProfileRow(
+                                        label = profile.name,
+                                        detail = "${profile.channelCount} channels",
+                                        selected = selectedProfileId == profile.id,
+                                        onClick = { selectedProfileId = profile.id },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (sourceType == SourceType.M3uUrl) {
                 item {
                     Section(
@@ -348,6 +417,51 @@ fun EditPlaylistScreen(
 }
 
 private enum class DispatcharrMode { UsernamePassword, ApiKey }
+
+/**
+ * One selectable channel-profile row in the Edit Playlist > Channel Profile
+ * picker. Shows the profile name (+ optional channel count) with a trailing
+ * checkmark when active, matching the app's other single-select lists (sort
+ * menu, group filter).
+ */
+@Composable
+private fun ProfileRow(
+    label: String,
+    detail: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
 
 @Composable
 private fun Section(

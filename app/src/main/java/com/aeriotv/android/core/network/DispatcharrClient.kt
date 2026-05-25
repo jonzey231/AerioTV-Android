@@ -257,6 +257,21 @@ class DispatcharrClient @Inject constructor() {
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/groups/", apiKey)
 
     /**
+     * GET /api/channels/profiles/ - Dispatcharr "channel profiles": named,
+     * admin-curated subsets of channels (e.g. "Plex", "Emby"). Each profile
+     * object carries the full list of member channel ids under `channels`.
+     *
+     * Dispatcharr exposes no server-side per-account default profile (the
+     * user's /api/accounts/users/me/ `channel_profiles` is empty for admins,
+     * and there is no implicit "All" row), so AerioTV lets the user pick a
+     * profile per playlist (Settings -> Edit Playlist -> Channel Profile) and
+     * resolves the membership against this list client-side. A null selection
+     * means "All Channels" (no filter).
+     */
+    suspend fun listProfiles(baseUrl: String, apiKey: String): List<DispatcharrProfile> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/profiles/", apiKey)
+
+    /**
      * GET /api/epg/grid/ - bulk EPG window covering roughly -1h to +24h. iOS uses
      * this as the universal EPG source for Dispatcharr-backed playlists; the
      * `/output/epg` XMLTV path is gated by Dispatcharr 0.23+ LAN-only policy and
@@ -782,6 +797,18 @@ data class MeResponse(
 data class DispatcharrGroup(
     val id: Int,
     val name: String,
+)
+
+/**
+ * One row from `/api/channels/profiles/`. `channels` is the list of member
+ * channel ids (matching [DispatcharrChannel.id]) used to filter a playlist
+ * down to a single profile. Tolerant of older builds that omit `channels`.
+ */
+@Serializable
+data class DispatcharrProfile(
+    val id: Int,
+    val name: String,
+    val channels: List<Int> = emptyList(),
 )
 
 @Serializable

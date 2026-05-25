@@ -7,6 +7,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.repository.ChannelProfileOption
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
@@ -59,6 +60,13 @@ class PlaylistViewModel @Inject constructor(
         val sortMode: SortMode = SortMode.ByNumber,
         val isLoading: Boolean = false,
         val error: String? = null,
+        /**
+         * Dispatcharr channel profiles available for the active playlist, shown
+         * as scoping options in Edit Playlist. Empty until [loadDispatcharrProfiles]
+         * resolves (or for non-Dispatcharr sources / servers with no profiles).
+         */
+        val availableProfiles: List<ChannelProfileOption> = emptyList(),
+        val profilesLoading: Boolean = false,
     )
 
     companion object {
@@ -358,6 +366,31 @@ class PlaylistViewModel @Inject constructor(
      * Save action — connection details + auth credentials + EPG URL can change
      * but the source type does not (iOS gates that too via a separate flow).
      */
+    /**
+     * Load the Dispatcharr channel profiles for the active playlist so the
+     * Edit Playlist screen can render the Channel Profile picker. No-op (and
+     * clears any stale list) for non-Dispatcharr sources. Failures leave the
+     * list empty so the picker just shows "All Channels".
+     */
+    fun loadDispatcharrProfiles() {
+        viewModelScope.launch {
+            val active = repository.activePlaylist() ?: return@launch
+            val sourceType = SourceType.entries.firstOrNull { it.name == active.sourceType }
+                ?: SourceType.M3uUrl
+            val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+                sourceType == SourceType.DispatcharrUserPass
+            if (!isDispatcharr) {
+                _state.update { it.copy(availableProfiles = emptyList(), profilesLoading = false) }
+                return@launch
+            }
+            _state.update { it.copy(profilesLoading = true) }
+            val profiles = runCatching { repository.listChannelProfiles(active) }
+                .onFailure { Log.w(TAG, "loadDispatcharrProfiles failed", it) }
+                .getOrDefault(emptyList())
+            _state.update { it.copy(availableProfiles = profiles, profilesLoading = false) }
+        }
+    }
+
     fun saveEdits(
         name: String,
         url: String,
@@ -366,6 +399,7 @@ class PlaylistViewModel @Inject constructor(
         apiKey: String?,
         username: String?,
         password: String?,
+        dispatcharrProfileId: Int?,
     ) {
         viewModelScope.launch {
             val active = repository.activePlaylist() ?: return@launch
@@ -384,6 +418,7 @@ class PlaylistViewModel @Inject constructor(
                 apiKey = apiKey?.trim()?.ifBlank { null },
                 username = username?.trim()?.ifBlank { null },
                 password = password?.ifBlank { null },
+                dispatcharrProfileId = dispatcharrProfileId,
             )
             repository.loadAndPersist(request, existingId = active.id).fold(
                 onSuccess = { (entity, channels) ->

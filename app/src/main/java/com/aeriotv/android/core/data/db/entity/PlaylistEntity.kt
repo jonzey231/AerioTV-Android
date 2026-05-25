@@ -53,6 +53,15 @@ data class PlaylistEntity(
      * and bunch together at the top until the user reorders.
      */
     val displayOrder: Int = 0,
+    /**
+     * Optional Dispatcharr channel-profile id this playlist is scoped to.
+     * When non-null, only channels that belong to that profile (per
+     * `/api/channels/profiles/`) are surfaced in the channel list, guide,
+     * search, and multiview; null means "All Channels" (no filter). Ignored
+     * for non-Dispatcharr sources. Set via Settings -> Edit Playlist ->
+     * Channel Profile. Added in DB v11 (preserving migration, not destructive).
+     */
+    val dispatcharrProfileId: Int? = null,
 )
 // TODO Phase 9 (Block Store): move apiKey + password out of Room into Google Play
 // Block Store / EncryptedSharedPreferences. Room cleartext storage is acceptable for

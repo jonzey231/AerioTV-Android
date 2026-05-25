@@ -78,6 +78,9 @@ class PlaylistRepository @Inject constructor(
         val apiKey: String? = null,
         val username: String? = null,
         val password: String? = null,
+        /** Dispatcharr channel-profile id to scope this playlist to, or null
+         * for "All Channels". Ignored for non-Dispatcharr sources. */
+        val dispatcharrProfileId: Int? = null,
     )
 
     suspend fun activePlaylist(): PlaylistEntity? = dao.firstActive()
@@ -123,6 +126,7 @@ class PlaylistRepository @Inject constructor(
             base = normalisedBase,
             userEpgUrl = request.epgUrl,
             apiKey = resolvedApiKey,
+            profileId = request.dispatcharrProfileId,
         )
 
         val entity = PlaylistEntity(
@@ -138,6 +142,7 @@ class PlaylistRepository @Inject constructor(
             channelCount = channels.size,
             lastRefreshedAt = System.currentTimeMillis(),
             isActive = true,
+            dispatcharrProfileId = request.dispatcharrProfileId,
         )
         // New / re-loaded playlist becomes the active one. Mirrors iOS commit
         // f72b942 — wrap "deactivate others + upsert" in a transactional DAO
@@ -165,9 +170,9 @@ class PlaylistRepository @Inject constructor(
         val channels = when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass ->
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    fetchChannelsFor(sourceType, base, playlist.epgUrl, key)
+                    fetchChannelsFor(sourceType, base, playlist.epgUrl, key, playlist.dispatcharrProfileId)
                 }
-            else -> fetchChannelsFor(sourceType, base, playlist.epgUrl, playlist.apiKey)
+            else -> fetchChannelsFor(sourceType, base, playlist.epgUrl, playlist.apiKey, playlist.dispatcharrProfileId)
         }
         dao.update(
             playlist.copy(
@@ -286,6 +291,23 @@ class PlaylistRepository @Inject constructor(
         programmes
     }
 
+    /**
+     * Fetch the Dispatcharr channel profiles available for [playlist] so the
+     * Edit Playlist screen can offer them as scoping options. Returns an empty
+     * list for non-Dispatcharr sources. Routed through the AuthBroker so a
+     * rotated api_key silently rebootstraps instead of surfacing a 401.
+     */
+    suspend fun listChannelProfiles(playlist: PlaylistEntity): List<ChannelProfileOption> {
+        val sourceType = playlist.resolvedSourceType()
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+            sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr) return emptyList()
+        val base = effectiveBaseUrl(playlist)
+        return dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            dispatcharrClient.listProfiles(base, key)
+        }.map { ChannelProfileOption(id = it.id, name = it.name, channelCount = it.channels.size) }
+    }
+
     suspend fun clear() {
         dispatcharrTokenStore.clearAll()
         dao.clear()
@@ -309,9 +331,9 @@ class PlaylistRepository @Inject constructor(
         val channels = when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass ->
                 dispatcharrAuth.withApiKeyRetry(entity.id) { key ->
-                    fetchChannelsFor(sourceType, base, entity.epgUrl, key)
+                    fetchChannelsFor(sourceType, base, entity.epgUrl, key, entity.dispatcharrProfileId)
                 }
-            else -> fetchChannelsFor(sourceType, base, entity.epgUrl, entity.apiKey)
+            else -> fetchChannelsFor(sourceType, base, entity.epgUrl, entity.apiKey, entity.dispatcharrProfileId)
         }
         dao.update(entity.copy(channelCount = channels.size, lastRefreshedAt = System.currentTimeMillis()))
         entity to channels
@@ -339,6 +361,7 @@ class PlaylistRepository @Inject constructor(
         base: String,
         userEpgUrl: String?,
         apiKey: String?,
+        profileId: Int? = null,
     ): List<M3UChannel> = when (sourceType) {
         SourceType.M3uUrl -> {
             val bytes = fetcher.fetchBytes(base)
@@ -354,7 +377,20 @@ class PlaylistRepository @Inject constructor(
                 ?: throw IllegalArgumentException("Dispatcharr API key is required")
             val groups = dispatcharrClient.listGroups(base, key)
                 .associate { it.id to it.name }
+            // Channel-profile scoping. When the playlist is pinned to a profile,
+            // resolve that profile's member channel ids and keep only those.
+            // A selected-but-now-deleted profile (firstOrNull == null) falls
+            // back to showing everything rather than a blank list. Skipped
+            // entirely (no extra request) when no profile is selected.
+            val allowedChannelIds: Set<Int>? = profileId?.let { pid ->
+                runCatching {
+                    dispatcharrClient.listProfiles(base, key).firstOrNull { it.id == pid }
+                }.getOrNull()?.channels?.toSet()
+            }
             val channels = dispatcharrClient.listChannels(base, key)
+                .let { list ->
+                    if (allowedChannelIds != null) list.filter { it.id in allowedChannelIds } else list
+                }
             channels
                 .filter { !it.uuid.isNullOrBlank() }
                 .sortedWith(compareBy(
@@ -385,6 +421,17 @@ class PlaylistRepository @Inject constructor(
 
 private fun PlaylistEntity.resolvedSourceType(): SourceType =
     SourceType.entries.firstOrNull { it.name == sourceType } ?: SourceType.M3uUrl
+
+/**
+ * UI-facing summary of a Dispatcharr channel profile for the Edit Playlist
+ * picker. [channelCount] lets the row show "Plex (65 channels)" so the user
+ * can tell the profiles apart at a glance.
+ */
+data class ChannelProfileOption(
+    val id: Int,
+    val name: String,
+    val channelCount: Int,
+)
 
 /**
  * Convert Dispatcharr `/api/epg/grid/` entries into the universal EPGProgramme
