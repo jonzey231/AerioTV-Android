@@ -105,6 +105,14 @@ fun VODPlayerScreen(
     val inPip by PipState.inPictureInPicture
     val pipAvailable = remember { context.supportsPip() }
 
+    // VOD is always video, so leaving the app should auto-enter PiP while this
+    // screen is up. Cleared when the player leaves composition.
+    DisposableEffect(Unit) {
+        PipState.videoPlaybackActive.value = true
+        PipState.audioPlaybackActive.value = false
+        onDispose { PipState.videoPlaybackActive.value = false }
+    }
+
     var chromeVisible by remember { mutableStateOf(true) }
     var mpvView by remember { mutableStateOf<MPVPlayerView?>(null) }
 

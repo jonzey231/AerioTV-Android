@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import android.util.Rational
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Process-wide PiP state. MainActivity flips [inPictureInPicture] inside its
@@ -22,6 +23,25 @@ import androidx.compose.runtime.mutableStateOf
  */
 object PipState {
     val inPictureInPicture = mutableStateOf(false)
+
+    /**
+     * True while a player screen is foregrounded showing VIDEO (not audio-only).
+     * MainActivity mirrors this into the window's PiP params (setAutoEnterEnabled
+     * on API 31+) and uses it in onUserLeaveHint on older versions, so leaving the
+     * app while video plays auto-enters Picture-in-Picture.
+     */
+    val videoPlaybackActive = MutableStateFlow(false)
+
+    /**
+     * True while a player screen is in AUDIO-ONLY mode. Leaving the app then must
+     * NOT enter PiP; instead a foreground media notification keeps the audio alive
+     * on the status bar + lock screen.
+     */
+    val audioPlaybackActive = MutableStateFlow(false)
+
+    /** Now-playing labels for the background notification used on audio-only leave. */
+    @Volatile var nowPlayingTitle: String = "AerioTV"
+    @Volatile var nowPlayingSubtitle: String = ""
 }
 
 /** Walk a Compose context chain to the host Activity. */

@@ -108,7 +108,13 @@ class PlaybackService : Service() {
 
     private fun buildNotification(title: String, subtitle: String): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            // SINGLE_TOP (not CLEAR_TOP) so tapping the notification RESUMES the
+            // existing activity via onNewIntent -- the player + its stream are
+            // still composed in the background -- instead of recreating it.
+            // CLEAR_TOP on a standard/singleTop activity tears the task down and
+            // relaunches fresh, which is what reopened the app instead of jumping
+            // back into the running stream.
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         val openPi = PendingIntent.getActivity(
             this, 0, openIntent,
@@ -130,6 +136,9 @@ class PlaybackService : Service() {
             .setContentText(subtitle.ifBlank { "Playing in background" })
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // Show full content on the lock screen so audio-only background
+            // playback has reachable controls there, not just in the shade.
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPi)
             .addAction(android.R.drawable.ic_media_pause, "Pause / Resume", pauseToggle)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stop)

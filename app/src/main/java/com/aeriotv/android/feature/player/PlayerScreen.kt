@@ -30,6 +30,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
 import com.aeriotv.android.core.playback.MPVPlayerHolder
+import com.aeriotv.android.core.pip.PipState
 import com.aeriotv.android.core.playback.PlaybackService
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
@@ -158,6 +159,20 @@ fun PlayerScreen(
     var sleepRemainingMillis by remember { mutableStateOf<Long?>(null) }
 
     var mpvView by remember { mutableStateOf<MPVPlayerView?>(null) }
+
+    // Publish playback state for the activity's leave-the-app handling: video
+    // (not audio-only) auto-enters PiP; audio-only instead keeps a background
+    // media notification (no PiP). Cleared when the player leaves composition.
+    DisposableEffect(audioOnly, currentChannel?.id, nowProgramme?.title) {
+        PipState.nowPlayingTitle = currentChannel?.name ?: "AerioTV"
+        PipState.nowPlayingSubtitle = nowProgramme?.title.orEmpty()
+        PipState.videoPlaybackActive.value = !audioOnly
+        PipState.audioPlaybackActive.value = audioOnly
+        onDispose {
+            PipState.videoPlaybackActive.value = false
+            PipState.audioPlaybackActive.value = false
+        }
+    }
 
     val streamUrl = currentChannel?.url.orEmpty()
 
@@ -343,7 +358,18 @@ fun PlayerScreen(
             },
             onToggleAudioOnly = {
                 audioOnly = !audioOnly
-                mpvView?.mpv?.setPropertyString("vid", if (audioOnly) "no" else "auto")
+                val view = mpvView
+                if (audioOnly) {
+                    view?.mpv?.setPropertyString("vid", "no")
+                } else {
+                    // Re-enabling video: on Android, vid=auto alone doesn't bring
+                    // the picture back -- libmpv released the video output when vid
+                    // went to "no" and doesn't re-bind it to the (still-attached)
+                    // SurfaceView. Reloading the current stream in place (the same
+                    // path a channel flip uses) re-inits the VO and restores video.
+                    view?.mpv?.setPropertyString("vid", "auto")
+                    currentChannel?.url?.takeIf { it.isNotBlank() }?.let { view?.playFile(it) }
+                }
             },
             audioOnly = audioOnly,
             onSetSleepMinutes = { minutes ->
