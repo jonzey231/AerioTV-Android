@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -89,6 +90,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Check
@@ -154,7 +156,16 @@ fun GuideScreen(
     // text sizing inside the cells/rail, not from oversized rows. Phone/tablet
     // keep the GuideMetrics defaults.
     val isTv = rememberLiveTvFormFactor().isTv
-    val railWidth = if (isTv) 150.dp else GuideMetrics.RAIL_WIDTH
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    // The channel rail must stay a small slice of the viewport or it eats the
+    // programme grid. The 168dp default was ~half the screen on a compact width
+    // (phones, and the Fold cover screen at ~344dp). Clamp to a narrow rail there;
+    // reserve the wider rail for tablets / the unfolded Fold.
+    val railWidth = when {
+        isTv -> 150.dp
+        screenWidthDp < 600 -> 118.dp
+        else -> GuideMetrics.RAIL_WIDTH
+    }
     val rowHeight = if (isTv) 64.dp else GuideMetrics.ROW_HEIGHT
     val headerHeight = if (isTv) 40.dp else GuideMetrics.HEADER_HEIGHT
 
@@ -241,7 +252,13 @@ fun GuideScreen(
     // row so they pan together.
     val horizontalScrollState = rememberScrollState()
 
-    Column(modifier = modifier.fillMaxSize()) {
+    // The host Scaffold sets contentWindowInsets = WindowInsets(0,0,0,0), so each
+    // tab owns its own status-bar top inset (the List view gets it free from
+    // CenterAlignedTopAppBar). The Guide's header is a bare control Row, so apply
+    // the inset here or the controls + group pills render UNDER the status bar
+    // (clock/battery overlap the All/Sports pills). No-op on Android TV (no status
+    // bar). Matches ChannelListScreen's top-inset behaviour.
+    Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
         // Jump-to-now scroller. Coroutine-driven so animateScrollTo can
         // suspend; matches iOS EPGGuideView's "scroll back to now" button
         // which snaps the time axis so the now-indicator sits ~1/4 of the
@@ -653,7 +670,8 @@ private fun ChannelGuideRow(
                             fallback = channel.groupTitle,
                         ),
                         modifier = Modifier.offset(x = xDp),
-                        onClick = { onProgrammeClick(programme) },
+                        onPlay = onChannelClick,
+                        onShowInfo = { onProgrammeClick(programme) },
                         onRecord = { onProgrammeRecord(programme) },
                         canAddToMultiview = channel.url.isNotBlank() && (!atCap || inMultiview),
                         inMultiview = inMultiview,
@@ -687,7 +705,8 @@ private fun ProgrammeCell(
     isTv: Boolean,
     categoryTint: androidx.compose.ui.graphics.Color?,
     modifier: Modifier,
-    onClick: () -> Unit,
+    onPlay: () -> Unit,
+    onShowInfo: () -> Unit,
     onRecord: () -> Unit,
     canAddToMultiview: Boolean,
     inMultiview: Boolean,
@@ -730,7 +749,9 @@ private fun ProgrammeCell(
             .border(borderWidth, borderColor, RoundedCornerShape(6.dp))
             .onFocusChanged { focused = it.isFocused }
             .combinedClickable(
-                onClick = onClick,
+                // Single tap/click plays the channel; the program-info sheet +
+                // actions live behind a long press (the menu below). iOS parity.
+                onClick = onPlay,
                 onLongClick = { menuOpen = true },
             )
             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -745,7 +766,7 @@ private fun ProgrammeCell(
                 text = { Text("Program Info") },
                 onClick = {
                     menuOpen = false
-                    onClick()
+                    onShowInfo()
                 },
             )
             DropdownMenuItem(

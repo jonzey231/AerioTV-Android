@@ -475,8 +475,14 @@ private fun Tile(
                     view.playFile(channel.url)
                     currentUrlRef.value = channel.url
                 }
-                // Initial audio focus state.
+                // Initial audio focus state. `mute` is the reliable gate: aid=no
+                // set right after playFile doesn't survive the async file load
+                // (mpv re-selects the default audio track on FILE_LOADED), which
+                // let every tile play sound at once. mute applies immediately and
+                // persists regardless of track-selection timing; aid still spares
+                // the CPU for non-focused tiles once it sticks.
                 view.mpv.setPropertyString("aid", if (isAudioFocused) "auto" else "no")
+                view.mpv.setPropertyString("mute", if (isAudioFocused) "no" else "yes")
                 view
             },
             update = { view ->
@@ -489,6 +495,7 @@ private fun Tile(
                     currentUrlRef.value = channel.url
                 }
                 view.mpv.setPropertyString("aid", if (isAudioFocused) "auto" else "no")
+                view.mpv.setPropertyString("mute", if (isAudioFocused) "no" else "yes")
             },
             onRelease = { view ->
                 Log.i(TAG, "Tile MPV releasing: ${channel.name}")
