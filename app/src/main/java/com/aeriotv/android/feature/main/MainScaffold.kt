@@ -317,22 +317,30 @@ private fun TvTopTabBar(
     selected: AppTab,
     onSelect: (AppTab) -> Unit,
 ) {
-    Row(
+    // tvOS-style floating nav: the tabs are grouped into one centered, rounded
+    // "segmented" capsule over the app background (no full-width surface toolbar
+    // strip), so the bar reads as a polished pill group rather than a heavy bar.
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            // Overscan-safe horizontally; kept vertically slim so the bar
-            // doesn't steal space from the guide below.
-            .padding(horizontal = 48.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(top = 12.dp, bottom = 6.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        tabs.forEach { tab ->
-            TvTab(
-                tab = tab,
-                selected = tab == selected,
-                onFocused = { onSelect(tab) },
-            )
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(30.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            tabs.forEach { tab ->
+                TvTab(
+                    tab = tab,
+                    selected = tab == selected,
+                    onFocused = { onSelect(tab) },
+                )
+            }
         }
     }
 }

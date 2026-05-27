@@ -64,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -168,6 +170,11 @@ fun GuideScreen(
     }
     val rowHeight = if (isTv) 56.dp else GuideMetrics.ROW_HEIGHT
     val headerHeight = if (isTv) 40.dp else GuideMetrics.HEADER_HEIGHT
+    // tvOS draws the guide grid separators as cyan (accentPrimary) hairlines, not
+    // neutral gray; mirror that on TV so the grid reads as one continuous surface.
+    // Phone keeps the existing gray surfaceVariant divider.
+    val guideDivider = if (isTv) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        else MaterialTheme.colorScheme.surfaceVariant
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
@@ -370,7 +377,7 @@ fun GuideScreen(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+        HorizontalDivider(color = guideDivider, thickness = 0.5.dp)
 
         // Time-header row: empty corner over the channel rail + horizontally-scrolled hour labels.
         Row(modifier = Modifier.fillMaxWidth()) {
@@ -417,7 +424,7 @@ fun GuideScreen(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+        HorizontalDivider(color = guideDivider, thickness = 0.5.dp)
 
         LazyColumn(
             modifier = Modifier
@@ -474,7 +481,7 @@ fun GuideScreen(
                     palette = palette,
                     multiviewStore = multiviewStore,
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+                HorizontalDivider(color = guideDivider, thickness = 0.5.dp)
             }
         }
     }
@@ -556,12 +563,22 @@ private fun ChannelGuideRow(
     ) {
         // Sticky-left channel rail. Tap plays the channel; long-press opens the
         // favorites toggle. Mirrors iOS EPGGuideView channel-rail .contextMenu
-        // (EPGGuideView.swift:2823).
-        Row(
+        // (EPGGuideView.swift:2823). Wrapped in a Box so the tvOS-style trailing
+        // accentPrimary separator can overlay the rail's right edge.
+        Box(
             modifier = Modifier
                 .width(railWidth)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.4f))
+                .fillMaxHeight(),
+        ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                // tvOS rail uses a solid card background; phone keeps the lighter
+                // translucent fill so the programme strip shows faintly behind it.
+                .background(
+                    if (isTv) MaterialTheme.colorScheme.surface
+                    else MaterialTheme.colorScheme.surface.copy(alpha = 0.4f),
+                )
                 .combinedClickable(
                     onClick = onChannelClick,
                     onLongClick = { railMenuOpen = true },
@@ -642,6 +659,18 @@ private fun ChannelGuideRow(
                 }
             }
         }
+            // tvOS trailing rail separator (accentPrimary.opacity(0.2)) so the
+            // sticky channel column reads as a distinct surface from the grid.
+            if (isTv) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
+                )
+            }
+        }
 
         // Programme strip - horizontally scrolled with the header.
         Box(
@@ -689,7 +718,9 @@ private fun ChannelGuideRow(
                         onToggleMultiview = { multiviewStore.toggle(channel) },
                     )
                 }
-                // "Now" indicator - 2dp cyan line, only drawn when "now" falls inside the window.
+                // "Now" indicator vertical line, only drawn when "now" falls
+                // inside the window. tvOS draws it in red (statusLive); phone
+                // keeps the cyan accent.
                 if (nowMillis in (windowStart + 1)..(windowStart + windowDurationMs - 1)) {
                     val nowX = msToDp(nowMillis - windowStart, hourWidth)
                     Box(
@@ -697,7 +728,9 @@ private fun ChannelGuideRow(
                             .offset(x = nowX)
                             .width(2.dp)
                             .fillMaxHeight()
-                            .background(MaterialTheme.colorScheme.primary),
+                            .background(
+                                if (isTv) Color(0xFFFF4757) else MaterialTheme.colorScheme.primary,
+                            ),
                     )
                 }
             }
@@ -732,20 +765,48 @@ private fun ProgrammeCell(
     val isReminderSet by remindersVm.observeIsSet(key)
         .collectAsStateWithLifecycle(initialValue = false)
     var focused by remember { mutableStateOf(false) }
-    val baseBg = categoryTint ?: if (isLive)
+    // Short time-range label ("7:00 - 7:30"), shown on the TV guide cell beneath
+    // the title to match the tvOS Emby-style cell (title + time range).
+    val cellTimeFmt = remember { SimpleDateFormat("h:mm", Locale.getDefault()) }
+    val timeRange = remember(programme.startMillis, programme.endMillis) {
+        "${cellTimeFmt.format(java.util.Date(programme.startMillis))} - " +
+            cellTimeFmt.format(java.util.Date(programme.endMillis))
+    }
+    // tvOS guide cells are flat, full-height "Emby-style" rectangles separated
+    // only by the row hairlines: NO rounded corners or always-on border at rest;
+    // focus / live / future are conveyed purely by fill brightness, plus a thin
+    // focus ring for D-pad clarity. Phone keeps the rounded, bordered card cell.
+    val cellShape = when {
+        !isTv -> RoundedCornerShape(6.dp)
+        focused -> RoundedCornerShape(4.dp)
+        else -> RectangleShape
+    }
+    val phoneBaseBg = categoryTint ?: if (isLive)
         MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     else
         MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)
-    val baseBorderColor = if (isLive)
+    val cellBg = if (isTv) {
+        when {
+            focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+            categoryTint != null -> categoryTint
+            isLive -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+            else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.30f)
+        }
+    } else {
+        if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.32f) else phoneBaseBg
+    }
+    val phoneBaseBorder = if (isLive)
         MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
     else
         MaterialTheme.colorScheme.surfaceVariant
-    // D-pad focus highlight: a bright, thick ring plus a brightened fill so the
-    // focused programme cell is unmistakable on a 10-foot display. Harmless on
-    // touch devices, which never raise focus on these cells.
-    val bg = if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.32f) else baseBg
-    val borderColor = if (focused) MaterialTheme.colorScheme.primary else baseBorderColor
-    val borderWidth = if (focused) 3.dp else 0.5.dp
+    val cellBorderColor = if (focused) MaterialTheme.colorScheme.primary else phoneBaseBorder
+    val cellBorderWidth = if (isTv) {
+        if (focused) 2.dp else 0.dp
+    } else {
+        if (focused) 3.dp else 0.5.dp
+    }
+    // Phone title keeps the cyan live tint; the tvOS title stays neutral (turning
+    // white only on focus, like the source).
     val titleColor = if (isLive)
         MaterialTheme.colorScheme.primary
     else
@@ -754,10 +815,19 @@ private fun ProgrammeCell(
         modifier = modifier
             .width(widthDp)
             .fillMaxHeight()
-            .padding(start = 1.dp, end = 1.dp, top = 4.dp, bottom = 4.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(bg)
-            .border(borderWidth, borderColor, RoundedCornerShape(6.dp))
+            .then(
+                // TV: a 1dp trailing seam so adjacent flat cells stay distinct.
+                // Phone: the original inset that floats the rounded card.
+                if (isTv) Modifier.padding(end = 1.dp)
+                else Modifier.padding(start = 1.dp, end = 1.dp, top = 4.dp, bottom = 4.dp),
+            )
+            .clip(cellShape)
+            .background(cellBg)
+            .then(
+                if (cellBorderWidth > 0.dp)
+                    Modifier.border(cellBorderWidth, cellBorderColor, cellShape)
+                else Modifier,
+            )
             .onFocusChanged { focused = it.isFocused }
             .combinedClickable(
                 // Single tap/click plays the channel; the program-info sheet +
@@ -766,7 +836,7 @@ private fun ProgrammeCell(
                 onLongClick = { menuOpen = true },
             )
             .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.Top,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         DropdownMenu(
             expanded = menuOpen,
@@ -823,22 +893,43 @@ private fun ProgrammeCell(
                 )
             }
         }
-        Text(
-            text = programme.title.ifBlank { "—" },
-            style = if (isTv) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelMedium,
-            color = titleColor,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = if (isTv) 1 else 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (programme.description.isNotBlank()) {
+        if (isTv) {
+            // tvOS cell: bold title + a time-range line. Title turns white on
+            // focus (over the bright fill); the time line dims to match.
             Text(
-                text = programme.description,
-                style = if (isTv) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (isTv) 1 else 2,
+                text = programme.title.ifBlank { "No info" },
+                style = MaterialTheme.typography.titleSmall,
+                color = if (focused) Color.White else MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Text(
+                text = timeRange,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (focused) Color.White.copy(alpha = 0.7f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Text(
+                text = programme.title.ifBlank { "No info" },
+                style = MaterialTheme.typography.labelMedium,
+                color = titleColor,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (programme.description.isNotBlank()) {
+                Text(
+                    text = programme.description,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
