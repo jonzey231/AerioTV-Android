@@ -152,6 +152,7 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
     implementation(libs.sh.calvin.reorderable)
+    implementation(libs.androidx.media)
 
     debugImplementation(libs.androidx.ui.tooling)
 }
