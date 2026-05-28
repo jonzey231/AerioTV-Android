@@ -94,6 +94,7 @@ fun MainScaffold(
     onMovieClick: (String) -> Unit = {},
     onSeriesClick: (Int) -> Unit = {},
     onEpisodeResume: (String) -> Unit = {},
+    onPlayRecording: (String, String) -> Unit = { _, _ -> },
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -229,6 +230,7 @@ fun MainScaffold(
                     onMovieClick = onMovieClick,
                     onSeriesClick = onSeriesClick,
                     onEpisodeResume = onEpisodeResume,
+                    onPlayRecording = onPlayRecording,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
@@ -312,6 +314,7 @@ fun MainScaffold(
             onMovieClick = onMovieClick,
             onSeriesClick = onSeriesClick,
             onEpisodeResume = onEpisodeResume,
+            onPlayRecording = onPlayRecording,
             modifier = Modifier.padding(padding),
         )
     }
@@ -329,13 +332,14 @@ private fun MainTabContent(
     onMovieClick: (String) -> Unit,
     onSeriesClick: (Int) -> Unit,
     onEpisodeResume: (String) -> Unit,
+    onPlayRecording: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier) {
         when (selectedTab) {
             AppTab.LiveTV -> LiveTVTabContent(onChannelClick = onChannelClick)
             AppTab.Favorites -> FavoritesTabContent(onChannelClick = onChannelClick)
-            AppTab.DVR -> DvrTabContent()
+            AppTab.DVR -> DvrTabContent(onPlayRecording = onPlayRecording)
             AppTab.OnDemand -> OnDemandTabContent(
                 onMovieClick = { movie -> onMovieClick(movie.uuid) },
                 onSeriesClick = { series -> onSeriesClick(series.id) },

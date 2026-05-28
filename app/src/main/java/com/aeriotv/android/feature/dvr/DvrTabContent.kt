@@ -78,6 +78,7 @@ import java.util.Date
 @Composable
 fun DvrTabContent(
     modifier: Modifier = Modifier,
+    onPlayRecording: (String, String) -> Unit = { _, _ -> },
     viewModel: DvrViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -190,15 +191,21 @@ fun DvrTabContent(
                     onEdit = { pendingEdit = rec },
                     onDelete = { pendingDelete = rec },
                     onPlay = {
-                        // Server completed playback + local playback both need
-                        // a player route that takes a raw URL. Wiring lands in
-                        // a follow-up phase (iOS MyRecordingsView playRecording
-                        // / playServerRecording paths).
-                        Toast.makeText(
-                            context,
-                            "Recording playback lands in the next phase.",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        // Audit task #43: local recordings have a file:// URL
+                        // resolved at toRecording() time; route to the VOD
+                        // player. Server-side recordings still toast because
+                        // the playable URL plumbing on the Dispatcharr side
+                        // (auth + endpoint) lands in a follow-up phase.
+                        val url = rec.playbackUrl
+                        if (rec.source == DvrViewModel.Source.Local && !url.isNullOrBlank()) {
+                            onPlayRecording(url, rec.title)
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Playback for server recordings lands in the next phase.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
                     },
                     onSaveToDevice = {
                         // iOS "Save to Device" walks the recording over to the

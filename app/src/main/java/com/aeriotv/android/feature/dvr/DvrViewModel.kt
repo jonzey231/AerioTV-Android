@@ -51,6 +51,13 @@ class DvrViewModel @Inject constructor(
         val endMillis: Long,
         val status: Status,
         val fileSizeBytes: Long,
+        /**
+         * Playable URL for completed recordings. `file://...` for local DVR
+         * captures (audit #43); a server URL for Dispatcharr server-side
+         * recordings will follow in a separate phase. `null` while the
+         * recording is still in-progress / scheduled / failed.
+         */
+        val playbackUrl: String? = null,
     ) {
         enum class Status { Scheduled, Recording, Completed, Failed, Stopped, Unknown }
     }
@@ -330,6 +337,15 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
         "failed", "error" -> DvrViewModel.Recording.Status.Failed
         else -> DvrViewModel.Recording.Status.Unknown
     }
+    // file:// URI for libmpv. Path may contain spaces / unicode (the recording
+    // service stamps the user-supplied channel name + ISO start time), so
+    // URL-encode every segment via android.net.Uri.fromFile. mpv on Android
+    // happily resolves file:// against the filesystem when SAF isn't involved.
+    val isPlayable = status == DvrViewModel.Recording.Status.Completed ||
+        status == DvrViewModel.Recording.Status.Stopped
+    val playable = if (isPlayable && filePath.isNotBlank()) {
+        android.net.Uri.fromFile(java.io.File(filePath)).toString()
+    } else null
     return DvrViewModel.Recording(
         id = "local-$id",
         source = DvrViewModel.Source.Local,
@@ -339,6 +355,7 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
         endMillis = endedAt,
         status = status,
         fileSizeBytes = byteSize,
+        playbackUrl = playable,
     )
 }
 

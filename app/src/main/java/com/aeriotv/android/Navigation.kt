@@ -76,6 +76,7 @@ object Routes {
     const val SERIES_DETAIL = "series_detail/{seriesId}"
     const val VOD_EPISODE_PLAYER = "vod_episode_player/{episodeUuid}"
     const val MULTIVIEW = "multiview"
+    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
     fun player(channelId: String) = "player/${Uri.encode(channelId)}"
@@ -83,6 +84,8 @@ object Routes {
     fun movieDetail(movieUuid: String) = "movie_detail/${Uri.encode(movieUuid)}"
     fun seriesDetail(seriesId: Int) = "series_detail/$seriesId"
     fun vodEpisodePlayer(episodeUuid: String) = "vod_episode_player/${Uri.encode(episodeUuid)}"
+    fun recordingPlayer(playbackUrl: String, title: String) =
+        "recording_player/${Uri.encode(playbackUrl)}/${Uri.encode(title)}"
 }
 
 @Composable
@@ -365,6 +368,9 @@ fun AerioTVNavHost(
                     onEpisodeResume = { videoId ->
                         navController.navigate(Routes.vodEpisodePlayer(videoId))
                     },
+                    onPlayRecording = { playbackUrl, title ->
+                        navController.navigate(Routes.recordingPlayer(playbackUrl, title))
+                    },
                 )
             }
 
@@ -584,6 +590,32 @@ fun AerioTVNavHost(
                     loadingMessage = resolveError ?: if (resolvedUrl == null) "Loading…" else null,
                     videoId = movieUuid,
                     posterUrl = movie?.posterUrl,
+                )
+            }
+
+            // Audit task #43: local DVR recording playback. Takes a raw
+            // file:// URL (from LocalRecordingEntity.filePath, encoded in
+            // DvrViewModel.Recording.playbackUrl) + a display title.
+            // VODPlayerScreen handles the file source natively via mpv;
+            // no HTTP headers, no live cache window, no resolveMovieUrl.
+            // Server-side recording playback is a follow-up phase.
+            composable(
+                route = Routes.RECORDING_PLAYER,
+                arguments = listOf(
+                    navArgument("playbackUrl") { type = NavType.StringType },
+                    navArgument("title") { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val playbackUrl = Uri.decode(entry.arguments?.getString("playbackUrl").orEmpty())
+                val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
+                VODPlayerScreen(
+                    streamUrl = playbackUrl,
+                    title = title.ifBlank { "Recording" },
+                    httpHeaders = emptyMap(),
+                    onClose = { navController.popBackStack() },
+                    loadingMessage = null,
+                    videoId = playbackUrl,
+                    posterUrl = null,
                 )
             }
         }
