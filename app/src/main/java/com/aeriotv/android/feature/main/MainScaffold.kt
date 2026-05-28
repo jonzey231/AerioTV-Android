@@ -200,13 +200,15 @@ fun MainScaffold(
     // tvOS TabView. Phone / tablet / fold keep the bottom nav below.
     val isTv = rememberLiveTvFormFactor().isTv
     if (isTv) {
-        // When the TV mini-player is active, shift the entire chrome (top
-        // tab bar + chips + guide rows) down so the mini-window in the
-        // top-right doesn't overlap anything (tvOS PlayerSession parity).
-        // The mini is ~118dp tall + 36dp top inset + 24dp hint+spacer = ~178dp;
-        // 184dp here gives a small breathing margin under the hint chip.
-        val miniActive = miniPlayerState is MiniPlayerSession.State.Active
-        val tvMiniTopShift = if (miniActive) 184.dp else 0.dp
+        // tvOS layout parity (Archie 2026-05-28 reference shot): when the
+        // mini-player is active, the top chrome (centered nav tabs +
+        // sync pill on the left + group filter pills below) does NOT
+        // shift down. The mini-player sits at the top-right in the empty
+        // space alongside the centered nav tabs. They coexist because the
+        // nav pill row is centered (Live TV / On Demand / Settings ~250dp
+        // wide) and the mini is 210dp wide aligned to the right edge -- on
+        // a 960dp-wide canvas there's ~250dp of empty space between them.
+        // An earlier revision shoved everything down 184dp; that was wrong.
         // Audit #57: a single FocusRequester bound to the tab-bar Row. The
         // Row uses focusRestorer() so re-entry from a section restores the
         // pill the user last focused (typically the currently-selected one).
@@ -217,8 +219,7 @@ fun MainScaffold(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(top = tvMiniTopShift),
+                    .background(MaterialTheme.colorScheme.background),
             ) {
                 TvTopTabBar(
                     tabs = tabs,
