@@ -27,11 +27,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import com.aeriotv.android.core.pip.PipState
+import com.aeriotv.android.core.playback.AerioExoPlayerHolder
 import com.aeriotv.android.core.playback.MPVPlayerHolder
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.system.NotificationPermissionGate
 import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
+import com.aeriotv.android.feature.player.ExoWindowState
 import com.aeriotv.android.feature.player.MpvWindowState
+import com.aeriotv.android.feature.player.PersistentExoWindow
 import com.aeriotv.android.feature.player.PersistentMpvWindow
 import com.aeriotv.android.feature.splash.SplashGate
 import com.aeriotv.android.ui.theme.AerioTVTheme
@@ -46,6 +49,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var miniPlayerSession: MiniPlayerSession
     @Inject lateinit var mpvHolder: MPVPlayerHolder
     @Inject lateinit var mpvWindowState: MpvWindowState
+    @Inject lateinit var exoHolder: AerioExoPlayerHolder
+    @Inject lateinit var exoWindowState: ExoWindowState
 
     /**
      * Most recent deep-link target the activity has received from a
@@ -279,6 +284,25 @@ class MainActivity : ComponentActivity() {
                         // punch-through (video) -- chrome IS in state
                         // but never reaches the pixels.
                         Box(modifier = Modifier.fillMaxSize()) {
+                            // PersistentExoWindow is declared FIRST so it
+                            // sits at the bottom of the z-stack, same
+                            // logic as PersistentMpvWindow re: NavHost
+                            // chrome painting over it in Fullscreen mode
+                            // and its own zIndex(1f) lifting it above
+                            // the NavHost in Mini mode (Phase 175).
+                            //
+                            // Both player views live here side by side
+                            // during the migration (task #61). Live TV
+                            // routes through PersistentExoWindow, VOD +
+                            // multiview still route through Persistent
+                            // MpvWindow. Each side starts in Hidden mode
+                            // so the inactive player consumes no layout
+                            // space. Once tasks #62 / #63 land the
+                            // MPV pair is removed entirely (task #67).
+                            PersistentExoWindow(
+                                holder = exoHolder,
+                                state = exoWindowState,
+                            )
                             PersistentMpvWindow(
                                 mpvHolder = mpvHolder,
                                 state = mpvWindowState,

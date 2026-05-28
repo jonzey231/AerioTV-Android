@@ -94,6 +94,13 @@ fun PlayerScreen(
     }
     val mpvHolder = remember { playerEntry.mpvPlayerHolder() }
     val mpvWindowState = remember { playerEntry.mpvWindowState() }
+    // Media3 migration (task #61). Live TV plays through ExoPlayer. The
+    // MPV pair still hangs around for the audio-track / subtitle /
+    // playback-speed UI (task #66 ports those readers) -- those calls
+    // null-check the View so they degrade to empty lists when MPV
+    // is dormant, which it is once we route Live TV through Exo.
+    val exoHolder = remember { playerEntry.exoPlayerHolder() }
+    val exoWindowState = remember { playerEntry.exoWindowState() }
 
     // Channel-flip state. The MPV view stays alive across flips; only the
     // current channel index changes and we call playFile again with the new URL.
@@ -133,23 +140,35 @@ fun PlayerScreen(
     // beneath our chrome overlays.
     LaunchedEffect(Unit) {
         PlaybackService.stop(context)
-        mpvHolder.setVideoEnabled(true)
-        mpvWindowState.requestFullscreen()
+        // Apply Dispatcharr / Xtream auth headers + custom User-Agent
+        // before the first setMediaSource so the DataSource picks them
+        // up. Replays on every mount so reentering the player after a
+        // settings change (e.g. swapping API key) takes effect on the
+        // next channel tap.
+        exoHolder.httpHeaders = httpHeaders
+        // Park the libmpv pair so its surface isn't competing with
+        // Exo's for display real estate. The Mpv side is still in the
+        // composition tree (task #67 removes it for real); hiding here
+        // is enough.
+        mpvWindowState.hide()
+        exoWindowState.requestFullscreen()
     }
 
-    // Channel-switch / first-mount playFile: when the held MPV is on a
-    // different channel than the user just selected, swap streams. Because
-    // the SurfaceView is persistent (Phase 165) we never have to wait for
-    // it to attach -- if mpvHolder.view exists, vo is already wired.
+    // Channel-switch / first-mount setMediaItem: when the held Exo
+    // player is on a different channel than the user just selected,
+    // swap streams via setMediaSource. The PlayerView at MainActivity
+    // root holds the surface across this so no reattach is required.
     LaunchedEffect(currentChannel?.id) {
         val channelId = currentChannel?.id ?: return@LaunchedEffect
         val url = currentChannel?.url ?: return@LaunchedEffect
         if (url.isBlank()) return@LaunchedEffect
-        val view = mpvHolder.view
-        if (view != null && mpvHolder.currentChannelId != channelId) {
-            Log.i(TAG, "Channel switch on persistent view -> $url")
-            view.playFile(url)
-            mpvHolder.currentChannelId = channelId
+        if (exoHolder.currentChannelId != channelId) {
+            Log.i(TAG, "Channel switch on Exo persistent player -> $url")
+            // Refresh headers each switch -- some Dispatcharr deployments
+            // rotate the API key per stream.
+            exoHolder.httpHeaders = httpHeaders
+            exoHolder.playUrl(url)
+            exoHolder.currentChannelId = channelId
         }
     }
 
@@ -194,14 +213,28 @@ fun PlayerScreen(
             if (!chromeVisible) {
                 chromeVisible = true
             } else {
-                mpvWindowState.requestMini()
+                // Live TV now flips the Exo persistent window into Mini.
+                // mpvWindowState stays at Hidden (set in the mount
+                // LaunchedEffect) until task #62 ports VOD too.
+                exoWindowState.requestMini()
                 miniPlayerVm.showMiniPlayer()
                 onClose()
             }
         } else {
+            // Phone Back: promote to bottom-bar audio-only mini chip,
+            // shut the persistent video window, keep playback going via
+            // the foreground PlaybackService. Live TV is on Exo so we
+            // hide that window; Mpv stays Hidden as it was.
             miniPlayerVm.showMiniPlayer()
             currentChannel?.let { ch ->
-                mpvHolder.setVideoEnabled(false)
+                // setVideoEnabled(false) is the libmpv "vid=no" trick.
+                // Exo's equivalent (stop rendering video, keep audio):
+                // we pause -- the MediaSession + foreground service
+                // approach in task #64 will replace this with a
+                // proper audio-only renderer setup. For first session,
+                // hiding the window is enough; the surface is gone
+                // so the GPU stops working.
+                exoWindowState.hide()
                 mpvWindowState.hide()
                 PlaybackService.startBackground(
                     context = context,
@@ -341,8 +374,14 @@ fun PlayerScreen(
             // stuck.
             onClose = {
                 miniPlayerVm.dismiss()
+                // Live TV is on Exo now; stop the player, hide the
+                // PersistentExoWindow. Mpv pair is already hidden by
+                // the LaunchedEffect above, but call hide() defensively
+                // in case the user hopped here via a not-yet-migrated
+                // entry point.
+                exoWindowState.hide()
+                exoHolder.stop()
                 mpvWindowState.hide()
-                mpvHolder.stop()
                 PlaybackService.stop(context)
                 onClose()
             },
@@ -636,4 +675,8 @@ private fun Double.roundToOneDecimal(): String = String.format(Locale.US, "%.1f"
 interface PlayerScreenEntryPoint {
     fun mpvPlayerHolder(): MPVPlayerHolder
     fun mpvWindowState(): MpvWindowState
+    // Media3 migration (task #61). Live TV reads these; the MPV pair
+    // stays for VOD and any legacy paths until tasks #62 / #66.
+    fun exoPlayerHolder(): com.aeriotv.android.core.playback.AerioExoPlayerHolder
+    fun exoWindowState(): ExoWindowState
 }

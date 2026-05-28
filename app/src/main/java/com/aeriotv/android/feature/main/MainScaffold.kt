@@ -605,6 +605,10 @@ internal fun visibleTabs(
 interface MainScaffoldEntryPoint {
     fun mpvPlayerHolder(): MPVPlayerHolder
     fun mpvWindowState(): com.aeriotv.android.feature.player.MpvWindowState
+    // Media3 migration (task #61). Live TV routes through these; VOD and
+    // multiview still hit the MPV pair until tasks #62 / #63.
+    fun exoPlayerHolder(): com.aeriotv.android.core.playback.AerioExoPlayerHolder
+    fun exoWindowState(): com.aeriotv.android.feature.player.ExoWindowState
 }
 
 /** Two-step Add Playlist flow embedded in the Settings tab. None = closed. */
