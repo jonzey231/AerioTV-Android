@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -470,7 +471,26 @@ fun GuideScreen(
 
         HorizontalDivider(color = guideDivider, thickness = 0.5.dp)
 
+        // Audit task #21: when the user comes back from the player, scroll the
+        // guide to the channel they just watched (iOS LiveTV behaviour). Keyed
+        // on (lastWatched, channels-loaded) so the scroll fires both on cold
+        // launch once channels arrive AND when a fresh lastWatched id flows in
+        // after the player closes. If the user is currently filtering and the
+        // last-watched channel isn't in the filtered list, indexOfFirst returns
+        // -1 and we no-op - the visible filter wins.
+        val listState = rememberLazyListState()
+        val lastWatchedId by settingsVm.lastWatchedChannelId
+            .collectAsStateWithLifecycle(initialValue = "")
+        LaunchedEffect(lastWatchedId, filteredChannels.isNotEmpty()) {
+            if (lastWatchedId.isBlank() || filteredChannels.isEmpty()) return@LaunchedEffect
+            val idx = filteredChannels.indexOfFirst { it.id == lastWatchedId }
+            if (idx >= 0) {
+                listState.animateScrollToItem(idx)
+            }
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 // Treat the grid as one focus group so D-pad DOWN from the chips
