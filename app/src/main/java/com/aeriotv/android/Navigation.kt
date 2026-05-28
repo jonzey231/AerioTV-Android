@@ -710,6 +710,7 @@ fun AerioTVNavHost(
         // instant because the decoder never tore down).
         TvMiniPlayerOverlay(
             state = miniState,
+            mpvHolder = miniMpvHolder,
             onResume = {
                 val resumed = miniPlayerVm.resumeChannel()
                 if (resumed != null) {

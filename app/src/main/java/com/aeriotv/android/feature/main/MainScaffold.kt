@@ -229,19 +229,18 @@ fun MainScaffold(
                     focusRequester = topNavRequester,
                 )
                 // tvOS layout reference: when the mini-player is active the
-                // group filter pills + guide grid drop DOWN below the
-                // mini-player's bottom edge so the right side of the chip
-                // row isn't covered. Only the section content shifts; the
-                // centered top nav row stays put. Mini player vertical
-                // extent: top=12 inset + 118 video + 6 spacer + ~25 hint
-                // chip ≈ 161dp from the top of the screen. Nav row ends
-                // around y=64dp on its own, so a 130dp spacer pushes the
-                // chip row to y≈194dp -- comfortably below the mini's
-                // y=173 bottom edge.
+                // group filter pills + guide grid drop DOWN so the
+                // mini-player's right-aligned 210x118 video + hint chip
+                // (~148dp tall starting at y=12) doesn't cover them.
+                // Archie's 2026-05-28 follow-up: pin the chip row
+                // *directly* below the hint chip rather than leaving a
+                // generous buffer. Mini bottom edge ≈ y=160dp; nav row
+                // ends ≈ y=68dp, so a 90dp spacer lands the chip row at
+                // y≈158dp -- effectively flush with the mini's bottom.
                 val miniActive = miniPlayerState is MiniPlayerSession.State.Active
                 if (miniActive) {
                     androidx.compose.foundation.layout.Spacer(
-                        modifier = Modifier.height(130.dp),
+                        modifier = Modifier.height(90.dp),
                     )
                 }
                 MainTabContent(

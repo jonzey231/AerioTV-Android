@@ -146,13 +146,19 @@ fun PlayerScreen(
     androidx.activity.compose.BackHandler {
         miniPlayerVm.showMiniPlayer()
         if (isTvForm) {
-            // Clean handoff to the TvMiniPlayerOverlay's fresh mpv handle so
-            // we don't have two libmpv instances decoding the same URL.
-            // The mini will play the URL again - brief buffer gap on
-            // entering mini, but stable and avoids the BaseMPVView
-            // surfaceDestroyed -> vo=null trap that breaks the
-            // re-parenting path.
-            mpvHolder.destroy()
+            // Persistent-MPV handoff (Phase 163 redo): leave the held MPV
+            // alive. AndroidView's onRelease below will call
+            // mpvHolder.detach() to remove it from the fullscreen frame;
+            // TvMiniPlayerOverlay then re-acquires the SAME view via
+            // mpvHolder.acquireOrCreate() and re-parents it into its own
+            // frame. The stream never reloads -- the user sees the same
+            // decoded frames at a smaller size, matching tvOS.
+            //
+            // Previously this called mpvHolder.destroy(), which forced
+            // the mini to spin up a fresh libmpv instance + reload the
+            // URL (3-5s buffer gap, and the subsequent mini visits
+            // ANR'd because the Streamer's 32-bit memory budget can't
+            // sustain rapid create/destroy cycles).
         } else {
             currentChannel?.let { ch ->
                 mpvHolder.setVideoEnabled(false)
