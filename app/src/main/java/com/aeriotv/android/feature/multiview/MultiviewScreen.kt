@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.feature.player.MPVPlayerView
@@ -278,37 +280,18 @@ private fun TileGrid(
     onTileDoubleTap: (Int) -> Unit,
     onReorder: (Int, Int) -> Unit,
 ) {
-    // Fullscreen branch: render exactly the focused tile filling the whole
-    // viewport. We deliberately skip the grid recomposition path so the
-    // other tiles' MPV instances continue running in the background (audio
-    // muted via storeHandle) -- exiting fullscreen returns to them
-    // instantly. iOS does the same: fullscreenTileID just changes which
-    // tile is rendered, not which tiles are loaded.
-    fullscreenIndex?.let { idx ->
-        val ch = tiles.getOrNull(idx)
-        if (ch != null) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                Tile(
-                    channel = ch,
-                    isAudioFocused = true,
-                    isRelocating = false,
-                    isDropTarget = false,
-                    httpHeaders = httpHeaders,
-                    cachingMs = cachingMs,
-                    audioFocusStyle = audioFocusStyle,
-                    tileRounded = false,
-                    chromeVisible = chromeVisible,
-                    focusFadedOut = focusFadedOut,
-                    onTap = { onTileTap(idx) },
-                    onDoubleTap = { onTileDoubleTap(idx) },
-                )
-            }
-            return
-        }
-    }
-
+    // tvOS parity (MultiviewTileView.shouldPause): "fullscreen a tile" only
+    // changes which tile is drawn full size -- NO tile is ever unmounted or
+    // destroyed. Every tile's MPVPlayerView stays in the composition so its
+    // libmpv handle survives; the focused tile fills the viewport while the
+    // others stay mounted (just parked off-screen) with their mpv PAUSED to
+    // save decode/GPU/network. Exiting fullscreen un-pauses them and they
+    // resume instantly -- no factory rebuild, no reload, no black flash. (The
+    // old code early-returned with only the focused Tile composed, which
+    // dropped every other AndroidView and fired its onRelease { destroy() }.)
     val (rows, cols) = gridShapeFor(tiles.size)
     val pad = if (tilePadding) 4.dp else 0.dp
+    val anyFullscreen = fullscreenIndex != null
 
     // Drag-to-reorder state. The MPV tiles are positional (never moved); a
     // long-press picks a tile up and we only commit the reorder on drop, so no
@@ -320,6 +303,10 @@ private fun TileGrid(
     var dragPos by remember { mutableStateOf(Offset.Zero) }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val gridW = maxWidth
+        val gridH = maxHeight
+        val cellWDp = gridW / cols
+        val cellHDp = gridH / rows
         val cellW = (constraints.maxWidth.toFloat() / cols).coerceAtLeast(1f)
         val cellH = (constraints.maxHeight.toFloat() / rows).coerceAtLeast(1f)
         fun cellIndexAt(pos: Offset): Int {
@@ -329,71 +316,74 @@ private fun TileGrid(
         }
         val hoverIndex = dragSource?.let { cellIndexAt(dragPos) }
 
-        Column(modifier = Modifier.fillMaxSize()) {
-            for (r in 0 until rows) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                ) {
-                    for (c in 0 until cols) {
-                        val index = r * cols + c
-                        val channel = tiles.getOrNull(index)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxSize()
-                                .padding(pad)
-                                .then(
-                                    if (channel != null) {
-                                        Modifier.pointerInput(index, cols, rows, tiles.size, cellW, cellH) {
-                                            detectDragGesturesAfterLongPress(
-                                                onDragStart = { offset ->
-                                                    val col0 = index % cols
-                                                    val row0 = index / cols
-                                                    dragSource = index
-                                                    dragPos = Offset(col0 * cellW + offset.x, row0 * cellH + offset.y)
-                                                    onTileLongPress(index)
-                                                },
-                                                onDrag = { change, amount ->
-                                                    change.consume()
-                                                    dragPos += amount
-                                                },
-                                                onDragEnd = {
-                                                    val from = dragSource
-                                                    if (from != null) {
-                                                        val to = cellIndexAt(dragPos)
-                                                        if (to != from) onReorder(from, to)
-                                                    }
-                                                    dragSource = null
-                                                },
-                                                onDragCancel = { dragSource = null },
-                                            )
-                                        }
-                                    } else {
-                                        Modifier
+        // Every selected tile is placed absolutely (NOT via a Column/Row that
+        // would drop tiles from the composition), so toggling fullscreen never
+        // releases an AndroidView / destroys an mpv handle. Normal mode tiles
+        // the grid; fullscreen promotes the focused tile to the whole viewport
+        // (zIndex on top) and parks the rest just off the right edge, paused.
+        tiles.forEachIndexed { index, channel ->
+            val isFull = fullscreenIndex == index
+            val col = index % cols
+            val row = index / cols
+            val offX = when {
+                isFull -> 0.dp
+                anyFullscreen -> gridW + cellWDp * col // parked off-screen (right)
+                else -> cellWDp * col
+            }
+            val offY = if (isFull) 0.dp else cellHDp * row
+            Box(
+                modifier = Modifier
+                    .offset(x = offX, y = offY)
+                    .size(
+                        width = if (isFull) gridW else cellWDp,
+                        height = if (isFull) gridH else cellHDp,
+                    )
+                    .zIndex(if (isFull) 1f else 0f)
+                    .padding(pad)
+                    .then(
+                        if (!anyFullscreen) {
+                            Modifier.pointerInput(index, cols, rows, tiles.size, cellW, cellH) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { offset ->
+                                        dragSource = index
+                                        dragPos = Offset(col * cellW + offset.x, row * cellH + offset.y)
+                                        onTileLongPress(index)
                                     },
-                                ),
-                        ) {
-                            if (channel != null) {
-                                Tile(
-                                    channel = channel,
-                                    isAudioFocused = index == focusedIndex,
-                                    isRelocating = index == relocatingIndex || index == dragSource,
-                                    isDropTarget = hoverIndex == index && dragSource != index,
-                                    httpHeaders = httpHeaders,
-                                    cachingMs = cachingMs,
-                                    audioFocusStyle = audioFocusStyle,
-                                    tileRounded = tileRounded,
-                                    chromeVisible = chromeVisible,
-                                    focusFadedOut = focusFadedOut,
-                                    onTap = { onTileTap(index) },
-                                    onDoubleTap = { onTileDoubleTap(index) },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        dragPos += amount
+                                    },
+                                    onDragEnd = {
+                                        val from = dragSource
+                                        if (from != null) {
+                                            val to = cellIndexAt(dragPos)
+                                            if (to != from) onReorder(from, to)
+                                        }
+                                        dragSource = null
+                                    },
+                                    onDragCancel = { dragSource = null },
                                 )
                             }
-                        }
-                    }
-                }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
+                Tile(
+                    channel = channel,
+                    isAudioFocused = index == focusedIndex,
+                    isRelocating = index == relocatingIndex || index == dragSource,
+                    isDropTarget = hoverIndex == index && dragSource != index,
+                    paused = anyFullscreen && !isFull,
+                    httpHeaders = httpHeaders,
+                    cachingMs = cachingMs,
+                    audioFocusStyle = audioFocusStyle,
+                    tileRounded = if (isFull) false else tileRounded,
+                    chromeVisible = chromeVisible,
+                    focusFadedOut = focusFadedOut,
+                    onTap = { onTileTap(index) },
+                    onDoubleTap = { onTileDoubleTap(index) },
+                )
             }
         }
     }
@@ -406,6 +396,7 @@ private fun Tile(
     isAudioFocused: Boolean,
     isRelocating: Boolean,
     isDropTarget: Boolean,
+    paused: Boolean,
     httpHeaders: Map<String, String>,
     cachingMs: Int,
     audioFocusStyle: String,
@@ -483,6 +474,9 @@ private fun Tile(
                 // the CPU for non-focused tiles once it sticks.
                 view.mpv.setPropertyString("aid", if (isAudioFocused) "auto" else "no")
                 view.mpv.setPropertyString("mute", if (isAudioFocused) "no" else "yes")
+                // Pause non-fullscreen tiles (set when this tile is created while
+                // another is already fullscreen). Frees decode/GPU; resumes on exit.
+                view.mpv.setPropertyString("pause", if (paused) "yes" else "no")
                 view
             },
             update = { view ->
@@ -496,6 +490,11 @@ private fun Tile(
                 }
                 view.mpv.setPropertyString("aid", if (isAudioFocused) "auto" else "no")
                 view.mpv.setPropertyString("mute", if (isAudioFocused) "no" else "yes")
+                // Fullscreen pause-not-destroy: a backgrounded (non-fullscreen)
+                // tile pauses to free decode/GPU/network; un-pauses on exit and
+                // resumes from its buffer (no reload). Surface + libmpv handle
+                // stay alive the whole time (the tile is only moved off-screen).
+                view.mpv.setPropertyString("pause", if (paused) "yes" else "no")
             },
             onRelease = { view ->
                 Log.i(TAG, "Tile MPV releasing: ${channel.name}")
