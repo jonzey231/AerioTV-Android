@@ -7,6 +7,7 @@ import com.aeriotv.android.core.debug.DebugLogger
 import com.aeriotv.android.core.debug.ResourceTelemetry
 import com.aeriotv.android.core.network.DispatcharrWarmupCoordinator
 import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.feature.multiview.MultiviewStore
 import com.aeriotv.android.feature.player.MpvLibraryWarmup
 import com.aeriotv.android.feature.reminders.ReminderBannerBus
 import dagger.hilt.android.HiltAndroidApp
@@ -38,6 +39,7 @@ class AerioTVApplication : Application(), Configuration.Provider {
     @Inject lateinit var appPreferences: AppPreferences
     @Inject lateinit var reminderBannerBus: ReminderBannerBus
     @Inject lateinit var resourceTelemetry: ResourceTelemetry
+    @Inject lateinit var multiviewStore: MultiviewStore
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -84,5 +86,11 @@ class AerioTVApplication : Application(), Configuration.Provider {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         resourceTelemetry.onTrimMemory(level)
+        // Audit task #35 OOM guard: shed inactive multiview tiles when the
+        // system signals critical pressure. Multiview is the single largest
+        // resource consumer (up to 9 concurrent mpv handles + SurfaceViews +
+        // audio tracks), so dropping non-focused tiles is the most effective
+        // way to keep the process alive. No-op for softer trim levels.
+        multiviewStore.onMemoryPressure(level)
     }
 }

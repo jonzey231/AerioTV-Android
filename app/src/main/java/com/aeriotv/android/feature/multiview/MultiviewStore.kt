@@ -115,4 +115,40 @@ class MultiviewStore @Inject constructor() {
         mutable[index] = newChannel
         _selected.value = mutable
     }
+
+    /**
+     * Audit task #35: OOM guard. Called from the Application's onTrimMemory
+     * forward when the system signals critical memory pressure. With up to 9
+     * concurrent mpv handles + SurfaceViews + audio tracks, multiview is the
+     * single largest resource consumer in the app, so it is the right thing
+     * to shed first under pressure.
+     *
+     * Only acts on TRIM_MEMORY_RUNNING_CRITICAL (system about to kill us) or
+     * TRIM_MEMORY_COMPLETE (we are being killed). Softer levels
+     * (RUNNING_LOW / RUNNING_MODERATE / etc.) are NOT reacted to - those
+     * fire frequently and shedding the user's tiles on every minor pressure
+     * spike would be more disruptive than helpful. When we do shed we keep
+     * exactly one tile (the audio-focused one, so the user's primary
+     * viewing survives), drop all others. The freed mpv handles release
+     * decoders, GPU buffers, audio tracks, and ~50-100MB of RAM each, which
+     * is normally enough to let the system reclaim instead of killing us.
+     */
+    fun onMemoryPressure(level: Int) {
+        val current = _selected.value
+        if (current.size <= 1) return
+        val shouldShed = when (level) {
+            android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+            android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> true
+            else -> false
+        }
+        if (!shouldShed) return
+        val focusedIdx = _audioFocusedIndex.value
+        val keep = current.getOrNull(focusedIdx) ?: current.first()
+        _selected.value = listOf(keep)
+        _audioFocusedIndex.value = 0
+        android.util.Log.w(
+            "MultiviewStore",
+            "memory pressure (level=$level): shed ${current.size - 1} of ${current.size} tiles, kept ${keep.name}",
+        )
+    }
 }
