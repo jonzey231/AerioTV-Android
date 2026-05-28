@@ -9,13 +9,18 @@ import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
+import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.data.sync.PlaylistRefreshWorker
 import com.aeriotv.android.core.debug.DebugLogger
 import com.aeriotv.android.core.debug.MemoryPressureBus
 import com.aeriotv.android.core.debug.ResourceTelemetry
+import com.aeriotv.android.core.network.ActivePlaylistCredentials
+import com.aeriotv.android.core.network.DispatcharrImageAuthInterceptor
 import com.aeriotv.android.core.network.DispatcharrWarmupCoordinator
 import com.aeriotv.android.core.security.SafeUrlInterceptor
+import okhttp3.OkHttpClient
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.feature.multiview.MultiviewStore
 import com.aeriotv.android.feature.player.MpvLibraryWarmup
@@ -51,6 +56,8 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var resourceTelemetry: ResourceTelemetry
     @Inject lateinit var multiviewStore: MultiviewStore
     @Inject lateinit var memoryPressureBus: MemoryPressureBus
+    @Inject lateinit var activeCredentials: ActivePlaylistCredentials
+    @Inject lateinit var playlistRepository: PlaylistRepository
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -74,8 +81,16 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
      * visible row smooth. The disk cap keeps repeat-visit cold-starts fast
      * without filling /data/data/com.aeriotv.android over time.
      */
-    override fun newImageLoader(context: PlatformContext): ImageLoader =
-        ImageLoader.Builder(context)
+    override fun newImageLoader(context: PlatformContext): ImageLoader {
+        // Audit task #54: dedicated OkHttp client for Coil that injects the
+        // Dispatcharr X-API-Key (+ Authorization fallback) on any image
+        // request whose URL matches the active playlist's base prefix.
+        // Header injection is scoped via ActivePlaylistCredentials so a
+        // third-party tvg-logo CDN doesn't see the key.
+        val imageHttp = OkHttpClient.Builder()
+            .addInterceptor(DispatcharrImageAuthInterceptor(activeCredentials))
+            .build()
+        return ImageLoader.Builder(context)
             .memoryCache {
                 MemoryCache.Builder()
                     .maxSizeBytes(32L * 1024L * 1024L)
@@ -87,14 +102,22 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
                     .maxSizeBytes(100L * 1024L * 1024L)
                     .build()
             }
-            // Audit task #53: SSRF-style gate -- block image fetches whose
-            // source URL uses file:// / content:// / javascript: / etc.
-            // Playlist providers can put anything in `tvg-logo` and a few
-            // other text fields; this keeps Coil from honouring a hostile
-            // value.
-            .components { add(SafeUrlInterceptor()) }
+            .components {
+                // The OkHttp fetcher factory + custom client run BEFORE the
+                // SSRF gate so the scheme check still kicks in on every
+                // request, but the auth header arrives in time for the
+                // network call.
+                add(OkHttpNetworkFetcherFactory(callFactory = { imageHttp }))
+                // Audit task #53: SSRF-style gate -- block image fetches
+                // whose source URL uses file:// / content:// / javascript:
+                // / etc. Playlist providers can put anything in `tvg-logo`
+                // and a few other text fields; this keeps Coil from
+                // honouring a hostile value.
+                add(SafeUrlInterceptor())
+            }
             .crossfade(true)
             .build()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -133,6 +156,14 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
                     PlaylistRefreshWorker.cancel(this@AerioTVApplication)
                 }
             }
+        }
+        // Audit task #54: prime the credential cache from disk on cold
+        // launch so Coil's first batch of Dispatcharr logo requests (the
+        // ones fired in the splash -> bootstrap window, before any
+        // user-initiated load) carry X-API-Key. PlaylistRepository
+        // .activePlaylist() also publishes; this is the bootstrap nudge.
+        appScope.launch {
+            runCatching { playlistRepository.activePlaylist() }
         }
     }
 

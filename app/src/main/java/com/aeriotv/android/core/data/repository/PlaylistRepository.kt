@@ -57,7 +57,28 @@ class PlaylistRepository @Inject constructor(
     private val appPreferences: AppPreferences,
     private val epgProgrammeDao: EpgProgrammeDao,
     private val channelSnapshotDao: ChannelSnapshotDao,
+    private val activeCredentials: com.aeriotv.android.core.network.ActivePlaylistCredentials,
 ) {
+
+    /**
+     * Audit task #54: push the active playlist's apiKey + URL prefix set into
+     * the synchronous [com.aeriotv.android.core.network.ActivePlaylistCredentials]
+     * cache so Coil's OkHttp interceptor can attach `X-API-Key` to image
+     * fetches against the same source. Called from every code path that
+     * mutates or selects the active playlist; safe to call with null on a
+     * source that doesn't need auth (clears the cache).
+     */
+    private fun publishActiveCredentials(playlist: PlaylistEntity?) {
+        if (playlist == null) {
+            activeCredentials.clear()
+            return
+        }
+        val prefixes = listOfNotNull(
+            playlist.urlString.takeIf { it.isNotBlank() },
+            playlist.lanUrlString?.takeIf { it.isNotBlank() },
+        )
+        activeCredentials.set(prefixes, playlist.apiKey)
+    }
 
     /**
      * Returns [PlaylistEntity.lanUrlString] when the device is connected to
@@ -89,7 +110,14 @@ class PlaylistRepository @Inject constructor(
         val dispatcharrProfileId: Int? = null,
     )
 
-    suspend fun activePlaylist(): PlaylistEntity? = dao.firstActive()
+    suspend fun activePlaylist(): PlaylistEntity? {
+        val pl = dao.firstActive()
+        // Keep the sync credential cache in lockstep with the DB; covers the
+        // cold-launch path where AerioTVApplication kicks off a read on
+        // startup. Read-only callers benefit too -- they're cheap.
+        publishActiveCredentials(pl)
+        return pl
+    }
 
     suspend fun loadAndPersist(
         request: SaveRequest,
@@ -169,6 +197,7 @@ class PlaylistRepository @Inject constructor(
         } catch (t: Throwable) {
             android.util.Log.w("PlaylistRepository", "saveChannelsToCache failed (loadAndPersist)", t)
         }
+        publishActiveCredentials(entity)
         entity to channels
     }
 
@@ -192,12 +221,11 @@ class PlaylistRepository @Inject constructor(
                 playlist.username, playlist.password,
             )
         }
-        dao.update(
-            playlist.copy(
-                channelCount = channels.size,
-                lastRefreshedAt = System.currentTimeMillis(),
-            ),
+        val refreshed = playlist.copy(
+            channelCount = channels.size,
+            lastRefreshedAt = System.currentTimeMillis(),
         )
+        dao.update(refreshed)
         // Persist the freshly-fetched channels so the next cold launch repaints
         // the rail INSTANTLY from disk (Phase 130 channel snapshot cache).
         // Best-effort: a cache-write failure must NOT fail the refresh.
@@ -206,6 +234,7 @@ class PlaylistRepository @Inject constructor(
         } catch (t: Throwable) {
             android.util.Log.w("PlaylistRepository", "saveChannelsToCache failed (refresh)", t)
         }
+        publishActiveCredentials(refreshed)
         channels
     }
 
@@ -421,14 +450,16 @@ class PlaylistRepository @Inject constructor(
                 entity.username, entity.password,
             )
         }
-        dao.update(entity.copy(channelCount = channels.size, lastRefreshedAt = System.currentTimeMillis()))
+        val updated = entity.copy(channelCount = channels.size, lastRefreshedAt = System.currentTimeMillis())
+        dao.update(updated)
         // Cache the post-switch channel list (Phase 130 channel snapshot cache).
         try {
-            saveChannelsToCache(entity.id, channels)
+            saveChannelsToCache(updated.id, channels)
         } catch (t: Throwable) {
             android.util.Log.w("PlaylistRepository", "saveChannelsToCache failed (switchActive)", t)
         }
-        entity to channels
+        publishActiveCredentials(updated)
+        updated to channels
     }
 
     suspend fun deletePlaylist(playlistId: String): Result<Unit> = runCatching {
