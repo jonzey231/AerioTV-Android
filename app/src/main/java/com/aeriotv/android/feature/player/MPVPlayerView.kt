@@ -91,6 +91,30 @@ class MPVPlayerView @JvmOverloads constructor(
 
         m.setOptionString("profile", "fast")                // iOS 3113 — disable expensive post-processing for mobile
 
+        // HDR tone-map to SDR (iOS v1.7.3 commit 63ca580 port).
+        //
+        // mpv's libmpv GLES render path collapses BT.2020 / PQ / HLG
+        // sources into the 8-bit RGB SurfaceView surface with NO gamut
+        // or transfer conversion by default -- HDR channels (Sky Sports
+        // Main Event UHD class) come out green and washed out, plus
+        // libplacebo emits the `r16u` shader fallback warnings seen on
+        // the Streamer with channel 38.
+        //
+        // Pinning the render target to BT.709 SDR makes mpv do the
+        // BT.2020 -> 709 gamut map and HDR -> SDR tone-map itself. No-op
+        // for SDR sources (709 -> 709), so this is safe to set
+        // unconditionally with no HDR detection. iOS used bt.1886 for
+        // target-trc (display EOTF; "bt.709" is rejected). Tone-mapping
+        // algorithm is bt.2390, ITU-R BT.2390 hard-knee that's both fast
+        // on weak GPUs and visually faithful for broadcast HDR.
+        //
+        // True HDR output stays deferred until a future architectural
+        // path that can hand a hardware-decoded HDR surface directly to
+        // SurfaceFlinger without GLES re-blit.
+        m.setOptionString("target-prim", "bt.709")
+        m.setOptionString("target-trc", "bt.1886")
+        m.setOptionString("tone-mapping", "bt.2390")
+
         // Hardware decode. Android analog of iOS videotoolbox-copy (iOS 3157).
         // Copy path: decoder writes to a CPU-readable buffer, app uploads to GL.
         // Avoids the v1.7.x 10-bit HEVC blue-screen seen with zero-copy paths.
