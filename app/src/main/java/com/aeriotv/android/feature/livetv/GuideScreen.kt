@@ -152,36 +152,33 @@ fun GuideScreen(
     var liveScale by remember { mutableStateOf(storedScale) }
     LaunchedEffect(storedScale) { liveScale = storedScale }
     val scale = liveScale.coerceIn(GUIDE_SCALE_MIN, GUIDE_SCALE_MAX)
-    val scaledHourWidth = GuideMetrics.HOUR_WIDTH * scale
-
     // Android TV: keep rows DENSE so more channels fit without scrolling (like
     // the tvOS guide), and keep the channel rail narrow. Legibility comes from
     // text sizing inside the cells/rail, not from oversized rows. Phone/tablet
     // keep the GuideMetrics defaults.
     val isTv = rememberLiveTvFormFactor().isTv
+    // tvOS pixelsPerHour = 600pt on a 1920x1080pt canvas; the proportional value
+    // on the 960x540dp Android-TV canvas is 300 dp/hour (= 600 * 0.5). Phone keeps
+    // the GuideMetrics.HOUR_WIDTH base (320dp), scaled by guideScale.
+    val scaledHourWidth = (if (isTv) 300.dp else GuideMetrics.HOUR_WIDTH) * scale
+
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     // The channel rail must stay a small slice of the viewport or it eats the
-    // programme grid. The 168dp default was ~half the screen on a compact width
-    // (phones, and the Fold cover screen at ~344dp). Clamp to a narrow rail there;
-    // reserve the wider rail for tablets / the unfolded Fold.
+    // programme grid. tvOS uses channelColumnWidth = 240pt / 1920 = 12.5% of width;
+    // on the 960dp-wide Android-TV canvas that is 120dp. Phone branches unchanged
+    // (the 168dp default was ~half the screen on a compact width — phones, and the
+    // Fold cover screen at ~344dp — so we clamp to a narrower rail there).
     val railWidth = when {
-        // Wider on TV so the channel name shows in full on one line under the
-        // logo (tvOS channelLabel parity). At the 0.9x TV type scale the name is
-        // ~12.6sp, so a ~92dp name column fits ~14-15 chars; longer names
-        // truncate like tvOS lineLimit(1).
-        isTv -> 150.dp
+        isTv -> 120.dp
         screenWidthDp < 600 -> 118.dp
         else -> GuideMetrics.RAIL_WIDTH
     }
-    // TV row + header sized to tvOS PROPORTIONS on the 960x540dp Android-TV
+    // Row + time-header sized to tvOS PROPORTIONS on the 960x540dp Android-TV
     // canvas (NOT copied from tvOS point values, which would be ~2x too big).
-    // tvOS rowHeight 110pt / 1080 = 10.2% of height -> 540dp * 0.102 = ~55dp;
-    // timeHeader 50pt / 1080 = 4.6% -> ~25dp (a touch more for the time labels).
-    // The old 76dp rows only fit ~5 channels on screen because the (since
-    // reverted) 1.5x type forced them tall; default type fits a title + time in
-    // ~56dp, restoring the ~7-9 visible rows the dense tvOS guide shows.
-    val rowHeight = if (isTv) 56.dp else GuideMetrics.ROW_HEIGHT
-    val headerHeight = if (isTv) 30.dp else GuideMetrics.HEADER_HEIGHT
+    // tvOS rowHeight 110pt / 1080 = 10.19% -> 540dp * 0.1019 = 55dp;
+    // timeHeader 50pt / 1080 = 4.63% -> 540dp * 0.0463 = 25dp.
+    val rowHeight = if (isTv) 55.dp else GuideMetrics.ROW_HEIGHT
+    val headerHeight = if (isTv) 25.dp else GuideMetrics.HEADER_HEIGHT
     // tvOS draws the guide grid separators as cyan (accentPrimary) hairlines, not
     // neutral gray; mirror that on TV so the grid reads as one continuous surface.
     // Phone keeps the existing gray surfaceVariant divider.
@@ -607,15 +604,19 @@ private fun ChannelGuideRow(
     // Compact rail sizing. On TV we keep it tight (narrow rail, small logo) so
     // more channels fit; legibility comes from the name/cell text, not bulk.
     val numberStyle = if (isTv) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall
-    // A 3-4 digit number fits ~30dp at labelMedium on TV (right-aligned, tvOS
-    // minWidth 38pt parity); phone keeps the compact 22dp.
-    val numberWidth = if (isTv) 30.dp else 22.dp
+    // tvOS minWidth 38pt -> 19dp proportional, but a 4-digit number ("1444") at
+    // labelMedium needs ~24dp; 28dp accommodates 4 digits with margin. Phone
+    // keeps the compact 22dp.
+    val numberWidth = if (isTv) 28.dp else 22.dp
     // logoBox/logoImage are the PHONE rail's square logo. TV uses a landscape
     // logo-over-name VStack (the isTv branch below) so the channel name gets its
     // own full-width line and shows in full, mirroring tvOS channelLabel.
     val logoBox = 36.dp
     val logoImage = 32.dp
-    val nameStyle = if (isTv) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.labelMedium
+    // TV name uses labelMedium (10.8sp at the 0.9 type scale) - the closest match
+    // to tvOS's 18pt name (~9sp proportional on 540dp). bodyMedium would be ~17%
+    // bigger than tvOS proportional. Phone keeps labelMedium.
+    val nameStyle = if (isTv) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelMedium
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -643,7 +644,10 @@ private fun ChannelGuideRow(
                     onClick = onChannelClick,
                     onLongClick = { railMenuOpen = true },
                 )
-                .padding(horizontal = if (isTv) 10.dp else 8.dp),
+                // tvOS channelLabel uses .padding(.horizontal, 8) on a 240pt
+                // column -> proportional 4dp on the 120dp Android-TV column;
+                // phone keeps the 8dp.
+                .padding(horizontal = if (isTv) 4.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (isTv) {
@@ -669,11 +673,12 @@ private fun ChannelGuideRow(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    // Landscape logo box (tvOS uses 72x48), proportional to the row.
+                    // Landscape logo box, tvOS 72x48pt proportional on the 540dp
+                    // canvas -> 36x24dp (matching the channel column's tvOS ratios).
                     Box(
                         modifier = Modifier
-                            .size(width = 46.dp, height = 28.dp)
-                            .clip(RoundedCornerShape(6.dp))
+                            .size(width = 36.dp, height = 24.dp)
+                            .clip(RoundedCornerShape(4.dp))
                             .background(MaterialTheme.colorScheme.background),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -991,7 +996,13 @@ private fun ProgrammeCell(
                 onClick = onPlay,
                 onLongClick = { menuOpen = true },
             )
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            // tvOS programCell uses .padding(.horizontal, 8) / .padding(.vertical, 6)
+            // on a 110pt row -> proportional 4dp/3dp on the 55dp Android-TV row.
+            // Phone keeps the original 8/6 inset.
+            .padding(
+                horizontal = if (isTv) 4.dp else 8.dp,
+                vertical = if (isTv) 3.dp else 6.dp,
+            ),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         DropdownMenu(
