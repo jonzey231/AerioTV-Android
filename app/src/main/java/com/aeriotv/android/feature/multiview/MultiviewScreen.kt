@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.multiview
 
+import android.content.res.Configuration
 import android.util.Log
 import android.view.ViewGroup
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -41,10 +42,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -104,6 +114,10 @@ fun MultiviewScreen(
     val tileRounded by settingsVm.multiviewTileCornersRounded.collectAsState(initial = false)
 
     var chromeVisible by remember { mutableStateOf(true) }
+    // Bumped whenever the user navigates between tiles (D-pad focus change)
+    // so the auto-hide timer re-arms instead of fading the channel names
+    // mid-navigation. Mirrors PlayerScreen's lastInteractionAt pattern.
+    var lastInteractionAt by remember { mutableStateOf(0L) }
     // Long-press a tile -> relocate mode. The next tap swaps positions with
     // the relocating tile. Tap the same tile again (or the close X) to cancel.
     var relocatingIndex by remember { mutableStateOf<Int?>(null) }
@@ -162,6 +176,13 @@ fun MultiviewScreen(
             tileRounded = tileRounded,
             chromeVisible = chromeVisible,
             focusFadedOut = focusFadedOut,
+            onTileFocused = {
+                // D-pad moved onto a tile: re-show the channel names + count
+                // chip and re-arm the auto-hide so they stay up while the
+                // user is actively navigating the grid.
+                chromeVisible = true
+                lastInteractionAt = android.os.SystemClock.uptimeMillis()
+            },
             onTileTap = { idx ->
                 val r = relocatingIndex
                 if (r != null && r != idx) {
@@ -230,7 +251,7 @@ fun MultiviewScreen(
         }
     }
 
-    LaunchedEffect(chromeVisible) {
+    LaunchedEffect(chromeVisible, lastInteractionAt) {
         if (chromeVisible) {
             kotlinx.coroutines.delay(4_000L)
             chromeVisible = false
@@ -288,11 +309,33 @@ private fun TileGrid(
     tileRounded: Boolean,
     chromeVisible: Boolean,
     focusFadedOut: Boolean,
+    onTileFocused: () -> Unit,
     onTileTap: (Int) -> Unit,
     onTileLongPress: (Int) -> Unit,
     onTileDoubleTap: (Int) -> Unit,
     onReorder: (Int, Int) -> Unit,
 ) {
+    val isTv = (
+        LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK
+        ) == Configuration.UI_MODE_TYPE_TELEVISION
+
+    // D-pad navigation index (TV only). The tiles are placed with
+    // Modifier.offset for the persistent-composition architecture, which
+    // breaks Compose's spatial focus search across them (offset siblings
+    // don't yield a clean left/right/up/down graph). So we own focus
+    // ourselves: a single focusable host on the grid captures the D-pad
+    // keys and moves this index through the rows x cols arithmetic, and
+    // each tile draws its ring from `index == dpadIndex`. OK/Center acts
+    // on the selected tile.
+    var dpadIndex by remember(tiles.size) {
+        mutableStateOf(focusedIndex.coerceIn(0, (tiles.size - 1).coerceAtLeast(0)))
+    }
+    val gridFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (isTv) runCatching { gridFocusRequester.requestFocus() }
+    }
+    // Re-arm the chrome (channel names + count chip) on every navigation.
+    LaunchedEffect(dpadIndex) { if (isTv) onTileFocused() }
     // tvOS parity (MultiviewTileView.shouldPause): "fullscreen a tile" only
     // changes which tile is drawn full size -- NO tile is ever unmounted or
     // destroyed. Every tile's MPVPlayerView stays in the composition so its
@@ -315,7 +358,45 @@ private fun TileGrid(
     var dragSource by remember { mutableStateOf<Int?>(null) }
     var dragPos by remember { mutableStateOf(Offset.Zero) }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            // Single focusable host for the whole grid (TV). It captures
+            // the D-pad and we move dpadIndex by hand; returning true
+            // consumes the event so Compose's own focus search never
+            // pulls focus into an individual (offset-placed) tile, which
+            // is what made the ring vanish on first navigation.
+            .focusRequester(gridFocusRequester)
+            .focusable()
+            .onKeyEvent { ev ->
+                if (!isTv || anyFullscreen) return@onKeyEvent false
+                if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
+                val (gr, gc) = gridShapeFor(tiles.size)
+                val r = dpadIndex / gc
+                val c = dpadIndex % gc
+                fun idx(rr: Int, cc: Int) = rr * gc + cc
+                when (ev.key) {
+                    Key.DirectionRight -> {
+                        val n = idx(r, c + 1)
+                        if (c + 1 < gc && n < tiles.size) { dpadIndex = n; true } else false
+                    }
+                    Key.DirectionLeft -> {
+                        if (c > 0) { dpadIndex = idx(r, c - 1); true } else false
+                    }
+                    Key.DirectionDown -> {
+                        val n = idx(r + 1, c)
+                        if (r + 1 < gr && n < tiles.size) { dpadIndex = n; true } else false
+                    }
+                    Key.DirectionUp -> {
+                        if (r > 0) { dpadIndex = idx(r - 1, c); true } else false
+                    }
+                    Key.DirectionCenter, Key.Enter -> {
+                        onTileTap(dpadIndex); true
+                    }
+                    else -> false
+                }
+            },
+    ) {
         val gridW = maxWidth
         val gridH = maxHeight
         val cellWDp = gridW / cols
@@ -394,6 +475,9 @@ private fun TileGrid(
                     tileRounded = if (isFull) false else tileRounded,
                     chromeVisible = chromeVisible,
                     focusFadedOut = focusFadedOut,
+                    // D-pad selection ring (TV only): the tile the remote is
+                    // currently on. Suppressed in fullscreen (single tile).
+                    isDpadFocused = isTv && !anyFullscreen && index == dpadIndex,
                     onTap = { onTileTap(index) },
                     onDoubleTap = { onTileDoubleTap(index) },
                 )
@@ -416,18 +500,31 @@ private fun Tile(
     tileRounded: Boolean,
     chromeVisible: Boolean,
     focusFadedOut: Boolean,
+    isDpadFocused: Boolean,
     onTap: () -> Unit,
     onDoubleTap: () -> Unit,
 ) {
     val shape = if (tileRounded) RoundedCornerShape(8.dp) else RoundedCornerShape(0.dp)
-    // Resolve the focus indicator for this tile. iOS canon:
+    // D-pad focus (which tile the remote is currently on) is owned by the
+    // grid host and passed in as [isDpadFocused]. Distinct from AUDIO focus
+    // (which tile is playing sound): the user moves the ring around the grid
+    // and presses OK to promote the ringed tile to audio focus. Without a
+    // visible ring the user can't tell which tile they're about to select.
+    val dpadFocused = isDpadFocused
+    // Resolve the AUDIO-focus indicator for this tile. iOS canon:
     //   centerIcon: speaker icon fades with the chrome
     //   grayPersistent: muted gray border always around the active tile
     //   themeFading: cyan border that auto-hides after 5s of inactivity
     val showCenterIcon = isAudioFocused && audioFocusStyle == "centerIcon" && chromeVisible
+    // Border priority: transient drag states first, then the D-pad focus
+    // ring (bright, always visible while navigating), then the audio-focus
+    // border styles, then the resting hairline. The D-pad ring deliberately
+    // outranks the audio-focus border so the navigation cursor is never
+    // ambiguous; the speaker icon still distinguishes the audio tile.
     val borderColor = when {
         isDropTarget -> MaterialTheme.colorScheme.tertiary
         isRelocating -> MaterialTheme.colorScheme.primary
+        dpadFocused -> Color.White
         isAudioFocused && audioFocusStyle == "grayPersistent" ->
             Color.White.copy(alpha = 0.5f)
         isAudioFocused && audioFocusStyle == "themeFading" && !focusFadedOut ->
@@ -436,6 +533,7 @@ private fun Tile(
     }
     val borderWidth = when {
         isDropTarget -> 4.dp
+        dpadFocused -> 4.dp
         isRelocating -> 3.dp
         isAudioFocused && (audioFocusStyle == "grayPersistent" ||
                 (audioFocusStyle == "themeFading" && !focusFadedOut)) -> 2.dp
@@ -458,22 +556,31 @@ private fun Tile(
             isAudioFocused = isAudioFocused,
             paused = paused,
         )
-        // Channel-name overlay (top-left). Always shown — iOS canon keeps the
-        // tile's broadcast bug visible alongside the channel label.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(6.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color.Black.copy(alpha = 0.55f))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+        // Channel-name overlay (top-left). Fades with the chrome: it's up
+        // on launch + whenever the user interacts (tap toggles chrome,
+        // D-pad navigation re-arms it) and auto-hides after 4s so the tile
+        // is an unobstructed video cell at rest. AnimatedVisibility gives
+        // a soft cross-fade rather than a hard pop.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = chromeVisible,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart),
         ) {
-            Text(
-                text = channel.name,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Box(
+                modifier = Modifier
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = channel.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
         // Audio-focus indicator. centerIcon mode shows the speaker icon over
         // the active tile while the chrome is visible. grayPersistent and
