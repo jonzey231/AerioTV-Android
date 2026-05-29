@@ -1,6 +1,8 @@
 package com.aeriotv.android.feature.livetv
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,9 +11,11 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -31,11 +35,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -104,80 +111,128 @@ fun ProgramInfoSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.background,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+    val isTv = (
+        LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK
+        ) == Configuration.UI_MODE_TYPE_TELEVISION
+
+    if (isTv) {
+        // TV: a centered modal card, not a bottom-edge sheet. tvOS shows
+        // program detail as a focused panel in the middle of the screen;
+        // a ModalBottomSheet's drag handle + swipe-to-dismiss + edge
+        // anchoring are all touch idioms that read as "phone UI" on a
+        // 10-foot display and aren't reachable with a remote. Dialog +
+        // Back-to-dismiss is the correct TV affordance.
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            Text(
-                text = target.channelName.uppercase(Locale.getDefault()),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                letterSpacing = 1.5.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = target.title.ifBlank { "Untitled" },
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                if (target.isLiveNow()) {
-                    Spacer(Modifier.size(10.dp))
-                    LiveBadge()
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth(0.55f)
+                    .heightIn(max = 620.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        // focusable so the remote's D-pad up/down scrolls
+                        // a long description instead of doing nothing.
+                        .focusable()
+                        .padding(horizontal = 32.dp, vertical = 28.dp),
+                ) {
+                    ProgramInfoBody(target = target, effectiveCategory = effectiveCategory)
                 }
             }
+        }
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.background,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+            ) {
+                ProgramInfoBody(target = target, effectiveCategory = effectiveCategory)
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+}
 
-            Spacer(Modifier.height(20.dp))
-            InfoColumnsRow(target)
+/**
+ * Shared program-detail body used by both the phone bottom-sheet and the
+ * TV centered-dialog presentations. Channel eyebrow, title + LIVE badge,
+ * the info-columns block, description, and the metadata / category pills.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProgramInfoBody(target: ProgramInfoTarget, effectiveCategory: String) {
+    Text(
+        text = target.channelName.uppercase(Locale.getDefault()),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        letterSpacing = 1.5.sp,
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = target.title.ifBlank { "Untitled" },
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        if (target.isLiveNow()) {
+            Spacer(Modifier.size(10.dp))
+            LiveBadge()
+        }
+    }
 
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(20.dp))
+    InfoColumnsRow(target)
 
-            SectionLabel("Description")
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+    Spacer(Modifier.height(20.dp))
+
+    SectionLabel("Description")
+    Spacer(Modifier.height(8.dp))
+    if (target.description.isBlank()) {
+        Text(
+            text = "No program description provided in XMLTV.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontStyle = FontStyle.Italic,
+        )
+    } else {
+        Text(
+            text = target.description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+    }
+
+    val tokens = effectiveCategory.categoryTokens()
+    if (tokens.isNotEmpty()) {
+        val (metadata, genres) = tokens.partition { it.lowercase(Locale.getDefault()) in METADATA_TOKENS }
+        if (metadata.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            SectionLabel("Metadata")
             Spacer(Modifier.height(8.dp))
-            if (target.description.isBlank()) {
-                Text(
-                    text = "No program description provided in XMLTV.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontStyle = FontStyle.Italic,
-                )
-            } else {
-                Text(
-                    text = target.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-
-            val tokens = effectiveCategory.categoryTokens()
-            if (tokens.isNotEmpty()) {
-                val (metadata, genres) = tokens.partition { it.lowercase(Locale.getDefault()) in METADATA_TOKENS }
-                if (metadata.isNotEmpty()) {
-                    Spacer(Modifier.height(20.dp))
-                    SectionLabel("Metadata")
-                    Spacer(Modifier.height(8.dp))
-                    PillsFlow(tokens = metadata)
-                }
-                if (genres.isNotEmpty()) {
-                    Spacer(Modifier.height(20.dp))
-                    SectionLabel("Categories")
-                    Spacer(Modifier.height(8.dp))
-                    PillsFlow(tokens = genres)
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
+            PillsFlow(tokens = metadata)
+        }
+        if (genres.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            SectionLabel("Categories")
+            Spacer(Modifier.height(8.dp))
+            PillsFlow(tokens = genres)
         }
     }
 }
