@@ -8,9 +8,12 @@ import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
 import com.aeriotv.android.core.network.DispatcharrClient
 import com.aeriotv.android.core.network.DispatcharrVODEpisode
+import com.aeriotv.android.core.network.DispatcharrVODLogo
 import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODProviderInfo
 import com.aeriotv.android.core.network.DispatcharrVODSeries
+import com.aeriotv.android.core.network.XtreamCodesApi
+import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * On Demand tab state. Phase 10a is Movies first-page only; Phase 10b adds
@@ -33,6 +38,7 @@ class OnDemandViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository,
     private val dispatcharrClient: DispatcharrClient,
     private val dispatcharrAuth: DispatcharrAuthBroker,
+    private val xtreamApi: XtreamCodesApi,
 ) : ViewModel() {
 
     data class UiState(
@@ -98,6 +104,10 @@ class OnDemandViewModel @Inject constructor(
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
                     sourceType == SourceType.DispatcharrUserPass
+            if (playlist != null && sourceType == SourceType.XtreamCodes) {
+                loadXtreamMovies(playlist)
+                return@launch
+            }
             if (playlist == null || !isDispatcharr || playlist.apiKey.isNullOrBlank()) {
                 _state.update { it.copy(unsupportedSource = true, movies = emptyList(), isLoading = false, error = null) }
                 return@launch
@@ -165,6 +175,10 @@ class OnDemandViewModel @Inject constructor(
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
                     sourceType == SourceType.DispatcharrUserPass
+            if (playlist != null && sourceType == SourceType.XtreamCodes) {
+                loadXtreamSeries(playlist)
+                return@launch
+            }
             if (playlist == null || !isDispatcharr || playlist.apiKey.isNullOrBlank()) {
                 _state.update { it.copy(unsupportedSource = true, series = emptyList(), isLoadingSeries = false, seriesError = null) }
                 return@launch
@@ -308,6 +322,10 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist()
                 ?: return@launch
+            if (playlist.isXtream()) {
+                loadXtreamEpisodes(playlist, seriesId)
+                return@launch
+            }
             if (playlist.apiKey.isNullOrBlank()) return@launch
             _state.update { it.copy(episodesLoadingFor = it.episodesLoadingFor + seriesId) }
             runCatching {
@@ -342,6 +360,13 @@ class OnDemandViewModel @Inject constructor(
     suspend fun resolveEpisodeUrl(episodeUuid: String, streamId: Int?): Result<String> {
         val playlist = playlistRepository.activePlaylist()
             ?: return Result.failure(IllegalStateException("No playlist loaded."))
+        // Xtream episodes carry a deterministic URL encoded in the sentinel
+        // uuid ("xc-ep-<id>-<ext>"); no network round-trip needed.
+        if (episodeUuid.startsWith(XC_EP_PREFIX)) {
+            return resolveXtreamUrl(playlist, episodeUuid, XC_EP_PREFIX) { base, u, p, id, ext ->
+                xtreamApi.episodeStreamUrl(base, u, p, id, ext)
+            }
+        }
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
@@ -365,6 +390,13 @@ class OnDemandViewModel @Inject constructor(
     suspend fun resolveMovieUrl(movieUuid: String): Result<String> {
         val playlist = playlistRepository.activePlaylist()
             ?: return Result.failure(IllegalStateException("No playlist loaded."))
+        // Xtream movies carry a deterministic URL encoded in the sentinel
+        // uuid ("xc-movie-<id>-<ext>"); build it directly.
+        if (movieUuid.startsWith(XC_MOVIE_PREFIX)) {
+            return resolveXtreamUrl(playlist, movieUuid, XC_MOVIE_PREFIX) { base, u, p, id, ext ->
+                xtreamApi.vodStreamUrl(base, u, p, id, ext)
+            }
+        }
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
@@ -381,7 +413,141 @@ class OnDemandViewModel @Inject constructor(
         }
     }
 
+    // ───────────────────────── Xtream Codes VOD ─────────────────────────
+    // XC VOD/series are mapped into the existing DispatcharrVOD* shapes so
+    // the On Demand UI + nav are source-agnostic. The play URL is encoded
+    // in a sentinel uuid (xc-movie-<id>-<ext> / xc-ep-<id>-<ext>) that the
+    // resolve* methods decode -- XC URLs are deterministic, no round-trip.
+
+    private fun PlaylistEntity.isXtream(): Boolean = sourceType == SourceType.XtreamCodes.name
+
+    private suspend fun loadXtreamMovies(playlist: PlaylistEntity) {
+        val user = playlist.username
+        val pass = playlist.password
+        if (user.isNullOrBlank() || pass == null) {
+            _state.update { it.copy(unsupportedSource = true, movies = emptyList(), isLoading = false) }
+            return
+        }
+        _state.update { it.copy(isLoading = true, error = null, unsupportedSource = false) }
+        runCatching { xtreamApi.getVodStreams(playlist.urlString, user, pass) }.fold(
+            onSuccess = { vods ->
+                val movies = vods.map { v ->
+                    DispatcharrVODMovie(
+                        id = v.streamId,
+                        uuid = "$XC_MOVIE_PREFIX${v.streamId}-${v.containerExtension}",
+                        title = v.name,
+                        plot = v.plot,
+                        genre = v.genre,
+                        rating = v.rating,
+                        year = v.year,
+                        logo = v.icon?.let { DispatcharrVODLogo(url = it) },
+                    )
+                }
+                _state.update { it.copy(isLoading = false, movies = movies, totalCount = movies.size, error = null) }
+            },
+            onFailure = { t ->
+                Log.w(TAG, "XC getVodStreams failed", t)
+                _state.update { it.copy(isLoading = false, error = t.message ?: t::class.simpleName) }
+            },
+        )
+    }
+
+    private suspend fun loadXtreamSeries(playlist: PlaylistEntity) {
+        val user = playlist.username
+        val pass = playlist.password
+        if (user.isNullOrBlank() || pass == null) {
+            _state.update { it.copy(unsupportedSource = true, series = emptyList(), isLoadingSeries = false) }
+            return
+        }
+        _state.update { it.copy(isLoadingSeries = true, seriesError = null, unsupportedSource = false) }
+        runCatching { xtreamApi.getSeries(playlist.urlString, user, pass) }.fold(
+            onSuccess = { list ->
+                val series = list.map { s ->
+                    DispatcharrVODSeries(
+                        id = s.seriesId,
+                        uuid = "xc-series-${s.seriesId}",
+                        name = s.name,
+                        plot = s.plot,
+                        genre = s.genre,
+                        rating = s.rating,
+                        year = s.year,
+                        logo = s.cover?.let { DispatcharrVODLogo(url = it) },
+                    )
+                }
+                _state.update { it.copy(isLoadingSeries = false, series = series, seriesTotalCount = series.size, seriesError = null) }
+            },
+            onFailure = { t ->
+                Log.w(TAG, "XC getSeries failed", t)
+                _state.update { it.copy(isLoadingSeries = false, seriesError = t.message ?: t::class.simpleName) }
+            },
+        )
+    }
+
+    private suspend fun loadXtreamEpisodes(playlist: PlaylistEntity, seriesId: Int) {
+        val user = playlist.username
+        val pass = playlist.password
+        if (user.isNullOrBlank() || pass == null) return
+        _state.update { it.copy(episodesLoadingFor = it.episodesLoadingFor + seriesId) }
+        runCatching { xtreamApi.getSeriesEpisodes(playlist.urlString, user, pass, seriesId) }.fold(
+            onSuccess = { eps ->
+                val mapped = eps.map { e ->
+                    DispatcharrVODEpisode(
+                        id = e.id,
+                        uuid = "$XC_EP_PREFIX${e.id}-${e.containerExtension}",
+                        title = e.title,
+                        seasonNumber = e.season,
+                        episodeNumber = e.episodeNum,
+                        plot = e.plot,
+                        durationSecs = e.durationSecs,
+                        // Episode still: the screen reads stillImageUrl from
+                        // custom_properties.movie_image, so stash the XC image there.
+                        customProperties = e.imageUrl?.let { img ->
+                            JsonObject(mapOf("movie_image" to JsonPrimitive(img)))
+                        },
+                    )
+                }
+                _state.update { st ->
+                    st.copy(
+                        episodesBySeries = st.episodesBySeries + (seriesId to mapped),
+                        episodesLoadingFor = st.episodesLoadingFor - seriesId,
+                        episodesErrorFor = st.episodesErrorFor - seriesId,
+                    )
+                }
+            },
+            onFailure = { t ->
+                Log.w(TAG, "XC getSeriesEpisodes($seriesId) failed", t)
+                _state.update { st ->
+                    st.copy(
+                        episodesLoadingFor = st.episodesLoadingFor - seriesId,
+                        episodesErrorFor = st.episodesErrorFor + (seriesId to (t.message ?: t::class.simpleName.orEmpty())),
+                    )
+                }
+            },
+        )
+    }
+
+    /** Decode a sentinel uuid ("<prefix><id>-<ext>") and build the XC URL. */
+    private fun resolveXtreamUrl(
+        playlist: PlaylistEntity,
+        uuid: String,
+        prefix: String,
+        build: (base: String, user: String, pass: String, id: Int, ext: String) -> String,
+    ): Result<String> {
+        val user = playlist.username
+        val pass = playlist.password
+        if (user.isNullOrBlank() || pass == null) {
+            return Result.failure(IllegalStateException("Xtream credentials missing."))
+        }
+        val payload = uuid.removePrefix(prefix)
+        val id = payload.substringBefore('-').toIntOrNull()
+            ?: return Result.failure(IllegalStateException("Bad Xtream id in $uuid"))
+        val ext = payload.substringAfter('-', "mp4").ifBlank { "mp4" }
+        return Result.success(build(playlist.urlString, user, pass, id, ext))
+    }
+
     private companion object {
         const val TAG = "OnDemandViewModel"
+        const val XC_MOVIE_PREFIX = "xc-movie-"
+        const val XC_EP_PREFIX = "xc-ep-"
     }
 }
