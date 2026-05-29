@@ -1,0 +1,38 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App Version
+      description: What version are you currently running?
+      placeholder: e.g. v0.1.3
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device / Environment
+      description: Device model and Android version (phone, tablet, Android TV / Google TV)
+      placeholder: e.g. Galaxy Z Fold 5, Android 14 / Google TV Streamer, Android 14
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Detailed Description
+      description: Describe the feature, the problem it solves, and any context, examples, or alternatives you've considered.
+      placeholder: |
+        **Problem / use case:**
+
+        **Proposed solution:**
+
+        **Alternatives considered:**
+
+        **Additional context:**
+    validations:
+      required: true
