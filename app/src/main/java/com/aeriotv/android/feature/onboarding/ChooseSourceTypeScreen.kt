@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -70,13 +69,9 @@ fun ChooseSourceTypeScreen(
         )
 
         val vp = rememberViewport()
-        // On wide+short viewports (TV landscape, foldables-landscape) lay the
-        // three cards in a single row so all three are reachable above the
-        // fold without a remote scroll. On any other size the cards stack
-        // vertically; on tablets they stay centered with a max width so they
-        // don't stretch unreadably wide.
-        val rowLayout = vp.widthDp >= 840 && vp.heightDp < 720
-
+        // tvOS parity: the three source types are a single vertical stack of
+        // rounded rows (not a 3-up grid), centered with a tighter max width so
+        // the rows aren't stretched edge-to-edge on a wide TV.
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -85,8 +80,8 @@ fun ChooseSourceTypeScreen(
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
             Column(
-                modifier = if (vp.formMaxWidth != androidx.compose.ui.unit.Dp.Unspecified && !rowLayout)
-                    Modifier.widthIn(max = vp.formMaxWidth).fillMaxWidth()
+                modifier = if (vp.onboardingMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
+                    Modifier.widthIn(max = vp.onboardingMaxWidth).fillMaxWidth()
                 else
                     Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -108,54 +103,25 @@ fun ChooseSourceTypeScreen(
 
                 Spacer(Modifier.height(4.dp))
 
-                if (rowLayout) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        SourceTypeCard(
-                            icon = Icons.Filled.Key,
-                            title = "Dispatcharr Direct Connect",
-                            subtitle = "Connect with your admin login or a personal API key.",
-                            modifier = Modifier
-                                .weight(1f)
-                                .tappable { onChoose(SourceType.DispatcharrUserPass) },
-                        )
-                        SourceTypeCard(
-                            icon = Icons.Filled.Tv,
-                            title = "Xtream Codes",
-                            subtitle = "Xtream Codes API. Live TV, VOD movies & series.",
-                            modifier = Modifier
-                                .weight(1f)
-                                .tappable { onChoose(SourceType.XtreamCodes) },
-                        )
-                        SourceTypeCard(
-                            icon = Icons.Filled.Description,
-                            title = "M3U + EPG",
-                            subtitle = "Any M3U playlist URL. Works with any IPTV provider.",
-                            modifier = Modifier
-                                .weight(1f)
-                                .tappable { onChoose(SourceType.M3uUrl) },
-                        )
-                    }
-                } else {
-                    SourceTypeCard(
-                        icon = Icons.Filled.Key,
-                        title = "Dispatcharr Direct Connect",
-                        subtitle = "Connect to Dispatcharr with your admin login or a personal API key " +
-                                "(*AerioTV is not officially affiliated with the Dispatcharr project)",
-                        modifier = Modifier.tappable { onChoose(SourceType.DispatcharrUserPass) },
-                    )
-                    SourceTypeCard(
-                        icon = Icons.Filled.Tv,
-                        title = "Xtream Codes",
-                        subtitle = "Xtream Codes API. Live TV, VOD movies & series.",
-                        modifier = Modifier.tappable { onChoose(SourceType.XtreamCodes) },
-                    )
-                    SourceTypeCard(
-                        icon = Icons.Filled.Description,
-                        title = "M3U + EPG",
-                        subtitle = "Any M3U playlist URL. Works with Dispatcharr, any IPTV provider.",
-                        modifier = Modifier.tappable { onChoose(SourceType.M3uUrl) },
-                    )
-                }
+                SourceTypeCard(
+                    icon = Icons.Filled.Key,
+                    title = "Dispatcharr Direct Connect",
+                    subtitle = "Connect to Dispatcharr with your admin login or a personal API key " +
+                            "(*AerioTV is not officially affiliated with the Dispatcharr project)",
+                    modifier = Modifier.tappable { onChoose(SourceType.DispatcharrUserPass) },
+                )
+                SourceTypeCard(
+                    icon = Icons.Filled.Tv,
+                    title = "Xtream Codes",
+                    subtitle = "Xtream Codes API. Live TV, VOD movies & series.",
+                    modifier = Modifier.tappable { onChoose(SourceType.XtreamCodes) },
+                )
+                SourceTypeCard(
+                    icon = Icons.Filled.Description,
+                    title = "M3U + EPG",
+                    subtitle = "Any M3U playlist URL. Works with Dispatcharr, any IPTV provider.",
+                    modifier = Modifier.tappable { onChoose(SourceType.M3uUrl) },
+                )
             }
         }
     }

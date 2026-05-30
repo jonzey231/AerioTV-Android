@@ -57,6 +57,14 @@ data class Viewport(val widthDp: Int, val heightDp: Int) {
             else -> 760.dp
         }
 
+    /** Tighter cap for the onboarding flow (Welcome / Choose Source Type /
+     * Configure). The general [formMaxWidth] of 760dp still reads as a
+     * stretched, full-bleed field row on a ~960dp-wide TV; onboarding text
+     * fields and buttons look better as a narrower centered column at 10-foot
+     * UX, closer to the tvOS proportions. Phones stay full width. */
+    val onboardingMaxWidth: Dp
+        get() = if (isCompact) Dp.Unspecified else 560.dp
+
     /** Horizontal padding for full-bleed screens that center constrained
      * content. Phones get the existing edge padding; wide viewports get
      * generous side gutters. */

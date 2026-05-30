@@ -154,8 +154,8 @@ fun ConfigureSourceScreen(
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
         Column(
-            modifier = if (vp.formMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
-                Modifier.widthIn(max = vp.formMaxWidth).fillMaxWidth()
+            modifier = if (vp.onboardingMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
+                Modifier.widthIn(max = vp.onboardingMaxWidth).fillMaxWidth()
             else
                 Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp),

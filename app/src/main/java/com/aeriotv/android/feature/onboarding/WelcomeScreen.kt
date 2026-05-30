@@ -103,10 +103,13 @@ private fun WelcomeSingleColumn(
             modifier = Modifier
                 // Constrain + center so the column doesn't stretch edge-to-edge
                 // on wide screens (TV) -- mirrors the centered tvOS layout while
-                // staying full-width on a narrow phone.
+                // staying full-width on a narrow phone. 560dp matches the rest
+                // of onboarding (Choose Source Type / Configure) so the brand
+                // block, source rows and CTA share one column width; a no-op on
+                // phones, which are narrower than the cap.
                 .align(Alignment.TopCenter)
                 .fillMaxHeight()
-                .widthIn(max = 620.dp)
+                .widthIn(max = 560.dp)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 24.dp),
