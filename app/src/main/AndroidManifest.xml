@@ -8,6 +8,25 @@
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
+    <!-- ACCESS_FINE_LOCATION (home-WiFi SSID detection) and ACCESS_WIFI_STATE
+         implicitly mark location + wifi HARDWARE as required. Android TV devices
+         often lack GPS/location hardware, so Google Play then filters the app
+         out of the Android TV catalog (the "not available on TV" / missing from
+         "Install on more devices" symptom). These features are optional for us;
+         the SSID/LAN-switch feature simply no-ops where the hardware or
+         permission is absent, so mark them not-required to keep TV eligible. -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.network"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Home WiFi detection for LAN URL switching. Reading the CONNECTED
