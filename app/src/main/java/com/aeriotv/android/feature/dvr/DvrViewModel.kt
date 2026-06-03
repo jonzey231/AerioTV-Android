@@ -129,6 +129,12 @@ class DvrViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isLoading = true, error = null, unsupportedSource = false) }
+            // Effective base (LAN when on a saved home SSID, else WAN), the
+            // same base the stream URLs use. Server recordings whose file_url
+            // is a relative path are anchored to this so a phone off the home
+            // network gets the reachable address (iOS resolves file_url
+            // against server.effectiveBaseURL).
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.listRecordings(playlist.urlString, key)
@@ -136,7 +142,7 @@ class DvrViewModel @Inject constructor(
             }.fold(
                 onSuccess = { remote ->
                     _state.update { st ->
-                        val server = remote.map { it.toRecording() }
+                        val server = remote.map { it.toRecording(base, dispatcharrClient) }
                         val local = st.recordings.filter { it.source == Source.Local }
                         st.copy(
                             isLoading = false,
@@ -343,7 +349,10 @@ class DvrViewModel @Inject constructor(
     }
 }
 
-private fun DispatcharrRecording.toRecording(): DvrViewModel.Recording {
+private fun DispatcharrRecording.toRecording(
+    baseUrl: String,
+    client: DispatcharrClient,
+): DvrViewModel.Recording {
     val start = parseIsoMillis(startTime) ?: 0L
     val end = parseIsoMillis(endTime) ?: start
     val status = when (this.status?.lowercase()) {
@@ -354,6 +363,18 @@ private fun DispatcharrRecording.toRecording(): DvrViewModel.Recording {
         "failed", "error" -> DvrViewModel.Recording.Status.Failed
         else -> DvrViewModel.Recording.Status.Unknown
     }
+    // Build a playback URL for finalized recordings, mirroring iOS
+    // playServerRecording (MyRecordingsView.swift line 559): prefer the
+    // server-reported file_url / output_file_url (resolved against the
+    // effective base), else fall back to the constructed /file/ endpoint for
+    // older Dispatcharr builds. Auth headers (X-API-Key) are applied by the
+    // recording-player route, not baked into the URL.
+    val playback: String? = when (status) {
+        DvrViewModel.Recording.Status.Completed,
+        DvrViewModel.Recording.Status.Stopped ->
+            resolveRecordingUrl(fileUrl, baseUrl) ?: client.recordingPlaybackUrl(baseUrl, id)
+        else -> null
+    }
     return DvrViewModel.Recording(
         id = "server-$id",
         source = DvrViewModel.Source.Server,
@@ -363,8 +384,29 @@ private fun DispatcharrRecording.toRecording(): DvrViewModel.Recording {
         endMillis = end,
         status = status,
         fileSizeBytes = fileSize ?: 0L,
+        playbackUrl = playback,
         dispatcharrChannelId = channel,
     )
+}
+
+/**
+ * Resolve a Dispatcharr-reported recording file_url against the active
+ * server's effective base URL. Mirrors iOS resolveRecordingURL
+ * (MyRecordingsView.swift line 614): an already-absolute value is used as-is;
+ * a relative path is anchored to the base. Returns null for a blank input.
+ */
+private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String): String? {
+    val trimmed = fileUrl?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.startsWith("http://", ignoreCase = true) ||
+        trimmed.startsWith("https://", ignoreCase = true)
+    ) {
+        return trimmed
+    }
+    val base = baseUrl.trimEnd('/')
+    if (base.isEmpty()) return null
+    val path = if (trimmed.startsWith("/")) trimmed else "/$trimmed"
+    return "$base$path"
 }
 
 private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {

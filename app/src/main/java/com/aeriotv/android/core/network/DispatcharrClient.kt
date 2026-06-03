@@ -1179,6 +1179,19 @@ data class DispatcharrRecording(
     val fileName: String?
         get() = customProperties?.stringField("file_name")
 
+    /**
+     * Server-provided playback URL for the recording, relative (e.g.
+     * `/api/channels/recordings/<id>/file/`) or already absolute. For
+     * finalized recordings this is the raw media file; the new DVR pipeline
+     * also emits an HLS playlist for in-progress rows. Mirrors iOS
+     * StreamingAPIs.swift line 2347-2348: prefer `output_file_url` (the
+     * remuxed final file) then `file_url`. Null on older Dispatcharr builds,
+     * in which case callers fall back to the constructed `/file/` path.
+     */
+    val fileUrl: String?
+        get() = customProperties?.stringField("output_file_url")
+            ?: customProperties?.stringField("file_url")
+
     /** Best-effort file-size lookup. Older Dispatcharr builds occasionally
      *  surface this as a flat key on the row; the new pipeline keeps it
      *  inside custom_properties. Try both. */

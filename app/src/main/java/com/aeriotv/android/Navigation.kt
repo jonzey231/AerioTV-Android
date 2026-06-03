@@ -659,10 +659,38 @@ fun AerioTVNavHost(
             ) { entry ->
                 val playbackUrl = Uri.decode(entry.arguments?.getString("playbackUrl").orEmpty())
                 val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
+                // A recording is either a local file:// capture (no auth) or a
+                // Dispatcharr server URL that needs the active source's
+                // X-API-Key. Resolve the playlist's auth headers like the VOD
+                // route and apply them only to remote (http/https) URLs so a
+                // file:// recording plays headerless.
+                val parent = remember(entry) {
+                    navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
+                }
+                val playlistVm: PlaylistViewModel = hiltViewModel(parent)
+                val playlistState by playlistVm.state.collectAsStateWithLifecycle()
+                val headers = remember(
+                    playlistState.playlist?.apiKey,
+                    playlistState.playlist?.sourceType,
+                    playbackUrl,
+                ) {
+                    val pl = playlistState.playlist
+                    val key = pl?.apiKey?.takeIf { it.isNotBlank() }
+                    val isDispatcharr = pl?.sourceType == SourceType.DispatcharrApiKey.name ||
+                            pl?.sourceType == SourceType.DispatcharrUserPass.name
+                    val remote = playbackUrl.startsWith("http://", ignoreCase = true) ||
+                            playbackUrl.startsWith("https://", ignoreCase = true)
+                    if (remote && isDispatcharr && key != null) {
+                        mapOf(
+                            "X-API-Key" to key,
+                            "Authorization" to "ApiKey $key",
+                        )
+                    } else emptyMap()
+                }
                 VODPlayerScreen(
                     streamUrl = playbackUrl,
                     title = title.ifBlank { "Recording" },
-                    httpHeaders = emptyMap(),
+                    httpHeaders = headers,
                     onClose = { navController.popBackStack() },
                     loadingMessage = null,
                     videoId = playbackUrl,

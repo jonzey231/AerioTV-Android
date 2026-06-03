@@ -70,6 +70,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -233,8 +234,15 @@ fun VODPlayerScreen(
                     .setEnableDecoderFallback(true)
                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
 
+                // Wrap the header-aware HTTP factory in DefaultDataSource.Factory
+                // so a local DVR recording's file:// URL resolves through
+                // FileDataSource while remote URLs (VOD + Dispatcharr server
+                // recordings) still flow through the HTTP factory carrying the
+                // auth headers. A bare DefaultHttpDataSource.Factory cannot open
+                // file://, so local recordings would otherwise fail to load.
+                val upstreamFactory = DefaultDataSource.Factory(ctx, dataSourceFactory)
                 val mediaSourceFactory = DefaultMediaSourceFactory(ctx)
-                    .setDataSourceFactory(dataSourceFactory)
+                    .setDataSourceFactory(upstreamFactory)
 
                 val player = ExoPlayer.Builder(ctx)
                     .setRenderersFactory(renderersFactory)

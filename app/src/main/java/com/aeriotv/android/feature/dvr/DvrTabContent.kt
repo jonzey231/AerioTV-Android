@@ -221,18 +221,20 @@ fun DvrTabContent(
                         rec.dispatcharrChannelId?.let { onWatchLive(it) }
                     },
                     onPlay = {
-                        // Audit task #43: local recordings have a file:// URL
-                        // resolved at toRecording() time; route to the VOD
-                        // player. Server-side recordings still toast because
-                        // the playable URL plumbing on the Dispatcharr side
-                        // (auth + endpoint) lands in a follow-up phase.
+                        // Audit task #43: both local (file://) and Dispatcharr
+                        // server recordings carry a playbackUrl resolved at
+                        // toRecording() time (the server URL is the reported
+                        // file_url or the constructed /file/ endpoint). Route to
+                        // the VOD player, which applies the source's auth
+                        // headers for remote URLs. Only finalized recordings get
+                        // a URL, so a null means the file isn't ready yet.
                         val url = rec.playbackUrl
-                        if (rec.source == DvrViewModel.Source.Local && !url.isNullOrBlank()) {
+                        if (!url.isNullOrBlank()) {
                             onPlayRecording(url, rec.title)
                         } else {
                             Toast.makeText(
                                 context,
-                                "Playback for server recordings lands in the next phase.",
+                                "This recording has no playable file yet.",
                                 Toast.LENGTH_SHORT,
                             ).show()
                         }
