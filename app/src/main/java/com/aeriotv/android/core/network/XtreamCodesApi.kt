@@ -5,14 +5,20 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.encodeURLParameter
+import io.ktor.utils.io.jvm.javaio.toInputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.DecodeSequenceMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.decodeToSequence
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -51,7 +57,6 @@ class XtreamCodesApi @Inject constructor() {
     }
 
     private val client = HttpClient(OkHttp) {
-        installSanitizedLogging()
         install(HttpTimeout) {
             // VOD / series libraries can be large; give the resource fetch
             // generous headroom while keeping connect snappy.
@@ -75,6 +80,13 @@ class XtreamCodesApi @Inject constructor() {
                 )
             }
         }
+        // Debug-only sanitized request logging (method + URL + status + timing,
+        // no headers/bodies), read with `adb logcat -s AerioNet`. Body logging
+        // stays OFF (LogLevel.INFO) so the large VOD / series responses are
+        // never buffered for logging -- the heavy fetches stream-decode straight
+        // off the channel (see fetchAndMapArray), and INFO-level logging does
+        // not touch the body, so it does not defeat that.
+        installSanitizedLogging()
     }
 
     // ─────────────────────────── Models ───────────────────────────
@@ -125,16 +137,14 @@ class XtreamCodesApi @Inject constructor() {
         username: String,
         password: String,
         categoryId: String? = null,
-    ): List<XtreamVod> = withContext(Dispatchers.Default) {
-        // Parsing + mapping runs on Default, NOT the caller's (Main) dispatcher.
-        // A full-library enumeration is hundreds of these; doing the JSON decode
-        // on Main would jank the UI / ANR while the On Demand grid fills.
+    ): List<XtreamVod> {
+        // Decode + map runs off-Main on Dispatchers.IO inside fetchAndMapArray
+        // (a full-library enumeration is hundreds of these; decoding on Main
+        // would jank the UI / ANR while the On Demand grid fills), one row at a
+        // time so the whole library never materializes at once.
         val extra = categoryId?.let { arrayOf("category_id" to it) } ?: emptyArray()
-        val arr = fetchArray(base, username, password, "get_vod_streams", *extra)
-            ?: return@withContext emptyList()
-        arr.mapNotNull { el ->
-            val o = el as? JsonObject ?: return@mapNotNull null
-            val id = o.flexInt("stream_id") ?: return@mapNotNull null
+        return fetchAndMapArray(base, username, password, "get_vod_streams", *extra) { o ->
+            val id = o.flexInt("stream_id") ?: return@fetchAndMapArray null
             XtreamVod(
                 streamId = id,
                 name = o.str("name").orEmpty(),
@@ -154,13 +164,10 @@ class XtreamCodesApi @Inject constructor() {
         username: String,
         password: String,
         categoryId: String? = null,
-    ): List<XtreamSeries> = withContext(Dispatchers.Default) {
+    ): List<XtreamSeries> {
         val extra = categoryId?.let { arrayOf("category_id" to it) } ?: emptyArray()
-        val arr = fetchArray(base, username, password, "get_series", *extra)
-            ?: return@withContext emptyList()
-        arr.mapNotNull { el ->
-            val o = el as? JsonObject ?: return@mapNotNull null
-            val id = o.flexInt("series_id") ?: return@mapNotNull null
+        return fetchAndMapArray(base, username, password, "get_series", *extra) { o ->
+            val id = o.flexInt("series_id") ?: return@fetchAndMapArray null
             XtreamSeries(
                 seriesId = id,
                 name = o.str("name").orEmpty(),
@@ -191,9 +198,8 @@ class XtreamCodesApi @Inject constructor() {
         username: String,
         password: String,
         action: String,
-    ): List<String> = withContext(Dispatchers.Default) {
-        val arr = fetchArray(base, username, password, action) ?: return@withContext emptyList()
-        arr.mapNotNull { (it as? JsonObject)?.str("category_id") }
+    ): List<String> = fetchAndMapArray(base, username, password, action) { o ->
+        o.str("category_id")
     }
 
     /**
@@ -250,17 +256,50 @@ class XtreamCodesApi @Inject constructor() {
 
     // ─────────────────────────── Internals ────────────────────────
 
-    private suspend fun fetchArray(
+    /**
+     * Streams a top-level JSON array response and maps each element to [T] as
+     * it is decoded, so the whole library never materializes in memory at once.
+     * A large VOD / series library is tens of MB; the old path
+     * (client.get().bodyAsText() -> Json.parseToJsonElement) made Ktor save()
+     * the entire body to a byte array, built a UTF-16 String of it, AND then a
+     * full JsonElement DOM -- several times the payload resident at once, which
+     * OOM'd the constrained heap on a TV (heapgrowthlimit ~384 MB) and thrashed
+     * GC into a multi-second stall (the retry-on-failure made it far worse,
+     * re-OOMing each attempt). decodeToSequence pulls ONE array element at a
+     * time off the response channel; only the current JsonObject plus the
+     * (small) mapped domain list stay resident. [transform] returning null
+     * drops that element (a non-object row, or one missing its id). A non-array
+     * body (false / null / an object / a 500 HTML page for an empty or
+     * unavailable library) throws inside the lazy decode and is swallowed to an
+     * empty list.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    private suspend fun <T> fetchAndMapArray(
         base: String,
         username: String,
         password: String,
         action: String,
         vararg extra: Pair<String, String>,
-    ): JsonArray? {
-        val body = fetchText(base, username, password, action, *extra) ?: return null
-        // Some panels return false / null / an object / a 500 HTML page for an
-        // empty or unavailable library -- all of which fail the array cast.
-        return runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonArray
+        transform: (JsonObject) -> T?,
+    ): List<T> {
+        val b = base.trimEnd('/')
+        val params = buildString {
+            append("username=${enc(username)}&password=${enc(password)}&action=$action")
+            extra.forEach { (k, v) -> append("&$k=${enc(v)}") }
+        }
+        val url = "$b/player_api.php?$params"
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                client.prepareGet(url).execute { response ->
+                    val out = ArrayList<T>()
+                    json.decodeToSequence<JsonElement>(
+                        response.bodyAsChannel().toInputStream(),
+                        DecodeSequenceMode.ARRAY_WRAPPED,
+                    ).forEach { el -> (el as? JsonObject)?.let(transform)?.let(out::add) }
+                    out
+                }
+            }
+        }.onFailure { Log.w(TAG, "XC $action fetch failed", it) }.getOrElse { emptyList() }
     }
 
     private suspend fun fetchText(
