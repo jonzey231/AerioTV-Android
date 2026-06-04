@@ -106,6 +106,10 @@ class XtreamCodesApi @Inject constructor() {
         val plot: String?,
         val genre: String?,
         val year: Int?,
+        /** XC `category_id` from the row. The matching display name comes
+         *  from getVodCategories() (id->name lookup) since the per-stream
+         *  row only carries the id. Null when the panel omits it. */
+        val categoryId: String?,
     )
 
     data class XtreamSeries(
@@ -116,6 +120,8 @@ class XtreamCodesApi @Inject constructor() {
         val genre: String?,
         val rating: String?,
         val year: Int?,
+        /** XC `category_id`. Same semantics as XtreamVod.categoryId. */
+        val categoryId: String?,
     )
 
     data class XtreamEpisode(
@@ -160,6 +166,10 @@ class XtreamCodesApi @Inject constructor() {
                 plot = o.str("plot"),
                 genre = o.str("genre"),
                 year = o.str("releasedate")?.let { yearFrom(it) } ?: o.flexInt("year"),
+                // XC `category_id` may arrive as Int or String depending on
+                // panel; the helper coerces both to String. Drives the VOD
+                // group-hide filter via the id->name map from getVodCategories.
+                categoryId = o.str("category_id"),
             )
         }
     }
@@ -183,6 +193,7 @@ class XtreamCodesApi @Inject constructor() {
                 rating = o.str("rating"),
                 year = o.str("releaseDate")?.let { yearFrom(it) }
                     ?: o.str("year")?.let { yearFrom(it) },
+                categoryId = o.str("category_id"),
             )
         }
     }
@@ -195,6 +206,26 @@ class XtreamCodesApi @Inject constructor() {
      */
     suspend fun getVodCategoryIds(base: String, username: String, password: String): List<String> =
         fetchCategoryIds(base, username, password, "get_vod_categories")
+
+    /** id -> display-name pair, e.g. "5" -> "Action". The group-hide UI needs
+     *  the human-readable name; the per-stream row only carries category_id.
+     *  Mirrors iOS XtreamCodesAPI.getVODCategories. Cheap (a few dozen rows). */
+    data class XtreamCategory(val id: String, val name: String)
+    suspend fun getVodCategories(base: String, username: String, password: String): List<XtreamCategory> =
+        fetchCategories(base, username, password, "get_vod_categories")
+    suspend fun getSeriesCategories(base: String, username: String, password: String): List<XtreamCategory> =
+        fetchCategories(base, username, password, "get_series_categories")
+
+    private suspend fun fetchCategories(
+        base: String,
+        username: String,
+        password: String,
+        action: String,
+    ): List<XtreamCategory> = fetchAndMapArray(base, username, password, action) { o ->
+        val id = o.str("category_id") ?: return@fetchAndMapArray null
+        val name = o.str("category_name")?.takeIf { it.isNotBlank() } ?: id
+        XtreamCategory(id = id, name = name)
+    }
 
     suspend fun getSeriesCategoryIds(base: String, username: String, password: String): List<String> =
         fetchCategoryIds(base, username, password, "get_series_categories")

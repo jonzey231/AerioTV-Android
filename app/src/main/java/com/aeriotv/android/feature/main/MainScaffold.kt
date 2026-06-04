@@ -124,10 +124,19 @@ fun MainScaffold(
     // adds no duplicate fetch; it just makes the eager load drive tab visibility.
     val onDemandVm: OnDemandViewModel = hiltViewModel()
     val onDemandState by onDemandVm.state.collectAsStateWithLifecycle()
+    // Per-playlist VOD opt-in gate (iOS HomeView.swift:317 servers.filter
+    // { $0.supportsVOD && $0.vodEnabled }). Read directly off the active
+    // playlist so the tab hides immediately when the user toggles "Fetch On
+    // Demand from this playlist" OFF at Add / Edit time, without waiting for
+    // the next OnDemandViewModel refresh to flip unsupportedSource. If the
+    // playlist hasn't loaded yet the default is true so we don't suppress
+    // the tab on a slow cold launch.
+    val activePlaylistVodEnabled = viewModel.state
+        .collectAsStateWithLifecycle().value.playlist?.vodEnabled ?: true
     // hasVOD: any movie/series loaded, OR still loading its library. The loading
     // bridge keeps the tab from flickering "absent -> present" on cold launch /
     // source switch; a source that finishes with zero VOD hides the tab entirely.
-    val hasVodContent = !onDemandState.unsupportedSource && (
+    val hasVodContent = activePlaylistVodEnabled && !onDemandState.unsupportedSource && (
         onDemandState.movies.isNotEmpty() ||
             onDemandState.series.isNotEmpty() ||
             onDemandState.isLoading ||

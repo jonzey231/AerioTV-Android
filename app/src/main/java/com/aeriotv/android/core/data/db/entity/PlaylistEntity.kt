@@ -81,6 +81,27 @@ data class PlaylistEntity(
      */
     @ColumnInfo(defaultValue = "10")
     val dispatcharrUserLevel: Int = 10,
+
+    /**
+     * Per-playlist On Demand opt-in (iOS `ServerConnection.vodEnabled`, set at
+     * onboarding via "Fetch On Demand from this playlist" in AddServerView /
+     * EditServerView). When false the OnDemandViewModel skips the unfiltered
+     * VOD + series fetches entirely and the On Demand tab disappears from the
+     * top nav (MainScaffold.hasVodContent gates on this), saving the user the
+     * multi-thousand-item sync when they only want Live TV from this server.
+     * Doesn't change source-type semantics: a DispatcharrApiKey playlist with
+     * vodEnabled=false is still a Dispatcharr playlist (Live TV / DVR / EPG
+     * all behave normally), just opted out of the VOD fetch. M3U playlists
+     * ignore this (they don't carry VOD anyway). Added in DB v16 (preserving
+     * migration); existing rows default to true so behaviour is unchanged for
+     * users who upgrade.
+     *
+     * @ColumnInfo(defaultValue) must match the v16 migration's `DEFAULT 1`
+     * (Room SQLite stores Boolean as INTEGER); same schema-validation rules
+     * as `dispatcharrUserLevel` above.
+     */
+    @ColumnInfo(defaultValue = "1")
+    val vodEnabled: Boolean = true,
 )
 // TODO Phase 9 (Block Store): move apiKey + password out of Room into Google Play
 // Block Store / EncryptedSharedPreferences. Room cleartext storage is acceptable for

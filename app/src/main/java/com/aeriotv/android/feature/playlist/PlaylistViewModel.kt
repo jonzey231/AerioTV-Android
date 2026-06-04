@@ -55,6 +55,11 @@ class PlaylistViewModel @Inject constructor(
         val apiKey: String = "",
         val username: String = "",
         val password: String = "",
+        /** Per-playlist On Demand opt-in (iOS ServerConnection.vodEnabled).
+         *  Bound to the "Fetch On Demand from this playlist" toggle in
+         *  ConfigureSourceScreen / EditPlaylistScreen. Default true, threaded
+         *  through SaveRequest into PlaylistEntity.vodEnabled. */
+        val vodEnabled: Boolean = true,
         val playlist: PlaylistEntity? = null,
         val channels: List<M3UChannel> = emptyList(),
         val epgByChannel: Map<String, List<EPGProgramme>> = emptyMap(),
@@ -251,6 +256,11 @@ class PlaylistViewModel @Inject constructor(
     fun onPasswordChange(value: String) {
         _state.update { it.copy(password = value) }
     }
+    /** Bound to "Fetch On Demand from this playlist" in ConfigureSourceScreen /
+     *  EditPlaylistScreen. Threaded into SaveRequest.vodEnabled on submit. */
+    fun onVodEnabledChange(value: Boolean) {
+        _state.update { it.copy(vodEnabled = value) }
+    }
     fun onSearchQueryChange(value: String) {
         _state.update { it.copy(searchQuery = value) }
     }
@@ -350,6 +360,7 @@ class PlaylistViewModel @Inject constructor(
                 apiKey = s.apiKey.trim().ifBlank { null },
                 username = s.username.trim().ifBlank { null },
                 password = s.password.ifBlank { null },
+                vodEnabled = s.vodEnabled,
             )
             repository.loadAndPersist(request, existingId = s.playlist?.id).fold(
                 onSuccess = { (entity, channels) ->
@@ -571,6 +582,7 @@ class PlaylistViewModel @Inject constructor(
         username: String?,
         password: String?,
         dispatcharrProfileId: Int?,
+        vodEnabled: Boolean = true,
     ) {
         viewModelScope.launch {
             val active = repository.activePlaylist() ?: return@launch
@@ -590,6 +602,7 @@ class PlaylistViewModel @Inject constructor(
                 username = username?.trim()?.ifBlank { null },
                 password = password?.ifBlank { null },
                 dispatcharrProfileId = dispatcharrProfileId,
+                vodEnabled = vodEnabled,
             )
             repository.loadAndPersist(request, existingId = active.id).fold(
                 onSuccess = { (entity, channels) ->

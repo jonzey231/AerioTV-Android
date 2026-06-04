@@ -125,6 +125,8 @@ class OnDemandViewModel @Inject constructor(
         xtreamItemsJob = null
         pendingMovieCats = emptyList()
         pendingSeriesCats = emptyList()
+        movieCategoryNames = emptyMap()
+        seriesCategoryNames = emptyMap()
         xtreamItemsLoaded = false
         xtreamPlaylist = null
         _state.value = UiState()
@@ -144,6 +146,25 @@ class OnDemandViewModel @Inject constructor(
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
                     sourceType == SourceType.DispatcharrUserPass
+            // Per-playlist On Demand opt-out (iOS HomeView.swift:310): clear
+            // movies and short-circuit when the user has toggled OFF "Fetch On
+            // Demand from this playlist" at Add / Edit time. MainScaffold's
+            // hasVodContent ALSO gates on vodEnabled so the tab disappears,
+            // but we still belt-and-suspenders here in case something opens
+            // the tab through another path (e.g. a deep link).
+            if (playlist != null && !playlist.vodEnabled) {
+                _state.update {
+                    it.copy(
+                        unsupportedSource = true,
+                        movies = emptyList(),
+                        totalCount = 0,
+                        isLoading = false,
+                        error = null,
+                        hasDeferredXtreamContent = false,
+                    )
+                }
+                return@launch
+            }
             if (playlist != null && sourceType == SourceType.XtreamCodes) {
                 ensureXtreamProbe(playlist)
                 return@launch
@@ -215,6 +236,22 @@ class OnDemandViewModel @Inject constructor(
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
                     sourceType == SourceType.DispatcharrUserPass
+            // Same opt-out gate as refresh() above for the series side; see
+            // the longer comment there. Belt-and-suspenders with MainScaffold's
+            // hasVodContent.
+            if (playlist != null && !playlist.vodEnabled) {
+                _state.update {
+                    it.copy(
+                        unsupportedSource = true,
+                        series = emptyList(),
+                        seriesTotalCount = 0,
+                        isLoadingSeries = false,
+                        seriesError = null,
+                        hasDeferredXtreamContent = false,
+                    )
+                }
+                return@launch
+            }
             if (playlist != null && sourceType == SourceType.XtreamCodes) {
                 ensureXtreamProbe(playlist)
                 return@launch
@@ -461,7 +498,7 @@ class OnDemandViewModel @Inject constructor(
 
     private fun PlaylistEntity.isXtream(): Boolean = sourceType == SourceType.XtreamCodes.name
 
-    private fun XtreamCodesApi.XtreamVod.toMovie(): DispatcharrVODMovie = DispatcharrVODMovie(
+    private fun XtreamCodesApi.XtreamVod.toMovie(categoryNames: Map<String, String> = emptyMap()): DispatcharrVODMovie = DispatcharrVODMovie(
         id = streamId,
         uuid = "$XC_MOVIE_PREFIX$streamId-$containerExtension",
         title = name,
@@ -470,9 +507,14 @@ class OnDemandViewModel @Inject constructor(
         rating = rating,
         year = year,
         logo = icon?.let { DispatcharrVODLogo(url = it) },
+        // Resolve category_id -> display name from the lookup the probe /
+        // walk pre-fetched. Falls back to null when the panel omitted the id
+        // or the id has no matching row in get_vod_categories -- the filter
+        // UI treats null as "Uncategorized" and lets the user hide that too.
+        categoryName = categoryId?.let { categoryNames[it] },
     )
 
-    private fun XtreamCodesApi.XtreamSeries.toSeries(): DispatcharrVODSeries = DispatcharrVODSeries(
+    private fun XtreamCodesApi.XtreamSeries.toSeries(categoryNames: Map<String, String> = emptyMap()): DispatcharrVODSeries = DispatcharrVODSeries(
         id = seriesId,
         uuid = "xc-series-$seriesId",
         name = name,
@@ -481,6 +523,7 @@ class OnDemandViewModel @Inject constructor(
         rating = rating,
         year = year,
         logo = cover?.let { DispatcharrVODLogo(url = it) },
+        categoryName = categoryId?.let { categoryNames[it] },
     )
 
     // XC On Demand is loaded LAZILY. At init a cheap probe runs (a standard
@@ -493,6 +536,11 @@ class OnDemandViewModel @Inject constructor(
     private var xtreamItemsJob: kotlinx.coroutines.Job? = null
     private var pendingMovieCats: List<String> = emptyList()
     private var pendingSeriesCats: List<String> = emptyList()
+    // category_id -> display-name lookups, populated once in probeXtream and
+    // re-used by the per-category walk so every toMovie/toSeries call can stamp
+    // the human-readable group name on its row. Empty for non-XC sources.
+    private var movieCategoryNames: Map<String, String> = emptyMap()
+    private var seriesCategoryNames: Map<String, String> = emptyMap()
     private var xtreamItemsLoaded = false
     private var xtreamPlaylist: PlaylistEntity? = null
 
@@ -539,18 +587,28 @@ class OnDemandViewModel @Inject constructor(
             .onFailure { Log.w(TAG, "XC getVodStreams failed", it) }.getOrDefault(emptyList())
         val seriesFast = runCatching { xtreamApi.getSeries(base, user, pass) }
             .onFailure { Log.w(TAG, "XC getSeries failed", it) }.getOrDefault(emptyList())
+        // Also fetch the full category lists (id + name) so each movie / series
+        // can be tagged with its group display name -- the Manage Groups filter
+        // sheet on the On Demand tab needs human-readable group names. Cheap
+        // (a few dozen rows each), so we always fetch even when the unfiltered
+        // probe succeeded. Stashed on the VM so the lazy per-category walk
+        // (loadXtreamItemsIfNeeded) re-uses the same lookup.
+        val movieCats = runCatching { xtreamApi.getVodCategories(base, user, pass) }
+            .onFailure { Log.w(TAG, "XC getVodCategories failed", it) }.getOrDefault(emptyList())
+        val seriesCats = runCatching { xtreamApi.getSeriesCategories(base, user, pass) }
+            .onFailure { Log.w(TAG, "XC getSeriesCategories failed", it) }.getOrDefault(emptyList())
+        movieCategoryNames = movieCats.associate { it.id to it.name }
+        seriesCategoryNames = seriesCats.associate { it.id to it.name }
         if (movieFast.isNotEmpty()) {
-            val movies = movieFast.map { it.toMovie() }
+            val movies = movieFast.map { it.toMovie(movieCategoryNames) }
             _state.update { it.copy(movies = movies, totalCount = movies.size) }
         }
         if (seriesFast.isNotEmpty()) {
-            val series = seriesFast.map { it.toSeries() }
+            val series = seriesFast.map { it.toSeries(seriesCategoryNames) }
             _state.update { it.copy(series = series, seriesTotalCount = series.size) }
         }
-        pendingMovieCats = if (movieFast.isEmpty())
-            runCatching { xtreamApi.getVodCategoryIds(base, user, pass) }.getOrDefault(emptyList()) else emptyList()
-        pendingSeriesCats = if (seriesFast.isEmpty())
-            runCatching { xtreamApi.getSeriesCategoryIds(base, user, pass) }.getOrDefault(emptyList()) else emptyList()
+        pendingMovieCats = if (movieFast.isEmpty()) movieCats.map { it.id } else emptyList()
+        pendingSeriesCats = if (seriesFast.isEmpty()) seriesCats.map { it.id } else emptyList()
         // Nothing left to walk: a standard panel already filled above, or the
         // source genuinely has no VOD/series. Mark loaded so the lazy trigger
         // is a no-op.
@@ -611,11 +669,11 @@ class OnDemandViewModel @Inject constructor(
                         when (kind) {
                             XcKind.MOVIE -> {
                                 val items = runCatching { xtreamApi.getVodStreams(base, user, pass, cat) }.getOrDefault(emptyList())
-                                items.forEach { movieAcc[it.streamId] = it.toMovie() }
+                                items.forEach { movieAcc[it.streamId] = it.toMovie(movieCategoryNames) }
                             }
                             XcKind.SERIES -> {
                                 val items = runCatching { xtreamApi.getSeries(base, user, pass, cat) }.getOrDefault(emptyList())
-                                items.forEach { seriesAcc[it.seriesId] = it.toSeries() }
+                                items.forEach { seriesAcc[it.seriesId] = it.toSeries(seriesCategoryNames) }
                             }
                         }
                         done++

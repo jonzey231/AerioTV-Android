@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -34,6 +35,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import com.aeriotv.android.feature.livetv.ManageGroupsSheet
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
@@ -195,10 +198,23 @@ private fun MoviesSubScreen(
     viewModel: OnDemandViewModel,
     onMovieClick: (DispatcharrVODMovie) -> Unit,
     watchVm: WatchProgressViewModel = hiltViewModel(),
+    settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val recentProgress by watchVm.observeRecent(20).collectAsStateWithLifecycle(initialValue = emptyList())
     val isTv = rememberLiveTvFormFactor().isTv
+    // VOD group hide filter (iOS MoviesView hiddenMovieGroups, MoviesView.swift:74).
+    // Categories are tagged on each movie row by OnDemandViewModel (from the XC
+    // get_vod_categories lookup); items with no categoryName fall under the
+    // "Uncategorized" bucket so the user can hide that too.
+    val hiddenMovieGroups by settingsVm.hiddenMovieGroups
+        .collectAsStateWithLifecycle(initialValue = emptySet())
+    val allMovieGroups = remember(state.movies) {
+        state.movies.asSequence()
+            .map { it.categoryName ?: UNCATEGORIZED }
+            .distinct().toList().sorted()
+    }
+    var showManageGroups by rememberSaveable { mutableStateOf(false) }
 
     if (state.unsupportedSource) {
         EmptyState(
@@ -221,12 +237,26 @@ private fun MoviesSubScreen(
     }
     val movieByUuid = remember(state.movies) { state.movies.associateBy { it.uuid } }
 
+    // Apply the hide filter once at this point in the pipeline; everything
+    // below renders from `visibleFiltered`. The total still reflects the
+    // server count so the user can see how many they've hidden.
+    val visibleFiltered = remember(state.visible, hiddenMovieGroups) {
+        if (hiddenMovieGroups.isEmpty()) state.visible
+        else state.visible.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenMovieGroups }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        VodSearchField(
-            query = state.searchQuery,
-            onQueryChange = viewModel::setSearchQuery,
-            placeholder = "Search movies",
-            isTv = isTv,
+        VodHeaderRow(
+            searchField = {
+                VodSearchField(
+                    query = state.searchQuery,
+                    onQueryChange = viewModel::setSearchQuery,
+                    placeholder = "Search movies",
+                    isTv = isTv,
+                )
+            },
+            hiddenCount = hiddenMovieGroups.size,
+            onManageGroups = { showManageGroups = true },
         )
 
         if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
@@ -239,7 +269,7 @@ private fun MoviesSubScreen(
         }
 
         val countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
-            "${state.movies.size} / $total"
+            "${visibleFiltered.size} / $total"
         }
         if (countLabel != null) {
             Text(
@@ -267,13 +297,18 @@ private fun MoviesSubScreen(
                 return@Column
             }
         }
-        if (state.visible.isEmpty()) {
+        if (visibleFiltered.isEmpty()) {
             EmptyState(
-                title = if (state.searchQuery.isNotBlank()) "No matches" else "No movies",
-                body = if (state.searchQuery.isNotBlank())
-                    "Try a different search term."
-                else
-                    "Dispatcharr returned an empty Movies library. Confirm VOD is enabled on the server.",
+                title = when {
+                    state.searchQuery.isNotBlank() -> "No matches"
+                    hiddenMovieGroups.isNotEmpty() -> "Everything's hidden"
+                    else -> "No movies"
+                },
+                body = when {
+                    state.searchQuery.isNotBlank() -> "Try a different search term."
+                    hiddenMovieGroups.isNotEmpty() -> "All ${hiddenMovieGroups.size} group${if (hiddenMovieGroups.size == 1) "" else "s"} you chose to hide accounts for every movie in this library. Tap the filter icon to show some again."
+                    else -> "Dispatcharr returned an empty Movies library. Confirm VOD is enabled on the server."
+                },
             )
             return@Column
         }
@@ -293,7 +328,7 @@ private fun MoviesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
-            items(items = state.visible, key = { it.id }) { movie ->
+            items(items = visibleFiltered, key = { it.id }) { movie ->
                 MoviePoster(
                     movie = movie,
                     isTv = isTv,
@@ -301,6 +336,15 @@ private fun MoviesSubScreen(
                 )
             }
         }
+    }
+
+    if (showManageGroups && allMovieGroups.isNotEmpty()) {
+        ManageGroupsSheet(
+            allGroups = allMovieGroups,
+            hiddenGroups = hiddenMovieGroups,
+            onSave = { settingsVm.setHiddenMovieGroups(it) },
+            onDismiss = { showManageGroups = false },
+        )
     }
 }
 
@@ -310,12 +354,22 @@ private fun SeriesSubScreen(
     onSeriesClick: (DispatcharrVODSeries) -> Unit,
     onEpisodeResume: (String) -> Unit = {},
     watchVm: WatchProgressViewModel = hiltViewModel(),
+    settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val recentProgress by watchVm.observeRecent(20)
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val isTv = rememberLiveTvFormFactor().isTv
     val seriesById = remember(state.series) { state.series.associateBy { it.id } }
+    // Series-side group hide filter, mirrors MoviesSubScreen above.
+    val hiddenSeriesGroups by settingsVm.hiddenSeriesGroups
+        .collectAsStateWithLifecycle(initialValue = emptySet())
+    val allSeriesGroups = remember(state.series) {
+        state.series.asSequence()
+            .map { it.categoryName ?: UNCATEGORIZED }
+            .distinct().toList().sorted()
+    }
+    var showManageGroups by rememberSaveable { mutableStateOf(false) }
     // Continue Watching for series = unfinished episode rows. Includes the next
     // episode the up-next queue seeded (positionMs 0) after finishing one, so a
     // binge keeps surfacing the next episode (iOS Issue #19).
@@ -331,12 +385,23 @@ private fun SeriesSubScreen(
         return
     }
 
+    val visibleSeriesFiltered = remember(state.visibleSeries, hiddenSeriesGroups) {
+        if (hiddenSeriesGroups.isEmpty()) state.visibleSeries
+        else state.visibleSeries.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenSeriesGroups }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        VodSearchField(
-            query = state.seriesSearchQuery,
-            onQueryChange = viewModel::setSeriesSearchQuery,
-            placeholder = "Search series",
-            isTv = isTv,
+        VodHeaderRow(
+            searchField = {
+                VodSearchField(
+                    query = state.seriesSearchQuery,
+                    onQueryChange = viewModel::setSeriesSearchQuery,
+                    placeholder = "Search series",
+                    isTv = isTv,
+                )
+            },
+            hiddenCount = hiddenSeriesGroups.size,
+            onManageGroups = { showManageGroups = true },
         )
 
         if (continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()) {
@@ -348,7 +413,7 @@ private fun SeriesSubScreen(
         }
 
         val countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
-            "${state.series.size} / $total"
+            "${visibleSeriesFiltered.size} / $total"
         }
         if (countLabel != null) {
             Text(
@@ -376,13 +441,18 @@ private fun SeriesSubScreen(
                 return@Column
             }
         }
-        if (state.visibleSeries.isEmpty()) {
+        if (visibleSeriesFiltered.isEmpty()) {
             EmptyState(
-                title = if (state.seriesSearchQuery.isNotBlank()) "No matches" else "No series",
-                body = if (state.seriesSearchQuery.isNotBlank())
-                    "Try a different search term."
-                else
-                    "Dispatcharr returned an empty Series library. Confirm VOD is enabled on the server.",
+                title = when {
+                    state.seriesSearchQuery.isNotBlank() -> "No matches"
+                    hiddenSeriesGroups.isNotEmpty() -> "Everything's hidden"
+                    else -> "No series"
+                },
+                body = when {
+                    state.seriesSearchQuery.isNotBlank() -> "Try a different search term."
+                    hiddenSeriesGroups.isNotEmpty() -> "All ${hiddenSeriesGroups.size} group${if (hiddenSeriesGroups.size == 1) "" else "s"} you chose to hide accounts for every series in this library. Tap the filter icon to show some again."
+                    else -> "Dispatcharr returned an empty Series library. Confirm VOD is enabled on the server."
+                },
             )
             return@Column
         }
@@ -400,7 +470,7 @@ private fun SeriesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
-            items(items = state.visibleSeries, key = { it.id }) { series ->
+            items(items = visibleSeriesFiltered, key = { it.id }) { series ->
                 SeriesPoster(
                     series = series,
                     isTv = isTv,
@@ -409,7 +479,58 @@ private fun SeriesSubScreen(
             }
         }
     }
+
+    if (showManageGroups && allSeriesGroups.isNotEmpty()) {
+        ManageGroupsSheet(
+            allGroups = allSeriesGroups,
+            hiddenGroups = hiddenSeriesGroups,
+            onSave = { settingsVm.setHiddenSeriesGroups(it) },
+            onDismiss = { showManageGroups = false },
+        )
+    }
 }
+
+/** Search field + Manage-Groups filter icon, used by both the Movies and
+ *  Series sub-screens. Mirrors the Live TV header row -- search occupies
+ *  the bulk of the width, the filter icon sits flush right and turns
+ *  primary-tinted when any groups are hidden so the user can see at a
+ *  glance that the list is filtered. */
+@Composable
+private fun VodHeaderRow(
+    searchField: @Composable RowScope.() -> Unit,
+    hiddenCount: Int,
+    onManageGroups: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) { searchField() }
+        }
+        IconButton(
+            onClick = onManageGroups,
+            modifier = Modifier.size(40.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.FilterList,
+                contentDescription = "Filter groups",
+                tint = if (hiddenCount == 0)
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                else
+                    MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+/** Stand-in group bucket for movies / series whose XC `category_id` is
+ *  missing or has no matching get_vod_categories row. Lets the user hide
+ *  that bucket the same way they hide a real group. */
+private const val UNCATEGORIZED = "Uncategorized"
 
 @Composable
 private fun SeriesPoster(

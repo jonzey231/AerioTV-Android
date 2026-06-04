@@ -22,4 +22,15 @@ enum class SourceType(val displayName: String, val isImplemented: Boolean) {
     DispatcharrApiKey("Dispatcharr (API Key)", true),
     DispatcharrUserPass("Dispatcharr (Username & Password)", true),
     XtreamCodes("Xtream Codes", true),
+    ;
+
+    /** True for source types that carry VOD (movies + series). Mirrors iOS
+     *  ServerType.supportsVOD: Dispatcharr (any auth) and Xtream Codes have
+     *  movie/series APIs; raw M3U is live-only. The On Demand toggle in
+     *  ConfigureSourceScreen / EditPlaylistScreen surfaces only when this
+     *  is true (no point asking M3U users whether to fetch VOD they don't
+     *  have). Also used by OnDemandViewModel to short-circuit the probe
+     *  for M3U playlists. */
+    val supportsVOD: Boolean
+        get() = this == DispatcharrApiKey || this == DispatcharrUserPass || this == XtreamCodes
 }

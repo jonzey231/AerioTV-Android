@@ -136,6 +136,23 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * v15 -> v16: per-playlist On Demand opt-in column. Mirrors iOS
+     * `ServerConnection.vodEnabled`. Default 1 (true) so every existing
+     * playlist keeps fetching VOD as before; users only toggle it off at
+     * Add / Edit Playlist. Same Boolean-as-INTEGER pattern as the rest of
+     * the Room schema; the `@ColumnInfo(defaultValue = "1")` on the entity
+     * MUST match the SQL `DEFAULT 1` here or Room rejects the post-upgrade
+     * schema on open.
+     */
+    private val MIGRATION_15_16 = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `playlists` ADD COLUMN `vodEnabled` INTEGER NOT NULL DEFAULT 1",
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -143,7 +160,7 @@ object DatabaseModule {
             // Preserve user data across known schema bumps where a clean ALTER
             // exists; fall back to a destructive rebuild only for un-mapped
             // version jumps (older dev builds).
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 

@@ -76,6 +76,10 @@ fun EditPlaylistScreen(
     var apiKey by remember(playlist?.id) { mutableStateOf(playlist?.apiKey.orEmpty()) }
     var username by remember(playlist?.id) { mutableStateOf(playlist?.username.orEmpty()) }
     var password by remember(playlist?.id) { mutableStateOf(playlist?.password.orEmpty()) }
+    // Per-playlist On Demand opt-in (iOS ServerConnection.vodEnabled). Default
+    // true so existing rows that pre-date the column still behave as before;
+    // re-seeds when the user switches between playlists in this screen.
+    var vodEnabled by remember(playlist?.id) { mutableStateOf(playlist?.vodEnabled ?: true) }
     var dispatcharrMode by remember(playlist?.id) {
         mutableStateOf(
             when (sourceType) {
@@ -149,6 +153,7 @@ fun EditPlaylistScreen(
                                 else -> null
                             },
                             dispatcharrProfileId = if (isDispatcharr) selectedProfileId else null,
+                            vodEnabled = vodEnabled,
                         )
                         onBack()
                     },
@@ -350,6 +355,44 @@ fun EditPlaylistScreen(
                     }
                 }
                 SourceType.M3uUrl -> { /* no auth */ }
+            }
+
+            // Per-playlist On Demand opt-in (iOS Edit Server "Fetch VOD from
+            // this playlist" toggle). Surfaces only for source types that
+            // actually carry VOD; M3U is live-only so the toggle would be
+            // pointless. Mirrors the same row used at Add Playlist
+            // (ConfigureSourceScreen.VodEnabledRow).
+            if (sourceType.supportsVOD) {
+                item {
+                    Section(
+                        header = "On Demand",
+                        footer = "When off, this playlist's movies and TV shows aren't loaded into On Demand. Useful if you only want Live TV from this server, or if you have a second playlist that already provides On Demand.",
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Fetch On Demand from this playlist",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.size(12.dp))
+                            androidx.compose.material3.Switch(
+                                checked = vodEnabled,
+                                onCheckedChange = { vodEnabled = it },
+                                colors = androidx.compose.material3.SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                ),
+                            )
+                        }
+                    }
+                }
             }
 
             if (isDispatcharr) {

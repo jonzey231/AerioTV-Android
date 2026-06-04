@@ -40,6 +40,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -181,6 +183,21 @@ fun ConfigureSourceScreen(
                 }
                 SourceType.XtreamCodes -> XtreamFields(state, viewModel)
                 SourceType.M3uUrl -> M3uFields(state, viewModel)
+            }
+
+            // Per-playlist On Demand opt-in (iOS AddServerView.vodEnabledRow,
+            // AddServerView.swift:337). Only meaningful for source types that
+            // actually carry VOD; M3U playlists never have it. Default ON.
+            // When off the OnDemand tab disappears and the multi-thousand-item
+            // VOD sync is skipped -- useful for users who only want Live TV
+            // from this playlist, or who have a second playlist already
+            // providing VOD. Can be flipped later in Edit Playlist.
+            if (sourceType.supportsVOD) {
+                Spacer(Modifier.height(4.dp))
+                VodEnabledRow(
+                    checked = state.vodEnabled,
+                    onCheckedChange = viewModel::onVodEnabledChange,
+                )
             }
 
             val validation = validate(sourceType, state, dispatcharrAuthMode)
@@ -609,5 +626,46 @@ private fun validate(
         missing.isEmpty() -> null
         missing.size == 1 -> "${missing.first()} is required."
         else -> "${missing.size} fields need attention."
+    }
+}
+
+/**
+ * On Demand opt-in row for Add / Edit Playlist. Mirrors the iOS
+ * AddServerView.vodEnabledRow (AddServerView.swift:337-348): title + help
+ * text + accent-tinted Switch. Title is wrapped in a Row so the Switch
+ * sits on the right with the text claiming the rest of the width. The
+ * help paragraph reuses the bodySmall + onSurfaceVariant pair the other
+ * form descriptions use.
+ */
+@Composable
+private fun VodEnabledRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Fetch On Demand from this playlist",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.size(12.dp))
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                ),
+            )
+        }
+        Text(
+            text = "When off, this playlist's movies and TV shows aren't loaded into On Demand. Useful if you only want Live TV from this server, or if you have a second playlist that already provides On Demand. You can change this later in Settings.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }

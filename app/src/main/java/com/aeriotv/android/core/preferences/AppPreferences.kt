@@ -282,6 +282,38 @@ class AppPreferences @Inject constructor(
             else prefs[KEY_HIDDEN_GROUPS] = groups.joinToString("\n")
         }
     }
+
+    /**
+     * Hidden VOD group titles, separately per Movies and Series. Same storage
+     * shape as [hiddenGroups] above (newline-delimited); same semantics
+     * (empty = nothing hidden, all visible). Mirrors iOS MoviesView's
+     * `hiddenMovieGroups` UserDefaults key + TVShowsView's
+     * `hiddenSeriesGroups` (StreamingAPIs MoviesView.swift:74,
+     * TVShowsView.swift:27). Surfaced via ManageGroupsSheet from the On
+     * Demand tab and consumed inside OnDemandViewModel to filter the lists.
+     */
+    val hiddenMovieGroups: Flow<Set<String>> = store.data.map { prefs ->
+        val raw = prefs[KEY_HIDDEN_MOVIE_GROUPS] ?: ""
+        if (raw.isBlank()) emptySet()
+        else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
+    }
+    suspend fun setHiddenMovieGroups(groups: Set<String>) {
+        store.edit { prefs ->
+            if (groups.isEmpty()) prefs.remove(KEY_HIDDEN_MOVIE_GROUPS)
+            else prefs[KEY_HIDDEN_MOVIE_GROUPS] = groups.joinToString("\n")
+        }
+    }
+    val hiddenSeriesGroups: Flow<Set<String>> = store.data.map { prefs ->
+        val raw = prefs[KEY_HIDDEN_SERIES_GROUPS] ?: ""
+        if (raw.isBlank()) emptySet()
+        else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
+    }
+    suspend fun setHiddenSeriesGroups(groups: Set<String>) {
+        store.edit { prefs ->
+            if (groups.isEmpty()) prefs.remove(KEY_HIDDEN_SERIES_GROUPS)
+            else prefs[KEY_HIDDEN_SERIES_GROUPS] = groups.joinToString("\n")
+        }
+    }
     suspend fun autoResumeLastChannelOnce(): Boolean =
         store.data.first()[KEY_AUTO_RESUME_LAST_CHANNEL] ?: false
     suspend fun lastWatchedChannelIdOnce(): String =
@@ -639,6 +671,12 @@ class AppPreferences @Inject constructor(
         val KEY_LAST_WATCHED_CHANNEL_ID = stringPreferencesKey("last_watched_channel_id")
         val KEY_LAST_SEEN_WHATSNEW_VERSION = stringPreferencesKey("last_seen_whatsnew_version")
         val KEY_HIDDEN_GROUPS = stringPreferencesKey("hidden_groups")
+        // Per-tab VOD group filters. iOS persists these under the global
+        // UserDefaults keys `hiddenMovieGroups` / `hiddenSeriesGroups`; we
+        // namespace into our DataStore the same way the live-TV
+        // `hidden_groups` key does.
+        val KEY_HIDDEN_MOVIE_GROUPS = stringPreferencesKey("hidden_movie_groups")
+        val KEY_HIDDEN_SERIES_GROUPS = stringPreferencesKey("hidden_series_groups")
         val KEY_HOME_SSIDS = stringPreferencesKey("home_ssids")
         val KEY_DISPLAY_SCALE_MOVIES = doublePreferencesKey("display_scale_movies")
         val KEY_DISPLAY_SCALE_LIVE_TV = doublePreferencesKey("display_scale_live_tv")

@@ -1095,6 +1095,12 @@ data class DispatcharrVODSeries(
     @SerialName("imdb_id")
     val imdbId: String? = null,
     val logo: DispatcharrVODLogo? = null,
+    /** Server-side group name (e.g. "K-Drama", "Latino", "Stand-Up"). Populated
+     *  by OnDemandViewModel from the Xtream get_series_categories id->name
+     *  lookup; null for sources that don't expose categories (Dispatcharr
+     *  Direct Connect REST). Drives the per-group hide filter exposed via
+     *  ManageGroupsSheet on the Series tab. Mirrors iOS VODSeries.categoryName. */
+    val categoryName: String? = null,
 ) {
     val displayName: String get() = name.ifBlank { title.orEmpty() }
     val posterUrl: String? get() = logo?.url
@@ -1118,6 +1124,8 @@ data class DispatcharrVODMovie(
     val imdbId: String? = null,
     val logo: DispatcharrVODLogo? = null,
     val streams: List<DispatcharrVODStreamOption> = emptyList(),
+    /** Server-side group name. See DispatcharrVODSeries.categoryName. */
+    val categoryName: String? = null,
 ) {
     val displayName: String get() = title.ifBlank { name.orEmpty() }
     val posterUrl: String? get() = logo?.url

@@ -112,6 +112,10 @@ class PlaylistRepository @Inject constructor(
         /** Dispatcharr channel-profile id to scope this playlist to, or null
          * for "All Channels". Ignored for non-Dispatcharr sources. */
         val dispatcharrProfileId: Int? = null,
+        /** Per-playlist On Demand opt-in (iOS ServerConnection.vodEnabled).
+         *  Default true. UI exposes this for Dispatcharr / Xtream sources; M3U
+         *  doesn't carry VOD so the field is ignored downstream for it. */
+        val vodEnabled: Boolean = true,
     )
 
     suspend fun activePlaylist(): PlaylistEntity? {
@@ -199,6 +203,7 @@ class PlaylistRepository @Inject constructor(
             isActive = true,
             dispatcharrProfileId = request.dispatcharrProfileId,
             dispatcharrUserLevel = dispatcharrUserLevel,
+            vodEnabled = request.vodEnabled,
         )
         // New / re-loaded playlist becomes the active one. Mirrors iOS commit
         // f72b942 — wrap "deactivate others + upsert" in a transactional DAO
