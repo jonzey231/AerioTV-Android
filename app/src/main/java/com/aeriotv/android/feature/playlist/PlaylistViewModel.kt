@@ -487,15 +487,97 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
-    /** Group + time-sort programmes into the per-channel map the UI consumes. */
+    /** Group + time-sort + dedup programmes into the per-channel map the UI consumes. */
     // Grouping hundreds of thousands of programmes by channel + sorting each
     // bucket is O(n log n); run it off the Main dispatcher so a large EPG
     // doesn't stall the UI between fetch and paint.
+    //
+    // iOS GuideStore parity (EPGGuideView.swift `mergeProgramInto`): collapse
+    // duplicate programmes within each channel bucket. Two programmes merge
+    // when EITHER (a) they share the same non-blank title and start within 60s
+    // of each other -- the Dispatcharr bulk-vs-detail enrichment case where
+    // the same airing is fetched twice with slightly different times, OR (b)
+    // they overlap by more than 80% of their combined span -- the
+    // XMLTV-layered-on-Dispatcharr case where two providers describe the same
+    // airing with different boundaries. Merge keeps the LONGER description,
+    // the existing non-blank category, the existing-else-new dispatcharrProgramId,
+    // and widens the time window to the union so the cell still covers both.
     private suspend fun groupByChannel(programmes: List<EPGProgramme>): Map<String, List<EPGProgramme>> =
         withContext(Dispatchers.Default) {
             programmes.groupBy { it.channelId }
-                .mapValues { (_, list) -> list.sortedBy { it.startMillis } }
+                .mapValues { (_, list) -> dedupSameAiring(list.sortedBy { it.startMillis }) }
         }
+
+    /**
+     * iOS GuideStore `mergeProgramInto` mirror. Input is a per-channel
+     * start-time-sorted list; walks the list once, collapsing a programme
+     * into the previously kept one whenever [isSameAiring] reports the
+     * two describe the same airing. O(n) per bucket and allocation-light:
+     * a single ArrayList is built only when at least one merge happens.
+     */
+    private fun dedupSameAiring(sorted: List<EPGProgramme>): List<EPGProgramme> {
+        if (sorted.size <= 1) return sorted
+        // Cheap two-pass: detect first whether ANY pair merges so the
+        // common (no-dup) case allocates nothing. Most XMLTV feeds and
+        // Xtream xmltv.php fall into this fast path.
+        val needsMerge = run {
+            var i = 0
+            while (i + 1 < sorted.size) {
+                if (isSameAiring(sorted[i], sorted[i + 1])) return@run true
+                i++
+            }
+            false
+        }
+        if (!needsMerge) return sorted
+        val out = ArrayList<EPGProgramme>(sorted.size)
+        for (next in sorted) {
+            val prev = out.lastOrNull()
+            if (prev != null && isSameAiring(prev, next)) {
+                out[out.lastIndex] = mergeProgrammes(prev, next)
+            } else {
+                out.add(next)
+            }
+        }
+        return out
+    }
+
+    /** Same-airing predicate: 60s start-delta with same non-blank title,
+     *  OR > 80% time overlap of the union span. */
+    private fun isSameAiring(a: EPGProgramme, b: EPGProgramme): Boolean {
+        val titleEq = a.title.isNotBlank() &&
+            a.title.trim().equals(b.title.trim(), ignoreCase = false)
+        val startDelta = kotlin.math.abs(a.startMillis - b.startMillis)
+        if (titleEq && startDelta <= 60_000L) return true
+        val overlap = kotlin.math.max(
+            0L,
+            kotlin.math.min(a.endMillis, b.endMillis) -
+                kotlin.math.max(a.startMillis, b.startMillis),
+        )
+        val span = kotlin.math.max(a.endMillis, b.endMillis) -
+            kotlin.math.min(a.startMillis, b.startMillis)
+        if (span <= 0L) return false
+        return overlap.toDouble() / span.toDouble() > 0.8
+    }
+
+    /** Merge per iOS: keep the longer description, the existing non-blank
+     *  category, the existing-else-new dispatcharrProgramId, widen the
+     *  time window to the union, and keep the first non-blank title. */
+    private fun mergeProgrammes(a: EPGProgramme, b: EPGProgramme): EPGProgramme {
+        val title = if (a.title.isNotBlank()) a.title else b.title
+        val description = if (a.description.length >= b.description.length) a.description else b.description
+        val category = a.category.takeIf { it.isNotBlank() } ?: b.category
+        val pid = a.dispatcharrProgramId ?: b.dispatcharrProgramId
+        val start = kotlin.math.min(a.startMillis, b.startMillis)
+        val end = kotlin.math.max(a.endMillis, b.endMillis)
+        return a.copy(
+            title = title,
+            description = description,
+            category = category,
+            startMillis = start,
+            endMillis = end,
+            dispatcharrProgramId = pid,
+        )
+    }
 
     /**
      * Re-fetch the active playlist (channels) and follow with EPG. Used by
