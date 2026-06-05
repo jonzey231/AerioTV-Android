@@ -49,12 +49,17 @@ data class Viewport(val widthDp: Int, val heightDp: Int) {
 
     /** Max content width for form-style screens. Phones get the full width;
      * larger viewports cap so a single column of labels + inputs stays
-     * readable at 10-foot UX (TV) or 18-inch (tablet). */
+     * readable at 10-foot UX (TV) or 18-inch (tablet). Numbers measured
+     * against actual screen widths on real devices: the Streamer reports
+     * `screenWidthDp = 960` (1920px @ density 320), so the previous 760dp
+     * cap was 80% of the screen and the form looked edge-to-edge stretched.
+     * 700dp on the Streamer leaves ~130dp gutters on each side -- the
+     * tvOS EditServerPage proportions the user asked us to match. */
     val formMaxWidth: Dp
         get() = when {
             isCompact -> Dp.Unspecified
             isMedium -> 600.dp
-            else -> 760.dp
+            else -> 700.dp
         }
 
     /** Tighter cap for the onboarding flow (Welcome / Choose Source Type /
@@ -78,13 +83,21 @@ data class Viewport(val widthDp: Int, val heightDp: Int) {
 
 /**
  * Modifier that caps a child's width to the current viewport's form max
- * (no-op on phones). Apply directly to a LazyColumn / Column whose parent
- * already centers it (or wrap inside [AdaptiveCenteredContent]).
+ * AND fills the remaining width so the child can be centered by a Box
+ * parent. Phones get full width (no cap, just fillMaxWidth). Wider
+ * viewports cap at [Viewport.formMaxWidth]; pair with a centering parent
+ * (a `Box(contentAlignment = Alignment.TopCenter)`, or use
+ * [AdaptiveCenteredContent]) to actually center the constrained column.
+ * The historical behaviour of this modifier was widthIn-only, which on
+ * non-Box parents (e.g. a plain Column) left the form glued to the
+ * leading edge -- exactly the "stretched mobile" look the user reported
+ * for EditPlaylistScreen on TV.
  */
 @Composable
 fun Modifier.adaptiveFormWidth(): Modifier {
     val vp = rememberViewport()
-    return if (vp.formMaxWidth != Dp.Unspecified) this.widthIn(max = vp.formMaxWidth)
+    return if (vp.formMaxWidth != Dp.Unspecified)
+        this.widthIn(max = vp.formMaxWidth)
     else this
 }
 
