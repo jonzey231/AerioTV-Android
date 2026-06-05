@@ -3,6 +3,7 @@ package com.aeriotv.android.feature.livetv
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -428,33 +429,55 @@ fun GuideScreen(
                 }
             }
             // Search toggle: reveals an inline channel-name search field.
+            // tvOS renders this as a TVGroupPill (icon-only) -- a filled
+            // capsule sitting beside the category pills -- so on TV give the
+            // icon a subtle filled circular container to match that contained
+            // look instead of a bare floating glyph. Active state fills with
+            // the accent.
             IconButton(
                 onClick = {
                     searchActive = !searchActive
                     if (!searchActive) viewModel.onSearchQueryChange("")
                 },
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(36.dp).then(
+                    if (isTv) Modifier.background(
+                        if (searchActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        CircleShape,
+                    ) else Modifier,
+                ),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Search,
                     contentDescription = "Search channels",
-                    tint = if (searchActive) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = when {
+                        isTv && searchActive -> MaterialTheme.colorScheme.onPrimary
+                        searchActive -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     modifier = Modifier.size(20.dp),
                 )
             }
             // Filter toggle: opens the group on/off picker (Manage Groups).
             IconButton(
                 onClick = { showManageGroups = true },
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(36.dp).then(
+                    if (isTv) Modifier.background(
+                        if (hiddenGroups.isEmpty())
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        else MaterialTheme.colorScheme.primary,
+                        CircleShape,
+                    ) else Modifier,
+                ),
             ) {
                 Icon(
                     imageVector = Icons.Filled.FilterList,
                     contentDescription = "Filter groups",
-                    tint = if (hiddenGroups.isEmpty())
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    else
-                        MaterialTheme.colorScheme.primary,
+                    tint = when {
+                        isTv && hiddenGroups.isNotEmpty() -> MaterialTheme.colorScheme.onPrimary
+                        hiddenGroups.isEmpty() -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.primary
+                    },
                     modifier = Modifier.size(20.dp),
                 )
             }
