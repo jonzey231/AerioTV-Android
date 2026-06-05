@@ -24,6 +24,7 @@ import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Single source of truth for playlist persistence + fetch + parse.
@@ -350,7 +352,45 @@ class PlaylistRepository @Inject constructor(
         }
     }
 
-    suspend fun loadEpg(playlist: PlaylistEntity): Result<List<EPGProgramme>> =
+    /**
+     * In-flight [loadEpg] deferreds keyed by `playlist.id`. Two callers that
+     * start an EPG fetch for the same source before the first one returns
+     * share the same [CompletableDeferred] and the same network roundtrip,
+     * instead of each independently parsing 60K-programme XMLTV or hitting
+     * Dispatcharr's `/api/epg/grid/` twice. Mirrors iOS GuideStore's
+     * `inFlightLoadTask` / `inFlightXMLTVTask` coalescing
+     * (EPGGuideView.swift lines 1300-1340).
+     *
+     * Entries are removed in the `finally` block of the winning caller so
+     * SEQUENTIAL re-fetches (cache went stale between two visits) still
+     * round-trip; only OVERLAPPING calls coalesce.
+     */
+    private val inFlightLoads = ConcurrentHashMap<String, CompletableDeferred<Result<List<EPGProgramme>>>>()
+
+    suspend fun loadEpg(playlist: PlaylistEntity): Result<List<EPGProgramme>> {
+        val key = playlist.id
+        val mine = CompletableDeferred<Result<List<EPGProgramme>>>()
+        val winner = inFlightLoads.putIfAbsent(key, mine)
+        if (winner != null) {
+            // Another caller already started the fetch; await their result.
+            return winner.await()
+        }
+        return try {
+            val result = loadEpgInternal(playlist)
+            mine.complete(result)
+            result
+        } catch (t: Throwable) {
+            val r: Result<List<EPGProgramme>> = Result.failure(t)
+            mine.complete(r)
+            r
+        } finally {
+            // Drop the entry so the next (sequential) call hits the network
+            // again instead of awaiting a long-stale completed Deferred.
+            inFlightLoads.remove(key, mine)
+        }
+    }
+
+    private suspend fun loadEpgInternal(playlist: PlaylistEntity): Result<List<EPGProgramme>> =
         // Parse + grid-mapping run on Default, NOT the caller's (Main) dispatcher.
         // A large provider EPG is hundreds of thousands of programmes; parsing
         // that XMLTV / mapping the Dispatcharr grid on Main froze the UI for
