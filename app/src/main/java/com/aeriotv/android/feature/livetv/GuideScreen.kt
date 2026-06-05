@@ -279,10 +279,26 @@ fun GuideScreen(
     }
 
     // Half-hour labels on the 10-foot guide (tvOS parity: 7:00 / 7:30 / 8:00);
-    // hourly on phone where the axis is narrower.
+    // hourly on phone where the axis is narrower. tvOS formats the axis labels
+    // with `dateFormat = "h:mma"` + amSymbol="am"/pmSymbol="pm" -> lowercase,
+    // NO space ("2:00pm"). Android's SimpleDateFormat emits uppercase "PM" by
+    // default, so override the am/pm symbols to match tvOS exactly.
     val timeFormatter = remember(isTv) {
-        SimpleDateFormat(if (isTv) "h:mm a" else "h a", Locale.getDefault())
-            .apply { timeZone = TimeZone.getDefault() }
+        if (isTv) {
+            val symbols = java.text.DateFormatSymbols(Locale.getDefault()).apply {
+                amPmStrings = arrayOf("am", "pm")
+            }
+            SimpleDateFormat("h:mma", symbols).apply { timeZone = TimeZone.getDefault() }
+        } else {
+            SimpleDateFormat("h a", Locale.getDefault()).apply { timeZone = TimeZone.getDefault() }
+        }
+    }
+    // tvOS shows the CURRENT time in the top-left corner cell above the channel
+    // rail (the "2:22 PM" box), in the device's locale-aware h:mm format with
+    // uppercase AM/PM -- distinct from the lowercase axis labels. Refreshes with
+    // the 30s nowMillis tick.
+    val cornerTimeFormatter = remember {
+        SimpleDateFormat("h:mm a", Locale.getDefault()).apply { timeZone = TimeZone.getDefault() }
     }
 
     // Horizontal scroll state shared across the time-header row + every channel
@@ -468,8 +484,9 @@ fun GuideScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     items(groups, key = { it }) { group ->
+                        val pillSelected = state.selectedGroup == group
                         FilterChip(
-                            selected = state.selectedGroup == group,
+                            selected = pillSelected,
                             onClick = { viewModel.onGroupSelected(group) },
                             label = {
                                 Text(
@@ -478,9 +495,23 @@ fun GuideScreen(
                                     else MaterialTheme.typography.labelLarge,
                                 )
                             },
+                            // tvOS TVGroupPill (ChannelListView.swift:2830): unselected
+                            // pills are FILLED capsules (Color.elevatedBackground), not
+                            // outlined -- selected fills with accentPrimary + dark text.
+                            // Drop the FilterChip outline on TV and give the unselected
+                            // state a subtle elevated fill so the row reads as a strip
+                            // of soft pills exactly like the tvOS guide.
                             colors = FilterChipDefaults.filterChipColors(
+                                containerColor = if (isTv)
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                else Color.Transparent,
+                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 selectedContainerColor = MaterialTheme.colorScheme.primary,
                                 selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            border = if (isTv) null else FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = pillSelected,
                             ),
                         )
                     }
@@ -490,14 +521,34 @@ fun GuideScreen(
 
         HorizontalDivider(color = guideDivider, thickness = 0.5.dp)
 
-        // Time-header row: empty corner over the channel rail + horizontally-scrolled hour labels.
+        // Time-header row: the corner over the channel rail shows the CURRENT
+        // time (tvOS "2:22 PM" corner cell), then horizontally-scrolled hour
+        // labels. The corner uses the rail's surface fill (tvOS cardBackground)
+        // so it reads as part of the sticky left column, and a semibold
+        // monospaced-digit clock to match EPGGuideView.swift's corner.
         Row(modifier = Modifier.fillMaxWidth()) {
             Box(
                 modifier = Modifier
                     .width(railWidth)
                     .height(headerHeight)
-                    .background(MaterialTheme.colorScheme.background),
-            )
+                    .background(
+                        if (isTv) MaterialTheme.colorScheme.surface
+                        else MaterialTheme.colorScheme.background,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (isTv) {
+                    Text(
+                        text = cornerTimeFormatter.format(java.util.Date(nowMillis)),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+            }
             Box(
                 modifier = Modifier
                     .horizontalScroll(horizontalScrollState)
@@ -1117,16 +1168,17 @@ private fun ProgrammeCell(
     else
         MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)
     val cellBg = if (isTv) {
-        // Archie: only the currently-airing cell gets a different color from
-        // the rail background; past + future cells blend with the channel-name
-        // background so a single row reads as one calm surface with a single
-        // accent. Category tint deliberately suppressed on TV - the "three
-        // different blues per row" busyness was from past/future picking up
-        // category colors that competed with the live highlight + the rail.
+        // tvOS cellBackground (EPGGuideView.swift:3791) with category tint OFF:
+        // focused = white.opacity(0.25), live = white.opacity(0.12),
+        // future/past = white.opacity(0.05). Neutral white overlays on the dark
+        // grid -- NOT cyan -- so a row reads as one calm surface with the
+        // now-airing cell a touch brighter. Category tint stays suppressed on
+        // TV (Archie: the "three different blues per row" busyness); the white
+        // ramp is exactly what the tvOS guide shows.
         when {
-            focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
-            isLive -> MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
-            else -> MaterialTheme.colorScheme.surface
+            focused -> Color.White.copy(alpha = 0.25f)
+            isLive -> Color.White.copy(alpha = 0.12f)
+            else -> Color.White.copy(alpha = 0.05f)
         }
     } else {
         if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.32f) else phoneBaseBg
@@ -1135,7 +1187,11 @@ private fun ProgrammeCell(
         MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
     else
         MaterialTheme.colorScheme.surfaceVariant
-    val cellBorderColor = if (focused) MaterialTheme.colorScheme.primary else phoneBaseBorder
+    // tvOS focus ring is a 4pt WHITE inset border (Emby style, line 3339); the
+    // Android-TV proportional is 2dp white. Phone keeps the cyan accent border.
+    val cellBorderColor = if (focused) {
+        if (isTv) Color.White else MaterialTheme.colorScheme.primary
+    } else phoneBaseBorder
     val cellBorderWidth = if (isTv) {
         if (focused) 2.dp else 0.dp
     } else {
