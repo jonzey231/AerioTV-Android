@@ -15,14 +15,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.res.Configuration
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -184,9 +190,10 @@ fun SettingsSelectionRow(
 }
 
 /**
- * Toggle row (Switch) on the shared focus card. tvOS uses an On/Off pill, but
- * an Android Switch reads more naturally here; the row still rides the teal
- * focus chrome so it matches the rest of the page on a remote.
+ * Toggle row with the tvOS `• On` / `• Off` indicator (accent dot + text),
+ * not a Switch -- this is exactly what the tvOS Settings show
+ * (`TVSettingsToggleRow`). Selecting the row flips the value. Optional
+ * leading icon (Debug Logging bug, Padding-Between-Tiles, etc.).
  */
 @Composable
 fun SettingsToggleRow(
@@ -230,14 +237,28 @@ fun SettingsToggleRow(
             }
         }
         Spacer(Modifier.width(12.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = if (enabled) onCheckedChange else null,
-            enabled = enabled,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                checkedTrackColor = MaterialTheme.colorScheme.primary,
-            ),
+        OnOffIndicator(on = checked && enabled)
+    }
+}
+
+/** The tvOS "• On" / "• Off" toggle indicator: an accent dot + label. */
+@Composable
+fun OnOffIndicator(on: Boolean) {
+    val onColor = MaterialTheme.colorScheme.primary
+    val offColor = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (on) onColor else offColor.copy(alpha = 0.6f)),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = if (on) "On" else "Off",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (on) onColor else offColor,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -262,3 +283,46 @@ fun SettingsSection(
 
 /** Trailing-lambda content shape for [SettingsSection]. */
 typealias ColumnScopeContent = @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+
+/** True on Android TV / leanback boxes (drives the no-back-button behaviour). */
+@Composable
+@ReadOnlyComposable
+fun rememberIsTvDevice(): Boolean {
+    val uiMode = LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK
+    return uiMode == Configuration.UI_MODE_TYPE_TELEVISION
+}
+
+/**
+ * Settings sub-screen top bar. On Android TV the back arrow is omitted -- the
+ * remote's BACK button already pops the screen, so an on-screen affordance is
+ * redundant clutter (user request). Phones/tablets keep the arrow.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsDetailTopBar(title: String, onBack: () -> Unit) {
+    val isTv = rememberIsTvDevice()
+    CenterAlignedTopAppBar(
+        title = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        navigationIcon = {
+            if (!isTv) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        },
+        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            titleContentColor = MaterialTheme.colorScheme.onBackground,
+        ),
+    )
+}

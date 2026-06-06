@@ -60,29 +60,9 @@ fun AppBehaviorsSettingsScreen(
     val autoResumeLastChannel by viewModel.autoResumeLastChannel.collectAsStateWithLifecycle(initialValue = false)
     val defaultTab by viewModel.defaultTab.collectAsStateWithLifecycle(initialValue = "")
 
+    val isTv = rememberIsTvDevice()
     Column(modifier = Modifier.fillMaxSize()) {
-        CenterAlignedTopAppBar(
-            title = {
-                Text(
-                    text = "App Behaviors",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-            },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.primary,
-                        )
-                }
-            },
-            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
-                titleContentColor = MaterialTheme.colorScheme.onBackground,
-            ),
-        )
+        SettingsDetailTopBar(title = "App Behaviors", onBack = onBack)
 
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -124,11 +104,18 @@ fun AppBehaviorsSettingsScreen(
 
             SettingsSection(
                 header = "Channel Flip Gesture",
-                footer = "Turn off if accidental swipes during playback flip channels by mistake.",
+                // tvOS / Android TV flip channels with D-pad up/down, not a
+                // swipe, so the "accidental swipes" caution is meaningless on
+                // a remote (user request: drop the note on TV). Phones keep it.
+                footer = if (isTv) null
+                else "Turn off if accidental swipes during playback flip channels by mistake.",
             ) {
                 SettingsToggleRow(
                     title = "Up / Down channel change",
-                    subtitle = "While the player chrome is visible, swipe up for the next channel and down for the previous. Live single-stream playback only.",
+                    subtitle = if (isTv)
+                        "While the player chrome is visible, press up for the next channel and down for the previous. Live single-stream playback only."
+                    else
+                        "While the player chrome is visible, swipe up for the next channel and down for the previous. Live single-stream playback only.",
                     checked = appleTVChannelFlip,
                     onCheckedChange = viewModel::setAppleTVChannelFlip,
                 )
