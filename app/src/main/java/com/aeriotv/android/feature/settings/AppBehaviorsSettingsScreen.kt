@@ -104,15 +104,17 @@ fun AppBehaviorsSettingsScreen(
                 ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            SettingsGroup(header = "Launch", footer = "Skip loading screen may cause brief stutter while data hydrates. Resume last channel re-opens the player on launch if the saved channel still exists in your playlist.") {
-                ToggleRow(
+            SettingsSection(
+                header = "Launch",
+                footer = "Skip loading screen may cause brief stutter while data hydrates. Resume last channel re-opens the player on launch if the saved channel still exists in your playlist.",
+            ) {
+                SettingsToggleRow(
                     title = "Skip loading screen",
                     subtitle = "Land on Live TV instantly; data hydrates in the background",
                     checked = skipLoadingScreen,
                     onCheckedChange = viewModel::setSkipLoadingScreen,
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                ToggleRow(
+                SettingsToggleRow(
                     title = "Resume last channel",
                     subtitle = "Auto-start the last-played channel on launch.",
                     checked = autoResumeLastChannel,
@@ -120,8 +122,11 @@ fun AppBehaviorsSettingsScreen(
                 )
             }
 
-            SettingsGroup(header = "Channel Flip Gesture", footer = "Turn off if accidental swipes during playback flip channels by mistake.") {
-                ToggleRow(
+            SettingsSection(
+                header = "Channel Flip Gesture",
+                footer = "Turn off if accidental swipes during playback flip channels by mistake.",
+            ) {
+                SettingsToggleRow(
                     title = "Up / Down channel change",
                     subtitle = "While the player chrome is visible, swipe up for the next channel and down for the previous. Live single-stream playback only.",
                     checked = appleTVChannelFlip,
@@ -129,122 +134,21 @@ fun AppBehaviorsSettingsScreen(
                 )
             }
 
-            SettingsGroup(header = "Default Tab", footer = "Which tab the app lands on after launch. Live TV is the iOS default.") {
-                AppTab.entries.forEachIndexed { idx, tab ->
+            SettingsSection(
+                header = "Default Tab",
+                footer = "Which tab the app lands on after launch. Live TV is the iOS default.",
+            ) {
+                AppTab.entries.forEach { tab ->
                     val selected = (defaultTab.isEmpty() && tab == AppTab.LiveTV) ||
-                            defaultTab == tab.name
-                    DefaultTabRow(
+                        defaultTab == tab.name
+                    SettingsSelectionRow(
                         label = tab.label,
                         selected = selected,
                         onClick = { viewModel.setDefaultTab(tab.name) },
                     )
-                    if (idx < AppTab.entries.lastIndex) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                    }
                 }
             }
         }
         }
-    }
-}
-
-@Composable
-private fun SettingsGroup(
-    header: String,
-    footer: String? = null,
-    content: @Composable () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = header.uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 4.dp),
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
-        ) {
-            content()
-        }
-        if (footer != null) {
-            Text(
-                text = footer,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ToggleRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    enabled: Boolean = true,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (enabled) MaterialTheme.colorScheme.onBackground
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.size(12.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = if (enabled) onCheckedChange else null,
-            enabled = enabled,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-            ),
-        )
-    }
-}
-
-@Composable
-private fun DefaultTabRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f),
-        )
-        RadioButton(
-            selected = selected,
-            onClick = onClick,
-            colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
-        )
     }
 }
