@@ -68,12 +68,16 @@ fun PlaylistDetailScreen(
                 )
             },
             navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.primary,
+                // No back arrow on Android TV -- the remote BACK pops it (user
+                // request). Phones/tablets keep it.
+                if (!rememberIsTvDevice()) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.primary,
                         )
+                    }
                 }
             },
             actions = {
