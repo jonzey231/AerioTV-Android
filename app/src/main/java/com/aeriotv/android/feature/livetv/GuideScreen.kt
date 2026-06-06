@@ -38,6 +38,9 @@ import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
@@ -131,7 +134,7 @@ import androidx.compose.material.icons.filled.Check
  * "Now" indicator: a 2dp vertical cyan line drawn over the programme strip at
  * the current-time x position, recomputed every minute.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GuideScreen(
     onChannelClick: (M3UChannel) -> Unit,
@@ -723,6 +726,11 @@ fun GuideScreen(
         // grid. `null` on phone (the CompositionLocal is unset off-TV) so
         // the .then(...) call is a no-op.
         val topNavRequester = LocalTvTopNavFocusRequester.current
+        // GH #5: anchor a focused cell's LEADING edge so an oversized programme
+        // (wider than the timeline viewport) doesn't fling the horizontal scroll
+        // to its END on D-pad focus. Flows down into each row's horizontalScroll;
+        // vertical row scrolling is unaffected (rows are shorter than the viewport).
+        CompositionLocalProvider(LocalBringIntoViewSpec provides GuideLeadingEdgeBringIntoViewSpec) {
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -791,6 +799,7 @@ fun GuideScreen(
                 )
                 HorizontalDivider(color = guideDivider, thickness = 0.5.dp)
             }
+        }
         }
     }
 
@@ -1451,3 +1460,31 @@ private const val MS_PER_HOUR_F = 3_600_000f
 /** Convert a millisecond span to its dp width on the (already scaled) time axis. */
 private fun msToDp(ms: Long, hourWidth: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp =
     (hourWidth.value * (ms.toFloat() / MS_PER_HOUR_F)).dp
+
+/**
+ * Guide timeline bring-into-view (GH #5). Compose's default spec aligns a
+ * focused child's TRAILING edge, which for a programme cell WIDER than the
+ * viewport scrolls the timeline all the way to that programme's END -- the
+ * disorienting "jump to end-of-line" users reported. This variant pins the
+ * LEADING edge for oversized cells (their tail simply overflows right) and
+ * otherwise falls back to the default minimal-nudge, so ordinary navigation
+ * feels unchanged.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private val GuideLeadingEdgeBringIntoViewSpec = object : BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float = when {
+        // Already fully visible: no scroll.
+        offset >= 0f && offset + size <= containerSize -> 0f
+        // Oversized cell (wider than the viewport): pin its LEADING edge to the
+        // viewport start so the tail overflows right -- never fling to its end.
+        size > containerSize -> offset
+        // Normal cell off the start edge: align leading (default behavior).
+        offset < 0f -> offset
+        // Normal cell off the end edge: align trailing (default behavior).
+        else -> offset + size - containerSize
+    }
+}
