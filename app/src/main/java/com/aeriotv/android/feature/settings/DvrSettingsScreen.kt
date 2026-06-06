@@ -95,28 +95,7 @@ fun DvrSettingsScreen(
     val usedFraction = if (capMB > 0) (usedMB.toFloat() / capMB.toFloat()).coerceIn(0f, 1f) else 0f
 
     Column(modifier = Modifier.fillMaxSize()) {
-        CenterAlignedTopAppBar(
-            title = {
-                Text(
-                    text = "DVR Settings",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-            },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.primary,
-                        )
-                }
-            },
-            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
-                titleContentColor = MaterialTheme.colorScheme.onBackground,
-            ),
-        )
+        SettingsDetailTopBar(title = "DVR Settings", onBack = onBack)
 
         androidx.compose.foundation.layout.Box(
             modifier = Modifier.fillMaxSize(),
@@ -280,39 +259,16 @@ fun DvrSettingsScreen(
             }
 
             item {
-                Card(
+                SettingsSection(
                     header = "Behavior",
                     footer = "Holds a CPU wake lock while a local recording is downloading so Doze can't stall it. Server-side recordings are unaffected (they run on Dispatcharr). Leave on unless you're debugging battery drain.",
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Keep device awake during recording",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            Text(
-                                text = "Recommended for long local recordings.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Spacer(Modifier.size(12.dp))
-                        androidx.compose.material3.Switch(
-                            checked = keepAwake,
-                            onCheckedChange = settingsVm::setDvrKeepAwakeDuringRecording,
-                            colors = androidx.compose.material3.SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                                checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                            ),
-                        )
-                    }
+                    SettingsToggleRow(
+                        title = "Keep device awake during recording",
+                        subtitle = "Recommended for long local recordings.",
+                        checked = keepAwake,
+                        onCheckedChange = settingsVm::setDvrKeepAwakeDuringRecording,
+                    )
                 }
             }
         }
@@ -326,29 +282,13 @@ private fun Card(
     footer: String?,
     content: @Composable () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = header.uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 4.dp),
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
-        ) {
+    // DVR's Local Storage / Buffers / Output Folder are genuinely grouped
+    // content (a slider+gauge, two dropdown rows, a folder picker) rather than
+    // simple pick-one rows, so they stay as one card per section -- but on the
+    // shared tvOS card chrome (faint accent hairline) so they match the rest.
+    SettingsSection(header = header, footer = footer) {
+        Column(modifier = Modifier.fillMaxWidth().settingsRowCard(focused = false)) {
             content()
-        }
-        if (footer != null) {
-            Text(
-                text = footer,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
         }
     }
 }
