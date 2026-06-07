@@ -318,6 +318,19 @@ class DispatcharrClient @Inject constructor() {
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/profiles/", apiKey)
 
     /**
+     * GET /api/epg/epgdata/ - EPGData records (one per ingested XMLTV guide
+     * channel). Used to resolve a channel's `epg_data_id` FK to the EPGData's
+     * `tvg_id`, which is the key /api/epg/grid/ programmes are bucketed under.
+     * A channel's own tvg_id (from the M3U/stream) routinely differs from the
+     * matched EPGData's tvg_id (e.g. channel "NPO3.nl" -> EPGData
+     * "NPO3(NPO3).nl"), so matching the grid by the channel's raw tvg_id misses
+     * every channel that Dispatcharr auto-mapped on the server. Resolving this
+     * FK is how Dispatcharr's own guide attaches EPG.
+     */
+    suspend fun listEpgData(baseUrl: String, apiKey: String): List<DispatcharrEpgData> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/epg/epgdata/", apiKey)
+
+    /**
      * GET /api/epg/grid/ - bulk EPG window covering roughly -1h to +24h. iOS uses
      * this as the universal EPG source for Dispatcharr-backed playlists; the
      * `/output/epg` XMLTV path is gated by Dispatcharr 0.23+ LAN-only policy and
@@ -994,6 +1007,19 @@ data class DispatcharrChannel(
     val tvgId: String? = null,
     @SerialName("epg_data_id")
     val epgDataId: Int? = null,
+    @SerialName("effective_epg_data_id")
+    val effectiveEpgDataId: Int? = null,
+)
+
+/**
+ * One EPGData record from /api/epg/epgdata/. Maps the channel's epg_data_id FK
+ * to the `tvg_id` that /api/epg/grid/ buckets programmes under.
+ */
+@Serializable
+data class DispatcharrEpgData(
+    val id: Int,
+    @SerialName("tvg_id")
+    val tvgId: String? = null,
 )
 
 @Serializable

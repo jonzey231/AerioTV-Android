@@ -700,6 +700,16 @@ class PlaylistRepository @Inject constructor(
                     dispatcharrClient.listProfiles(base, key).firstOrNull { it.id == pid }
                 }.getOrNull()?.channels?.toSet()
             }
+            // Resolve each channel's EPG via its epg_data_id FK. The grid keys
+            // programmes by the EPGData's tvg_id, which routinely differs from a
+            // channel's own tvg_id, so map epg_data_id -> EPGData.tvg_id and use
+            // THAT as the channel's tvgID below. Without this, only channels
+            // whose raw tvg_id happens to equal the EPGData tvg_id get a guide.
+            val epgDataTvgById: Map<Int, String> = runCatching {
+                dispatcharrClient.listEpgData(base, key)
+                    .mapNotNull { d -> d.tvgId?.takeIf { it.isNotBlank() }?.let { d.id to it } }
+                    .toMap()
+            }.getOrDefault(emptyMap())
             val channels = dispatcharrClient.listChannels(base, key)
                 .let { list ->
                     if (allowedChannelIds != null) list.filter { it.id in allowedChannelIds } else list
@@ -720,7 +730,13 @@ class PlaylistRepository @Inject constructor(
                         name = ch.name,
                         url = dispatcharrClient.streamUrl(base, ch.uuid!!),
                         groupTitle = ch.channelGroupId?.let { groups[it] }.orEmpty(),
-                        tvgID = ch.tvgId.orEmpty(),
+                        // Prefer the matched EPGData's tvg_id (resolved via the
+                        // epg_data_id FK) so grid programmes attach; fall back to
+                        // the channel's own tvg_id when it has no EPG mapping.
+                        tvgID = (ch.effectiveEpgDataId ?: ch.epgDataId)
+                            ?.let { epgDataTvgById[it] }
+                            ?.takeIf { it.isNotBlank() }
+                            ?: ch.tvgId.orEmpty(),
                         tvgName = ch.name,
                         tvgLogo = ch.logoId?.let { dispatcharrClient.logoUrl(base, it) }.orEmpty(),
                         channelNumber = ch.channelNumber?.formatChannelNumber(),

@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.EPGProgramme
+import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.data.bridgeChannelIds
@@ -465,7 +466,9 @@ class PlaylistViewModel @Inject constructor(
             val hasCache = cached.isNotEmpty()
             if (hasCache) {
                 Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
-                val groupedCached = groupByChannel(cached)
+                val groupedCached = withChannelNamePlaceholders(
+                    groupByChannel(cached), _state.value.channels,
+                )
                 _state.update { it.copy(epgByChannel = groupedCached, isEpgLoading = false) }
             }
             // 2. Freshness: skip the network entirely when the cache is recent,
@@ -498,7 +501,9 @@ class PlaylistViewModel @Inject constructor(
                     // and the network fetch; re-read so we bridge against the
                     // freshest channel set.
                     val programmes = bridgeChannelIds(rawProgrammes, _state.value.channels)
-                    val grouped = groupByChannel(programmes)
+                    val grouped = withChannelNamePlaceholders(
+                        groupByChannel(programmes), _state.value.channels,
+                    )
                     // Cheap channel count off the already-bucketed map instead of
                     // `programmes.map { it.channelId }.toSet().size` which used to
                     // allocate a fresh List + a Set over 60K rows on every cold
@@ -524,7 +529,9 @@ class PlaylistViewModel @Inject constructor(
                         // something; short-circuits the recompose when the source
                         // already had categories baked in (XMLTV path).
                         if (enriched !== programmes) {
-                            val groupedEnriched = groupByChannel(enriched)
+                            val groupedEnriched = withChannelNamePlaceholders(
+                                groupByChannel(enriched), _state.value.channels,
+                            )
                             _state.update { it.copy(epgByChannel = groupedEnriched) }
                             // Keep the cache enriched too so tints survive a relaunch.
                             runCatching { repository.saveEpgToCache(playlist.id, enriched) }
@@ -561,6 +568,40 @@ class PlaylistViewModel @Inject constructor(
             programmes.groupBy { it.channelId }
                 .mapValues { (_, list) -> dedupSameAiring(list.sortedBy { it.startMillis }) }
         }
+
+    /**
+     * Dispatcharr (and tvOS) never show a blank guide row: a channel with no
+     * EPG still renders its name as the current programme (Dispatcharr's "dummy
+     * EPG"). Mirror that by injecting one channel-name placeholder, keyed by the
+     * channel's guideMatchKey, for every channel left with no programmes after
+     * matching. Real programmes always win; only empty buckets are filled.
+     */
+    private fun withChannelNamePlaceholders(
+        grouped: Map<String, List<EPGProgramme>>,
+        channels: List<M3UChannel>,
+    ): Map<String, List<EPGProgramme>> {
+        if (channels.isEmpty()) return grouped
+        val now = System.currentTimeMillis()
+        val start = now - 12 * 3_600_000L
+        val end = now + 48 * 3_600_000L
+        val out = HashMap(grouped)
+        for (ch in channels) {
+            val key = ch.guideMatchKey
+            if (out[key].isNullOrEmpty()) {
+                out[key] = listOf(
+                    EPGProgramme(
+                        channelId = key,
+                        title = ch.name,
+                        description = "",
+                        startMillis = start,
+                        endMillis = end,
+                        category = "",
+                    ),
+                )
+            }
+        }
+        return out
+    }
 
     /**
      * iOS GuideStore `mergeProgramInto` mirror. Input is a per-channel
