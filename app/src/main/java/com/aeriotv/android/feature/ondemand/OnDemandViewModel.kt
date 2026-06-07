@@ -195,7 +195,8 @@ class OnDemandViewModel @Inject constructor(
                     // pages append as they arrive. De-dup on uuid in case two
                     // pages share a row.
                     var nextUrl = page.next
-                    while (nextUrl != null) {
+                    var pagesLoaded = 1
+                    while (nextUrl != null && pagesLoaded < MAX_EAGER_VOD_PAGES) {
                         val captured = nextUrl
                         val nextResult = runCatching {
                             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -203,6 +204,7 @@ class OnDemandViewModel @Inject constructor(
                             }
                         }
                         nextUrl = nextResult.getOrNull()?.next
+                        pagesLoaded++
                         nextResult.getOrNull()?.let { p ->
                             _state.update { st ->
                                 val merged = st.movies.toMutableList()
@@ -278,7 +280,8 @@ class OnDemandViewModel @Inject constructor(
                     // Audit task #42: same next-cursor walk as movies above.
                     // Series use `id` as the de-dup key. Stops on first error.
                     var nextUrl = page.next
-                    while (nextUrl != null) {
+                    var pagesLoaded = 1
+                    while (nextUrl != null && pagesLoaded < MAX_EAGER_VOD_PAGES) {
                         val captured = nextUrl
                         val nextResult = runCatching {
                             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -286,6 +289,7 @@ class OnDemandViewModel @Inject constructor(
                             }
                         }
                         nextUrl = nextResult.getOrNull()?.next
+                        pagesLoaded++
                         nextResult.getOrNull()?.let { p ->
                             _state.update { st ->
                                 val merged = st.series.toMutableList()
@@ -755,5 +759,16 @@ class OnDemandViewModel @Inject constructor(
         const val XC_EP_PREFIX = "xc-ep-"
         // Batch size for XC enumeration state flushes (see loadXtreamItemsIfNeeded).
         const val STATE_FLUSH_EVERY = 16
+
+        /**
+         * Cap on the eager VOD next-cursor walk. A large Dispatcharr provider can
+         * expose 30k+ movies (340+ pages) plus thousands of series; walking the
+         * whole library on load fired ~420 back-to-back requests, ballooned the
+         * Dalvik heap past 90MB, and starved the EPG + UI for minutes (Z Fold 5
+         * field report: page 90/344 after 2 min, EPG never painting). Load a
+         * browsable head eagerly; fetching the rest lazily on scroll is a
+         * follow-up. 100 rows/page, so this is ~1,000 movies + ~1,000 series.
+         */
+        const val MAX_EAGER_VOD_PAGES = 10
     }
 }
