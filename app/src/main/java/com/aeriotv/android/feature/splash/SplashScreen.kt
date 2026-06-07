@@ -2,6 +2,7 @@ package com.aeriotv.android.feature.splash
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -91,11 +95,35 @@ private fun SplashContent(modifier: Modifier = Modifier) {
             // Brand block — matches the WelcomeScreen BrandLogo so the splash
             // and the onboarding entry feel like the same surface. The iOS
             // rounded-square is baked into the PNG.
-            Image(
-                painter = painterResource(id = R.drawable.aerio_logo),
-                contentDescription = null,
-                modifier = Modifier.size(120.dp),
-            )
+            // Cyan glow halo behind the mark (iOS SplashView parity, same
+            // radial-gradient treatment as the WelcomeScreen BrandLogo).
+            val accent = MaterialTheme.colorScheme.primary
+            Box(
+                modifier = Modifier.size(160.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(modifier = Modifier.size(160.dp)) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colorStops = arrayOf(
+                                0.0f to accent.copy(alpha = 0.55f),
+                                0.35f to accent.copy(alpha = 0.28f),
+                                0.7f to accent.copy(alpha = 0.06f),
+                                1.0f to Color.Transparent,
+                            ),
+                            center = Offset(size.width / 2f, size.height / 2f + 8.dp.toPx()),
+                            radius = size.minDimension / 2f,
+                        ),
+                        center = Offset(size.width / 2f, size.height / 2f + 8.dp.toPx()),
+                        radius = size.minDimension / 2f,
+                    )
+                }
+                Image(
+                    painter = painterResource(id = R.drawable.aerio_logo),
+                    contentDescription = null,
+                    modifier = Modifier.size(108.dp),
+                )
+            }
             Spacer(Modifier.height(24.dp))
             Text(
                 text = "AerioTV",
