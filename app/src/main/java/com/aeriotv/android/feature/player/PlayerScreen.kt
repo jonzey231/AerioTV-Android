@@ -33,6 +33,7 @@ import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.pip.PipState
+import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.multiview.AddToMultiviewSheet
@@ -186,6 +187,35 @@ fun PlayerScreen(
         context.resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_TYPE_MASK
         ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+
+    // UHD judder fix: match the panel refresh rate to the live content's frame
+    // rate. The MPEG-TS feed doesn't signal fps, so a 50fps UHD stream would
+    // otherwise judder on a 60Hz panel. TV-only; the mode is reset on teardown.
+    if (isTvForm) {
+        val fpsMatchHandle = remember { mutableStateOf<Any?>(null) }
+        LaunchedEffect(Unit) {
+            var tries = 0
+            while (exoHolder.player == null && tries < 30) {
+                kotlinx.coroutines.delay(100)
+                tries++
+            }
+            val p = exoHolder.player
+            val act = context.findActivity()
+            if (p != null && act != null) {
+                fpsMatchHandle.value = DisplayFrameRateMatcher.attach(p, act)
+            }
+        }
+        DisposableEffect(Unit) {
+            onDispose {
+                DisplayFrameRateMatcher.detach(
+                    exoHolder.player,
+                    fpsMatchHandle.value,
+                    context.findActivity(),
+                )
+            }
+        }
+    }
+
     // Chrome auto-starts visible on phone (user can immediately reach
     // controls + close) but hidden on TV (the user just pressed a
     // channel and wants to watch -- 1st Back press surfaces chrome,
