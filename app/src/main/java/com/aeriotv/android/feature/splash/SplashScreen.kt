@@ -27,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -53,29 +54,65 @@ fun SplashGate(
     val skipLoading by settingsVm.skipLoadingScreen.collectAsStateWithLifecycle(initialValue = false)
 
     var finished by remember { mutableStateOf(false) }
-    var opacity by remember { mutableStateOf(0f) }
-    val animated by animateFloatAsState(
-        targetValue = opacity,
-        animationSpec = tween(durationMillis = 400),
-        label = "splash-fade",
-    )
 
     LaunchedEffect(skipLoading) {
         if (skipLoading) {
             finished = true
             return@LaunchedEffect
         }
-        opacity = 1f
-        delay(2_300L)
-        opacity = 0f
-        delay(500L)
+        // Hard fallback so a stuck / unsupported clip never traps the user on
+        // the splash. AerioSplash.mp4 is ~4s; give it headroom.
+        delay(6_000L)
         finished = true
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         content()
-        if (!finished) {
-            SplashContent(modifier = Modifier.alpha(animated))
+        if (!finished && !skipLoading) {
+            SplashVideo(onPlaybackDone = { finished = true })
+        }
+    }
+}
+
+/**
+ * Plays the iOS AerioSplash.mp4 intro (ported into res/raw) centered on black.
+ * The clip is portrait (720x1280), so on a landscape TV it pillarboxes, but
+ * since it animates a centered logo on black the bars are invisible. Muted,
+ * plays once, dismisses on completion. Falls back to the static brand card if
+ * the device can't decode it.
+ */
+@Composable
+private fun SplashVideo(onPlaybackDone: () -> Unit) {
+    var failed by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (failed) {
+            SplashContent()
+        } else {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    android.widget.VideoView(ctx).apply {
+                        setZOrderOnTop(true)
+                        setVideoURI(
+                            android.net.Uri.parse(
+                                "android.resource://${ctx.packageName}/${R.raw.aerio_splash}",
+                            ),
+                        )
+                        setOnPreparedListener { mp ->
+                            mp.setVolume(0f, 0f)
+                            mp.isLooping = false
+                            start()
+                        }
+                        setOnCompletionListener { onPlaybackDone() }
+                        setOnErrorListener { _, _, _ -> failed = true; true }
+                    }
+                },
+            )
         }
     }
 }
