@@ -4,8 +4,8 @@ AerioTV for Android is a native IPTV streaming app for Android phones, tablets, 
 
 It is the Android port of [AerioTV for Apple platforms](https://github.com/jonzey231/AerioTV).
 
-**Google Play (testing track)**
-- A closed testing track is available on Google Play. The opt-in link will be posted here.
+**Google Play**
+- AerioTV is in closed testing on Google Play (invite only).
 
 **Sideload**
 - Download the latest `.apk` from [Releases](https://github.com/jonzey231/AerioTV-Android/releases) and install it (enable install from unknown sources for your browser or file manager, or run `adb install`). The sideload build is occasionally ahead of the Play track.
@@ -297,7 +297,7 @@ app/src/main/java/com/aeriotv/android/
 
 ## License
 
-This project is licensed under the MIT License, matching the parent [AerioTV](https://github.com/jonzey231/AerioTV) project.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Support
 
