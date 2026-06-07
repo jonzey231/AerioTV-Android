@@ -21,4 +21,10 @@ data class EPGProgramme(
      * and for Dispatcharr's "Dummy EPG" string-id entries.
      */
     val dispatcharrProgramId: Int? = null,
+    /**
+     * True for a synthesized "channel name" row shown when a channel has no real
+     * EPG (Dispatcharr dummy-EPG parity). The guide pins the title so it stays
+     * visible while scrolling and hides the (meaningless) time range.
+     */
+    val isPlaceholder: Boolean = false,
 )

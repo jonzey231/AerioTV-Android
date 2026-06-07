@@ -1125,7 +1125,8 @@ private fun ChannelGuideRow(
                     // Floor the width so a malformed ~1-min programme still renders a
                     // tappable sliver instead of a zero-width cell (iOS max(20,...)).
                     val wDp = msToDp(clippedEnd - clippedStart, hourWidth).coerceAtLeast(6.dp)
-                    val isLive = programme.startMillis <= nowMillis && programme.endMillis > nowMillis
+                    val isLive = !programme.isPlaceholder &&
+                        programme.startMillis <= nowMillis && programme.endMillis > nowMillis
                     // Elapsed fraction (0..1) for the now-airing cell's progress
                     // bar, recomputed only on the 30s nowMillis tick. Null for
                     // non-live cells so they don't recompose on the tick (the
@@ -1150,6 +1151,7 @@ private fun ChannelGuideRow(
                         isLive = isLive,
                         liveProgress = liveProgress,
                         isTv = isTv,
+                        horizontalScrollState = horizontalScrollState,
                         activeReminderKeys = activeReminderKeys,
                         remindersVm = remindersVm,
                         // Dispatcharr bulk grid drops <category>; fall back
@@ -1202,6 +1204,7 @@ private fun ProgrammeCell(
      * Drives the bottom progress bar that marks the currently-airing cell. */
     liveProgress: Float?,
     isTv: Boolean,
+    horizontalScrollState: androidx.compose.foundation.ScrollState? = null,
     activeReminderKeys: Set<String>,
     remindersVm: RemindersViewModel,
     categoryTint: androidx.compose.ui.graphics.Color?,
@@ -1278,6 +1281,16 @@ private fun ProgrammeCell(
         MaterialTheme.colorScheme.primary
     else
         MaterialTheme.colorScheme.onBackground
+    // Placeholder (no-EPG channel) titles stay pinned to the visible left edge as
+    // the user scrolls, so the channel name never disappears into the wide cell.
+    // The placeholder cell sits at x=0 spanning the window and the scroll range
+    // keeps the viewport inside it, so a plain scroll offset needs no extra clamp.
+    // offset {} runs in the placement phase, so this re-places without recomposing.
+    val stickyTitle = if (programme.isPlaceholder && horizontalScrollState != null) {
+        Modifier.offset { androidx.compose.ui.unit.IntOffset(horizontalScrollState.value, 0) }
+    } else {
+        Modifier
+    }
     Column(
         modifier = modifier
             .width(widthDp)
@@ -1378,6 +1391,7 @@ private fun ProgrammeCell(
             // white on focus (over the bright fill); description dims to a
             // soft white, time-range dims further.
             Text(
+                modifier = stickyTitle,
                 text = programme.title.ifBlank { "No info" },
                 style = MaterialTheme.typography.titleSmall,
                 color = if (focused) Color.White else MaterialTheme.colorScheme.onBackground,
@@ -1395,16 +1409,19 @@ private fun ProgrammeCell(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                text = timeRange,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (focused) Color.White.copy(alpha = 0.7f)
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (!programme.isPlaceholder) {
+                Text(
+                    text = timeRange,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (focused) Color.White.copy(alpha = 0.7f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         } else {
             Text(
+                modifier = stickyTitle,
                 text = programme.title.ifBlank { "No info" },
                 style = MaterialTheme.typography.labelMedium,
                 color = titleColor,

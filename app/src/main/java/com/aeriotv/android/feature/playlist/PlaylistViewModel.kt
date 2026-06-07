@@ -596,6 +596,7 @@ class PlaylistViewModel @Inject constructor(
                         startMillis = start,
                         endMillis = end,
                         category = "",
+                        isPlaceholder = true,
                     ),
                 )
             }
