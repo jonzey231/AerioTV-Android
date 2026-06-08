@@ -972,7 +972,7 @@ private fun ChannelGuideRow(
     // tvOS minWidth 38pt -> 19dp proportional, but a 4-digit number ("1444") at
     // labelMedium needs ~24dp; 28dp accommodates 4 digits with margin. Phone
     // keeps the compact 22dp.
-    val numberWidth = if (isTv) 28.dp else 22.dp
+    val numberWidth = if (isTv) 24.dp else 22.dp
     // logoBox/logoImage are the PHONE rail's square logo. TV uses a landscape
     // logo-over-name VStack (the isTv branch below) so the channel name gets its
     // own full-width line and shows in full, mirroring tvOS channelLabel.
@@ -1012,7 +1012,7 @@ private fun ChannelGuideRow(
                 // tvOS channelLabel uses .padding(.horizontal, 8) on a 240pt
                 // column -> proportional 4dp on the 120dp Android-TV column;
                 // phone keeps the 8dp.
-                .padding(horizontal = if (isTv) 4.dp else 8.dp),
+                .padding(start = if (isTv) 2.dp else 8.dp, end = if (isTv) 4.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (isTv) {
@@ -1032,7 +1032,7 @@ private fun ChannelGuideRow(
                         modifier = Modifier.width(numberWidth),
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(3.dp))
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally,
