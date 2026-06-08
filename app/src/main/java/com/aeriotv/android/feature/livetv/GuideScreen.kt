@@ -60,6 +60,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester
+import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
+import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.ui.LocalCanRecordToServer
 import com.aeriotv.android.core.preferences.GUIDE_SCALE_MAX
 import com.aeriotv.android.core.preferences.GUIDE_SCALE_MIN
@@ -168,6 +170,11 @@ fun GuideScreen(
     val epgWindowHours by settingsVm.epgWindowHours.collectAsStateWithLifecycle(initialValue = 24)
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
     val multiviewStore = rememberMultiviewStoreHandle()
+    // Observe the mini-player session so the guide's Back handler can stand
+    // down while the mini is showing (see the BackHandler below for why).
+    val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
+    val miniState by miniPlayerVm.state.collectAsStateWithLifecycle()
+    val miniActive = miniState is MiniPlayerSession.State.Active
     // Audit task #22: staged-channel banner. When the user has added at
     // least one channel to Multiview (via the row context menu / long
     // press), surface a "X channels staged" pill with a Play button at
@@ -490,7 +497,7 @@ fun GuideScreen(
                     searchActive = !searchActive
                     if (!searchActive) viewModel.onSearchQueryChange("")
                 },
-                modifier = Modifier.size(30.dp).then(
+                modifier = Modifier.size(24.dp).then(
                     if (isTv) Modifier.background(
                         if (searchActive) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
@@ -518,7 +525,7 @@ fun GuideScreen(
             // Filter toggle: opens the group on/off picker (Manage Groups).
             IconButton(
                 onClick = { showManageGroups = true },
-                modifier = Modifier.size(30.dp).then(
+                modifier = Modifier.size(24.dp).then(
                     if (isTv) Modifier.background(
                         if (hiddenGroups.isEmpty())
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
@@ -701,10 +708,22 @@ fun GuideScreen(
         // over any outer handlers (sheets, dialogs) -- Compose dispatches
         // back events in LIFO order, so the innermost active enabled handler
         // claims the event.
+        //
+        // EXCEPTION: while the mini-player is showing this handler STANDS DOWN
+        // (enabled = !miniActive). Backing out of the fullscreen player
+        // re-composes GuideScreen, which re-registers THIS BackHandler AFTER
+        // the root-level TvMiniPlayerOverlay's -- so by LIFO it would otherwise
+        // win and scroll-to-top / show the exit dialog instead of letting the
+        // mini's own BackHandler close it (verified on-device: Back surfaced
+        // the "Exit AerioTV?" dialog while the mini stayed up). Disabling it
+        // here hands the Back to the overlay's handler, which dismisses the
+        // mini cleanly; once the mini is Hidden this re-enables so the next
+        // Back scrolls the guide to the top, then the next shows the exit
+        // dialog -- matching the requested tvOS-style ladder.
         val backScope = androidx.compose.runtime.rememberCoroutineScope()
         var showExitDialog by remember { mutableStateOf(false) }
         val activity = LocalContext.current.findActivity()
-        androidx.activity.compose.BackHandler(enabled = !showExitDialog) {
+        androidx.activity.compose.BackHandler(enabled = !showExitDialog && !miniActive) {
             val atTop = listState.firstVisibleItemIndex == 0 &&
                 listState.firstVisibleItemScrollOffset == 0
             if (!atTop) {

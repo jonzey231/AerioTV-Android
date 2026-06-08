@@ -512,7 +512,7 @@ private fun TvTopTabBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 4.dp),
+            .padding(top = 16.dp, bottom = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(
