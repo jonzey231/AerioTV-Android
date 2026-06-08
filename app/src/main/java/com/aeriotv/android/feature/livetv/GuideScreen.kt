@@ -690,6 +690,11 @@ fun GuideScreen(
             .collectAsStateWithLifecycle(initialValue = "")
         LaunchedEffect(lastWatchedId, filteredChannels.isNotEmpty()) {
             if (lastWatchedId.isBlank() || filteredChannels.isEmpty()) return@LaunchedEffect
+            // On TV, when the mini-player is showing (we just backed out of the
+            // fullscreen player), the focus-on-return effect below -- keyed on the
+            // mini-player session -- owns BOTH the scroll and the D-pad focus.
+            // Skip here so the two effects don't fight over listState.
+            if (miniActive && isTv) return@LaunchedEffect
             val idx = filteredChannels.indexOfFirst { it.id == lastWatchedId }
             if (idx >= 0) {
                 listState.animateScrollToItem(idx)
@@ -779,6 +784,31 @@ fun GuideScreen(
         //     when already on channel index 0.
         val guideNav = remember { GuideVerticalNavState() }
         val navScope = rememberCoroutineScope()
+        // Focus-on-return (TV): backing out of the fullscreen player leaves the
+        // mini-player Active over the guide. Land D-pad focus on the watched
+        // channel's NOW cell so the user keeps channel-surfing with UP/DOWN
+        // instead of focus resting on the Live TV nav pill. Keyed on the mini
+        // session, so it fires once when state flips to Active (a fresh
+        // GuideScreen composition on the nav-return). moveFocusToChannel scrolls
+        // the row in (scrollToItem composes it instantly) then polls its focus
+        // handler for up to 8 frames, so it never races row composition;
+        // seedAnchor(now) makes the focused cell the live programme.
+        if (isTv) {
+            LaunchedEffect(miniState, filteredChannels.isNotEmpty()) {
+                val active = miniState as? MiniPlayerSession.State.Active
+                    ?: return@LaunchedEffect
+                if (filteredChannels.isEmpty()) return@LaunchedEffect
+                val idx = filteredChannels.indexOfFirst { it.id == active.channel.id }
+                if (idx < 0) return@LaunchedEffect
+                // Let the nav-return composition + the top-nav focusRestorer
+                // settle, then claim focus LAST so it lands on the channel rather
+                // than the restored Live TV pill.
+                kotlinx.coroutines.delay(96L)
+                guideNav.seedAnchor(nowMillis)
+                guideNav.beginVerticalMove()
+                guideNav.moveFocusToChannel(idx, listState)
+            }
+        }
         // GH #5: anchor a focused cell's LEADING edge so an oversized programme
         // (wider than the timeline viewport) doesn't fling the horizontal scroll
         // to its END on D-pad focus. Flows down into each row's horizontalScroll;
@@ -1719,6 +1749,13 @@ private class GuideVerticalNavState {
      *  focus-driven bring-into-view of a wide cell can't pan it sideways. */
     fun beginVerticalMove() {
         suppressHorizontalScroll = true
+    }
+
+    /** Pin the navigation anchor to a specific time before a programmatic focus.
+     *  Focus-on-return seeds 'now' so the focused cell is the live programme
+     *  rather than the window-edge cell the Long.MIN_VALUE default would pick. */
+    fun seedAnchor(timeMs: Long) {
+        anchorTimeMs = timeMs
     }
 
     /** The user pressed LEFT/RIGHT (or clicked): release the timeline so normal
