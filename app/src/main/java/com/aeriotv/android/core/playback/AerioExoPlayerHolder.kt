@@ -122,45 +122,6 @@ class AerioExoPlayerHolder @Inject constructor() {
         }
     }
 
-    // ONE app-scoped OkHttp client shared by every stream request, so the DNS +
-    // TCP + TLS handshake to the Dispatcharr / Xtream proxy is paid ONCE and the
-    // socket is kept alive + REUSED for the next channel tap (OkHttp default
-    // ConnectionPool: 5 idle sockets, 5-min keep-alive). This removes a full
-    // handshake (~100-400ms+) from every channel switch after the first -- the
-    // dominant remaining startup cost vs the iOS launch speed. connectTimeout 4s
-    // fails a dead proxy fast; readTimeout stays 30s (live feeds legitimately go
-    // quiet across a stream discontinuity).
-    private val streamHttpClient: okhttp3.OkHttpClient by lazy {
-        okhttp3.OkHttpClient.Builder()
-            .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .eventListener(StreamConnEventListener)
-            .build()
-    }
-
-    /** Release-safe network timing for the launch-speed work: a channel tap that
-     *  reuses a pooled socket logs connectionAcquired with NO preceding
-     *  connectStart; a fresh handshake logs connectStart. Read: adb logcat -s AerioNet. */
-    private object StreamConnEventListener : okhttp3.EventListener() {
-        override fun callStart(call: okhttp3.Call) {
-            Log.i(TAG_NET, "callStart host=${call.request().url.host} t=${SystemClock.elapsedRealtime()}")
-        }
-        override fun connectStart(
-            call: okhttp3.Call,
-            inetSocketAddress: java.net.InetSocketAddress,
-            proxy: java.net.Proxy,
-        ) {
-            Log.i(TAG_NET, "connectStart NEW-SOCKET handshake t=${SystemClock.elapsedRealtime()}")
-        }
-        override fun connectionAcquired(call: okhttp3.Call, connection: okhttp3.Connection) {
-            Log.i(TAG_NET, "connectionAcquired t=${SystemClock.elapsedRealtime()}")
-        }
-        override fun responseHeadersEnd(call: okhttp3.Call, response: okhttp3.Response) {
-            Log.i(TAG_NET, "responseHeadersEnd code=${response.code} t=${SystemClock.elapsedRealtime()}")
-        }
-    }
-
     /**
      * Dynamic HTTP DataSource.Factory used ONLY by the player's MediaSource
      * factory, i.e. the Android Auto path where a MediaController calls
@@ -171,7 +132,10 @@ class AerioExoPlayerHolder @Inject constructor() {
      * factory never affects PlayerScreen playback.
      */
     private val autoDataSourceFactory = DataSource.Factory {
-        val f = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(streamHttpClient)
+        val f = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(30_000)
+            .setReadTimeoutMs(30_000)
         val h = httpHeaders
         if (h.isNotEmpty()) {
             f.setDefaultRequestProperties(h)
@@ -213,7 +177,7 @@ class AerioExoPlayerHolder @Inject constructor() {
                 /* minBufferMs = */ 2_500,
                 /* maxBufferMs = */ 5_000,
                 /* bufferForPlaybackMs = */ 500,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -359,9 +323,10 @@ class AerioExoPlayerHolder @Inject constructor() {
     }
 
     private fun httpDataSourceFactory(): DataSource.Factory {
-        // Pooled OkHttp client (see streamHttpClient) so a channel switch to the
-        // same proxy reuses the warm socket instead of paying a fresh DNS+TCP+TLS.
-        val factory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(streamHttpClient)
+        val factory = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(30_000)
+            .setReadTimeoutMs(30_000)
         // Apply Dispatcharr API-key / custom User-Agent. Headers are
         // applied verbatim; the User-Agent header (if present) replaces
         // the default.
@@ -616,6 +581,5 @@ class AerioExoPlayerHolder @Inject constructor() {
     companion object {
         private const val TAG = "AerioExoPlayer"
         private const val TAG_DIAG = "AerioPlayerDiag"
-        private const val TAG_NET = "AerioNet"
     }
 }
