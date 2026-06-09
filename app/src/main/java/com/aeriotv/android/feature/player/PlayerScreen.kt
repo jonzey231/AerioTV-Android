@@ -197,33 +197,13 @@ fun PlayerScreen(
             android.content.res.Configuration.UI_MODE_TYPE_MASK
         ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
 
-    // UHD judder fix: match the panel refresh rate to the live content's frame
-    // rate. The MPEG-TS feed doesn't signal fps, so a 50fps UHD stream would
-    // otherwise judder on a 60Hz panel. TV-only; the mode is reset on teardown.
-    if (isTvForm) {
-        val fpsMatchHandle = remember { mutableStateOf<Any?>(null) }
-        LaunchedEffect(Unit) {
-            var tries = 0
-            while (exoHolder.player == null && tries < 30) {
-                kotlinx.coroutines.delay(100)
-                tries++
-            }
-            val p = exoHolder.player
-            val act = context.findActivity()
-            if (p != null && act != null) {
-                fpsMatchHandle.value = DisplayFrameRateMatcher.attach(p, act)
-            }
-        }
-        DisposableEffect(Unit) {
-            onDispose {
-                DisplayFrameRateMatcher.detach(
-                    exoHolder.player,
-                    fpsMatchHandle.value,
-                    context.findActivity(),
-                )
-            }
-        }
-    }
+    // UHD judder fix (seamless content frame-rate matching) now lives in
+    // PersistentExoWindow, which owns the SurfaceView whose Surface the
+    // refresh-rate match is requested on. The old window-level
+    // preferredDisplayModeId pin lived HERE but was a NON-seamless HDMI
+    // re-handshake that destroyed the SurfaceView mid-stream and blacked out
+    // the video on TV boxes (GOTCHA 23) -- replaced with the seamless
+    // Surface.setFrameRate path.
 
     // Chrome auto-starts visible on phone (user can immediately reach
     // controls + close) but hidden on TV (the user just pressed a

@@ -113,6 +113,20 @@ fun BoxScope.PersistentExoWindow(
                     // Surface mode is set via the bundled layout
                     // exo_player_view.xml's surface_type=surface_view default.
                     setPlayer(player)
+                    // Seamless content frame-rate matching (UHD judder fix).
+                    // Requests a refresh-rate match on THIS SurfaceView's Surface
+                    // via Surface.setFrameRate(CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS)
+                    // -- it never pins the display mode, so it cannot black out
+                    // the video like the old preferredDisplayModeId path
+                    // (GOTCHA 23). TV-only + self-gating (acts only while frames
+                    // flow); API 31+ inside the matcher.
+                    val tvUiMode = ctx.resources.configuration.uiMode and
+                        android.content.res.Configuration.UI_MODE_TYPE_MASK
+                    if (tvUiMode == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) {
+                        (videoSurfaceView as? android.view.SurfaceView)?.let { sv ->
+                            DisplayFrameRateMatcher.attach(player, sv)
+                        }
+                    }
                 }
             },
             update = { view ->

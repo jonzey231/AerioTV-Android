@@ -1,8 +1,9 @@
 package com.aeriotv.android.feature.player
 
-import android.app.Activity
 import android.os.Build
 import android.util.Log
+import android.view.Surface
+import android.view.SurfaceView
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.video.VideoFrameMetadataListener
@@ -10,49 +11,44 @@ import kotlin.math.abs
 
 /**
  * tvOS-style content frame-rate matching for live TV (the UHD "super stuttery"
- * fix).
+ * fix) -- SEAMLESS edition.
  *
  * Dispatcharr's MPEG-TS feed for UK UHD channels (e.g. Sky Sports Main Event
- * UHD, ch 36) runs at 50fps but does NOT signal its frame rate in the container
- * (Format.frameRate == -1). With nothing to match, ExoPlayer / Google TV leave
- * the panel pinned at 60Hz and 50fps-on-60Hz pulldown produces constant judder.
+ * UHD) runs at 50fps but does NOT signal its frame rate in the container
+ * (Format.frameRate == -1). With nothing to match, the panel stays pinned at
+ * 60Hz and 50-on-60 pulldown produces constant judder.
  *
  * We measure the real frame rate from rendered-frame presentation timestamps
- * and request the matching display mode via preferredDisplayModeId. The switch
- * is non-seamless (a brief HDMI re-handshake on channel start), the same
- * tradeoff tvOS makes for smooth playback. Measurement is continuous, so a flip
- * to a different-cadence stream re-matches while same-cadence flips don't
- * re-switch (no extra flash). TV-only; the mode is reset on teardown.
+ * and request a matching display refresh rate via [Surface.setFrameRate] with
+ * [Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS].
+ *
+ * Why this and NOT the old preferredDisplayModeId pin (GOTCHA 23): pinning
+ * window.preferredDisplayModeId on a TV box is a NON-seamless HDMI re-handshake
+ * that destroys the persistent SurfaceView mid-stream with no rebind -> the
+ * decoder writes into a dead surface and the picture goes BLACK while audio
+ * keeps playing. The seamless path can NEVER do that: if the panel can change
+ * refresh rate WITHOUT a mode switch it does so smoothly; if it can't, the
+ * request is a no-op (judder remains, but video keeps playing). So it is safe
+ * to leave on for TV.
+ *
+ * Lifetime: attached once by [PersistentExoWindow] to the activity-lifetime
+ * PlayerView's SurfaceView. The listener only does work while frames are
+ * actually being rendered, so it is inert when nothing is playing.
  */
+@OptIn(UnstableApi::class)
 object DisplayFrameRateMatcher {
     private const val TAG = "AerioFpsMatch"
 
     /**
-     * Start measuring [player]'s frame rate and switch [activity]'s display mode
-     * to match. Returns an opaque handle to pass back to [detach]; null if the
-     * platform is too old to enumerate display modes.
+     * Start measuring [player]'s frame rate and request a SEAMLESS refresh-rate
+     * match on [surfaceView]'s Surface. Returns an opaque handle to pass back to
+     * [detach]; null on API < S (the 3-arg setFrameRate strategy is API 31+).
      */
-    @OptIn(UnstableApi::class)
-    fun attach(player: ExoPlayer, activity: Activity): Any? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        // DISABLED on TV boxes (currently the ONLY caller -- PlayerScreen gates
-        // attach behind isTvForm). applyMode pins preferredDisplayModeId, which
-        // on a TV box is a NON-SEAMLESS HDMI re-handshake: it destroys the
-        // persistent SurfaceView mid-stream (~1s after a channel starts) and
-        // nothing rebinds it, so MediaCodec keeps decoding into a DEAD surface
-        // -- audio plays but the picture goes BLACK (user-reported on a Google
-        // TV Streamer -> Hisense; confirmed via logcat: video frames flowing +
-        // AudioTrack started + a live "Display device changed ... modeId" during
-        // playback). MainActivity already refuses to pin preferredDisplayModeId
-        // on TV for this exact "goes black" reason. Re-enabling needs a SEAMLESS
-        // Surface.setFrameRate(CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS) reimpl.
-        val uiMode = activity.resources.configuration.uiMode and
-            android.content.res.Configuration.UI_MODE_TYPE_MASK
-        if (uiMode == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) return null
+    fun attach(player: ExoPlayer, surfaceView: SurfaceView): Any? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
         val deltasUs = ArrayDeque<Long>()
         var lastPtsUs = -1L
-        var lastIdeal = 0f
-        var sinceSwitch = 0
+        var lastAppliedFps = 0f
         val listener = VideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
             if (lastPtsUs >= 0L) {
                 val d = presentationTimeUs - lastPtsUs
@@ -64,15 +60,25 @@ object DisplayFrameRateMatcher {
                 }
             }
             lastPtsUs = presentationTimeUs
-            sinceSwitch++
-            if (deltasUs.size >= 30 && sinceSwitch >= 30) {
+            if (deltasUs.size >= 30) {
                 val sorted = deltasUs.sorted()
-                val fps = 1_000_000.0 / sorted[sorted.size / 2]
-                val ideal = idealRefreshFor(fps)
-                if (ideal != lastIdeal) {
-                    lastIdeal = ideal
-                    sinceSwitch = 0
-                    activity.runOnUiThread { applyMode(activity, fps, ideal) }
+                val fps = (1_000_000.0 / sorted[sorted.size / 2]).toFloat()
+                // Re-request only on a meaningful cadence change (a channel flip
+                // to different-fps content), not every frame.
+                if (fps in 20f..130f && abs(fps - lastAppliedFps) > 1.0f) {
+                    lastAppliedFps = fps
+                    val surface = surfaceView.holder.surface
+                    if (surface != null && surface.isValid) {
+                        runCatching {
+                            surface.setFrameRate(
+                                fps,
+                                Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                                Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS,
+                            )
+                        }.onSuccess {
+                            Log.i(TAG, "seamless setFrameRate(${"%.2f".format(fps)})")
+                        }
+                    }
                 }
             }
         }
@@ -80,58 +86,23 @@ object DisplayFrameRateMatcher {
         return listener
     }
 
-    @OptIn(UnstableApi::class)
-    fun detach(player: ExoPlayer?, handle: Any?, activity: Activity?) {
+    /** Stop measuring and release our frame-rate preference (so the guide /
+     *  launcher revert to the panel default). */
+    fun detach(player: ExoPlayer?, handle: Any?, surfaceView: SurfaceView?) {
         (handle as? VideoFrameMetadataListener)?.let { l ->
             runCatching { player?.clearVideoFrameMetadataListener(l) }
         }
-        // Release our preferred mode so the launcher / guide return to default.
-        activity?.let { act ->
-            val attrs = act.window.attributes
-            if (attrs.preferredDisplayModeId != 0) {
-                act.window.attributes = attrs.apply { preferredDisplayModeId = 0 }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val surface = surfaceView?.holder?.surface
+            if (surface != null && surface.isValid) {
+                runCatching {
+                    surface.setFrameRate(
+                        0f,
+                        Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                        Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS,
+                    )
+                }
             }
         }
-    }
-
-    private fun applyMode(activity: Activity, fps: Double, ideal: Float) {
-        @Suppress("DEPRECATION")
-        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            activity.display
-        } else {
-            activity.windowManager.defaultDisplay
-        } ?: return
-        val current = display.mode ?: return
-        // Same resolution as the current mode, refresh rate closest to ideal.
-        val target = display.supportedModes
-            .filter {
-                it.physicalWidth == current.physicalWidth &&
-                    it.physicalHeight == current.physicalHeight
-            }
-            .minByOrNull { abs(it.refreshRate - ideal) }
-            ?: return
-        // Only switch if it's a meaningfully better match than what's active.
-        if (target.modeId != current.modeId &&
-            abs(target.refreshRate - ideal) + 0.5f < abs(current.refreshRate - ideal)
-        ) {
-            Log.w(
-                TAG,
-                "content ${"%.2f".format(fps)}fps -> ${target.physicalWidth}x" +
-                    "${target.physicalHeight}@${"%.2f".format(target.refreshRate)} " +
-                    "(was @${"%.2f".format(current.refreshRate)})",
-            )
-            activity.window.attributes = activity.window.attributes.apply {
-                preferredDisplayModeId = target.modeId
-            }
-        }
-    }
-
-    /** Map a measured content fps to the ideal panel refresh: 50/25 -> 50Hz,
-     *  60/30 -> 60Hz. Live feeds are one of these; film cadence falls back to
-     *  60 (standard pulldown). */
-    private fun idealRefreshFor(fps: Double): Float = when {
-        fps in 47.0..52.5 || fps in 23.5..26.5 -> 50f
-        fps in 57.0..62.0 || fps in 28.5..31.5 -> 60f
-        else -> 60f
     }
 }
