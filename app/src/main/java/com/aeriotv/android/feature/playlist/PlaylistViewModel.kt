@@ -102,6 +102,16 @@ class PlaylistViewModel @Inject constructor(
         data class Failure(val message: String) : ActionStatus
     }
 
+    /**
+     * "Skip for now" on the Welcome screen: the user chose to enter the app
+     * with no playlist. The MAIN route's NeedsUrl bounce-back guard respects
+     * this for the rest of the session; without it, Skip navigated to MAIN
+     * and was bounced straight back to Welcome within a frame, so the button
+     * read as dead. Resets with the process: an unconfigured app still lands
+     * on Welcome at next launch.
+     */
+    var onboardingSkipped: Boolean = false
+
     data class ActiveRoute(val isLan: Boolean, val url: String)
 
     companion object {

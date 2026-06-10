@@ -247,7 +247,9 @@ fun AerioTVNavHost(
                     onConnectServer = { navController.navigate(Routes.CHOOSE_TYPE) },
                     // "Skip for now" is iOS parity. With no playlist saved the channel
                     // list is empty; user can reach Settings -> Change playlist later.
+                    // The flag stops MAIN's NeedsUrl guard from bouncing right back.
                     onSkip = {
+                        vm.onboardingSkipped = true
                         navController.navigate(Routes.MAIN) {
                             popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
                         }
@@ -371,7 +373,9 @@ fun AerioTVNavHost(
                 val context = androidx.compose.ui.platform.LocalContext.current
 
                 LaunchedEffect(state.phase) {
-                    if (state.phase == PlaylistViewModel.Phase.NeedsUrl) {
+                    // Skipped onboarding stays in the (empty) app; see
+                    // PlaylistViewModel.onboardingSkipped.
+                    if (state.phase == PlaylistViewModel.Phase.NeedsUrl && !vm.onboardingSkipped) {
                         navController.navigate(Routes.WELCOME) {
                             popUpTo(Routes.MAIN) { inclusive = true }
                         }
