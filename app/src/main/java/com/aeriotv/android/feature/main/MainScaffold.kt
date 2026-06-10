@@ -38,7 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.border
-import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -544,6 +544,16 @@ private fun TvTopTabBar(
         if ((armed || deliberateEntry) && cur != selected) onSelect(cur)
     }
 
+    // Focus entering the bar by ANY route (the guide's routed UP, or plain
+    // geometric 2D search from tabs that don't wire the requester) must land
+    // on the SELECTED tab's pill. Geometric entry used to land on whichever
+    // pill sat above the content column (On Demand over the centered Settings
+    // form), and with selection-follows-focus that instantly switched tabs
+    // (user report). The per-pill requesters + the group's entry redirect
+    // replace focusRestorer: with selection following focus, the selected
+    // pill IS the last-focused pill in every normal flow.
+    val pillRequesters = remember(tabs) { tabs.associateWith { FocusRequester() } }
+
     // tvOS-style floating nav: the tabs are grouped into one centered, rounded
     // "segmented" capsule over the app background (no full-width surface toolbar
     // strip), so the bar reads as a polished pill group rather than a heavy bar.
@@ -556,7 +566,12 @@ private fun TvTopTabBar(
         Row(
             modifier = Modifier
                 .focusRequester(focusRequester)
-                .focusRestorer()
+                .focusGroup()
+                .focusProperties {
+                    onEnter = {
+                        pillRequesters[selected]?.requestFocus()
+                    }
+                }
                 // Row-level hasFocus stays true while focus moves between pills
                 // and only flips false when focus leaves the bar entirely, so it
                 // is the reliable "is the user in the bar" signal for [armed].
@@ -575,6 +590,7 @@ private fun TvTopTabBar(
                     tab = tab,
                     selected = tab == selected,
                     onFocused = { focusedTab = tab },
+                    modifier = Modifier.focusRequester(pillRequesters.getValue(tab)),
                 )
             }
         }
@@ -586,6 +602,7 @@ private fun TvTab(
     tab: AppTab,
     selected: Boolean,
     onFocused: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
     // SELECTED owns the solid fill; FOCUS is the white ring (the app-wide
@@ -609,7 +626,7 @@ private fun TvTab(
         label = "tvTabForeground",
     )
     Row(
-        modifier = Modifier
+        modifier = modifier
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocused()
