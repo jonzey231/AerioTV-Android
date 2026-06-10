@@ -54,6 +54,8 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.feature.main.AppTab
 import com.aeriotv.android.ui.tv.dpadFocusEscape
+import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
+import com.aeriotv.android.ui.tv.tvFormFieldInput
 
 /**
  * App Behaviors sub-screen. Mirrors iOS AppBehaviorsSettingsView.swift:
@@ -76,6 +78,7 @@ fun AppBehaviorsSettingsScreen(
     val tmdbKeyState by viewModel.tmdbKeyTestState.collectAsStateWithLifecycle()
 
     val isTv = rememberIsTvDevice()
+    TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "App Behaviors", onBack = onBack)
 
@@ -174,7 +177,7 @@ fun AppBehaviorsSettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 8.dp)
-                            .dpadFocusEscape(),
+                            .tvFormFieldInput(),
                     )
                     Row(
                         modifier = Modifier
@@ -234,5 +237,6 @@ fun AppBehaviorsSettingsScreen(
             }
         }
         }
+    }
     }
 }

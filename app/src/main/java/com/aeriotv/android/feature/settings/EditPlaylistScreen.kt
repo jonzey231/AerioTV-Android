@@ -46,6 +46,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.tv.dpadFocusEscape
+import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
+import com.aeriotv.android.ui.tv.tvFormFieldInput
 
 /**
  * Edit Playlist sub-screen. Mirrors iOS Edit Playlist modal: Cancel header
@@ -144,6 +146,7 @@ fun EditPlaylistScreen(
         onBack()
     }
 
+    TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
         CenterAlignedTopAppBar(
             title = {
@@ -222,7 +225,7 @@ fun EditPlaylistScreen(
                             onValueChange = { name = it },
                             label = { Text("Name") },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                            modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                             keyboardOptions = aerioTextFieldKeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
                                 imeAction = androidx.compose.ui.text.input.ImeAction.Next,
@@ -243,7 +246,7 @@ fun EditPlaylistScreen(
                                 )
                             },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                            modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                             keyboardOptions = aerioTextFieldKeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
                                 imeAction = androidx.compose.ui.text.input.ImeAction.Next,
@@ -256,7 +259,7 @@ fun EditPlaylistScreen(
                             label = { Text("LAN URL (optional)") },
                             placeholder = { Text("http://192.168.1.10:9191") },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                            modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                             keyboardOptions = aerioTextFieldKeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
                                 imeAction = androidx.compose.ui.text.input.ImeAction.Next,
@@ -288,7 +291,7 @@ fun EditPlaylistScreen(
                                 label = { Text("API Key") },
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                 keyboardOptions = aerioTextFieldKeyboardOptions(
                                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
                                 ),
@@ -312,7 +315,7 @@ fun EditPlaylistScreen(
                                     onValueChange = { username = it },
                                     label = { Text("Username") },
                                     singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                    modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                     keyboardOptions = aerioTextFieldKeyboardOptions(
                                         imeAction = androidx.compose.ui.text.input.ImeAction.Next,
                                     ),
@@ -324,7 +327,7 @@ fun EditPlaylistScreen(
                                     label = { Text("Password") },
                                     singleLine = true,
                                     visualTransformation = PasswordVisualTransformation(),
-                                    modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                    modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                     keyboardOptions = aerioTextFieldKeyboardOptions(
                                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
                                     ),
@@ -336,7 +339,7 @@ fun EditPlaylistScreen(
                                     label = { Text("API Key") },
                                     singleLine = true,
                                     visualTransformation = PasswordVisualTransformation(),
-                                    modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                    modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                 )
                             }
                         }
@@ -350,7 +353,7 @@ fun EditPlaylistScreen(
                                 onValueChange = { username = it },
                                 label = { Text("Username") },
                                 singleLine = true,
-                                modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                 keyboardOptions = aerioTextFieldKeyboardOptions(
                                     imeAction = androidx.compose.ui.text.input.ImeAction.Next,
                                 ),
@@ -362,7 +365,7 @@ fun EditPlaylistScreen(
                                 label = { Text("Password") },
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                 keyboardOptions = aerioTextFieldKeyboardOptions(
                                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
                                 ),
@@ -483,7 +486,7 @@ fun EditPlaylistScreen(
                                 label = { Text("XMLTV URL") },
                                 singleLine = true,
                                 placeholder = { Text("https://example.com/xmltv.xml") },
-                                modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                                modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                                 keyboardOptions = aerioTextFieldKeyboardOptions(
                                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
                                 ),
@@ -509,6 +512,7 @@ fun EditPlaylistScreen(
         }
         }
         }
+    }
     }
 }
 

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.graphicsLayer
@@ -147,5 +148,105 @@ object TvImeNoJitterBringIntoViewSpec : androidx.compose.foundation.gestures.Bri
         // ...unless it is a sub-2px correction, which is the IME boundary
         // oscillation, not a real scroll.
         return if (kotlin.math.abs(distance) < 2f) 0f else distance
+    }
+}
+
+/**
+ * Shared state for the keyboard-on-OK gate: [armed] is true only after the
+ * user pressed OK on a text field, and flips false whenever D-pad focus
+ * moves away. See [TvKeyboardOnOkHost].
+ */
+class TvKeyboardGateState {
+    var armed by androidx.compose.runtime.mutableStateOf(false)
+}
+
+val LocalTvKeyboardGate =
+    androidx.compose.runtime.staticCompositionLocalOf<TvKeyboardGateState?> { null }
+
+/**
+ * TV form keyboard gate: the on-screen keyboard opens only when the user
+ * presses OK on a text field, not the moment a field gains D-pad focus.
+ *
+ * Stock Compose text fields start a platform text-input session (which shows
+ * the IME) on focus gain, so walking DOWN through a form popped the keyboard
+ * at every field. This wraps the form in [InterceptPlatformTextInput] and
+ * blocks the session until the gate is armed by an OK press (see
+ * [tvFormFieldInput]). The IME's own Next/Done actions keep the gate armed,
+ * so the type-Next-type flow still works; a D-pad move disarms it.
+ *
+ * No-op on touch devices: phones keep keyboard-on-focus, which is correct
+ * there because focusing a field IS the tap.
+ */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+fun TvKeyboardOnOkHost(content: @Composable () -> Unit) {
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isTv = (configuration.uiMode and android.content.res.Configuration.UI_MODE_TYPE_MASK) ==
+        android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+    if (!isTv) {
+        content()
+        return
+    }
+    val gate = androidx.compose.runtime.remember { TvKeyboardGateState() }
+    val armed = gate.armed
+    androidx.compose.ui.platform.InterceptPlatformTextInput(
+        // remember(armed): a NEW interceptor instance per armed flip, which
+        // restarts any active input session under the new policy. That is
+        // what actually shows (armed) or suppresses (disarmed) the IME.
+        interceptor = androidx.compose.runtime.remember(armed) {
+            androidx.compose.ui.platform.PlatformTextInputInterceptor { request, nextHandler ->
+                if (armed) {
+                    nextHandler.startInputMethod(request)
+                } else {
+                    kotlinx.coroutines.awaitCancellation()
+                }
+            }
+        },
+    ) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalTvKeyboardGate provides gate,
+            content = content,
+        )
+    }
+}
+
+/**
+ * Form text-field input behavior for TV, used INSIDE a [TvKeyboardOnOkHost]:
+ *
+ *  - OK (D-pad center / Enter) arms the gate and shows the keyboard.
+ *  - D-pad UP/DOWN disarms the gate and moves focus (single-line fields have
+ *    no use for vertical cursor movement), so walking the form never pops
+ *    the keyboard. This subsumes [dpadFocusEscape], which it falls back to
+ *    when no host is present.
+ *
+ * No-op on touch devices (these key events never fire).
+ */
+@Composable
+fun Modifier.tvFormFieldInput(): Modifier {
+    val gate = LocalTvKeyboardGate.current ?: return this.dpadFocusEscape()
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    return this.onPreviewKeyEvent { event ->
+        val isOk = event.key == Key.DirectionCenter || event.key == Key.Enter ||
+            event.key == Key.NumPadEnter
+        when {
+            event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown -> {
+                gate.armed = false
+                focusManager.moveFocus(FocusDirection.Down)
+            }
+            event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp -> {
+                gate.armed = false
+                focusManager.moveFocus(FocusDirection.Up)
+            }
+            // Swallow the down-press so the field's own key handling never
+            // sees a half-click; act on the release.
+            event.type == KeyEventType.KeyDown && isOk -> true
+            event.type == KeyEventType.KeyUp && isOk -> {
+                gate.armed = true
+                keyboard?.show()
+                true
+            }
+            else -> false
+        }
     }
 }

@@ -21,8 +21,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -65,6 +67,7 @@ fun PlaylistDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val playlist = state.playlist
+    var confirmDelete by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         CenterAlignedTopAppBar(
@@ -231,8 +234,49 @@ fun PlaylistDetailScreen(
                     }
                 }
             }
+
+            item {
+                Section(
+                    header = "Danger Zone",
+                    footer = "Removes this playlist and its credentials from this device.",
+                ) {
+                    ActionRow(
+                        icon = Icons.Outlined.Delete,
+                        label = "Delete Playlist",
+                        destructive = true,
+                        onClick = { confirmDelete = true },
+                    )
+                }
+            }
         }
         }
+    }
+
+    if (confirmDelete && playlist != null) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete playlist?") },
+            text = {
+                Text(
+                    "This removes \"${playlist.name}\" and its credentials from this " +
+                        "device. If another playlist is saved, it becomes active.",
+                )
+            },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Delete",
+                    destructive = true,
+                    onClick = {
+                        confirmDelete = false
+                        viewModel.deletePlaylist(playlist.id)
+                        onBack()
+                    },
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { confirmDelete = false })
+            },
+        )
     }
 }
 
@@ -313,18 +357,20 @@ private fun ActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
+    destructive: Boolean = false,
 ) {
     // The whole row is the click/focus target. The old shape (label inside a
     // TextButton) gave D-pad focus a tiny pill around the text only, which
     // looked out of place next to the full-width rows around it.
     var focused by remember { mutableStateOf(false) }
+    val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }
             .background(
                 if (focused) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    accent.copy(alpha = 0.16f)
                 } else {
                     Color.Transparent
                 },
@@ -336,12 +382,12 @@ private fun ActionRow(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = accent,
         )
         Spacer(Modifier.size(12.dp))
         Text(
             text = label,
-            color = MaterialTheme.colorScheme.primary,
+            color = accent,
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.Medium,
         )

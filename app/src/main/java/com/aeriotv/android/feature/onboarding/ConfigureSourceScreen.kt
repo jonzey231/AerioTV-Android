@@ -73,6 +73,8 @@ import com.aeriotv.android.feature.settings.dpadFocusRing
 import com.aeriotv.android.feature.settings.dpadFocusWash
 import com.aeriotv.android.feature.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.tv.dpadFocusEscape
+import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
+import com.aeriotv.android.ui.tv.tvFormFieldInput
 
 /**
  * Configure-source form. Mirrors iOS App Store screenshots IMG_1078 (Dispatcharr
@@ -137,6 +139,7 @@ fun ConfigureSourceScreen(
         }
     }
 
+    TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Configure", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
@@ -272,6 +275,7 @@ fun ConfigureSourceScreen(
         }
         }
         }
+    }
     }
 }
 
@@ -497,7 +501,7 @@ private fun IconTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+        modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
         singleLine = true,
         placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         leadingIcon = {

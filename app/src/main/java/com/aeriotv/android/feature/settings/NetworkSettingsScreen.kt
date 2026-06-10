@@ -42,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.aeriotv.android.ui.tv.dpadFocusEscape
+import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
+import com.aeriotv.android.ui.tv.tvFormFieldInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -526,14 +528,16 @@ private fun HomeWifiSection(
             onDismissRequest = { adding = false; manualSsid = "" },
             title = { Text("Add home SSID") },
             text = {
+                TvKeyboardOnOkHost {
                 androidx.compose.material3.OutlinedTextField(
                     value = manualSsid,
                     onValueChange = { manualSsid = it },
                     label = { Text("SSID name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().dpadFocusEscape(),
+                    modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
                     keyboardOptions = com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions(),
                 )
+                }
             },
             confirmButton = {
                 SettingsDialogTextButton(

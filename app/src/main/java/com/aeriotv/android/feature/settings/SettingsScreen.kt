@@ -2,9 +2,6 @@ package com.aeriotv.android.feature.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import com.aeriotv.android.core.tv.rememberTvMenuGuard
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,8 +21,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Movie
@@ -37,10 +32,7 @@ import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,7 +46,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
@@ -73,10 +64,9 @@ import java.util.Date
  * Settings root. Mirrors iOS SettingsView.swift section ordering + grouped-card
  * presentation (lines 150-496):
  *
- *  1. Playlists  — inline list of every saved playlist with tap-to-activate,
- *                  long-press context menu (Edit / Delete), and an Add Playlist
- *                  row. Footer surfaces the same hints iOS shows
- *                  ("Tap ○ to set the active playlist" etc.).
+ *  1. Playlists  — inline list of every saved playlist with tap-to-activate
+ *                  (tap the active row again for details, edit, delete) and an
+ *                  Add Playlist row. Footer surfaces the matching hints.
  *  2. App Settings — Appearance / App Behaviors / Multiview / Network rows
  *                  inside a single grouped card.
  *  3. Sync       — current cut routes through to the full SyncSettingsScreen.
@@ -100,7 +90,6 @@ fun SettingsScreen(
     onOpenPlaylistDetail: () -> Unit = {},
     onOpenPlaylists: () -> Unit = {},
     onAddPlaylist: () -> Unit = {},
-    onEditPlaylist: (PlaylistEntity) -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -112,7 +101,6 @@ fun SettingsScreen(
     val playlists by viewModel.allPlaylists.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeId = state.playlist?.id
 
-    var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
 
     val packageInfo = remember {
         runCatching {
@@ -171,8 +159,6 @@ fun SettingsScreen(
                         if (pl.id == activeId) onOpenPlaylistDetail()
                         else viewModel.switchToPlaylist(pl.id)
                     },
-                    onEdit = { onEditPlaylist(it) },
-                    onDelete = { pendingDelete = it },
                     onAdd = onAddPlaylist,
                     onManage = onOpenPlaylists,
                 )
@@ -252,43 +238,15 @@ fun SettingsScreen(
         }
     }
 
-    pendingDelete?.let { pl ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete playlist?") },
-            text = {
-                Text(
-                    "This removes \"${pl.name}\" and its credentials from this device. " +
-                        if (pl.id == activeId) "The next playlist on the list will be activated." else "",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Delete",
-                    onClick = {
-                        pendingDelete = null
-                        viewModel.deletePlaylist(pl.id)
-                    },
-                    destructive = true,
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pendingDelete = null })
-            },
-        )
-    }
 }
 
 // MARK: - Playlists section
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistsSection(
     playlists: List<PlaylistEntity>,
     activeId: String?,
     onTap: (PlaylistEntity) -> Unit,
-    onEdit: (PlaylistEntity) -> Unit,
-    onDelete: (PlaylistEntity) -> Unit,
     onAdd: () -> Unit,
     onManage: () -> Unit,
 ) {
@@ -321,8 +279,6 @@ private fun PlaylistsSection(
                         playlist = pl,
                         isActive = pl.id == activeId,
                         onTap = { onTap(pl) },
-                        onEdit = { onEdit(pl) },
-                        onDelete = { onDelete(pl) },
                     )
                 }
                 RowDivider()
@@ -381,14 +337,14 @@ private fun PlaylistsSection(
         }
         if (playlists.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            // Input-appropriate verbs: a remote has no "tap" or "long press".
+            // Input-appropriate verbs: a remote has no "tap".
             if (rememberIsTvDevice()) {
-                SectionFooter("Press OK on a playlist to make it active · Hold OK to edit or delete")
+                SectionFooter("Press OK on a playlist to make it active · Open the active playlist to edit or delete it")
                 if (playlists.size > 1) {
                     SectionFooter("Select Manage Playlists to reorder")
                 }
             } else {
-                SectionFooter("Tap ○ to set the active playlist · Long press to edit or delete")
+                SectionFooter("Tap ○ to set the active playlist · Tap the active playlist to edit or delete it")
                 if (playlists.size > 1) {
                     SectionFooter("Tap Manage Playlists to reorder")
                 }
@@ -397,22 +353,14 @@ private fun PlaylistsSection(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistRow(
     playlist: PlaylistEntity,
     isActive: Boolean,
     onTap: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
-    // Guard the long-press menu against the Android TV D-pad bug where the OK
-    // RELEASE auto-selects the menu's first item (Edit) the instant the user
-    // lifts off -- so a long-press to Delete always landed on Edit. arm() when
-    // the menu opens, wrap() each item: the spurious release-click within the
-    // grace window is swallowed, leaving Delete reachable. No-op on touch.
-    val tvGuard = rememberTvMenuGuard()
+    // No long-press menu: editing and deleting live on the Playlist Detail
+    // screen (open the active playlist), so the row is a plain click target.
     val isTv = rememberIsTvDevice()
     var focused by remember { mutableStateOf(false) }
     Box {
@@ -421,12 +369,7 @@ private fun PlaylistRow(
                 .fillMaxWidth()
                 .onFocusChanged { focused = it.isFocused }
                 .groupRowFocus(focused)
-                // Wrap onTap too: on some focus configurations the OK-release
-                // KEY_UP after a long-press is delivered back to the originating
-                // row (firing onTap = "open Edit") rather than to the menu item.
-                // Guarding both paths means the spurious release-click is caught
-                // wherever it lands; the AerioLongPress log shows which fired.
-                .combinedClickable(onClick = tvGuard.wrap(onTap), onLongClick = { menuOpen = true; tvGuard.arm() })
+                .clickable(onClick = onTap)
                 .padding(horizontal = 14.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -470,89 +413,6 @@ private fun PlaylistRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (isTv) {
-            // Centered dialog instead of an anchored popup: the app's TV
-            // modal idiom, and the focused action row is plainly visible.
-            if (menuOpen) {
-                Dialog(onDismissRequest = { menuOpen = false }) {
-                    androidx.compose.material3.Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.background,
-                    ) {
-                        Column(modifier = Modifier.padding(vertical = 10.dp)) {
-                            Text(
-                                text = playlist.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                            )
-                            PlaylistMenuRow(
-                                label = "Edit",
-                                icon = Icons.Filled.Edit,
-                                destructive = false,
-                                onClick = tvGuard.wrap { menuOpen = false; onEdit() },
-                            )
-                            PlaylistMenuRow(
-                                label = "Delete",
-                                icon = Icons.Filled.Delete,
-                                destructive = true,
-                                onClick = tvGuard.wrap { menuOpen = false; onDelete() },
-                            )
-                        }
-                    }
-                }
-            }
-        } else {
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Edit") },
-                    leadingIcon = {
-                        Icon(Icons.Filled.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    },
-                    onClick = tvGuard.wrap { menuOpen = false; onEdit() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                    leadingIcon = {
-                        Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                    },
-                    onClick = tvGuard.wrap { menuOpen = false; onDelete() },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlaylistMenuRow(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    destructive: Boolean,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
-            .groupRowFocus(focused)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, contentDescription = null, tint = tint)
-        Spacer(Modifier.size(12.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (destructive) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onBackground,
-        )
     }
 }
 

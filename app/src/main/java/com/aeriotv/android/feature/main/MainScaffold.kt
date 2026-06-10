@@ -724,14 +724,6 @@ private fun SettingsTabContent() {
             onOpenPlaylistDetail = { playlistDetailOpen = true },
             onOpenPlaylists = { playlistsOpen = true },
             onAddPlaylist = { addPlaylistStep = AddPlaylistStep.ChooseType },
-            onEditPlaylist = {
-                // Editing requires the row to be active so the existing
-                // EditPlaylistScreen (which always edits the active playlist
-                // — iOS does the same) has the right context. Switch first,
-                // then open the editor.
-                if (playlistState.playlist?.id != it.id) playlistVm.switchToPlaylist(it.id)
-                editPlaylistOpen = true
-            },
         )
         section == SettingsSection.Appearance -> AppearanceSettingsScreen(
             onBack = { section = null },
