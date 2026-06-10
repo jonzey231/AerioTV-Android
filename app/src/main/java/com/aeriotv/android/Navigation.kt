@@ -23,6 +23,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
@@ -47,6 +48,7 @@ import com.aeriotv.android.feature.miniplayer.TvMiniPlayerOverlay
 import com.aeriotv.android.feature.player.PlayerScreen
 import com.aeriotv.android.feature.player.VODPlayerScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.update.UpdateGate
 import com.aeriotv.android.feature.whatsnew.WhatsNewGate
 import com.aeriotv.android.feature.reminders.ReminderBannerHost
 import dagger.hilt.EntryPoint
@@ -753,6 +755,12 @@ fun AerioTVNavHost(
         // last-dismissed value; first-ever install is seeded silently so
         // the onboarding flow isn't interrupted.
         WhatsNewGate()
+
+        // In-app updater prompt (github flavor; inert no-op on Play). Renders
+        // only on the main tabs, after What's New settles, and drives the
+        // throttled foreground update check.
+        val updateBackStack by navController.currentBackStackEntryAsState()
+        UpdateGate(currentRoute = updateBackStack?.destination?.route)
 
         // Mini-player overlay (Phase 139 / audit #22). The session ViewModel
         // is rooted here so the same instance is visible from PlayerScreen

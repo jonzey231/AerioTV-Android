@@ -655,6 +655,53 @@ class AppPreferences @Inject constructor(
         }
     }
 
+    // ── In-app updater (github flavor) ───────────────────────────────────
+    // Device-local bookkeeping for the GitHub-releases self-updater. NONE of
+    // these belong in snapshotSyncablePreferences (per-device state).
+
+    /** uptime-independent wall clock of the last automatic update check. */
+    val updateLastCheckAt: Flow<Long> = store.data.map { it[KEY_UPDATE_LAST_CHECK_AT] ?: 0L }
+    suspend fun setUpdateLastCheckAt(value: Long) {
+        store.edit { it[KEY_UPDATE_LAST_CHECK_AT] = value }
+    }
+    suspend fun updateLastCheckAtOnce(): Long = store.data.first()[KEY_UPDATE_LAST_CHECK_AT] ?: 0L
+
+    /** versionName the user chose "Later" on; the launch prompt skips it.
+     *  Manual checks in Settings ignore the skip. */
+    val updateSkippedVersion: Flow<String> = store.data.map { it[KEY_UPDATE_SKIPPED_VERSION] ?: "" }
+    suspend fun setUpdateSkippedVersion(value: String) {
+        store.edit { prefs ->
+            if (value.isBlank()) prefs.remove(KEY_UPDATE_SKIPPED_VERSION)
+            else prefs[KEY_UPDATE_SKIPPED_VERSION] = value
+        }
+    }
+    suspend fun updateSkippedVersionOnce(): String =
+        store.data.first()[KEY_UPDATE_SKIPPED_VERSION].orEmpty()
+
+    /** JSON-encoded PendingUpdate (staged APK path + expected version). Written
+     *  BEFORE the unknown-sources Settings trip and BEFORE the install-session
+     *  commit, because both can kill this process; the next launch resumes from
+     *  it. Blank = nothing pending. */
+    val updatePendingJson: Flow<String> = store.data.map { it[KEY_UPDATE_PENDING] ?: "" }
+    suspend fun setUpdatePendingJson(value: String) {
+        store.edit { prefs ->
+            if (value.isBlank()) prefs.remove(KEY_UPDATE_PENDING)
+            else prefs[KEY_UPDATE_PENDING] = value
+        }
+    }
+    suspend fun updatePendingJsonOnce(): String = store.data.first()[KEY_UPDATE_PENDING].orEmpty()
+
+    /** Set by PackageReplacedReceiver after an in-place update lands; cleared
+     *  on the next launch once the new version has booted (bookkeeping only). */
+    suspend fun setUpdateCompletedVersion(value: String) {
+        store.edit { prefs ->
+            if (value.isBlank()) prefs.remove(KEY_UPDATE_COMPLETED_VERSION)
+            else prefs[KEY_UPDATE_COMPLETED_VERSION] = value
+        }
+    }
+    suspend fun updateCompletedVersionOnce(): String =
+        store.data.first()[KEY_UPDATE_COMPLETED_VERSION].orEmpty()
+
     // ── DVR ──────────────────────────────────────────────────────────────
 
     /** iOS `dvrMaxLocalStorageMB` parity. Default 10 GB. */
@@ -725,6 +772,11 @@ class AppPreferences @Inject constructor(
         val KEY_PROGRAM_POSTERS_TMDB_ENABLED =
             booleanPreferencesKey("app_behaviors_program_posters_tmdb_enabled")
         val KEY_TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
+        // In-app updater (github flavor); device-local, never synced.
+        val KEY_UPDATE_LAST_CHECK_AT = longPreferencesKey("update_last_check_at")
+        val KEY_UPDATE_SKIPPED_VERSION = stringPreferencesKey("update_skipped_version")
+        val KEY_UPDATE_PENDING = stringPreferencesKey("update_pending")
+        val KEY_UPDATE_COMPLETED_VERSION = stringPreferencesKey("update_completed_version")
         val KEY_AUTO_RESUME_LAST_CHANNEL = booleanPreferencesKey("app_behaviors_auto_resume_last_channel")
         val KEY_LAST_WATCHED_CHANNEL_ID = stringPreferencesKey("last_watched_channel_id")
         val KEY_LAST_SEEN_WHATSNEW_VERSION = stringPreferencesKey("last_seen_whatsnew_version")

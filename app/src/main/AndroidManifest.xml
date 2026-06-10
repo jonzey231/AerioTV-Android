@@ -173,5 +173,23 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
+
+        <!--
+            Runs on the FIRST process start after this app is updated in place
+            (any channel: adb, Play, or the in-app updater). AlarmManager drops
+            every scheduled alarm when a package is replaced, so programme
+            reminders silently die on each update without this; the receiver
+            re-registers them from the Room table. It also clears the in-app
+            updater's staged APK + bookkeeping after a successful self-update.
+            MY_PACKAGE_REPLACED is a protected broadcast the system delivers
+            only to the replaced app itself, so exported=false is safe.
+        -->
+        <receiver
+            android:name=".core.update.PackageReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

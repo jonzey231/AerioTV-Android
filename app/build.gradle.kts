@@ -40,8 +40,8 @@ android {
         applicationId = "com.aeriotv.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.2.4"
+        versionCode = 14
+        versionName = "0.2.5"
         vectorDrawables { useSupportLibrary = true }
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -74,6 +74,24 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+    }
+
+    // Distribution split (in-app updater). The GitHub/sideload channel carries
+    // the self-updater + REQUEST_INSTALL_PACKAGES (github manifest overlay);
+    // the Play channel must contain NEITHER -- Play policy forbids self-update
+    // of Play-distributed builds and the manifest permission alone triggers a
+    // declaration review. Build the GitHub release APK with
+    // :app:assembleGithubRelease and the Play AAB with :app:bundlePlayRelease.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER_ENABLED", "true")
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER_ENABLED", "false")
         }
     }
 

@@ -725,6 +725,8 @@ private fun SettingsTabContent() {
         section == SettingsSection.AppBehaviors -> AppBehaviorsSettingsScreen(onBack = { section = null })
         section == SettingsSection.Multiview -> MultiviewSettingsScreen(onBack = { section = null })
         section == SettingsSection.Network -> NetworkSettingsScreen(onBack = { section = null })
+        section == SettingsSection.AppUpdates ->
+            com.aeriotv.android.feature.settings.AppUpdatesScreen(onBack = { section = null })
         section == SettingsSection.Sync -> com.aeriotv.android.feature.settings.SyncSettingsScreen(
             onBack = { section = null },
         )

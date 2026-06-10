@@ -148,33 +148,17 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Add to Multiview while watching",
-            body = "From a live channel, open Add to Multiview, pick more " +
-                "channels, and jump straight into the split-screen grid. The " +
-                "channel you were watching becomes the first tile and keeps the " +
-                "sound.",
+            title = "In-app updates",
+            body = "AerioTV now tells you when a new release is out. Download " +
+                "and install it right from the app; your channels, settings, " +
+                "and recordings are kept. You can also check any time in " +
+                "Settings, App Updates.",
         ),
         WhatsNewItem(
-            title = "Smoother Android TV guide",
-            body = "A single D-pad press moves one channel and holding fast " +
-                "scrolls, the guide scale matches the tvOS app, and now-playing " +
-                "titles stay readable as a long program airs.",
-        ),
-        WhatsNewItem(
-            title = "Fill missing artwork from TMDB",
-            body = "Turn on Program Posters in App Behaviors and add your own " +
-                "free TMDB key to fill in missing movie, show, and channel " +
-                "artwork. The key syncs across your devices.",
-        ),
-        WhatsNewItem(
-            title = "Back returns to Live TV",
-            body = "Pressing Back from the DVR, On Demand, or Settings tab now " +
-                "takes you to the Live TV tab instead of closing the app.",
-        ),
-        WhatsNewItem(
-            title = "Smoother mini player",
-            body = "Sending a channel to the corner mini player no longer " +
-                "pauses for a moment before the picture and sound resume.",
+            title = "Reminders survive updates",
+            body = "Programme reminders are re-registered automatically after " +
+                "the app updates, so they fire even if an update landed in " +
+                "between.",
         ),
     )
 }

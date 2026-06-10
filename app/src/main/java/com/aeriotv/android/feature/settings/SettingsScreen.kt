@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.outlined.BugReport
@@ -101,6 +102,10 @@ fun SettingsScreen(
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Flavor-gated: the App Updates row only exists on the GitHub/sideload
+    // channel (play flavor binds a disabled no-op manager).
+    val updateVm: com.aeriotv.android.feature.update.UpdateViewModel = hiltViewModel()
+    val updaterEnabled = updateVm.isEnabled
     val state by viewModel.state.collectAsStateWithLifecycle()
     val playlists by viewModel.allPlaylists.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeId = state.playlist?.id
@@ -169,12 +174,13 @@ fun SettingsScreen(
             item("app-settings") {
                 SettingsSectionGroup(
                     header = "App Settings",
-                    rows = listOf(
-                        SettingsSection.Appearance,
-                        SettingsSection.AppBehaviors,
-                        SettingsSection.Multiview,
-                        SettingsSection.Network,
-                    ),
+                    rows = buildList {
+                        add(SettingsSection.Appearance)
+                        add(SettingsSection.AppBehaviors)
+                        add(SettingsSection.Multiview)
+                        add(SettingsSection.Network)
+                        if (updaterEnabled) add(SettingsSection.AppUpdates)
+                    },
                     onClick = onSectionClick,
                 )
             }
@@ -736,6 +742,11 @@ enum class SettingsSection(
         title = "Network",
         subtitle = "Timeout, buffer, home WiFi & refresh",
         icon = Icons.Filled.Wifi,
+    ),
+    AppUpdates(
+        title = "App Updates",
+        subtitle = "Check for new releases",
+        icon = Icons.Filled.SystemUpdate,
     ),
     Sync(
         title = "Sync",

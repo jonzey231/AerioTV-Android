@@ -121,6 +121,11 @@ class LocalRecordingService : Service() {
             stopSelf()
             return
         }
+        // Process-wide "recording in flight" flag. The in-app updater hard-
+        // refuses to install while this is true: a self-update kills the
+        // process mid-write and the recording's MediaStore row would stay
+        // IS_PENDING (invisible) and be reaped -- total recording loss.
+        isActive = true
         ensureNotificationChannel()
         val notif = buildNotification(title, "Recording…")
         startForegroundCompat(notif)
@@ -479,6 +484,7 @@ class LocalRecordingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isActive = false
         releaseWakeLock()
         scope.cancel()
     }
@@ -545,6 +551,13 @@ class LocalRecordingService : Service() {
     }
 
     companion object {
+        /** True while a local recording is in flight (set in startRecording,
+         *  cleared in onDestroy). Read by the in-app updater's install
+         *  interlock; volatile because the updater reads it off-main. */
+        @Volatile
+        var isActive: Boolean = false
+            private set
+
         private const val TAG = "LocalRecordingService"
         private const val NOTIF_ID = 0xAE
         private const val DOWNLOAD_DONE_NOTIF_ID = 0xAD

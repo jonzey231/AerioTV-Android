@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    GitHub/sideload distribution overlay. This manifest is merged ONLY into
+    the `github` flavor, so the Play AAB never carries the install permission
+    (Play policy: self-update of Play-distributed builds is disallowed, and
+    declaring REQUEST_INSTALL_PACKAGES alone triggers a declaration review).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Lets the in-app updater hand the downloaded GitHub release APK to the
+         system package installer. The user still confirms every install and
+         grants the per-app "Install unknown apps" toggle the first time. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application>
+        <!-- PackageInstaller session status sink. Manifest-declared (not
+             context-registered) so STATUS_PENDING_USER_ACTION still reaches us
+             if the process was recycled between commit and the system's
+             callback. Not exported: only the platform's install session
+             (targeted explicitly via PendingIntent) delivers here. -->
+        <receiver
+            android:name="com.aeriotv.android.core.update.InstallStatusReceiver"
+            android:exported="false" />
+    </application>
+</manifest>
