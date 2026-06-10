@@ -4,10 +4,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,48 +56,98 @@ fun WhatsNewSheet(
     items: List<WhatsNewItem>,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.background,
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(horizontal = 20.dp, vertical = 4.dp)
-                .verticalScroll(rememberScrollState()),
+    // Form-factor split (AddToMultiviewSheet / UpdatePromptSheet precedent):
+    // a bottom sheet is a touch idiom -- on Android TV its drag handle reads
+    // as a dead control and the sheet sits awkwardly at the screen bottom.
+    // TV gets a centered Dialog panel with the dismiss button auto-focused.
+    val isTv = com.aeriotv.android.feature.settings.rememberIsTvDevice()
+    if (isTv) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = onDismiss,
+            properties = androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = false,
+            ),
         ) {
+            androidx.compose.material3.Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.55f)
+                    .heightIn(max = 560.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.background,
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+                    WhatsNewBody(version, items, onDismiss, autoFocusDismiss = true)
+                }
+            }
+        }
+    } else {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.background,
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+                WhatsNewBody(version, items, onDismiss, autoFocusDismiss = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.WhatsNewBody(
+    version: String,
+    items: List<WhatsNewItem>,
+    onDismiss: () -> Unit,
+    autoFocusDismiss: Boolean,
+) {
+    val dismissFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    Text(
+        text = "What's New in v$version",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onBackground,
+    )
+    Spacer(Modifier.height(16.dp))
+    Column(
+        modifier = Modifier
+            .weight(1f, fill = false)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        items.forEach { item ->
             Text(
-                text = "What's New in v$version",
-                style = MaterialTheme.typography.headlineSmall,
+                text = item.title,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = MaterialTheme.colorScheme.primary,
             )
-            Spacer(Modifier.height(16.dp))
-            items.forEach { item ->
+            if (item.body.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    text = item.body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (item.body.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = item.body,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.height(14.dp))
             }
-            Spacer(Modifier.height(4.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) {
-                    Text("Got it")
-                }
+            Spacer(Modifier.height(14.dp))
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        TextButton(
+            onClick = onDismiss,
+            modifier = Modifier.focusRequester(dismissFocus),
+        ) {
+            Text("Got it")
+        }
+    }
+    Spacer(Modifier.height(20.dp))
+    if (autoFocusDismiss) {
+        LaunchedEffect(Unit) {
+            repeat(10) {
+                if (runCatching { dismissFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                kotlinx.coroutines.delay(16L)
             }
-            Spacer(Modifier.height(20.dp))
         }
     }
 }
