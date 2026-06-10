@@ -57,7 +57,7 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
  * (Settings > Change Playlist), which on Android maps to the existing clear+
  * re-onboard path.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun EditPlaylistScreen(
     onBack: () -> Unit,
@@ -190,6 +190,15 @@ fun EditPlaylistScreen(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
+        // TV: deadband spec stops the form's +/-1px per-frame jiggle when a
+        // focused text field sits at the floating IME's top edge (see
+        // TvImeNoJitterBringIntoViewSpec).
+        val bringIntoViewSpec =
+            if (rememberIsTvDevice()) com.aeriotv.android.ui.tv.TvImeNoJitterBringIntoViewSpec
+            else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
+        ) {
         LazyColumn(
             modifier = Modifier.adaptiveFormWidth(),
             // 104dp bottom clears the MainScaffold NavigationBar so the
@@ -258,7 +267,7 @@ fun EditPlaylistScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Type: ${sourceType.displayName} (cannot change here — use Change Playlist)",
+                            text = "Type: ${sourceType.displayName}. To switch types, use Change Playlist.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -473,6 +482,7 @@ fun EditPlaylistScreen(
                     }
                 }
             }
+        }
         }
         }
     }

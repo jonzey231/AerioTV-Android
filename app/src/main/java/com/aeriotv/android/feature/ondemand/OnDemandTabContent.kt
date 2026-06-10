@@ -708,6 +708,9 @@ private fun SeriesPoster(
             else MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Medium,
+            // minLines 2 keeps the year/rating meta line at the same height
+            // across a grid row whether the title wraps or not.
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp),
@@ -1030,6 +1033,9 @@ private fun MoviePoster(
             else MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Medium,
+            // minLines 2 keeps the year/rating meta line at the same height
+            // across a grid row whether the title wraps or not.
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp),

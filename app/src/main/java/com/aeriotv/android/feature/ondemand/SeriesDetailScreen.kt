@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,6 +51,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -62,8 +67,11 @@ import coil3.compose.AsyncImage
 import com.aeriotv.android.core.network.DispatcharrVODEpisode
 import com.aeriotv.android.core.network.DispatcharrVODProviderInfo
 import com.aeriotv.android.core.network.DispatcharrVODSeries
+import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.watchprogress.UpNextEntry
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
+import com.aeriotv.android.ui.tv.tvFocusScale
+import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -183,6 +191,29 @@ fun SeriesDetailScreen(
         onEpisodeClick(ep)
     }
 
+    val isTv = rememberLiveTvFormFactor().isTv
+    val edgeInset = if (isTv) 48.dp else 16.dp
+
+    // On TV land focus on the first actionable control (Resume when the
+    // series has one, otherwise the first episode row) once the episode list
+    // arrives; without this the screen had no focused control at all and the
+    // D-pad appeared dead. Fire once so later data changes don't yank focus.
+    val firstActionFocus = remember(seriesId) { FocusRequester() }
+    var initialFocusDone by remember(seriesId) { mutableStateOf(false) }
+    if (isTv) {
+        LaunchedEffect(continueWatchingEpisode != null, episodesInSeason.isNotEmpty()) {
+            if (initialFocusDone) return@LaunchedEffect
+            if (continueWatchingEpisode == null && episodesInSeason.isEmpty()) return@LaunchedEffect
+            repeat(10) {
+                if (runCatching { firstActionFocus.requestFocus() }.isSuccess) {
+                    initialFocusDone = true
+                    return@LaunchedEffect
+                }
+                delay(16L)
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (series == null) {
             Box(
@@ -202,12 +233,18 @@ fun SeriesDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 item {
-                    SeriesHeroSection(series = series, info = info, tmdbPosterUrl = tmdbPosterUrl)
+                    SeriesHeroSection(
+                        series = series,
+                        info = info,
+                        tmdbPosterUrl = tmdbPosterUrl,
+                        isTv = isTv,
+                    )
                 }
                 item {
                     SeriesInfoSection(
                         series = series,
                         info = info,
+                        isTv = isTv,
                         onOpenUrl = { url ->
                             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -223,7 +260,8 @@ fun SeriesDetailScreen(
                             positionMs = progress.positionMs,
                             durationMs = progress.durationMs,
                             onResume = { playEpisode(episode) },
-                            modifier = Modifier.padding(horizontal = 16.dp),
+                            modifier = Modifier.padding(horizontal = edgeInset),
+                            resumeModifier = Modifier.focusRequester(firstActionFocus),
                         )
                         Spacer(Modifier.height(12.dp))
                     }
@@ -235,6 +273,7 @@ fun SeriesDetailScreen(
                             seasons = seasons.keys.toList(),
                             selected = selectedSeason,
                             onSelect = { selectedSeason = it },
+                            edgeInset = edgeInset,
                         )
                         Spacer(Modifier.height(8.dp))
                     }
@@ -252,7 +291,7 @@ fun SeriesDetailScreen(
                             text = "Couldn't load episodes: $error",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp),
+                            modifier = Modifier.padding(horizontal = edgeInset, vertical = 24.dp),
                         )
                     }
                 } else if (episodes.isEmpty()) {
@@ -261,22 +300,37 @@ fun SeriesDetailScreen(
                             text = "Server returned no episodes for this series.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp),
+                            modifier = Modifier.padding(horizontal = edgeInset, vertical = 24.dp),
                         )
                     }
                 } else {
-                    items(items = episodesInSeason, key = { it.id }) { ep ->
+                    itemsIndexed(items = episodesInSeason, key = { _, ep -> ep.id }) { index, ep ->
                         EpisodeRow(
                             episode = ep,
                             onClick = { playEpisode(ep) },
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .padding(
+                                    horizontal = if (isTv) 44.dp else 12.dp,
+                                    vertical = 4.dp,
+                                )
+                                .then(
+                                    if (index == 0 && continueWatchingEpisode == null) {
+                                        Modifier.focusRequester(firstActionFocus)
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
                         )
                     }
                 }
             }
         }
 
-        FloatingBackButton(onClick = onBack)
+        // Hidden on Android TV: remote BACK pops the screen, and the floating
+        // pill would otherwise be an invisible D-pad focus stop.
+        if (!isTv) {
+            FloatingBackButton(onClick = onBack)
+        }
     }
 }
 
@@ -285,6 +339,7 @@ private fun SeriesHeroSection(
     series: DispatcharrVODSeries,
     info: DispatcharrVODProviderInfo?,
     tmdbPosterUrl: String?,
+    isTv: Boolean,
 ) {
     val heroUrl = info?.backdropUrl ?: series.posterUrl ?: tmdbPosterUrl
     val posterUrl = series.posterUrl ?: info?.posterUrl ?: tmdbPosterUrl
@@ -296,7 +351,11 @@ private fun SeriesHeroSection(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 11f),
+            // 16:11 of the 960dp TV canvas is 660dp, taller than the whole
+            // 540dp screen: the title block sat below the fold and the screen
+            // read as a full-screen poster. Fixed 300dp hero on TV; phones
+            // keep the aspect-ratio hero. Same fix as MovieDetailScreen.
+            .then(if (isTv) Modifier.height(300.dp) else Modifier.aspectRatio(16f / 11f)),
     ) {
         if (!heroUrl.isNullOrBlank()) {
             AsyncImage(
@@ -326,7 +385,10 @@ private fun SeriesHeroSection(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(
+                    horizontal = if (isTv) 48.dp else 16.dp,
+                    vertical = 16.dp,
+                ),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -406,6 +468,7 @@ private fun MetaStripCompact(year: String?, rating: String?) {
 private fun SeriesInfoSection(
     series: DispatcharrVODSeries,
     info: DispatcharrVODProviderInfo?,
+    isTv: Boolean,
     onOpenUrl: (String) -> Unit,
 ) {
     val plot = info?.effectivePlot?.takeIf { it.isNotBlank() } ?: series.plot?.takeIf { it.isNotBlank() }
@@ -421,7 +484,7 @@ private fun SeriesInfoSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 16.dp),
+            .padding(horizontal = if (isTv) 48.dp else 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (!plot.isNullOrBlank()) {
@@ -457,10 +520,18 @@ private fun PillButton(
     text: String,
     onClick: () -> Unit,
 ) {
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusScale(focused)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(50),
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -499,20 +570,32 @@ private fun MetaRow(label: String, value: String) {
 }
 
 @Composable
-private fun SeasonPicker(seasons: List<Int>, selected: Int, onSelect: (Int) -> Unit) {
+private fun SeasonPicker(
+    seasons: List<Int>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    edgeInset: androidx.compose.ui.unit.Dp = 16.dp,
+) {
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 16.dp),
+        contentPadding = PaddingValues(horizontal = edgeInset),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(items = seasons) { season ->
             val isSelected = season == selected
+            var focused by remember { mutableStateOf(false) }
             Row(
                 modifier = Modifier
+                    .onFocusChanged { focused = it.isFocused }
                     .clip(RoundedCornerShape(50))
                     .background(
                         if (isSelected) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                    )
+                    .border(
+                        width = 2.dp,
+                        color = if (focused) Color.White else Color.Transparent,
+                        shape = RoundedCornerShape(50),
                     )
                     .clickable { onSelect(season) }
                     .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -539,10 +622,23 @@ private fun EpisodeRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Resting look is unchanged (transparent row); the wash + white ring only
+    // appear under D-pad focus, which never happens on touch devices.
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
             .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                else Color.Transparent,
+            )
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(10.dp),
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.Top,
@@ -634,6 +730,7 @@ private fun ContinueWatchingCard(
     durationMs: Long,
     onResume: () -> Unit,
     modifier: Modifier = Modifier,
+    resumeModifier: Modifier = Modifier,
 ) {
     val progress = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
@@ -686,8 +783,17 @@ private fun ContinueWatchingCard(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            var resumeFocused by remember { mutableStateOf(false) }
             Button(
                 onClick = onResume,
+                modifier = resumeModifier
+                    .onFocusChanged { resumeFocused = it.isFocused }
+                    .tvFocusScale(resumeFocused)
+                    .border(
+                        width = 2.dp,
+                        color = if (resumeFocused) Color.White else Color.Transparent,
+                        shape = RoundedCornerShape(50),
+                    ),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,

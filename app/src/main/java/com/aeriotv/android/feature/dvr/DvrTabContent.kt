@@ -185,15 +185,56 @@ fun DvrTabContent(
             // filter is selected and there is at least one recording to
             // delete. Confirms via AlertDialog before firing the bulk delete.
             if (state.filter == DvrViewModel.Filter.Completed && state.completedCount > 0) {
-                TextButton(
-                    onClick = { pendingClearAll = true },
-                    modifier = Modifier.padding(start = 8.dp),
-                ) {
-                    Text(
-                        text = "Clear All",
-                        color = MaterialTheme.colorScheme.error,
-                        fontWeight = FontWeight.Medium,
-                    )
+                if (isTv) {
+                    // Same pill grammar as the filter row so D-pad focus is
+                    // visible; a bare TextButton has no focus chrome on TV.
+                    var clearFocused by remember { mutableStateOf(false) }
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .height(36.dp)
+                            .onFocusChanged { clearFocused = it.isFocused }
+                            .clip(CircleShape)
+                            .background(
+                                if (clearFocused) {
+                                    MaterialTheme.colorScheme.error.copy(alpha = 0.22f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                },
+                            )
+                            .then(
+                                if (clearFocused) {
+                                    Modifier.border(2.dp, Color.White, CircleShape)
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { pendingClearAll = true },
+                            )
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Clear All",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                } else {
+                    TextButton(
+                        onClick = { pendingClearAll = true },
+                        modifier = Modifier.padding(start = 8.dp),
+                    ) {
+                        Text(
+                            text = "Clear All",
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
                 }
             }
         }

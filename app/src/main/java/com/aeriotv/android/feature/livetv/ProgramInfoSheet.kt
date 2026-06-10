@@ -361,7 +361,7 @@ interface ProgramInfoEntryPoint {
 }
 
 private fun formatDuration(millis: Long): String {
-    if (millis <= 0L) return "—"
+    if (millis <= 0L) return "–"
     val totalMinutes = ((millis + 30_000L) / 60_000L).toInt()
     if (totalMinutes < 60) return "$totalMinutes min"
     val hours = totalMinutes / 60

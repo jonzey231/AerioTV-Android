@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +43,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -53,7 +57,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODProviderInfo
+import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
+import com.aeriotv.android.ui.tv.tvFocusScale
+import kotlinx.coroutines.delay
 
 /**
  * Movie detail screen. Mirrors iOS VODDetailView (Aerio/Features/VOD/VODDetailView.swift)
@@ -114,6 +121,7 @@ fun MovieDetailScreen(
         }
     }
     BackHandler(enabled = true) { onBack() }
+    val isTv = rememberLiveTvFormFactor().isTv
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (movie == null) {
@@ -139,6 +147,7 @@ fun MovieDetailScreen(
                         info = info,
                         tmdbPosterUrl = tmdbPosterUrl,
                         hasResume = hasResume,
+                        isTv = isTv,
                         onPlay = { onPlay(movie) },
                     )
                 }
@@ -146,6 +155,7 @@ fun MovieDetailScreen(
                     InfoSection(
                         movie = movie,
                         info = info,
+                        isTv = isTv,
                         onOpenUrl = { url ->
                             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -158,8 +168,12 @@ fun MovieDetailScreen(
 
         // Floating back button overlaid on the hero. Mirrors iOS's small
         // chevron pill drawn on top of the backdrop (the regular nav bar
-        // is hidden so the artwork bleeds to the top safe area).
-        FloatingBackButton(onClick = onBack)
+        // is hidden so the artwork bleeds to the top safe area). Hidden on
+        // Android TV (remote BACK pops the screen; same call as the
+        // playlist-detail top bar) so it can't trap D-pad focus invisibly.
+        if (!isTv) {
+            FloatingBackButton(onClick = onBack)
+        }
     }
 }
 
@@ -169,6 +183,7 @@ private fun HeroSection(
     info: DispatcharrVODProviderInfo?,
     tmdbPosterUrl: String?,
     hasResume: Boolean,
+    isTv: Boolean,
     onPlay: () -> Unit,
 ) {
     val heroUrl = info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl
@@ -179,10 +194,27 @@ private fun HeroSection(
         ?.takeIf { it.isNotBlank() && it != "0.0" }
     val durationSecs = info?.durationSecs?.takeIf { it > 0 } ?: movie.durationSecs?.takeIf { it > 0 }
 
+    // On TV land focus on Play the moment the screen opens; without this the
+    // screen had no focused control at all and the D-pad appeared dead.
+    val playFocus = remember { FocusRequester() }
+    if (isTv) {
+        LaunchedEffect(Unit) {
+            repeat(10) {
+                if (runCatching { playFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                delay(16L)
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 11f),
+            // 16:11 of the 960dp-wide TV canvas is 660dp, taller than the
+            // whole 540dp screen: the title block and Play CTA sat below the
+            // fold, leaving nothing but raw artwork visible. A fixed 300dp
+            // hero (~56% of the canvas) keeps them on screen. Phones keep
+            // the aspect-ratio hero (16:11 of 411dp is only ~282dp).
+            .then(if (isTv) Modifier.height(300.dp) else Modifier.aspectRatio(16f / 11f)),
     ) {
         if (!heroUrl.isNullOrBlank()) {
             AsyncImage(
@@ -214,7 +246,10 @@ private fun HeroSection(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(
+                    horizontal = if (isTv) 48.dp else 16.dp,
+                    vertical = 16.dp,
+                ),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -259,7 +294,11 @@ private fun HeroSection(
                     typeLabel = "MOVIE",
                 )
                 Spacer(Modifier.height(10.dp))
-                PlayCta(hasResume = hasResume, onClick = onPlay)
+                PlayCta(
+                    hasResume = hasResume,
+                    onClick = onPlay,
+                    modifier = Modifier.focusRequester(playFocus),
+                )
             }
         }
     }
@@ -330,11 +369,23 @@ private fun MetaStrip(
 
 /** Big rounded cyan Play / Resume button. */
 @Composable
-private fun PlayCta(hasResume: Boolean, onClick: () -> Unit) {
+private fun PlayCta(
+    hasResume: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier
+        modifier = modifier
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusScale(focused)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.primary)
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(50),
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -358,6 +409,7 @@ private fun PlayCta(hasResume: Boolean, onClick: () -> Unit) {
 private fun InfoSection(
     movie: DispatcharrVODMovie,
     info: DispatcharrVODProviderInfo?,
+    isTv: Boolean,
     onOpenUrl: (String) -> Unit,
 ) {
     val plot = info?.effectivePlot?.takeIf { it.isNotBlank() } ?: movie.plot?.takeIf { it.isNotBlank() }
@@ -373,7 +425,7 @@ private fun InfoSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 16.dp),
+            .padding(horizontal = if (isTv) 48.dp else 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (!plot.isNullOrBlank()) {
@@ -417,10 +469,18 @@ private fun PillButton(
     text: String,
     onClick: () -> Unit,
 ) {
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusScale(focused)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(50),
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,

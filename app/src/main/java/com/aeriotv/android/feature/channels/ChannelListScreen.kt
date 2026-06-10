@@ -854,7 +854,7 @@ private fun UpcomingProgrammeRow(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = programme.title.ifBlank { "—" },
+                    text = programme.title.ifBlank { "–" },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.Medium,

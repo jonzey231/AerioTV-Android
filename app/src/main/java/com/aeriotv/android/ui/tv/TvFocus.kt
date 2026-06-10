@@ -109,3 +109,43 @@ fun Modifier.dpadFocusEscape(): Modifier {
         }
     }
 }
+
+/**
+ * Deadband [androidx.compose.foundation.gestures.BringIntoViewSpec] for TV
+ * form screens whose text fields sit under the floating leanback IME.
+ *
+ * With the keyboard open, Compose Foundation's keep-cursor-visible logic
+ * pins the focused field's cursor rect at the IME's top edge. The required
+ * correction lands on a fractional pixel, the scrollable rounds it, and the
+ * 1px correction re-fires every frame in the opposite direction: the whole
+ * form visibly "jiggles" up and down (measured on the Streamer: the form
+ * column flips +/-1px continuously while the title and keyboard stay
+ * pixel-static). The GH #1 fix (TV-only SOFT_INPUT_ADJUST_PAN) removed the
+ * window-resize channel but not this scroll-container loop.
+ *
+ * The deadband swallows corrections under 2px, breaking the loop; real
+ * scrolls (row-to-row focus moves) are far larger. Provide it around the
+ * form's scroll container on TV:
+ *
+ * ```
+ * CompositionLocalProvider(LocalBringIntoViewSpec provides TvImeNoJitterBringIntoViewSpec) {
+ *     LazyColumn(...) { ... }
+ * }
+ * ```
+ */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+object TvImeNoJitterBringIntoViewSpec : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float {
+        // Already fully visible: no scroll.
+        if (offset >= 0f && offset + size <= containerSize) return 0f
+        // Minimal nudge (default behavior)...
+        val distance = if (offset < 0f) offset else offset + size - containerSize
+        // ...unless it is a sub-2px correction, which is the IME boundary
+        // oscillation, not a real scroll.
+        return if (kotlin.math.abs(distance) < 2f) 0f else distance
+    }
+}

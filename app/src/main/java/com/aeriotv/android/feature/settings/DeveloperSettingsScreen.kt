@@ -234,8 +234,8 @@ private fun LoggingSection(
     ) {
         SettingsToggleRow(
             title = "Debug Logging",
-            subtitle = if (enabled) "Active — writing to aerio_debug_logs.txt"
-            else "Off — no data is collected",
+            subtitle = if (enabled) "Active, writing to aerio_debug_logs.txt"
+            else "Off, no data is collected",
             leadingIcon = Icons.Filled.BugReport,
             checked = enabled,
             // Route through the confirm dialogs instead of flipping directly.
@@ -292,7 +292,7 @@ private fun WhatsCapturedSection() {
         CategoryRow(
             icon = Icons.Outlined.NetworkCheck,
             title = "Network",
-            detail = "All API requests — URL, method, status code, duration, payload size",
+            detail = "All API requests: URL, method, status code, duration, payload size",
         )
         DevRowDivider()
         CategoryRow(
@@ -328,7 +328,7 @@ private fun WhatsCapturedSection() {
         CategoryRow(
             icon = Icons.Outlined.Speed,
             title = "Performance",
-            detail = "Timed operations — parse time, load time, memory at session start",
+            detail = "Timed operations: parse time, load time, memory at session start",
         )
     }
 }

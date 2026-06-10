@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.border
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -538,7 +539,10 @@ private fun TvTopTabBar(
                 .clip(RoundedCornerShape(22.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
                 .padding(horizontal = 4.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            // 8dp leaves headroom for the focused pill's 1.04x paint-only
+            // grow (graphicsLayer does not relayout); at 3dp the widest pill
+            // visually collided with its neighbor.
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             tabs.forEach { tab ->
@@ -559,20 +563,22 @@ private fun TvTab(
     onFocused: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // SELECTED owns the solid fill; FOCUS is the white ring (the app-wide
+    // guide-pill convention). The old scheme gave focused-not-selected a
+    // solid fill brighter than the selected tab, so re-entering the bar lit
+    // two pills as "active" at once.
     val background by animateColorAsState(
         targetValue = when {
-            focused -> MaterialTheme.colorScheme.primary
-            // Selected-but-unfocused reads as a clearly filled pill (tvOS shows
-            // a bold filled selected tab), not a faint tint.
-            selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.32f)
+            selected -> MaterialTheme.colorScheme.primary
+            focused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
             else -> Color.Transparent
         },
         label = "tvTabBackground",
     )
     val foreground by animateColorAsState(
         targetValue = when {
-            focused -> MaterialTheme.colorScheme.onPrimary
-            selected -> MaterialTheme.colorScheme.primary
+            selected -> MaterialTheme.colorScheme.onPrimary
+            focused -> MaterialTheme.colorScheme.onSurface
             else -> MaterialTheme.colorScheme.onSurfaceVariant
         },
         label = "tvTabForeground",
@@ -583,9 +589,18 @@ private fun TvTab(
                 focused = it.isFocused
                 if (it.isFocused) onFocused()
             }
-            .tvFocusScale(focused)
+            // 1.04x (not the 1.08x default): the pills sit 8dp apart and the
+            // paint-only grow must stay inside that gap.
+            .tvFocusScale(focused, focusedScale = 1.04f)
             .clip(RoundedCornerShape(18.dp))
             .background(background)
+            // Transparent (not absent) border at rest keeps the measured pill
+            // size constant so nothing shifts when focus arrives.
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(18.dp),
+            )
             .focusable()
             .padding(horizontal = 13.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

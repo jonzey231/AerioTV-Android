@@ -78,7 +78,7 @@ import com.aeriotv.android.feature.settings.rememberIsTvDevice
  * Dispatcharr-auth-mode toggle controls which form variant renders for the
  * Dispatcharr type.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ConfigureSourceScreen(
     sourceType: SourceType,
@@ -153,6 +153,15 @@ fun ConfigureSourceScreen(
         )
 
         val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
+        // TV: deadband spec stops the form's +/-1px per-frame jiggle when a
+        // focused text field sits at the floating IME's top edge (see
+        // TvImeNoJitterBringIntoViewSpec). Same loop as Edit Playlist.
+        val bringIntoViewSpec =
+            if (rememberIsTvDevice()) com.aeriotv.android.ui.tv.TvImeNoJitterBringIntoViewSpec
+            else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -252,6 +261,7 @@ fun ConfigureSourceScreen(
             }
 
             Spacer(Modifier.height(24.dp))
+        }
         }
         }
     }

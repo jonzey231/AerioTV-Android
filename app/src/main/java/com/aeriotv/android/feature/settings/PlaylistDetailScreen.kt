@@ -3,6 +3,8 @@ package com.aeriotv.android.feature.settings
 import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,9 +33,14 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -110,21 +117,46 @@ fun PlaylistDetailScreen(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.TopCenter,
         ) {
+        val isTv = rememberIsTvDevice()
         LazyColumn(
             modifier = Modifier.adaptiveFormWidth(),
-            // 104dp bottom clears the MainScaffold NavigationBar so the
-            // Danger Zone (Delete) row at the end stays reachable.
+            // 104dp bottom clears the MainScaffold NavigationBar on phones;
+            // the TV nav lives at the top, so a slim overscan inset suffices.
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
                 top = 16.dp,
-                bottom = 104.dp,
+                bottom = if (isTv) 32.dp else 104.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
                 Section(header = "Connection Details", footer = null) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    // On TV the card is itself a (read-only) focus stop: with
+                    // only the Action rows focusable, D-pad UP from "Test
+                    // Connection" had nowhere to go, so the list stayed
+                    // scrolled with this card clipped under the title bar.
+                    var infoFocused by remember { mutableStateOf(false) }
+                    Column(
+                        modifier = Modifier
+                            .then(
+                                if (isTv) {
+                                    Modifier
+                                        .onFocusChanged { infoFocused = it.isFocused }
+                                        .background(
+                                            if (infoFocused) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                                            } else {
+                                                Color.Transparent
+                                            },
+                                        )
+                                        .focusable()
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
                         DetailRow("Type", playlist.sourceType)
                         DetailRow("Remote URL", playlist.urlString)
                         DetailRow(
@@ -267,10 +299,23 @@ private fun ActionRow(
     label: String,
     onClick: () -> Unit,
 ) {
+    // The whole row is the click/focus target. The old shape (label inside a
+    // TextButton) gave D-pad focus a tiny pill around the text only, which
+    // looked out of place next to the full-width rows around it.
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+            .onFocusChanged { focused = it.isFocused }
+            .background(
+                if (focused) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                } else {
+                    Color.Transparent
+                },
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -279,8 +324,11 @@ private fun ActionRow(
             tint = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.size(12.dp))
-        TextButton(onClick = onClick) {
-            Text(label, color = MaterialTheme.colorScheme.primary)
-        }
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
