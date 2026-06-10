@@ -39,6 +39,45 @@ data class TmdbDetails(
 )
 
 /**
+ * One credited person, structured (vs. the pre-joined display strings in
+ * [TmdbDetails]) so the detail screens can render headshots and deep-link
+ * into the person bio sheet. [role] is the character name for cast,
+ * "Director" / "Creator" for crew. [id] stays a String even though TMDB
+ * emits an Int, because every caller round-trips it straight back into a
+ * `/person/{id}` path.
+ */
+data class TmdbPerson(
+    val id: String,
+    val name: String,
+    val role: String?,
+    val profilePath: String?,
+)
+
+/**
+ * Structured credits for one title: top-billed [cast] (first 20 entries)
+ * plus [directors] (movie crew "Director" rows, or the top-level
+ * `created_by` array for tv, where the role reads "Creator" because TMDB
+ * tv shows have no per-series director).
+ */
+data class TmdbCredits(
+    val cast: List<TmdbPerson>,
+    val directors: List<TmdbPerson>,
+)
+
+/**
+ * `/person/{id}` profile payload for the bio sheet. [name] is the only
+ * field TMDB guarantees; the rest arrive blank-stripped to null.
+ */
+data class TmdbPersonBio(
+    val name: String,
+    val biography: String?,
+    val birthday: String?,
+    val deathday: String?,
+    val placeOfBirth: String?,
+    val profilePath: String?,
+)
+
+/**
  * Minimal TMDB v3 client, the Android port of iOS `TMDBService`
  * (Aerio Networking/VODService.swift). Used ONLY to (a) validate the user's
  * own free API key, (b) look up a poster image when the playlist provides
@@ -89,12 +128,21 @@ class TMDBService @Inject constructor() {
      *  request (offline, bad key, 404) stays retryable. */
     private val detailsCache = ConcurrentHashMap<String, TmdbDetails>()
 
+    /** "credits:movie|tv:<id>" -> parsed credits. Successes only, same
+     *  retryability rule as [detailsCache]. */
+    private val creditsCache = ConcurrentHashMap<String, TmdbCredits>()
+
+    /** "person:<id>" -> parsed bio. Successes only. */
+    private val personBioCache = ConcurrentHashMap<String, TmdbPersonBio>()
+
     /** Drop every cached lookup, including misses recorded under an old key.
      *  Called when the user saves a new key so prior 401-era state can't
      *  outlive the credential that produced it. */
     fun clearCache() {
         cache.clear()
         detailsCache.clear()
+        creditsCache.clear()
+        personBioCache.clear()
     }
 
     /** v4 read-access token = a JWT: starts with "eyJ" and has exactly 2 dots. */
@@ -163,6 +211,12 @@ class TMDBService @Inject constructor() {
 
     private fun imageUrl(path: String, size: String): String =
         "https://image.tmdb.org/t/p/$size$path"
+
+    /** Headshot URL for a person's `profile_path`, null/blank-safe (TMDB
+     *  omits the path for most minor cast). w185 is the grid-sized profile
+     *  rendition; the bio sheet can ask for a larger one. */
+    fun profileImageUrl(path: String?, size: String = "w185"): String? =
+        path?.takeIf { it.isNotBlank() }?.let { imageUrl(it, size) }
 
     /**
      * Poster image URL for a program/VOD title via `/search/multi`
@@ -236,55 +290,114 @@ class TMDBService @Inject constructor() {
     }
 
     /**
-     * Detail metadata when no tmdb_id is known: resolve an id via the typed
-     * `/search/movie` | `/search/tv` endpoint (which, unlike `/search/multi`,
-     * accepts a year filter: `year=` for movies, `first_air_date_year=` for
-     * tv), then fetch details by id. The query gets the same sanitize rules
-     * as [posterUrlForTitle] -- trailing "(YYYY)" stripped into the year
-     * param, leading-punctuation variant retried, and a final attempt
-     * WITHOUT the year constraint in case the playlist's year disagrees with
-     * TMDB's. The resolved id is cached in [cache] under a "details-id:"
-     * prefix keyed by the ORIGINAL trim+lowercase title ("" = confirmed
-     * miss); failed requests are never cached.
+     * Detail metadata when no tmdb_id is known: resolve an id via
+     * [resolveIdForTitle], then fetch details by id.
      */
     suspend fun detailsForTitle(title: String, isMovie: Boolean, rawKey: String): TmdbDetails? {
         val key = rawKey.trim()
+        if (key.isEmpty()) return null
+        val id = resolveIdForTitle(title, isMovie, key) ?: return null
+        return detailsForId(id, isMovie, key)
+    }
+
+    /**
+     * Structured cast + directors by exact TMDB id. Same
+     * `append_to_response=credits` endpoint as [detailsForId], but parsed
+     * into [TmdbPerson] rows (instead of pre-joined display strings) so the
+     * detail screens can show headshots and open the person bio sheet.
+     * Cached per id; only a parsed 200 is cached.
+     */
+    suspend fun creditsForId(tmdbId: String, isMovie: Boolean, rawKey: String): TmdbCredits? {
+        val key = rawKey.trim()
+        val id = tmdbId.trim()
+        if (key.isEmpty() || id.isEmpty()) return null
+        val kind = if (isMovie) "movie" else "tv"
+        val cacheKey = "credits:$kind:$id"
+        creditsCache[cacheKey]?.let { return it }
+        val body = getJsonOrNull("/$kind/$id", "append_to_response=credits", key)
+        val credits = body?.let { parseCredits(it, isMovie) }
+        if (credits != null) creditsCache[cacheKey] = credits
+        Log.d(TAG, "credits $id ($kind) -> ${if (credits != null) "ok" else "no match"}")
+        return credits
+    }
+
+    /**
+     * Structured credits when no tmdb_id is known: same title-to-id
+     * resolution as [detailsForTitle] (shared via [resolveIdForTitle], so
+     * the search round-trip happens at most once per title per session
+     * regardless of which lookup fired first), then [creditsForId].
+     */
+    suspend fun creditsForTitle(title: String, isMovie: Boolean, rawKey: String): TmdbCredits? {
+        val key = rawKey.trim()
+        if (key.isEmpty()) return null
+        val id = resolveIdForTitle(title, isMovie, key) ?: return null
+        return creditsForId(id, isMovie, key)
+    }
+
+    /**
+     * `/person/{id}` profile for the bio sheet: biography text, birth and
+     * death dates, birthplace, headshot path. Cached per id, successes only.
+     */
+    suspend fun personBio(personId: String, rawKey: String): TmdbPersonBio? {
+        val key = rawKey.trim()
+        val id = personId.trim()
+        if (key.isEmpty() || id.isEmpty()) return null
+        val cacheKey = "person:$id"
+        personBioCache[cacheKey]?.let { return it }
+        val body = getJsonOrNull("/person/$id", "", key)
+        val bio = body?.let { parsePersonBio(it) }
+        if (bio != null) personBioCache[cacheKey] = bio
+        Log.d(TAG, "person $id -> ${if (bio != null) "ok" else "no match"}")
+        return bio
+    }
+
+    /**
+     * Resolve a display title to a TMDB id via the typed `/search/movie` |
+     * `/search/tv` endpoint (which, unlike `/search/multi`, accepts a year
+     * filter: `year=` for movies, `first_air_date_year=` for tv). The query
+     * gets the same sanitize rules as [posterUrlForTitle] -- trailing
+     * "(YYYY)" stripped into the year param, leading-punctuation variant
+     * retried, and a final attempt WITHOUT the year constraint in case the
+     * playlist's year disagrees with TMDB's. The resolved id is cached in
+     * [cache] under a "details-id:" prefix keyed by the ORIGINAL
+     * trim+lowercase title ("" = confirmed miss); failed requests are never
+     * cached. Shared by [detailsForTitle] and [creditsForTitle].
+     */
+    private suspend fun resolveIdForTitle(title: String, isMovie: Boolean, key: String): String? {
         val kind = if (isMovie) "movie" else "tv"
         val normalizedTitle = title.trim().lowercase()
-        if (key.isEmpty() || normalizedTitle.isEmpty()) return null
+        if (normalizedTitle.isEmpty()) return null
         val cacheKey = "details-id:$kind:$normalizedTitle"
-        val id = when (val cached = cache[cacheKey]) {
-            null -> {
-                val (cleaned, year) = splitTitleYear(title)
-                val yearParam = year?.let {
-                    if (isMovie) "&year=$it" else "&first_air_date_year=$it"
-                } ?: ""
-                // (query text, extra params) attempts in order; the no-year
-                // retry only exists when a year was actually extracted.
-                val attempts = buildList {
-                    searchAttempts(cleaned).forEach { add(it to yearParam) }
-                    if (year != null) add(cleaned to "")
-                }
-                var sawResponse = false
-                var found: String? = null
-                for ((attempt, extra) in attempts) {
-                    val body = getJsonOrNull(
-                        "/search/$kind",
-                        "query=${attempt.encodeURLParameter()}&include_adult=false$extra",
-                        key,
-                    ) ?: continue
-                    sawResponse = true
-                    found = parseFirstSearchId(body)
-                    if (found != null) break
-                }
-                if (sawResponse) cache[cacheKey] = found ?: ""
-                Log.d(TAG, "details search '$title' -> ${found ?: "no match"}")
-                found ?: return null
-            }
+        when (val cached = cache[cacheKey]) {
+            null -> Unit
             "" -> return null
-            else -> cached
+            else -> return cached
         }
-        return detailsForId(id, isMovie, key)
+        val (cleaned, year) = splitTitleYear(title)
+        val yearParam = year?.let {
+            if (isMovie) "&year=$it" else "&first_air_date_year=$it"
+        } ?: ""
+        // (query text, extra params) attempts in order; the no-year
+        // retry only exists when a year was actually extracted.
+        val attempts = buildList {
+            searchAttempts(cleaned).forEach { add(it to yearParam) }
+            if (year != null) add(cleaned to "")
+        }
+        var sawResponse = false
+        var found: String? = null
+        for ((attempt, extra) in attempts) {
+            val body = getJsonOrNull(
+                "/search/$kind",
+                "query=${attempt.encodeURLParameter()}&include_adult=false$extra",
+                key,
+            ) ?: continue
+            sawResponse = true
+            found = parseFirstSearchId(body)
+            if (found != null) break
+        }
+        if (sawResponse) cache[cacheKey] = found ?: ""
+        Log.d(TAG, "details search '$title' -> ${found ?: "no match"}")
+        return found
     }
 
     /** First hit's id from a typed `/search/movie` | `/search/tv` response.
@@ -326,6 +439,62 @@ class TMDBService @Inject constructor() {
                 ?.takeIf { it > 0.0 }
                 ?.let { String.format("%.1f", it) },
             posterPath = field("poster_path"),
+        )
+    }.getOrNull()
+
+    /** [TmdbPerson] from one cast / crew / created_by entry, or null when
+     *  the name or id is missing (a row we can neither render nor deep-link).
+     *  The id arrives as an Int on the wire; contentOrNull tolerates either
+     *  Int or String. */
+    private fun parsePerson(element: kotlinx.serialization.json.JsonElement, role: String?): TmdbPerson? {
+        val obj = element.jsonObject
+        val name = obj["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        return TmdbPerson(
+            id = id,
+            name = name,
+            role = role,
+            profilePath = obj["profile_path"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    private fun parseCredits(body: String, isMovie: Boolean): TmdbCredits? = runCatching {
+        val obj = json.parseToJsonElement(body).jsonObject
+        val credits = obj["credits"]?.jsonObject
+        val cast = credits?.get("cast")?.jsonArray
+            ?.mapNotNull { entry ->
+                parsePerson(
+                    entry,
+                    entry.jsonObject["character"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                )
+            }
+            ?.take(20)
+            ?: emptyList()
+        // Movies credit a Director in the crew; tv has no equivalent job, so
+        // the top-level `created_by` array stands in (role reads "Creator").
+        val directors = if (isMovie) {
+            credits?.get("crew")?.jsonArray
+                ?.filter { it.jsonObject["job"]?.jsonPrimitive?.contentOrNull == "Director" }
+                ?.mapNotNull { parsePerson(it, "Director") }
+                ?: emptyList()
+        } else {
+            obj["created_by"]?.jsonArray?.mapNotNull { parsePerson(it, "Creator") } ?: emptyList()
+        }
+        TmdbCredits(cast = cast, directors = directors)
+    }.getOrNull()
+
+    private fun parsePersonBio(body: String): TmdbPersonBio? = runCatching {
+        val obj = json.parseToJsonElement(body).jsonObject
+        fun field(name: String): String? =
+            obj[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        val name = field("name") ?: return@runCatching null
+        TmdbPersonBio(
+            name = name,
+            biography = field("biography"),
+            birthday = field("birthday"),
+            deathday = field("deathday"),
+            placeOfBirth = field("place_of_birth"),
+            profilePath = field("profile_path"),
         )
     }.getOrNull()
 

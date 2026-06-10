@@ -1,7 +1,14 @@
 package com.aeriotv.android.feature.ondemand
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -24,9 +31,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -51,11 +60,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -81,10 +94,15 @@ import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
+import com.aeriotv.android.feature.main.LocalTvChromeCollapsed
+import com.aeriotv.android.feature.main.collapsibleChrome
+import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
+import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.scale.WithDisplayScale
 import com.aeriotv.android.ui.tv.tvFocusScale
+import kotlinx.coroutines.launch
 
 /**
  * On Demand tab shell. Mirrors iOS OnDemandView (Aerio/Features/VOD/OnDemandView.swift):
@@ -112,6 +130,34 @@ fun OnDemandTabContent(
     val scale by settingsVm.displayScaleMovies.collectAsStateWithLifecycle(initialValue = 1.0f)
 
     val tabIsTv = rememberLiveTvFormFactor().isTv
+    // Grid scroll state is hoisted out of the sub-screens so (a) BOTH the
+    // chrome-collapse logic here and the per-grid BringIntoViewSpec / BACK
+    // handling can observe it, and (b) the Movies scroll position survives a
+    // Movies -> Series -> Movies pill round-trip. rememberLazyGridState is
+    // saveable, so the detail-return scroll restore keeps working unchanged.
+    val moviesGridState = rememberLazyGridState()
+    val seriesGridState = rememberLazyGridState()
+    val activeGridState = when (section) {
+        OnDemandSection.Movies -> moviesGridState
+        OnDemandSection.Series -> seriesGridState
+    }
+    // TV chrome collapse: once the user scrolls past the first poster row,
+    // report "collapsed" to the shell (top tab bar) and shrink the segment
+    // pills below, so the reclaimed height shows more posters. derivedStateOf
+    // keeps this from recomposing on every scroll frame -- it only flips at
+    // the row-0 boundary.
+    val chromeCollapsed = LocalTvChromeCollapsed.current
+    val scrolled by remember(activeGridState) {
+        derivedStateOf { activeGridState.firstVisibleItemIndex > 0 }
+    }
+    if (tabIsTv && chromeCollapsed != null) {
+        LaunchedEffect(scrolled) { chromeCollapsed.value = scrolled }
+        // Leaving the tab (or losing the TV shell) must never strand the
+        // top bar collapsed for the next tab.
+        DisposableEffect(Unit) {
+            onDispose { chromeCollapsed.value = false }
+        }
+    }
     WithDisplayScale(scale = scale) {
     Column(modifier = modifier.fillMaxSize()) {
         // Phone: centered title bar matching the other tabs. TV: no title --
@@ -134,20 +180,41 @@ fun OnDemandTabContent(
             )
         }
 
-        SegmentPills(
-            current = section,
-            onSelect = { section = it },
+        // Same collapse treatment as the shell's top tab bar: shrink, never
+        // unmount (the pills hold D-pad focus targets), and focus arriving on
+        // a pill expands the row back even while scrolled.
+        var pillsHaveFocus by remember { mutableStateOf(false) }
+        val pillsFraction by animateFloatAsState(
+            targetValue = if (tabIsTv && scrolled && !pillsHaveFocus) 0f else 1f,
+            animationSpec = tween(durationMillis = 250),
+            label = "vodPillsCollapse",
         )
+        Box(
+            modifier = if (tabIsTv) {
+                Modifier
+                    .onFocusChanged { pillsHaveFocus = it.hasFocus }
+                    .collapsibleChrome(pillsFraction)
+            } else {
+                Modifier
+            },
+        ) {
+            SegmentPills(
+                current = section,
+                onSelect = { section = it },
+            )
+        }
 
         when (section) {
             OnDemandSection.Movies -> MoviesSubScreen(
                 viewModel = viewModel,
                 onMovieClick = onMovieClick,
+                gridState = moviesGridState,
             )
             OnDemandSection.Series -> SeriesSubScreen(
                 viewModel = viewModel,
                 onSeriesClick = onSeriesClick,
                 onEpisodeResume = onEpisodeResume,
+                gridState = seriesGridState,
             )
         }
     }
@@ -240,10 +307,12 @@ private fun SegmentPill(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MoviesSubScreen(
     viewModel: OnDemandViewModel,
     onMovieClick: (DispatcharrVODMovie) -> Unit,
+    gridState: LazyGridState,
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -256,15 +325,54 @@ private fun MoviesSubScreen(
     // "Uncategorized" bucket so the user can hide that too.
     val hiddenMovieGroups by settingsVm.hiddenMovieGroups
         .collectAsStateWithLifecycle(initialValue = emptySet())
-    val allMovieGroups = remember(state.movies) {
-        state.movies.asSequence()
-            .map { it.categoryName ?: UNCATEGORIZED }
-            .distinct().toList().sorted()
+    val allMovieGroups = remember(state.movies, state.movieGroupNames) {
+        // Server-authoritative names from /api/vod/categories/ cover the FULL
+        // library, including groups whose items haven't paged in yet; deriving
+        // from loaded items stays as the fallback for sources without the
+        // endpoint (XC). The Uncategorized bucket is offered only when some
+        // LOADED item actually lacks a group -- the endpoint never lists it.
+        val base = state.movieGroupNames.ifEmpty {
+            state.movies.asSequence()
+                .mapNotNull { it.categoryName }
+                .distinct().toList().sorted()
+        }
+        if (state.movies.any { it.categoryName == null }) {
+            (base + UNCATEGORIZED).distinct()
+        } else {
+            base
+        }
     }
     var showManageGroups by rememberSaveable { mutableStateOf(false) }
     // BACK from MovieDetail must land D-pad focus back on the poster / rail
     // card that opened it, not the top nav pills. See VodReturnFocusState.
     val returnFocus = rememberVodReturnFocus(isTv)
+    // TV BACK ladder, copied from GuideScreen: scrolled into the grid -> one
+    // BACK returns to the top-left poster; already at the top -> this handler
+    // is DISABLED so BACK falls through to MainScaffold's tab -> Live TV
+    // handler. Also stands down while the mini-player is up so its own
+    // root-level BackHandler can dismiss it (Compose dispatches Back LIFO and
+    // this handler is registered after the overlay's).
+    val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
+    val miniState by miniPlayerVm.state.collectAsStateWithLifecycle()
+    val miniActive = miniState is MiniPlayerSession.State.Active
+    val atTop by remember(gridState) {
+        derivedStateOf {
+            gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+        }
+    }
+    val backScope = rememberCoroutineScope()
+    val firstPosterFocus = remember { FocusRequester() }
+    androidx.activity.compose.BackHandler(enabled = isTv && !miniActive && !atTop) {
+        backScope.launch {
+            gridState.animateScrollToItem(0)
+            // The index-0 poster can compose a frame or two after the scroll
+            // settles; retry briefly, then give up quietly (focus stays put).
+            repeat(10) {
+                if (runCatching { firstPosterFocus.requestFocus() }.isSuccess) return@launch
+                kotlinx.coroutines.delay(16L)
+            }
+        }
+    }
 
     if (state.unsupportedSource) {
         EmptyState(
@@ -380,12 +488,21 @@ private fun MoviesSubScreen(
             return@Column
         }
 
+        // TV: deadband spec kills the horizontal-move vertical jump (see
+        // VodGridBringIntoViewSpec). Phone keeps the inherited default.
+        val bringIntoViewSpec =
+            if (isTv) VodGridBringIntoViewSpec
+            else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        CompositionLocalProvider(
+            androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
+        ) {
         LazyVerticalGrid(
             // Larger posters + overscan-safe padding on the 10-foot TV; phone
             // keeps the compact grid whose 104dp bottom clears the bottom
             // NavigationBar (TV has top tabs, so it needs far less bottom inset).
             columns = GridCells.Adaptive(minSize = if (isTv) 128.dp else 120.dp),
             modifier = Modifier.fillMaxSize(),
+            state = gridState,
             contentPadding = PaddingValues(
                 start = if (isTv) 48.dp else 12.dp,
                 end = if (isTv) 48.dp else 12.dp,
@@ -409,12 +526,20 @@ private fun MoviesSubScreen(
                     movie = movie,
                     isTv = isTv,
                     focusRequester = returnFocus.requesterFor("movie:${movie.uuid}"),
+                    // Index 0 additionally carries the BACK-to-top requester;
+                    // a separate hook so it never disturbs VodReturnFocusState.
+                    modifier = if (isTv && index == 0) {
+                        Modifier.focusRequester(firstPosterFocus)
+                    } else {
+                        Modifier
+                    },
                     onClick = {
                         returnFocus.arm("movie:${movie.uuid}")
                         onMovieClick(movie)
                     },
                 )
             }
+        }
         }
     }
 
@@ -428,11 +553,13 @@ private fun MoviesSubScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SeriesSubScreen(
     viewModel: OnDemandViewModel,
     onSeriesClick: (DispatcharrVODSeries) -> Unit,
     onEpisodeResume: (String) -> Unit = {},
+    gridState: LazyGridState,
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -444,15 +571,44 @@ private fun SeriesSubScreen(
     // Series-side group hide filter, mirrors MoviesSubScreen above.
     val hiddenSeriesGroups by settingsVm.hiddenSeriesGroups
         .collectAsStateWithLifecycle(initialValue = emptySet())
-    val allSeriesGroups = remember(state.series) {
-        state.series.asSequence()
-            .map { it.categoryName ?: UNCATEGORIZED }
-            .distinct().toList().sorted()
+    val allSeriesGroups = remember(state.series, state.seriesGroupNames) {
+        // Endpoint-driven names first, items-derived fallback, Uncategorized
+        // only when a loaded item lacks a group -- see allMovieGroups above.
+        val base = state.seriesGroupNames.ifEmpty {
+            state.series.asSequence()
+                .mapNotNull { it.categoryName }
+                .distinct().toList().sorted()
+        }
+        if (state.series.any { it.categoryName == null }) {
+            (base + UNCATEGORIZED).distinct()
+        } else {
+            base
+        }
     }
     var showManageGroups by rememberSaveable { mutableStateOf(false) }
     // BACK from SeriesDetail / the episode player must land D-pad focus back
     // on the poster / rail card that opened it. See VodReturnFocusState.
     val returnFocus = rememberVodReturnFocus(isTv)
+    // TV BACK ladder, same wiring as MoviesSubScreen above.
+    val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
+    val miniState by miniPlayerVm.state.collectAsStateWithLifecycle()
+    val miniActive = miniState is MiniPlayerSession.State.Active
+    val atTop by remember(gridState) {
+        derivedStateOf {
+            gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+        }
+    }
+    val backScope = rememberCoroutineScope()
+    val firstPosterFocus = remember { FocusRequester() }
+    androidx.activity.compose.BackHandler(enabled = isTv && !miniActive && !atTop) {
+        backScope.launch {
+            gridState.animateScrollToItem(0)
+            repeat(10) {
+                if (runCatching { firstPosterFocus.requestFocus() }.isSuccess) return@launch
+                kotlinx.coroutines.delay(16L)
+            }
+        }
+    }
     // Continue Watching for series = unfinished episode rows. Includes the next
     // episode the up-next queue seeded (positionMs 0) after finishing one, so a
     // binge keeps surfacing the next episode (iOS Issue #19).
@@ -549,10 +705,18 @@ private fun SeriesSubScreen(
             return@Column
         }
 
+        // TV: same deadband spec as the Movies grid (VodGridBringIntoViewSpec).
+        val bringIntoViewSpec =
+            if (isTv) VodGridBringIntoViewSpec
+            else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        CompositionLocalProvider(
+            androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
+        ) {
         LazyVerticalGrid(
             // Series tab matches the Movies tab's TV / phone grid metrics.
             columns = GridCells.Adaptive(minSize = if (isTv) 128.dp else 120.dp),
             modifier = Modifier.fillMaxSize(),
+            state = gridState,
             contentPadding = PaddingValues(
                 start = if (isTv) 48.dp else 12.dp,
                 end = if (isTv) 48.dp else 12.dp,
@@ -573,12 +737,20 @@ private fun SeriesSubScreen(
                     series = series,
                     isTv = isTv,
                     focusRequester = returnFocus.requesterFor("series:${series.id}"),
+                    // Index 0 additionally carries the BACK-to-top requester;
+                    // a separate hook so it never disturbs VodReturnFocusState.
+                    modifier = if (isTv && index == 0) {
+                        Modifier.focusRequester(firstPosterFocus)
+                    } else {
+                        Modifier
+                    },
                     onClick = {
                         returnFocus.arm("series:${series.id}")
                         onSeriesClick(series)
                     },
                 )
             }
+        }
         }
     }
 
@@ -692,6 +864,42 @@ private fun TvHeaderIconButton(
 private const val UNCATEGORIZED = "Uncategorized"
 
 /**
+ * Deadband [androidx.compose.foundation.gestures.BringIntoViewSpec] for the
+ * TV poster grids, modeled on TvImeNoJitterBringIntoViewSpec but tuned for
+ * poster cards instead of 1-2px IME cursor corrections.
+ *
+ * A D-pad LEFT/RIGHT move within a row must never produce a vertical scroll:
+ * the focused poster's 2-line title strip + meta line make neighboring cards
+ * report fractionally different heights to the focus system, so the default
+ * minimal-nudge spec issued a small "correction" on every horizontal hop and
+ * the whole grid visibly jumped up/down while the user was only moving
+ * sideways. Only a genuine row change (the next card is truly off the
+ * viewport edge) needs a scroll, and that correction is always at least a
+ * full card height, far above the 24f deadband. Suppressing anything smaller
+ * keeps horizontal traversal rock-steady without touching real scrolls.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private object VodGridBringIntoViewSpec : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float {
+        // Already fully visible: no scroll.
+        if (offset >= 0f && offset + size <= containerSize) return 0f
+        // Item taller than the viewport (a poster card at an extreme zoom /
+        // display-scale combination): if ANY part is visible, stay put --
+        // slamming its edge flush would fling the grid on a horizontal move.
+        if (size > containerSize && offset < containerSize && offset + size > 0f) return 0f
+        // Minimal nudge (default behavior)...
+        val distance = if (offset < 0f) offset else offset + size - containerSize
+        // ...unless it is below the deadband: that is the title-strip
+        // oscillation from a within-row horizontal move, not a row change.
+        return if (kotlin.math.abs(distance) < 24f) 0f else distance
+    }
+}
+
+/**
  * BACK-from-detail D-pad focus restoration for the VOD grids/rails (TV only;
  * every member no-ops off TV so phone behavior is untouched).
  *
@@ -759,11 +967,13 @@ private fun SeriesPoster(
     isTv: Boolean = false,
     /** Attached only on the item BACK should refocus (see VodReturnFocusState). */
     focusRequester: FocusRequester? = null,
+    /** Extra hook for the grid's index-0 BACK-to-top requester. */
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .then(
                 if (focusRequester != null) Modifier.focusRequester(focusRequester)
@@ -1186,11 +1396,13 @@ private fun MoviePoster(
     isTv: Boolean = false,
     /** Attached only on the item BACK should refocus (see VodReturnFocusState). */
     focusRequester: FocusRequester? = null,
+    /** Extra hook for the grid's index-0 BACK-to-top requester. */
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .then(
                 if (focusRequester != null) Modifier.focusRequester(focusRequester)
@@ -1377,13 +1589,34 @@ private fun VodSearchField(
         }
         return
     }
+    // The text editor consumes D-pad verticals as single-line cursor moves
+    // (no-ops) even after the IME closes, which strands focus in the field:
+    // the user can type but never reach the results below or the pills
+    // above. Route verticals to focus traversal before the editor sees them.
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
-            .focusRequester(focusRequester),
+            .focusRequester(focusRequester)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    return@onPreviewKeyEvent false
+                }
+                when (event.key) {
+                    Key.DirectionDown -> {
+                        focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
+                        true
+                    }
+                    Key.DirectionUp -> {
+                        focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
+                        true
+                    }
+                    else -> false
+                }
+            },
         singleLine = true,
         placeholder = { Text(placeholder) },
         leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },

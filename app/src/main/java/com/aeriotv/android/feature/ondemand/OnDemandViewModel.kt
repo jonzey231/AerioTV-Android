@@ -13,12 +13,16 @@ import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODProviderInfo
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.core.network.TMDBService
+import com.aeriotv.android.core.network.TmdbCredits
 import com.aeriotv.android.core.network.TmdbDetails
+import com.aeriotv.android.core.network.TmdbPersonBio
 import com.aeriotv.android.core.network.XtreamCodesApi
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -98,6 +102,14 @@ class OnDemandViewModel @Inject constructor(
         val seriesProviderInfo: Map<Int, DispatcharrVODProviderInfo> = emptyMap(),
         val movieProviderInfoLoading: Set<Int> = emptySet(),
         val seriesProviderInfoLoading: Set<Int> = emptySet(),
+        // Server-authoritative VOD group names from /api/vod/categories/
+        // (Dispatcharr only; enabled on at least one M3U account, name-sorted,
+        // distinct). ManageGroupsSheet prefers these over the items-derived
+        // list so groups whose items haven't paged in yet are still offered;
+        // empty for sources without the endpoint (XC keeps deriving names
+        // from the items themselves).
+        val movieGroupNames: List<String> = emptyList(),
+        val seriesGroupNames: List<String> = emptyList(),
     ) {
         // While searching, render the server-side results (full library). While
         // browsing, render the progressively-paginated list. The search request
@@ -152,6 +164,12 @@ class OnDemandViewModel @Inject constructor(
         seriesCategoryNames = emptyMap()
         xtreamItemsLoaded = false
         xtreamPlaylist = null
+        dispatcharrCategoriesFetch?.cancel()
+        dispatcharrCategoriesFetch = null
+        dispatcharrMovieCategoryNames = emptyMap()
+        dispatcharrSeriesCategoryNames = emptyMap()
+        dispatcharrMovieFallbackGroup = null
+        dispatcharrSeriesFallbackGroup = null
         _state.value = UiState()
     }
 
@@ -186,6 +204,9 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isSearching = true) }
+            // Search results need the same group stamp as the browse list so
+            // the Manage Groups filter applies identically to both.
+            ensureDispatcharrCategories(playlist)
             val base = playlist.urlString.trimEnd('/')
             val url = "$base/api/vod/movies/?search=" +
                     java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
@@ -196,7 +217,7 @@ class OnDemandViewModel @Inject constructor(
             }.getOrNull()
             // Discard a stale response if the user kept typing past this query.
             if (_state.value.searchQuery.trim() != q) return@launch
-            _state.update { it.copy(searchResults = page?.results ?: emptyList(), isSearching = false) }
+            _state.update { it.copy(searchResults = page?.results?.map(::stampMovieGroup) ?: emptyList(), isSearching = false) }
         }
     }
 
@@ -225,6 +246,8 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isSearchingSeries = true) }
+            // Same group stamp as the browse list; see setSearchQuery.
+            ensureDispatcharrCategories(playlist)
             val base = playlist.urlString.trimEnd('/')
             val url = "$base/api/vod/series/?search=" +
                     java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
@@ -234,7 +257,7 @@ class OnDemandViewModel @Inject constructor(
                 }
             }.getOrNull()
             if (_state.value.seriesSearchQuery.trim() != q) return@launch
-            _state.update { it.copy(seriesSearchResults = page?.results ?: emptyList(), isSearchingSeries = false) }
+            _state.update { it.copy(seriesSearchResults = page?.results?.map(::stampSeriesGroup) ?: emptyList(), isSearchingSeries = false) }
         }
     }
 
@@ -257,6 +280,9 @@ class OnDemandViewModel @Inject constructor(
                 _state.update { it.copy(isLoadingMore = false) }
                 return@launch
             }
+            // The cursor only ever exists for Dispatcharr sources; reuse this
+            // cycle's category maps (no refetch) before stamping the page.
+            ensureDispatcharrCategories(playlist)
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getVODMoviesPage(cursor, key)
@@ -266,7 +292,7 @@ class OnDemandViewModel @Inject constructor(
                     _state.update { s ->
                         val merged = s.movies.toMutableList()
                         val seen = merged.mapTo(HashSet()) { it.uuid }
-                        p.results.forEach { m -> if (m.uuid !in seen) { merged += m; seen += m.uuid } }
+                        p.results.forEach { m -> if (m.uuid !in seen) { merged += stampMovieGroup(m); seen += m.uuid } }
                         s.copy(movies = merged, totalCount = p.count, moviesNextCursor = p.next, isLoadingMore = false)
                     }
                 },
@@ -290,6 +316,8 @@ class OnDemandViewModel @Inject constructor(
                 _state.update { it.copy(isLoadingMoreSeries = false) }
                 return@launch
             }
+            // See loadMoreMovies: stamp the appended page from the cached maps.
+            ensureDispatcharrCategories(playlist)
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getVODSeriesPage(cursor, key)
@@ -299,7 +327,7 @@ class OnDemandViewModel @Inject constructor(
                     _state.update { s ->
                         val merged = s.series.toMutableList()
                         val seen = merged.mapTo(HashSet()) { it.id }
-                        p.results.forEach { x -> if (x.id !in seen) { merged += x; seen += x.id } }
+                        p.results.forEach { x -> if (x.id !in seen) { merged += stampSeriesGroup(x); seen += x.id } }
                         s.copy(series = merged, seriesTotalCount = p.count, seriesNextCursor = p.next, isLoadingMoreSeries = false)
                     }
                 },
@@ -345,6 +373,10 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isLoading = true, error = null, unsupportedSource = false) }
+            // New refresh cycle = new category snapshot (server-side group
+            // edits become visible without an app restart). Series refresh,
+            // pagination, and search all reuse this fetch's maps.
+            ensureDispatcharrCategories(playlist, invalidate = true)
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getVODMoviesFirstPage(playlist.urlString, key)
@@ -354,7 +386,7 @@ class OnDemandViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            movies = page.results,
+                            movies = page.results.map(::stampMovieGroup),
                             totalCount = page.count,
                             moviesNextCursor = page.next,
                             error = null,
@@ -383,7 +415,7 @@ class OnDemandViewModel @Inject constructor(
                                 val seen = merged.mapTo(HashSet()) { it.uuid }
                                 p.results.forEach { m ->
                                     if (m.uuid !in seen) {
-                                        merged += m
+                                        merged += stampMovieGroup(m)
                                         seen += m.uuid
                                     }
                                 }
@@ -435,6 +467,9 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isLoadingSeries = true, seriesError = null) }
+            // Piggybacks on refresh()'s category fetch when both run in the
+            // same cycle (the usual case); only starts one if none exists.
+            ensureDispatcharrCategories(playlist)
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getVODSeriesFirstPage(playlist.urlString, key)
@@ -444,7 +479,7 @@ class OnDemandViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             isLoadingSeries = false,
-                            series = page.results,
+                            series = page.results.map(::stampSeriesGroup),
                             seriesTotalCount = page.count,
                             seriesNextCursor = page.next,
                             seriesError = null,
@@ -469,7 +504,7 @@ class OnDemandViewModel @Inject constructor(
                                 val seen = merged.mapTo(HashSet()) { it.id }
                                 p.results.forEach { s ->
                                     if (s.id !in seen) {
-                                        merged += s
+                                        merged += stampSeriesGroup(s)
                                         seen += s.id
                                     }
                                 }
@@ -490,14 +525,97 @@ class OnDemandViewModel @Inject constructor(
         }
     }
 
+    // ──────────────────── Dispatcharr VOD categories ────────────────────
+    // /api/vod/movies|series/ rows hide their category inside
+    // custom_properties.category_id; /api/vod/categories/ is the id -> name
+    // join table. Fetched once per refresh cycle (the movies-side refresh()
+    // invalidates; series refresh / pagination / search await the same
+    // in-flight fetch), then every Dispatcharr row gets stamped with its
+    // group display name so the Manage Groups filter works exactly like it
+    // does for XC sources.
+
+    private var dispatcharrCategoriesFetch: Deferred<Unit>? = null
+    private var dispatcharrMovieCategoryNames: Map<String, String> = emptyMap()
+    private var dispatcharrSeriesCategoryNames: Map<String, String> = emptyMap()
+    // iOS v1.6.22 fallback: an item whose category_id is absent (or unknown)
+    // lands in the FIRST enabled category of its type rather than
+    // "Uncategorized". Null when the endpoint returned nothing, which keeps
+    // today's no-groups behavior.
+    private var dispatcharrMovieFallbackGroup: String? = null
+    private var dispatcharrSeriesFallbackGroup: String? = null
+
+    /**
+     * Await this cycle's categories fetch, starting one if none is in
+     * flight. `invalidate` forces a fresh fetch (a new refresh cycle should
+     * see server-side group edits); everyone else piggybacks on the current
+     * snapshot so pagination and search never refetch the endpoint. All
+     * callers run on the Main-dispatched viewModelScope, so the
+     * check-then-set on the var has no suspension point to race across.
+     */
+    private suspend fun ensureDispatcharrCategories(playlist: PlaylistEntity, invalidate: Boolean = false) {
+        if (playlist.apiKey.isNullOrBlank()) return
+        val fetch = dispatcharrCategoriesFetch
+            ?.takeIf { !invalidate }
+            ?: viewModelScope.async { fetchDispatcharrCategories(playlist) }
+                .also { dispatcharrCategoriesFetch = it }
+        fetch.await()
+    }
+
+    /**
+     * One GET of /api/vod/categories/. On failure the maps stay empty and
+     * every row stamps null (= "Uncategorized"), exactly the pre-categories
+     * behavior. Also publishes the Manage Groups dialog's name lists.
+     */
+    private suspend fun fetchDispatcharrCategories(playlist: PlaylistEntity) {
+        val categories = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getVODCategories(playlist.urlString, key)
+            }
+        }.onFailure { Log.w(TAG, "getVODCategories failed; proceeding without groups", it) }
+            .getOrDefault(emptyList())
+            .filter { it.enabledOnAnyAccount }
+        val movieCats = categories.filter { it.categoryType == "movie" }
+        val seriesCats = categories.filter { it.categoryType == "series" }
+        dispatcharrMovieCategoryNames = movieCats.associate { it.id.toString() to it.name }
+        dispatcharrSeriesCategoryNames = seriesCats.associate { it.id.toString() to it.name }
+        dispatcharrMovieFallbackGroup = movieCats.firstOrNull()?.name
+        dispatcharrSeriesFallbackGroup = seriesCats.firstOrNull()?.name
+        _state.update {
+            it.copy(
+                movieGroupNames = movieCats.map { c -> c.name }.distinct().sorted(),
+                seriesGroupNames = seriesCats.map { c -> c.name }.distinct().sorted(),
+            )
+        }
+    }
+
+    /** Stamp a Dispatcharr movie with its group display name. */
+    private fun stampMovieGroup(movie: DispatcharrVODMovie): DispatcharrVODMovie =
+        movie.copy(
+            categoryName = movie.vodCategoryId?.let { dispatcharrMovieCategoryNames[it] }
+                ?: dispatcharrMovieFallbackGroup,
+        )
+
+    /** Stamp a Dispatcharr series with its group display name. */
+    private fun stampSeriesGroup(series: DispatcharrVODSeries): DispatcharrVODSeries =
+        series.copy(
+            categoryName = series.vodCategoryId?.let { dispatcharrSeriesCategoryNames[it] }
+                ?: dispatcharrSeriesFallbackGroup,
+        )
+
+    // While a search is active the detail screens navigate by id/uuid from
+    // the search-results list, whose rows may never have paged into the
+    // browse list -- so both lookups must check both lists or a search hit
+    // opens to "not found".
     fun seriesById(id: Int): DispatcharrVODSeries? =
         _state.value.series.firstOrNull { it.id == id }
+            ?: _state.value.seriesSearchResults.firstOrNull { it.id == id }
 
     fun movieById(id: Int): DispatcharrVODMovie? =
         _state.value.movies.firstOrNull { it.id == id }
 
     fun movieByUuid(uuid: String): DispatcharrVODMovie? =
         _state.value.movies.firstOrNull { it.uuid == uuid }
+            ?: _state.value.searchResults.firstOrNull { it.uuid == uuid }
 
     /**
      * TMDB poster fallback (iOS VODDetailView.loadTMDBPosterIfNeeded parity).
@@ -533,6 +651,36 @@ class OnDemandViewModel @Inject constructor(
         if (title.isBlank()) return null
         return tmdbService.detailsForTitle(title, isMovie, key)
     }
+
+    /**
+     * Structured TMDB credits (cast with headshots + directors) for the
+     * detail screens. Same opt-in + key gate and id-then-title resolution
+     * order as [resolveTmdbDetails].
+     */
+    suspend fun resolveTmdbCredits(tmdbId: String?, title: String, isMovie: Boolean): TmdbCredits? {
+        if (!appPreferences.programPostersTmdbEnabled.first()) return null
+        val key = appPreferences.tmdbApiKey.first()
+        if (key.isBlank()) return null
+        tmdbId?.takeIf { it.isNotBlank() }?.let { id ->
+            tmdbService.creditsForId(id, isMovie, key)?.let { return it }
+        }
+        if (title.isBlank()) return null
+        return tmdbService.creditsForTitle(title, isMovie, key)
+    }
+
+    /** Person biography for the cast-member sheet. Same opt-in + key gate as
+     *  [resolveTmdbDetails]; the personId comes from [TmdbCredits] rows. */
+    suspend fun resolveTmdbPersonBio(personId: String): TmdbPersonBio? {
+        if (!appPreferences.programPostersTmdbEnabled.first()) return null
+        val key = appPreferences.tmdbApiKey.first()
+        if (key.isBlank()) return null
+        return tmdbService.personBio(personId, key)
+    }
+
+    /** Headshot URL pass-through so screens never need a TMDBService
+     *  reference. Pure string building, hence not gated on the pref. */
+    fun tmdbProfileImageUrl(path: String?, size: String = "w185"): String? =
+        tmdbService.profileImageUrl(path, size)
 
     /**
      * Lazy-fetch provider-info for a movie — backdrop, cast, director,

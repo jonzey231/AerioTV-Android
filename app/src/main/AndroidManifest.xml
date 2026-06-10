@@ -55,6 +55,17 @@
          install. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Detail screens offer "Play in YouTube" for trailers on TV. API 30+
+         package-visibility filtering hides other apps from resolveActivity
+         unless the intent shape is declared here; without it the YouTube
+         lookup always misses and the menu silently degrades to QR-only. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" android:host="www.youtube.com" />
+        </intent>
+    </queries>
+
     <application
         android:name=".AerioTVApplication"
         android:allowBackup="true"

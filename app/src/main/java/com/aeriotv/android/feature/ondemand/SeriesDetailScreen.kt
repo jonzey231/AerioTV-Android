@@ -24,13 +24,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.Button
@@ -47,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,14 +71,20 @@ import coil3.compose.AsyncImage
 import com.aeriotv.android.core.network.DispatcharrVODEpisode
 import com.aeriotv.android.core.network.DispatcharrVODProviderInfo
 import com.aeriotv.android.core.network.DispatcharrVODSeries
+import com.aeriotv.android.core.network.TmdbCredits
 import com.aeriotv.android.core.network.TmdbDetails
+import com.aeriotv.android.core.network.TmdbPerson
+import com.aeriotv.android.core.tv.TvActionMenuDialog
+import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
+import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.watchprogress.UpNextEntry
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -146,6 +156,31 @@ fun SeriesDetailScreen(
             )
         }
     }
+
+    // Structured TMDB credits for the Cast & Crew strip. Independent of the
+    // missingMeta gate above: servers only ever send comma-separated name
+    // strings, so headshots always need TMDB. The resolver returns null when
+    // the TMDB opt-in or key is absent and the strip simply does not render.
+    var tmdbCredits by remember(seriesId) { mutableStateOf<TmdbCredits?>(null) }
+    LaunchedEffect(seriesId, info, state.seriesProviderInfoLoading) {
+        val s = series ?: return@LaunchedEffect
+        val infoSettled = state.seriesProviderInfo.containsKey(seriesId) ||
+            !state.seriesProviderInfoLoading.contains(seriesId)
+        if (tmdbCredits == null && infoSettled) {
+            tmdbCredits = viewModel.resolveTmdbCredits(
+                tmdbId = info?.tmdbId ?: s.tmdbId,
+                title = s.displayName,
+                isMovie = false,
+            )
+        }
+    }
+    // Cast first, then creators, deduped by id so a creator who also acts
+    // doesn't show twice (the cast entry wins; it carries the character).
+    val castCrewPeople = remember(tmdbCredits) {
+        tmdbCredits?.let { c -> (c.cast + c.directors).distinctBy { it.id } }.orEmpty()
+    }
+    var bioPerson by remember { mutableStateOf<TmdbPerson?>(null) }
+
     BackHandler(enabled = true) { onBack() }
 
     val episodes = state.episodesBySeries[seriesId].orEmpty()
@@ -221,6 +256,41 @@ fun SeriesDetailScreen(
 
     // TV: external links surface as a QR dialog (no browser on Android TV).
     var qrLink by remember { mutableStateOf<TvQrLink?>(null) }
+    // TV trailer menu: when a YouTube app can take VIEW for a watch URL the
+    // menu offers to play right on this device, with QR as the second row.
+    // Boxes without YouTube keep the straight-to-QR path. Resolved once per
+    // entry (the installed-package set can't change under this screen) and
+    // it needs the https/www.youtube.com <queries> entry in the manifest or
+    // API 30+ package-visibility filtering blanks the lookup.
+    val youtubeResolvable = remember {
+        runCatching {
+            context.packageManager.resolveActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=x")),
+                0,
+            )
+        }.getOrNull() != null
+    }
+    var trailerMenuUrl by remember { mutableStateOf<String?>(null) }
+
+    // Scroll-to-top fix: the hero holds no focusables, so once the list
+    // scrolls it away the D-pad has nowhere to land above the topmost
+    // actionable item and the title / rating / poster become unreachable.
+    // Whichever focusable container is topmost THIS composition calls this
+    // on gaining focus to bring the hero back. Initial entry is safe: the
+    // firstActionFocus request below fires while firstVisibleItemIndex is
+    // still 0, so the guard skips it.
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val maybeScrollHeroIntoView: () -> Unit = {
+        // Offset counts too: the chip row's own bring-into-view can settle at
+        // item 0 with the hero title still clipped above the screen edge.
+        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
+            scope.launch { listState.animateScrollToItem(0) }
+        }
+    }
+    // Mirrors SeriesInfoSection's own chip-visibility logic; keep in sync.
+    val hasInfoChips = info?.effectiveTrailer?.let { youtubeUrl(it) } != null ||
+        !(info?.tmdbId ?: series?.tmdbId).isNullOrBlank()
 
     // On TV land focus on the first actionable control (Resume when the
     // series has one, otherwise the first episode row) once the episode list
@@ -256,6 +326,7 @@ fun SeriesDetailScreen(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
@@ -275,16 +346,26 @@ fun SeriesDetailScreen(
                         info = info,
                         tmdbDetails = tmdbDetails,
                         isTv = isTv,
+                        castPhotosVisible = castCrewPeople.isNotEmpty(),
+                        // The chip row, when present, is always the topmost
+                        // focusable on this screen.
+                        chipRowModifier = Modifier.onFocusChanged {
+                            if (it.hasFocus) maybeScrollHeroIntoView()
+                        },
                         onOpenUrl = { label, url ->
                             if (isTv) {
-                                qrLink = TvQrLink(
-                                    title = label,
-                                    caption = when (label) {
-                                        "Trailer" -> "Scan with your phone to watch the trailer on YouTube."
-                                        else -> "Scan with your phone to view this title on TMDB."
-                                    },
-                                    url = url,
-                                )
+                                if (label == "Trailer" && youtubeResolvable) {
+                                    trailerMenuUrl = url
+                                } else {
+                                    qrLink = TvQrLink(
+                                        title = label,
+                                        caption = when (label) {
+                                            "Trailer" -> "Scan with your phone to watch the trailer on YouTube."
+                                            else -> "Scan with your phone to view this title on TMDB."
+                                        },
+                                        url = url,
+                                    )
+                                }
                             } else {
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -294,6 +375,20 @@ fun SeriesDetailScreen(
                     )
                 }
 
+                if (castCrewPeople.isNotEmpty()) {
+                    item(key = "cast-crew") {
+                        CastCrewSection(
+                            people = castCrewPeople,
+                            isTv = isTv,
+                            profileUrl = viewModel::tmdbProfileImageUrl,
+                            onPersonClick = { bioPerson = it },
+                            modifier = Modifier.onFocusChanged {
+                                if (it.hasFocus && !hasInfoChips) maybeScrollHeroIntoView()
+                            },
+                        )
+                    }
+                }
+
                 continueWatchingEpisode?.let { (episode, progress) ->
                     item(key = "continue-watching") {
                         ContinueWatchingCard(
@@ -301,7 +396,13 @@ fun SeriesDetailScreen(
                             positionMs = progress.positionMs,
                             durationMs = progress.durationMs,
                             onResume = { playEpisode(episode) },
-                            modifier = Modifier.padding(horizontal = edgeInset),
+                            modifier = Modifier
+                                .padding(horizontal = edgeInset)
+                                .onFocusChanged {
+                                    if (it.hasFocus && !hasInfoChips && castCrewPeople.isEmpty()) {
+                                        maybeScrollHeroIntoView()
+                                    }
+                                },
                             resumeModifier = Modifier.focusRequester(firstActionFocus),
                         )
                         Spacer(Modifier.height(12.dp))
@@ -315,6 +416,13 @@ fun SeriesDetailScreen(
                             selected = selectedSeason,
                             onSelect = { selectedSeason = it },
                             edgeInset = edgeInset,
+                            modifier = Modifier.onFocusChanged {
+                                if (it.hasFocus && !hasInfoChips && castCrewPeople.isEmpty() &&
+                                    continueWatchingEpisode == null
+                                ) {
+                                    maybeScrollHeroIntoView()
+                                }
+                            },
                         )
                         Spacer(Modifier.height(8.dp))
                     }
@@ -360,6 +468,19 @@ fun SeriesDetailScreen(
                                     } else {
                                         Modifier
                                     },
+                                )
+                                .then(
+                                    // Topmost only when nothing focusable
+                                    // renders above the episode list.
+                                    if (index == 0 && !hasInfoChips && castCrewPeople.isEmpty() &&
+                                        continueWatchingEpisode == null && seasons.size <= 1
+                                    ) {
+                                        Modifier.onFocusChanged {
+                                            if (it.hasFocus) maybeScrollHeroIntoView()
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
                                 ),
                         )
                     }
@@ -379,6 +500,47 @@ fun SeriesDetailScreen(
                 caption = link.caption,
                 url = link.url,
                 onDismiss = { qrLink = null },
+            )
+        }
+
+        trailerMenuUrl?.let { url ->
+            // Guard never armed: this menu opens from a short press, and the
+            // rows' own OK latch already ignores the opening press's release.
+            TvActionMenuDialog(
+                title = "Trailer",
+                actions = listOf(
+                    TvMenuAction(
+                        label = "Play in YouTube",
+                        icon = Icons.Filled.PlayArrow,
+                        onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { context.startActivity(intent) }
+                        },
+                    ),
+                    TvMenuAction(
+                        label = "Show QR Code",
+                        icon = Icons.Filled.QrCode,
+                        onClick = {
+                            qrLink = TvQrLink(
+                                title = "Trailer",
+                                caption = "Scan with your phone to watch the trailer on YouTube.",
+                                url = url,
+                            )
+                        },
+                    ),
+                ),
+                guard = rememberTvMenuGuard(),
+                onDismiss = { trailerMenuUrl = null },
+            )
+        }
+
+        bioPerson?.let { person ->
+            PersonBioDialog(
+                person = person,
+                fetchBio = viewModel::resolveTmdbPersonBio,
+                profileUrl = viewModel::tmdbProfileImageUrl,
+                onDismiss = { bioPerson = null },
             )
         }
     }
@@ -524,6 +686,8 @@ private fun SeriesInfoSection(
     info: DispatcharrVODProviderInfo?,
     tmdbDetails: TmdbDetails?,
     isTv: Boolean,
+    castPhotosVisible: Boolean,
+    chipRowModifier: Modifier,
     onOpenUrl: (label: String, url: String) -> Unit,
 ) {
     // Server-provided values always win; TMDB backfills only the holes.
@@ -556,7 +720,10 @@ private fun SeriesInfoSection(
             )
         }
         if (trailerUrl != null || tmdbUrl != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = chipRowModifier,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 if (trailerUrl != null) {
                     PillButton(icon = Icons.Outlined.PlayCircle, text = "Trailer") {
                         onOpenUrl("Trailer", trailerUrl)
@@ -570,9 +737,120 @@ private fun SeriesInfoSection(
             }
         }
         if (!genre.isNullOrBlank()) MetaRow("Genre", genre)
-        if (!cast.isNullOrBlank()) MetaRow("Cast", cast)
-        if (!director.isNullOrBlank()) MetaRow("Director", director)
+        // The text rows duplicate the Cast & Crew photo strip when it
+        // renders; they stay as the fallback when TMDB enrichment is off
+        // or returned nothing for this title.
+        if (!cast.isNullOrBlank() && !castPhotosVisible) MetaRow("Cast", cast)
+        if (!director.isNullOrBlank() && !castPhotosVisible) MetaRow("Director", director)
         if (!country.isNullOrBlank()) MetaRow("Country", country)
+    }
+}
+
+/**
+ * Plex-style Cast & Crew strip: TMDB headshot, real name, character or crew
+ * role. Cast leads, creators follow (deduped upstream). Cards open
+ * [PersonBioDialog]; the 3dp primary focus ring matches the poster cards on
+ * the On Demand shelves so D-pad focus reads the same at 10 feet.
+ */
+@Composable
+private fun CastCrewSection(
+    people: List<TmdbPerson>,
+    isTv: Boolean,
+    profileUrl: (String?, String) -> String?,
+    onPersonClick: (TmdbPerson) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val edgeInset = if (isTv) 48.dp else 16.dp
+    Column(modifier = modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+        Text(
+            text = "Cast & Crew",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = edgeInset),
+        )
+        Spacer(Modifier.height(10.dp))
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = edgeInset),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(items = people, key = { it.id }) { person ->
+                PersonCard(
+                    person = person,
+                    isTv = isTv,
+                    photoUrl = profileUrl(person.profilePath, "w185"),
+                    onClick = { onPersonClick(person) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PersonCard(
+    person: TmdbPerson,
+    isTv: Boolean,
+    photoUrl: String?,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .width(if (isTv) 110.dp else 90.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusScale(focused)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                .then(
+                    if (focused) Modifier.border(
+                        3.dp,
+                        MaterialTheme.colorScheme.primary,
+                        RoundedCornerShape(10.dp),
+                    ) else Modifier,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!photoUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = photoUrl,
+                    contentDescription = person.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.Person,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = person.name,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        person.role?.takeIf { it.isNotBlank() }?.let { role ->
+            Text(
+                text = role,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -637,9 +915,10 @@ private fun SeasonPicker(
     selected: Int,
     onSelect: (Int) -> Unit,
     edgeInset: androidx.compose.ui.unit.Dp = 16.dp,
+    modifier: Modifier = Modifier,
 ) {
     LazyRow(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(horizontal = edgeInset),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

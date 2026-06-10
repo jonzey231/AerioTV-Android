@@ -702,6 +702,17 @@ class DispatcharrClient @Inject constructor() {
     }
 
     /**
+     * GET /api/vod/categories/ - every VOD category (movie + series) the
+     * server knows, as a plain JSON array (no pagination). The list payloads
+     * from /api/vod/movies|series/ carry an item's category ONLY inside
+     * `custom_properties.category_id`, so this endpoint is the id -> name
+     * join table for the On Demand group filter. A `category_type` query
+     * param exists server-side but one unfiltered fetch covers both tabs.
+     */
+    suspend fun getVODCategories(baseUrl: String, apiKey: String): List<DispatcharrVODCategory> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/vod/categories/", apiKey)
+
+    /**
      * GET /api/vod/movies/<id>/provider-info/ — rich-metadata fetch for a
      * single movie. Mirrors iOS DispatcharrAPI.getMovieProviderInfo
      * (StreamingAPIs.swift line 1702). Returns the cast / director / country /
@@ -1213,6 +1224,38 @@ data class DispatcharrVODProviderInfo(
     }
 }
 
+/**
+ * One row of a VOD category's `m3u_accounts` join table: which M3U account
+ * the category came from and whether the admin left it enabled there.
+ */
+@Serializable
+data class DispatcharrVODCategoryRelation(
+    val category: Int,
+    @SerialName("m3u_account")
+    val m3uAccount: Int,
+    val enabled: Boolean = true,
+)
+
+/**
+ * One row from `/api/vod/categories/`. `categoryType` is "movie" or
+ * "series"; per-account enablement rides in [m3uAccounts]. The On Demand
+ * group filter joins these against each item's
+ * `custom_properties.category_id`.
+ */
+@Serializable
+data class DispatcharrVODCategory(
+    val id: Int,
+    val name: String,
+    @SerialName("category_type")
+    val categoryType: String = "movie",
+    @SerialName("m3u_accounts")
+    val m3uAccounts: List<DispatcharrVODCategoryRelation> = emptyList(),
+) {
+    /** A category the admin disabled on EVERY account shouldn't be offered
+     *  as a group; an empty join list (older builds) counts as enabled. */
+    val enabledOnAnyAccount: Boolean get() = m3uAccounts.isEmpty() || m3uAccounts.any { it.enabled }
+}
+
 @Serializable
 data class DispatcharrVODSeries(
     val id: Int,
@@ -1230,13 +1273,24 @@ data class DispatcharrVODSeries(
     val logo: DispatcharrVODLogo? = null,
     /** Server-side group name (e.g. "K-Drama", "Latino", "Stand-Up"). Populated
      *  by OnDemandViewModel from the Xtream get_series_categories id->name
-     *  lookup; null for sources that don't expose categories (Dispatcharr
-     *  Direct Connect REST). Drives the per-group hide filter exposed via
+     *  lookup, or (Dispatcharr Direct Connect) from the /api/vod/categories/
+     *  join on [vodCategoryId]. Drives the per-group hide filter exposed via
      *  ManageGroupsSheet on the Series tab. Mirrors iOS VODSeries.categoryName. */
     val categoryName: String? = null,
+    /** Raw `custom_properties` blob. The list endpoint hides the item's
+     *  category here (`category_id`), not at the top level, so the object is
+     *  kept raw and read lazily via [vodCategoryId]. */
+    @SerialName("custom_properties")
+    val customPropertiesRaw: JsonObject? = null,
 ) {
     val displayName: String get() = name.ifBlank { title.orEmpty() }
     val posterUrl: String? get() = logo?.url
+
+    /** `custom_properties.category_id`, Int-or-String tolerant (same wire
+     *  variance as DispatcharrProgramDetail's tmdb_id). */
+    val vodCategoryId: String?
+        get() = (customPropertiesRaw?.get("category_id") as? JsonPrimitive)
+            ?.contentOrNull?.takeIf { it.isNotBlank() }
 }
 
 @Serializable
@@ -1259,10 +1313,19 @@ data class DispatcharrVODMovie(
     val streams: List<DispatcharrVODStreamOption> = emptyList(),
     /** Server-side group name. See DispatcharrVODSeries.categoryName. */
     val categoryName: String? = null,
+    /** Raw `custom_properties` blob; see DispatcharrVODSeries.customPropertiesRaw. */
+    @SerialName("custom_properties")
+    val customPropertiesRaw: JsonObject? = null,
 ) {
     val displayName: String get() = title.ifBlank { name.orEmpty() }
     val posterUrl: String? get() = logo?.url
     val firstStreamId: Int? get() = streams.firstOrNull()?.streamId
+
+    /** `custom_properties.category_id`, Int-or-String tolerant.
+     *  See DispatcharrVODSeries.vodCategoryId. */
+    val vodCategoryId: String?
+        get() = (customPropertiesRaw?.get("category_id") as? JsonPrimitive)
+            ?.contentOrNull?.takeIf { it.isNotBlank() }
 }
 
 @Serializable

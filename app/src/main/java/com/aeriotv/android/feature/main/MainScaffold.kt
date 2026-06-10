@@ -1,6 +1,8 @@
 package com.aeriotv.android.feature.main
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -35,11 +37,14 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.border
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -90,9 +95,26 @@ import com.aeriotv.android.ui.tv.tvFocusScale
  * D-pad UP from the top row of the guide jumps focus back to the pills
  * instead of being trapped inside the `focusGroup()` (audit task #57).
  *
- * `null` on phone shell — the CompositionLocal is only filled on TV.
+ * `null` on phone shell - the CompositionLocal is only filled on TV.
  */
 val LocalTvTopNavFocusRequester = staticCompositionLocalOf<FocusRequester?> { null }
+
+/**
+ * TV chrome-collapse channel. Content screens write `true` while the user is
+ * scrolled down a long surface (the On Demand poster grids first) and the top
+ * tab bar shrinks out of the way so an extra poster row fits on screen.
+ *
+ * The bar is never UNMOUNTED for this: its pills are the target of
+ * FocusRequester.requestFocus() calls (the content's D-pad UP exit redirect),
+ * which throws on a detached node, so an AnimatedVisibility-style hide would
+ * crash the first UP press while collapsed. [collapsibleChrome] instead
+ * shrinks the bar to a 1px, alpha-0 strip; the pills stay attached and
+ * focusable, and focus arriving on the bar expands it back.
+ *
+ * `null` on the phone shell -- only the TV shell provides a state.
+ */
+val LocalTvChromeCollapsed =
+    staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>?> { null }
 
 /**
  * Top-level scaffold once a playlist is loaded. Mirrors iOS MainTabView with the
@@ -116,7 +138,7 @@ fun MainScaffold(
     // Show the Favorites tab only when the user has at least one favorite
     // that ALSO exists in the active playlist. The raw DB count would keep
     // the tab pinned to the bottom bar after a playlist switch left stale
-    // orphan rows pointing at channel ids that no longer exist — the user
+    // orphan rows pointing at channel ids that no longer exist - the user
     // would see the tab, tap it, and find an empty "No Favorites" body
     // even though the DB count was non-zero.
     val hasRenderableFavorites = remember(favorites, state.channels) {
@@ -295,7 +317,14 @@ fun MainScaffold(
         // them) and the content's exit redirect below (which targets the
         // SELECTED pill directly, not the bar, so no entry heuristics apply).
         val pillRequesters = remember(tabs) { tabs.associateWith { FocusRequester() } }
-        CompositionLocalProvider(LocalTvTopNavFocusRequester provides topNavRequester) {
+        // Chrome-collapse channel: long content surfaces (the On Demand grids)
+        // set this true while scrolled down so the tab bar shrinks away. See
+        // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
+        val chromeCollapsed = remember { mutableStateOf(false) }
+        CompositionLocalProvider(
+            LocalTvTopNavFocusRequester provides topNavRequester,
+            LocalTvChromeCollapsed provides chromeCollapsed,
+        ) {
             Box(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
@@ -308,14 +337,31 @@ fun MainScaffold(
                         false
                     },
             ) {
-                TvTopTabBar(
-                    tabs = tabs,
-                    selected = selectedTab,
-                    onSelect = { selectedTab = it; initialTabApplied = true },
-                    focusRequester = topNavRequester,
-                    lastUpKeyMs = lastUpKeyMs,
-                    pillRequesters = pillRequesters,
+                // Collapse the bar only while the content reports a scrolled
+                // state AND no pill holds focus: the UP-from-content redirect
+                // (focusProperties onExit below) lands focus on the selected
+                // pill even at 1px, which flips barHasFocus and grows the bar
+                // back so the user can see what they're navigating.
+                var barHasFocus by remember { mutableStateOf(false) }
+                val barFraction by animateFloatAsState(
+                    targetValue = if (chromeCollapsed.value && !barHasFocus) 0f else 1f,
+                    animationSpec = tween(durationMillis = 250),
+                    label = "tvTopBarCollapse",
                 )
+                Box(
+                    modifier = Modifier
+                        .onFocusChanged { barHasFocus = it.hasFocus }
+                        .collapsibleChrome(barFraction),
+                ) {
+                    TvTopTabBar(
+                        tabs = tabs,
+                        selected = selectedTab,
+                        onSelect = { selectedTab = it; initialTabApplied = true },
+                        focusRequester = topNavRequester,
+                        lastUpKeyMs = lastUpKeyMs,
+                        pillRequesters = pillRequesters,
+                    )
+                }
                 // tvOS layout reference: when the mini-player is active the
                 // group filter pills + guide grid drop DOWN so the
                 // mini-player's right-aligned 210x118 video + hint chip
@@ -518,7 +564,7 @@ private fun MainTabContent(
  * Audit task #57: [focusRequester] is attached to the pill Row and combined
  * with [Modifier.focusRestorer]. When a section calls `focusRequester
  * .requestFocus()` (via the D-pad UP route from the guide), focus lands on
- * the previously-focused pill rather than the first one — so the user comes
+ * the previously-focused pill rather than the first one - so the user comes
  * back exactly where they left.
  */
 @Composable
@@ -681,6 +727,30 @@ private fun TvTab(
         )
     }
 }
+
+/**
+ * Collapses a TV chrome strip (the top tab bar here, the On Demand segment
+ * pills on their tab) to [visibleFraction] of its measured height, fading the
+ * pixels in step. The strip stays MOUNTED throughout: its children are
+ * FocusRequester targets and requestFocus() on a detached node throws, so the
+ * hide must be geometric, not compositional. Height is floored at 1px so the
+ * strip also stays reachable by plain D-pad UP focus search when fully
+ * collapsed; focus arriving is the signal the callers use to expand it again.
+ *
+ * Internal (not private) because the On Demand tab applies the same treatment
+ * to its Movies/Series pills; the behavior must stay identical in both spots.
+ */
+internal fun Modifier.collapsibleChrome(visibleFraction: Float): Modifier = this
+    .graphicsLayer { alpha = visibleFraction }
+    .clipToBounds()
+    .layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val collapsedHeight =
+            (placeable.height * visibleFraction).toInt().coerceAtLeast(1)
+        layout(placeable.width, collapsedHeight) {
+            placeable.placeRelative(0, 0)
+        }
+    }
 
 @Composable
 private fun SettingsTabContent() {
