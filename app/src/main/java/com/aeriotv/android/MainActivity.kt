@@ -90,6 +90,22 @@ class MainActivity : ComponentActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         PipState.inPictureInPicture.value = isInPictureInPictureMode
+        // Closing the PiP window with its X must STOP playback. Android only
+        // tells us "PiP ended"; the X-dismiss and the expand-back-to-app land
+        // in the same callback. They differ by lifecycle state: on expand the
+        // activity is on its way to RESUMED (>= STARTED here); on X-dismiss it
+        // was already stopped, so we sit at CREATED. Without this the player
+        // singleton kept decoding and audio played on in the background until
+        // a force-stop (tester report on 0.2.4/0.2.5). Same teardown order as
+        // the player's proven X-close path.
+        if (!isInPictureInPictureMode &&
+            !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) {
+            runCatching { miniPlayerSession.dismiss() }
+            runCatching { exoWindowState.hide() }
+            runCatching { exoHolder.stop() }
+            AerioMediaPlaybackService.stop(this)
+        }
     }
 
     override fun onResume() {
