@@ -236,6 +236,7 @@ class DriveSyncManager @Inject constructor(
                     sourceType = e.sourceType,
                     urlString = e.urlString,
                     epgUrlString = e.epgUrl,
+                    lanUrlString = e.lanUrlString,
                     username = null,
                     apiKey = null,
                     lastUsedMillis = e.lastRefreshedAt,
@@ -312,6 +313,9 @@ class DriveSyncManager @Inject constructor(
                 urlString = entry.urlString,
                 sourceType = entry.sourceType,
                 epgUrl = entry.epgUrlString,
+                // Old snapshots have no lanUrlString; keep whatever this
+                // device already has instead of wiping it.
+                lanUrlString = entry.lanUrlString ?: current?.lanUrlString,
                 isActive = entry.id == snapshot.active,
             )
             playlistDao.upsert(merged)

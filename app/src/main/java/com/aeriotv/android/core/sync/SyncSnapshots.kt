@@ -25,6 +25,10 @@ data class PlaylistSnapshotEntry(
     val sourceType: String,
     val urlString: String,
     val epgUrlString: String? = null,
+    // LAN URL travels with the playlist: a sync RESTORE used to recreate the
+    // entity without it, silently dropping the user's home-network URL.
+    // Nullable default keeps old snapshots decodable.
+    val lanUrlString: String? = null,
     val username: String? = null,
     val apiKey: String? = null,
     val lastUsedMillis: Long? = null,
