@@ -100,12 +100,29 @@ class UpdateChecker @Inject constructor() {
         return Outcome.UpdateAvailable(
             UpdateInfo(
                 versionName = remote,
-                notes = release.body.orEmpty().trim(),
+                notes = plainTextNotes(release.body.orEmpty()),
                 apkUrl = apk.browserDownloadUrl,
                 apkSizeBytes = apk.size,
             ),
         )
     }
+
+    /**
+     * The release body is GitHub-flavored markdown but the prompt and the
+     * Settings screen render plain Text. Flatten the constructs our release
+     * notes actually use (#-headers, *emphasis*, backticks, [links](url))
+     * instead of showing the raw markers.
+     */
+    private fun plainTextNotes(markdown: String): String =
+        markdown.lines().joinToString("\n") { line ->
+            line
+                .replace(Regex("^#{1,6}\\s+"), "")
+                .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
+                .replace(Regex("(?<![*\\w])\\*([^*]+)\\*(?![*\\w])"), "$1")
+                .replace(Regex("`([^`]+)`"), "$1")
+                .replace(Regex("\\[([^\\]]+)\\]\\([^)]*\\)"), "$1")
+                .trimEnd()
+        }.replace(Regex("\n{3,}"), "\n\n").trim()
 
     @Serializable
     private data class GithubRelease(
