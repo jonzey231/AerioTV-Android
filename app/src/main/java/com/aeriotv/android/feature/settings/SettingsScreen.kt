@@ -56,6 +56,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.db.entity.sourceTypeDisplayLabel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import java.text.DateFormat
 import java.util.Date
@@ -392,12 +393,10 @@ private fun PlaylistRow(
                 )
                 val subtitle = buildString {
                     append("${playlist.channelCount} channels")
-                    val pretty = playlist.sourceType
-                        .replace("Dispatcharr", "Dispatcharr ")
-                        .replace("ApiKey", "API Key")
-                        .replace("UserPass", "Username & Password")
-                        .replace("M3uUrl", "M3U + EPG")
-                        .replace("XtreamCodes", "Xtream Codes")
+                    // Shared pretty-printer (PlaylistEntity.sourceTypeDisplayLabel)
+                    // keeps this subtitle in lockstep with the Playlist Detail
+                    // Type row.
+                    val pretty = playlist.sourceTypeDisplayLabel()
                     if (pretty.isNotBlank()) append("  ·  ").append(pretty)
                 }
                 Text(

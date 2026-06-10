@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -94,11 +95,19 @@ fun SyncSettingsScreen(
     val lastPush by viewModel.lastPushAt.collectAsStateWithLifecycle(initialValue = 0L)
     val lastPull by viewModel.lastPullAt.collectAsStateWithLifecycle(initialValue = 0L)
     val statusObj by viewModel.driveStatus.collectAsState()
+    val syncNowStatus by viewModel.syncNowStatus.collectAsState()
+    val clearStatus by viewModel.clearStatus.collectAsState()
     val configured = remember { SyncConfig.isConfigured() }
 
     // Silently restore a persisted Drive session on open so the screen shows
     // signed-in (and Sync Now works) without a manual re-login.
     LaunchedEffect(Unit) { viewModel.restoreSessionIfPossible() }
+
+    // Action results are point-in-time feedback; don't let a stale "Synced 5
+    // categories" line greet the next visit (PlaylistDetailScreen pattern).
+    DisposableEffect(Unit) {
+        onDispose { viewModel.clearActionStatuses() }
+    }
 
     var inFlight by remember { mutableStateOf(false) }
     // When Sign-in with Google is tapped on a build without an OAuth client
@@ -254,42 +263,41 @@ fun SyncSettingsScreen(
                         header = "Actions",
                         footer = "Sync Now pushes local changes then pulls remote changes. Last Push: ${formatTimestamp(lastPush)}. Last Pull: ${formatTimestamp(lastPull)}.",
                     ) {
+                        // Inline spinner + result line replaced the old Toasts,
+                        // which never surfaced on Android TV (rows looked dead).
+                        val actionRunning =
+                            syncNowStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                                clearStatus is SyncSettingsViewModel.ActionStatus.Running
                         SettingsActionRow(
                             label = "Sync Now",
                             subtitle = "Last synced: ${formatTimestamp(lastPull)}",
                             leadingIcon = Icons.Filled.Sync,
+                            running = syncNowStatus is SyncSettingsViewModel.ActionStatus.Running,
+                            statusLine = when (val s = syncNowStatus) {
+                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
+                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
+                                else -> null
+                            },
+                            statusIsError = syncNowStatus is SyncSettingsViewModel.ActionStatus.Failure,
                             onClick = {
-                                if (inFlight) return@SettingsActionRow
-                                inFlight = true
-                                scope.launch {
-                                    val result = viewModel.syncNow()
-                                    val failed = result.entries.count { !it.value }
-                                    Toast.makeText(
-                                        context,
-                                        if (failed == 0) "Sync complete."
-                                        else "Sync finished with $failed category failure${if (failed > 1) "s" else ""}.",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    inFlight = false
-                                }
+                                if (inFlight || actionRunning) return@SettingsActionRow
+                                viewModel.runSyncNow()
                             },
                         )
                         SettingsActionRow(
                             label = "Clear Drive Data",
                             leadingIcon = Icons.Filled.CloudOff,
                             destructive = true,
+                            running = clearStatus is SyncSettingsViewModel.ActionStatus.Running,
+                            statusLine = when (val s = clearStatus) {
+                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
+                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
+                                else -> null
+                            },
+                            statusIsError = clearStatus is SyncSettingsViewModel.ActionStatus.Failure,
                             onClick = {
-                                if (inFlight) return@SettingsActionRow
-                                inFlight = true
-                                scope.launch {
-                                    val ok = viewModel.clearRemote()
-                                    Toast.makeText(
-                                        context,
-                                        if (ok) "Drive data cleared." else "Clear failed.",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    inFlight = false
-                                }
+                                if (inFlight || actionRunning) return@SettingsActionRow
+                                viewModel.runClearRemote()
                             },
                         )
                     }

@@ -3,18 +3,25 @@ package com.aeriotv.android.ui.tv
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -226,6 +233,10 @@ fun TvKeyboardOnOkHost(content: @Composable () -> Unit) {
  *    no use for vertical cursor movement), so walking the form never pops
  *    the keyboard. This subsumes [dpadFocusEscape], which it falls back to
  *    when no host is present.
+ *  - Whenever the keyboard is summoned for the field (OK press, or focus
+ *    arriving while the gate is already armed), the field is scrolled toward
+ *    the viewport top so the floating centered leanback IME panel cannot
+ *    cover it. See the clearance comment in the body.
  *
  * No-op on touch devices (these key events never fire).
  */
@@ -234,13 +245,52 @@ fun Modifier.tvFormFieldInput(): Modifier {
     val gate = LocalTvKeyboardGate.current ?: return this.dpadFocusEscape()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    // Floating-IME clearance: the Google TV leanback keyboard is a CENTERED
+    // floating panel, so it contributes no bottom inset (adjustResize and
+    // imePadding are no-ops) and a mid-screen field can sit half-covered
+    // behind it. Whenever the keyboard is summoned for this field, request a
+    // bring-into-view for the field's rect EXTENDED ~360dp downward;
+    // satisfying that oversized rect makes the enclosing scroll container
+    // park the field near the viewport TOP, clear of the centered panel.
+    // A real scroll like this passes TvImeNoJitterBringIntoViewSpec's <2px
+    // deadband unchanged; with no scrollable ancestor (e.g. the SSID dialog)
+    // the request is a harmless no-op.
+    val bringIntoViewRequester = androidx.compose.runtime.remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    val imeClearancePx = with(LocalDensity.current) { 360.dp.toPx() }
+    val fieldSize = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(androidx.compose.ui.unit.IntSize.Zero)
+    }
+    fun scrollClearOfFloatingIme() {
+        scope.launch {
+            bringIntoViewRequester.bringIntoView(
+                androidx.compose.ui.geometry.Rect(
+                    0f,
+                    0f,
+                    fieldSize.value.width.toFloat(),
+                    fieldSize.value.height.toFloat() + imeClearancePx,
+                ),
+            )
+        }
+    }
     // Only an OK whose DOWN-press was also seen by THIS field may arm the
     // gate. The OK that opened the screen (pressed on the navigating row,
     // released after focus pulled into the first field) otherwise delivers
     // its KeyUp here and pops the keyboard on entry, the same spurious
     // release-click TvMenuGuard exists for.
     val sawOkDown = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    return this.onPreviewKeyEvent { event ->
+    return this
+        .bringIntoViewRequester(bringIntoViewRequester)
+        .onSizeChanged { fieldSize.value = it }
+        .onFocusEvent { state ->
+            // IME-Next path: focus hopped to this field with the gate still
+            // armed (keyboard left open), so no OK press re-fires the scroll.
+            // Re-park the newly focused field clear of the floating panel.
+            // D-pad moves disarm the gate BEFORE focus lands, so plain
+            // form-walking never triggers this.
+            if (state.isFocused && gate.armed) scrollClearOfFloatingIme()
+        }
+        .onPreviewKeyEvent { event ->
         val isOk = event.key == Key.DirectionCenter || event.key == Key.Enter ||
             event.key == Key.NumPadEnter
         when {
@@ -262,6 +312,7 @@ fun Modifier.tvFormFieldInput(): Modifier {
                 if (sawOkDown.value) {
                     gate.armed = true
                     keyboard?.show()
+                    scrollClearOfFloatingIme()
                 }
                 sawOkDown.value = false
                 true

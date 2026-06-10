@@ -196,6 +196,14 @@ fun AerioTVNavHost(
                 val scope = androidx.compose.runtime.rememberCoroutineScope()
                 var googleSignInInFlight by remember { mutableStateOf(false) }
                 var welcomeNotConfiguredDialog by remember { mutableStateOf(false) }
+                // Restore-progress screen state (replaces the old silent
+                // wait between sign-in success and the auto-advance to MAIN).
+                // While visible it REPLACES WelcomeScreen entirely -- an
+                // overlay would leave Welcome's buttons focusable underneath
+                // on TV. BACK is swallowed inside the progress screen.
+                var restoreOverlayVisible by remember { mutableStateOf(false) }
+                var restoreActivatedPlaylist by remember { mutableStateOf(false) }
+                val restoreSteps by syncVm.restoreSteps.collectAsStateWithLifecycle()
                 // Shared restore closure: pulls all categories from Drive,
                 // then asks PlaylistViewModel to re-bootstrap from whatever
                 // playlists just landed in the DB. The existing
@@ -207,12 +215,30 @@ fun AerioTVNavHost(
                 // regardless of whether the user had granted Drive scope
                 // on a previous session.
                 val tryRestoreAndAdvance: suspend (String?) -> Unit = { signedInEmail ->
+                    // Surface the restore-progress screen for the whole pull
+                    // + bootstrap stretch. Clear any stale steps first so a
+                    // second sign-in attempt doesn't flash the previous run's
+                    // settled rows before pullAllTracked resets the list.
+                    syncVm.clearRestoreProgress()
+                    restoreActivatedPlaylist = false
+                    restoreOverlayVisible = true
                     val pulled = runCatching { syncVm.restoreFromDrive() }
                         .getOrDefault(emptyMap())
                     val playlistsRestored = pulled[com.aeriotv.android.core.sync.SyncCategory.Playlists] == true
                     val activated = if (playlistsRestored) {
                         runCatching { vm.loadActivePlaylistIfAvailable() }.getOrDefault(false)
                     } else false
+                    if (activated) {
+                        // Keep the progress screen up; its Channels & Guide
+                        // line now runs until Phase.ChannelsReady trips the
+                        // existing auto-advance to MAIN.
+                        restoreActivatedPlaylist = true
+                    } else {
+                        // Nothing to hydrate -- drop back to Welcome, exactly
+                        // where the old silent flow left the user.
+                        restoreOverlayVisible = false
+                        syncVm.clearRestoreProgress()
+                    }
                     val message = when {
                         activated -> "Signed in as ${signedInEmail.orEmpty()}. Restoring your data..."
                         signedInEmail != null -> "Signed in as $signedInEmail. No playlists in Drive yet -- set one up below."
@@ -243,7 +269,35 @@ fun AerioTVNavHost(
                     }
                 }
 
-                WelcomeScreen(
+                // Backstop: if the restored playlist's channel load FAILS
+                // (switchToPlaylist surfaces state.error and never reaches
+                // ChannelsReady), don't trap the user on a progress screen
+                // whose BACK is disabled -- fall back to Welcome, matching
+                // where the old silent flow stranded them.
+                LaunchedEffect(restoreActivatedPlaylist, state.error, state.phase) {
+                    if (restoreOverlayVisible && restoreActivatedPlaylist &&
+                        state.phase != PlaylistViewModel.Phase.ChannelsReady &&
+                        state.error != null
+                    ) {
+                        restoreOverlayVisible = false
+                        restoreActivatedPlaylist = false
+                        syncVm.clearRestoreProgress()
+                    }
+                }
+
+                if (restoreOverlayVisible) {
+                    com.aeriotv.android.feature.onboarding.OnboardingSyncProgressScreen(
+                        steps = restoreSteps,
+                        channelsState = when {
+                            !restoreActivatedPlaylist ->
+                                com.aeriotv.android.core.sync.DriveSyncManager.RestoreStepState.Pending
+                            state.phase == PlaylistViewModel.Phase.ChannelsReady ->
+                                com.aeriotv.android.core.sync.DriveSyncManager.RestoreStepState.Done
+                            else ->
+                                com.aeriotv.android.core.sync.DriveSyncManager.RestoreStepState.Running
+                        },
+                    )
+                } else WelcomeScreen(
                     onConnectServer = { navController.navigate(Routes.CHOOSE_TYPE) },
                     // "Skip for now" is iOS parity. With no playlist saved the channel
                     // list is empty; user can reach Settings -> Change playlist later.

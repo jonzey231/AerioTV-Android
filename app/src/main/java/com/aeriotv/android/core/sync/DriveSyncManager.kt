@@ -59,6 +59,27 @@ class DriveSyncManager @Inject constructor(
     val status: StateFlow<Status> = _status.asStateFlow()
 
     /**
+     * Per-category progress for the onboarding restore screen. Empty when no
+     * tracked restore has run this process; otherwise one entry per category
+     * in pull order. Only [pullAllTracked] writes here -- the background
+     * worker and Settings "Sync Now" use the untracked [pullAll] so a routine
+     * sync never repaints the onboarding progress UI.
+     */
+    private val _restoreSteps: MutableStateFlow<List<RestoreStep>> = MutableStateFlow(emptyList())
+    val restoreSteps: StateFlow<List<RestoreStep>> = _restoreSteps.asStateFlow()
+
+    /** Reset the tracked restore progress (call when leaving the restore UI). */
+    fun clearRestoreProgress() {
+        _restoreSteps.value = emptyList()
+    }
+
+    private fun updateRestoreStep(category: SyncCategory, state: RestoreStepState, detail: String? = null) {
+        _restoreSteps.value = _restoreSteps.value.map { step ->
+            if (step.category == category) step.copy(state = state, detail = detail) else step
+        }
+    }
+
+    /**
      * Step 1 of the two-step flow: open the Sign-in-with-Google sheet via
      * Credential Manager. Returns the user's email on success so the caller
      * can persist it; the resulting identity has no Drive scope yet, so the
@@ -188,6 +209,35 @@ class DriveSyncManager @Inject constructor(
         return result
     }
 
+    /**
+     * [pullAll] variant that publishes per-category progress through
+     * [restoreSteps] for the onboarding restore screen. Same return shape and
+     * same per-category semantics (a category maps to true only when a remote
+     * snapshot existed AND applied cleanly); the only addition is the step
+     * state machine: Pending -> Running -> Done/Failed. A category whose file
+     * simply doesn't exist in Drive yet settles as Done with a
+     * "Nothing in Drive yet" detail instead of Failed -- a fresh account
+     * isn't an error.
+     */
+    suspend fun pullAllTracked(token: String, enabled: Set<SyncCategory>): Map<SyncCategory, Boolean> {
+        _restoreSteps.value = enabled.map { RestoreStep(category = it) }
+        val result = mutableMapOf<SyncCategory, Boolean>()
+        enabled.forEach { category ->
+            updateRestoreStep(category, RestoreStepState.Running)
+            val outcome = runCatching { pullCategoryDetailed(token, category) }
+                .onFailure { Log.w(TAG, "pull ${category.name} failed", it) }
+                .getOrDefault(PullOutcome.Failed)
+            result[category] = outcome == PullOutcome.Applied
+            when (outcome) {
+                PullOutcome.Applied -> updateRestoreStep(category, RestoreStepState.Done)
+                PullOutcome.NoRemote -> updateRestoreStep(category, RestoreStepState.Done, "Nothing in Drive yet")
+                PullOutcome.Failed -> updateRestoreStep(category, RestoreStepState.Failed, "Couldn't restore")
+            }
+        }
+        appPreferences.setSyncLastPullAt(System.currentTimeMillis())
+        return result
+    }
+
     private suspend fun pushCategory(token: String, category: SyncCategory): Boolean {
         val payload = when (category) {
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
@@ -199,9 +249,15 @@ class DriveSyncManager @Inject constructor(
         return driveClient.upload(token, category.fileName, payload).isSuccess
     }
 
-    private suspend fun pullCategory(token: String, category: SyncCategory): Boolean {
-        val fileId = driveClient.findFileId(token, category.fileName) ?: return false
-        val body = driveClient.download(token, fileId) ?: return false
+    private suspend fun pullCategory(token: String, category: SyncCategory): Boolean =
+        pullCategoryDetailed(token, category) == PullOutcome.Applied
+
+    /** Tri-state pull so [pullAllTracked] can tell "no remote snapshot yet"
+     * (fresh account, not an error) apart from a genuine failure. The Boolean
+     * [pullCategory] wrapper preserves the original semantics for [pullAll]. */
+    private suspend fun pullCategoryDetailed(token: String, category: SyncCategory): PullOutcome {
+        val fileId = driveClient.findFileId(token, category.fileName) ?: return PullOutcome.NoRemote
+        val body = driveClient.download(token, fileId) ?: return PullOutcome.Failed
         return runCatching {
             when (category) {
                 SyncCategory.Playlists -> applyPlaylistsSnapshot(json.decodeFromString(body))
@@ -210,10 +266,12 @@ class DriveSyncManager @Inject constructor(
                 SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body))
                 SyncCategory.Credentials -> applyCredentialsSnapshot(json.decodeFromString(body))
             }
-            true
+            PullOutcome.Applied
         }.onFailure { Log.w(TAG, "decode ${category.name} failed", it) }
-            .getOrDefault(false)
+            .getOrDefault(PullOutcome.Failed)
     }
+
+    private enum class PullOutcome { Applied, NoRemote, Failed }
 
     // ── Snapshot builders ─────────────────────────────────────────────────
 
@@ -392,6 +450,17 @@ class DriveSyncManager @Inject constructor(
         object MissingConfig : Status
         data class SignedIn(val accessToken: String) : Status
     }
+
+    /** One line on the onboarding restore screen: a category and where its
+     * pull currently stands. [detail] is an optional sub-line ("Nothing in
+     * Drive yet" / "Couldn't restore"), mirroring the iOS SyncStage detail. */
+    data class RestoreStep(
+        val category: SyncCategory,
+        val state: RestoreStepState = RestoreStepState.Pending,
+        val detail: String? = null,
+    )
+
+    enum class RestoreStepState { Pending, Running, Done, Failed }
 
     /** Two outcomes from [requestDriveScope]: token in hand, or needs consent UI. */
     sealed interface RequestResult {

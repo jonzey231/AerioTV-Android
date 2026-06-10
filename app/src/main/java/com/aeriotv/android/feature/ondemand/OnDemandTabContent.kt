@@ -1,7 +1,9 @@
 package com.aeriotv.android.feature.ondemand
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
@@ -29,6 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Search
@@ -49,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +74,10 @@ import com.aeriotv.android.feature.livetv.ManageGroupsSheet
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
+import com.aeriotv.android.core.tv.TvActionMenuDialog
+import com.aeriotv.android.core.tv.TvMenuAction
+import com.aeriotv.android.core.tv.TvMenuGuard
+import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
@@ -254,6 +262,9 @@ private fun MoviesSubScreen(
             .distinct().toList().sorted()
     }
     var showManageGroups by rememberSaveable { mutableStateOf(false) }
+    // BACK from MovieDetail must land D-pad focus back on the poster / rail
+    // card that opened it, not the top nav pills. See VodReturnFocusState.
+    val returnFocus = rememberVodReturnFocus(isTv)
 
     if (state.unsupportedSource) {
         EmptyState(
@@ -305,9 +316,22 @@ private fun MoviesSubScreen(
         if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
             ContinueWatchingRail(
                 items = continueWatching,
-                onItemClick = { progress ->
-                    movieByUuid[progress.videoId]?.let(onMovieClick)
+                // The stored row often has no posterUrl (Navigation captures
+                // movie?.posterUrl before the route-scoped library finishes
+                // loading, and many Dispatcharr rows carry no logo at all),
+                // so fall back to the loaded library's poster for the card.
+                posterFor = { row ->
+                    row.posterUrl?.takeIf { it.isNotBlank() }
+                        ?: movieByUuid[row.videoId]?.posterUrl
                 },
+                onItemClick = { progress ->
+                    movieByUuid[progress.videoId]?.let { movie ->
+                        returnFocus.arm("cw:${progress.videoId}")
+                        onMovieClick(movie)
+                    }
+                },
+                onRemove = { watchVm.delete(it.videoId) },
+                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
             )
         }
 
@@ -384,7 +408,11 @@ private fun MoviesSubScreen(
                 MoviePoster(
                     movie = movie,
                     isTv = isTv,
-                    onClick = { onMovieClick(movie) },
+                    focusRequester = returnFocus.requesterFor("movie:${movie.uuid}"),
+                    onClick = {
+                        returnFocus.arm("movie:${movie.uuid}")
+                        onMovieClick(movie)
+                    },
                 )
             }
         }
@@ -422,6 +450,9 @@ private fun SeriesSubScreen(
             .distinct().toList().sorted()
     }
     var showManageGroups by rememberSaveable { mutableStateOf(false) }
+    // BACK from SeriesDetail / the episode player must land D-pad focus back
+    // on the poster / rail card that opened it. See VodReturnFocusState.
+    val returnFocus = rememberVodReturnFocus(isTv)
     // Continue Watching for series = unfinished episode rows. Includes the next
     // episode the up-next queue seeded (positionMs 0) after finishing one, so a
     // binge keeps surfacing the next episode (iOS Issue #19).
@@ -464,7 +495,12 @@ private fun SeriesSubScreen(
             SeriesContinueWatchingRail(
                 items = continueWatchingEpisodes,
                 seriesById = seriesById,
-                onItemClick = { row -> onEpisodeResume(row.videoId) },
+                onItemClick = { row ->
+                    returnFocus.arm("cw:${row.videoId}")
+                    onEpisodeResume(row.videoId)
+                },
+                onRemove = { watchVm.delete(it.videoId) },
+                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
             )
         }
 
@@ -536,7 +572,11 @@ private fun SeriesSubScreen(
                 SeriesPoster(
                     series = series,
                     isTv = isTv,
-                    onClick = { onSeriesClick(series) },
+                    focusRequester = returnFocus.requesterFor("series:${series.id}"),
+                    onClick = {
+                        returnFocus.arm("series:${series.id}")
+                        onSeriesClick(series)
+                    },
                 )
             }
         }
@@ -651,16 +691,84 @@ private fun TvHeaderIconButton(
  *  that bucket the same way they hide a real group. */
 private const val UNCATEGORIZED = "Uncategorized"
 
+/**
+ * BACK-from-detail D-pad focus restoration for the VOD grids/rails (TV only;
+ * every member no-ops off TV so phone behavior is untouched).
+ *
+ * MovieDetail / SeriesDetail / the episode player are nav routes pushed ON TOP
+ * of MAIN, so this whole tab is disposed while they're up; an in-composition
+ * focusRestorer can't survive that. Instead the clicked item's key is written
+ * to a rememberSaveable slot (which DOES survive via the back-stack's saved
+ * state), the matching grid poster / rail card re-attaches [requester] when
+ * the tab recomposes on return, and [restoreIfPending] pulls focus onto it --
+ * otherwise the window's initial-focus assignment parks focus on the top nav
+ * pills (user report).
+ */
+private class VodReturnFocusState(
+    private val isTv: Boolean,
+    private val pendingKeyState: MutableState<String?>,
+) {
+    val requester = FocusRequester()
+    private val pendingKey: String? get() = pendingKeyState.value
+
+    /** Record the item being opened so focus can return to it after BACK.
+     *  Call right before the navigation callback. */
+    fun arm(key: String) {
+        if (isTv) pendingKeyState.value = key
+    }
+
+    /** The [FocusRequester] for [key]'s item, or null for every other item. */
+    fun requesterFor(key: String): FocusRequester? =
+        if (isTv && key == pendingKey) requester else null
+
+    /** One-shot on the return composition: focus the armed item. The item
+     *  composes a frame or two after the grid restores its scroll position,
+     *  so retry until the requester is attached, then re-assert once more a
+     *  few frames later in case the initial-focus fallback (nav pills) lands
+     *  after the first success. Gives up quietly if the item is gone (e.g. a
+     *  Continue Watching row that completed while watching). */
+    suspend fun restoreIfPending() {
+        if (!isTv || pendingKey == null) return
+        repeat(20) {
+            if (runCatching { requester.requestFocus() }.isSuccess) {
+                kotlinx.coroutines.delay(48L)
+                runCatching { requester.requestFocus() }
+                pendingKeyState.value = null
+                return
+            }
+            kotlinx.coroutines.delay(16L)
+        }
+        pendingKeyState.value = null
+    }
+}
+
+@Composable
+private fun rememberVodReturnFocus(isTv: Boolean): VodReturnFocusState {
+    // The key lives in rememberSaveable so it survives the tab's disposal
+    // while a detail route sits on top of MAIN. arm() writes it
+    // synchronously in the click handler, before navigation saves state.
+    val pendingKey = rememberSaveable { mutableStateOf<String?>(null) }
+    val state = remember { VodReturnFocusState(isTv, pendingKey) }
+    LaunchedEffect(Unit) { state.restoreIfPending() }
+    return state
+}
+
 @Composable
 private fun SeriesPoster(
     series: DispatcharrVODSeries,
     isTv: Boolean = false,
+    /** Attached only on the item BACK should refocus (see VodReturnFocusState). */
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier,
+            )
             .onFocusChanged { focused = it.isFocused }
             .tvFocusScale(focused)
             .clip(RoundedCornerShape(10.dp))
@@ -734,7 +842,12 @@ private fun SeriesPoster(
 @Composable
 private fun ContinueWatchingRail(
     items: List<WatchProgressEntity>,
+    posterFor: (WatchProgressEntity) -> String?,
     onItemClick: (WatchProgressEntity) -> Unit,
+    onRemove: (WatchProgressEntity) -> Unit,
+    /** BACK-from-detail refocus hook: non-null only for the card the focus
+     *  restore should land on (see VodReturnFocusState). */
+    focusRequesterFor: (WatchProgressEntity) -> FocusRequester? = { null },
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Text(
@@ -755,24 +868,40 @@ private fun ContinueWatchingRail(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(items = items, key = { it.videoId }) { row ->
-                ContinueWatchingCard(row = row, onClick = { onItemClick(row) })
+                ContinueWatchingCard(
+                    row = row,
+                    posterUrl = posterFor(row),
+                    focusRequester = focusRequesterFor(row),
+                    onClick = { onItemClick(row) },
+                    onRemove = { onRemove(row) },
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContinueWatchingCard(
     row: WatchProgressEntity,
+    posterUrl: String?,
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val progress = if (row.durationMs > 0L) {
         (row.positionMs.toFloat() / row.durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
     var cardFocused by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val tvGuard = rememberTvMenuGuard()
     Column(
         modifier = Modifier
             .width(140.dp)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier,
+            )
             .onFocusChanged { cardFocused = it.isFocused }
             .clip(RoundedCornerShape(10.dp))
             // Same D-pad focus ring as the poster grid; without it the rail
@@ -784,7 +913,13 @@ private fun ContinueWatchingCard(
                     RoundedCornerShape(10.dp),
                 ) else Modifier,
             )
-            .clickable(onClick = onClick),
+            // tvGuard: the OK RELEASE after a TV long-press is delivered as a
+            // click (to this card or the menu's first row); arm/wrap swallows
+            // it. Same wiring as the DVR recording rows.
+            .combinedClickable(
+                onClick = tvGuard.wrap(onClick),
+                onLongClick = { menuOpen = true; tvGuard.arm() },
+            ),
     ) {
         Box(
             modifier = Modifier
@@ -794,9 +929,9 @@ private fun ContinueWatchingCard(
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
             contentAlignment = Alignment.BottomCenter,
         ) {
-            if (!row.posterUrl.isNullOrBlank()) {
+            if (!posterUrl.isNullOrBlank()) {
                 AsyncImage(
-                    model = row.posterUrl,
+                    model = posterUrl,
                     contentDescription = row.title,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -840,6 +975,45 @@ private fun ContinueWatchingCard(
             )
         }
     }
+    if (menuOpen) {
+        ContinueWatchingActionMenu(
+            title = row.title.ifBlank { "Untitled" },
+            guard = tvGuard,
+            onDismiss = { menuOpen = false },
+            onRemove = onRemove,
+        )
+    }
+}
+
+/**
+ * Long-press menu for a Continue Watching rail card (movie + episode
+ * variants share it). The house TvActionMenuDialog on BOTH form factors:
+ * the rail card had no prior long-press behavior on phone, the centered
+ * dialog reads fine on touch, and the guard no-ops off TV, so one idiom
+ * serves both instead of forking a DropdownMenu branch.
+ */
+@Composable
+private fun ContinueWatchingActionMenu(
+    title: String,
+    guard: TvMenuGuard,
+    onDismiss: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    TvActionMenuDialog(
+        title = title,
+        actions = listOf(
+            TvMenuAction(
+                label = "Remove from Continue Watching",
+                icon = Icons.Outlined.Delete,
+                destructive = true,
+            ) { onRemove() },
+            // Dismiss-only escape hatch; the dialog itself dismisses before
+            // running any action, so the click body is intentionally empty.
+            TvMenuAction(label = "Cancel") {},
+        ),
+        guard = guard,
+        onDismiss = onDismiss,
+    )
 }
 
 /**
@@ -853,6 +1027,10 @@ private fun SeriesContinueWatchingRail(
     items: List<WatchProgressEntity>,
     seriesById: Map<Int, DispatcharrVODSeries>,
     onItemClick: (WatchProgressEntity) -> Unit,
+    onRemove: (WatchProgressEntity) -> Unit,
+    /** BACK-from-player refocus hook: non-null only for the card the focus
+     *  restore should land on (see VodReturnFocusState). */
+    focusRequesterFor: (WatchProgressEntity) -> FocusRequester? = { null },
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Text(
@@ -876,21 +1054,30 @@ private fun SeriesContinueWatchingRail(
                 val series = row.seriesId?.toIntOrNull()?.let { seriesById[it] }
                 SeriesContinueWatchingCard(
                     row = row,
-                    seriesPoster = series?.posterUrl ?: row.posterUrl,
+                    // Prefer the loaded library's series art (iOS shows the
+                    // parent SERIES poster on these cards); the stored row's
+                    // own posterUrl (episode still) is the fallback.
+                    seriesPoster = series?.posterUrl?.takeIf { it.isNotBlank() }
+                        ?: row.posterUrl,
                     seriesName = series?.displayName ?: row.title,
+                    focusRequester = focusRequesterFor(row),
                     onClick = { onItemClick(row) },
+                    onRemove = { onRemove(row) },
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SeriesContinueWatchingCard(
     row: WatchProgressEntity,
     seriesPoster: String?,
     seriesName: String,
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val progress = if (row.durationMs > 0L) {
         (row.positionMs.toFloat() / row.durationMs.toFloat()).coerceIn(0f, 1f)
@@ -901,9 +1088,15 @@ private fun SeriesContinueWatchingCard(
     ).joinToString(":")
     val subtitle = listOf(tag, row.title).filter { it.isNotBlank() }.joinToString(" · ")
     var cardFocused by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val tvGuard = rememberTvMenuGuard()
     Column(
         modifier = Modifier
             .width(140.dp)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier,
+            )
             .onFocusChanged { cardFocused = it.isFocused }
             .clip(RoundedCornerShape(10.dp))
             // Same D-pad focus ring as the poster grid; without it the rail
@@ -915,7 +1108,12 @@ private fun SeriesContinueWatchingCard(
                     RoundedCornerShape(10.dp),
                 ) else Modifier,
             )
-            .clickable(onClick = onClick),
+            // Same long-press menu + spurious-OK-release guard wiring as
+            // ContinueWatchingCard above.
+            .combinedClickable(
+                onClick = tvGuard.wrap(onClick),
+                onLongClick = { menuOpen = true; tvGuard.arm() },
+            ),
     ) {
         Box(
             modifier = Modifier
@@ -972,18 +1170,32 @@ private fun SeriesContinueWatchingCard(
             )
         }
     }
+    if (menuOpen) {
+        ContinueWatchingActionMenu(
+            title = seriesName.ifBlank { row.title.ifBlank { "Untitled" } },
+            guard = tvGuard,
+            onDismiss = { menuOpen = false },
+            onRemove = onRemove,
+        )
+    }
 }
 
 @Composable
 private fun MoviePoster(
     movie: DispatcharrVODMovie,
     isTv: Boolean = false,
+    /** Attached only on the item BACK should refocus (see VodReturnFocusState). */
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier,
+            )
             .onFocusChanged { focused = it.isFocused }
             .tvFocusScale(focused)
             .clip(RoundedCornerShape(10.dp))

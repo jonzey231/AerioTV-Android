@@ -118,3 +118,27 @@ fun PlaylistEntity.canRecordToServer(): Boolean =
         sourceType == SourceType.DispatcharrUserPass.name) &&
         dispatcharrUserLevel >= 10
 
+/**
+ * User-facing label for this playlist's source type. Single source of truth
+ * for the Type row on Playlist Detail AND the playlist-row subtitle on the
+ * Settings root, so the two never drift apart.
+ *
+ * Lives on the entity (not on [SourceType]) because the Dispatcharr API-key
+ * wording splits Admin vs Standard on [PlaylistEntity.dispatcharrUserLevel]
+ * (10 = admin; 1 = standard and 0 = streamer both read as Standard), which
+ * only the row carries. Caveat: the column defaults to 10 when the
+ * /api/accounts/users/me/ capture fails or for pre-DB-v15 rows, so those
+ * read as Admin until the next successful connect refreshes the level.
+ */
+fun PlaylistEntity.sourceTypeDisplayLabel(): String = when (sourceType) {
+    SourceType.DispatcharrUserPass.name ->
+        "Dispatcharr Direct Connect - Username & Password"
+    SourceType.DispatcharrApiKey.name ->
+        if (dispatcharrUserLevel >= 10) "Dispatcharr Direct Connect - Admin API Key"
+        else "Dispatcharr Direct Connect - Standard API Key"
+    SourceType.XtreamCodes.name -> "Xtream Codes (XC)"
+    SourceType.M3uUrl.name -> "M3U"
+    // Unknown enum NAME (shouldn't happen; future-proofing) falls back to raw.
+    else -> sourceType
+}
+

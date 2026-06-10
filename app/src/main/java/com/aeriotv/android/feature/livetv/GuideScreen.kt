@@ -281,6 +281,14 @@ fun GuideScreen(
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
+    // TV focus-on-dismiss for the Program Info / Record dialogs (user report:
+    // Back from Program Info parked D-pad focus on the nav pills, not the
+    // cell that opened it). The originating cell's row index + time column
+    // are captured when the dialog opens; bumping the tick on dismissal
+    // drives the refocus effect inside the grid, where guideNav and
+    // listState are in scope.
+    var dialogFocusOrigin by remember { mutableStateOf<Pair<Int, Long>?>(null) }
+    var dialogFocusRestoreTick by remember { mutableStateOf(0) }
 
     // Tick "now" forward every 30s so the indicator + currently-airing tinting stay
     // accurate without forcing the whole tree to recompose on every frame.
@@ -949,6 +957,16 @@ fun GuideScreen(
                 // focusedChannelIndex == idx.
                 guideNav.focusChannelAtNow(idx, nowMillis, listState)
             }
+            // Focus-on-dismiss for the Program Info / Record dialogs: re-land
+            // D-pad focus on the exact cell (row + time column) that opened
+            // the dialog. Same re-assert-until-it-sticks machinery as the
+            // return-from-player path above, because the top-nav
+            // focusRestorer competes for focus on the dialog teardown frame.
+            LaunchedEffect(dialogFocusRestoreTick) {
+                if (dialogFocusRestoreTick == 0) return@LaunchedEffect
+                val (rowIndex, anchorMs) = dialogFocusOrigin ?: return@LaunchedEffect
+                guideNav.focusChannelAt(rowIndex, anchorMs, listState)
+            }
         }
         // GH #5: anchor a focused cell's LEADING edge so an oversized programme
         // (wider than the timeline viewport) doesn't fling the horizontal scroll
@@ -1155,9 +1173,15 @@ fun GuideScreen(
                     remindersVm = remindersVm,
                     onChannelClick = { onChannelClick(channel) },
                     onProgrammeClick = { programme ->
+                        // Capture the originating cell (row + clipped time
+                        // column) so dismissal can restore D-pad focus to it.
+                        dialogFocusOrigin =
+                            channelIndex to programme.startMillis.coerceAtLeast(windowStart)
                         programInfoTarget = programme.toInfoTarget(channel.name, channel.dispatcharrChannelId)
                     },
                     onProgrammeRecord = { programme ->
+                        dialogFocusOrigin =
+                            channelIndex to programme.startMillis.coerceAtLeast(windowStart)
                         recordTarget = programme.toInfoTarget(channel.name, channel.dispatcharrChannelId)
                     },
                     isFavorite = channel.id in favoriteIds,
@@ -1175,13 +1199,22 @@ fun GuideScreen(
     programInfoTarget?.let { target ->
         ProgramInfoSheet(
             target = target,
-            onDismiss = { programInfoTarget = null },
+            onDismiss = {
+                programInfoTarget = null
+                // Hand D-pad focus back to the cell that opened the dialog
+                // (the grid-side LaunchedEffect keyed on this tick does the
+                // actual focus work). No-op on phone.
+                if (isTv) dialogFocusRestoreTick++
+            },
         )
     }
     recordTarget?.let { target ->
         RecordProgramSheet(
             target = target,
-            onDismiss = { recordTarget = null },
+            onDismiss = {
+                recordTarget = null
+                if (isTv) dialogFocusRestoreTick++
+            },
         )
     }
     if (showManageGroups) {
@@ -1891,7 +1924,19 @@ private fun ProgrammeCell(
                     title = programme.title.ifBlank { channelName },
                     actions = menuActions,
                     guard = menuGuard,
-                    onDismiss = { menuOpen = false },
+                    onDismiss = {
+                        menuOpen = false
+                        // Back from the menu must put D-pad focus back on this
+                        // cell: the dialog window held focus, and without the
+                        // re-request Compose's fallback can park it on the nav
+                        // pills. Harmless when an action opens a follow-up
+                        // dialog (Program Info / Record): the refocus lands in
+                        // the host window underneath it, and that dialog
+                        // restores again via dialogFocusRestoreTick on its own
+                        // dismissal. The Multiview staging banner's focus pull
+                        // still wins afterwards (it retries by LaunchedEffect).
+                        runCatching { focusRequester.requestFocus() }
+                    },
                 )
             }
         } else {
@@ -2283,8 +2328,17 @@ private class GuideVerticalNavState {
      * actually equals the target.
      */
     suspend fun focusChannelAtNow(targetIndex: Int, nowMs: Long, listState: LazyListState) {
+        focusChannelAt(targetIndex, nowMs, listState)
+    }
+
+    /** Land D-pad focus on [targetIndex]'s cell at the [anchorMs] time column,
+     *  re-asserting until it sticks (same competing-focusRestorer rationale as
+     *  [focusChannelAtNow], which delegates here). The dialog focus-restore
+     *  path passes the originating cell's own start time so Program Info /
+     *  Record dismissal returns focus to the exact cell that opened it. */
+    suspend fun focusChannelAt(targetIndex: Int, anchorMs: Long, listState: LazyListState) {
         if (targetIndex < 0) return
-        seedAnchor(nowMs)
+        seedAnchor(anchorMs)
         beginVerticalMove()
         repeat(14) {
             moveFocusToChannel(targetIndex, listState)

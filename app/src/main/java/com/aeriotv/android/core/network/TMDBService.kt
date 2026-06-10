@@ -101,6 +101,36 @@ class TMDBService @Inject constructor() {
     private fun isBearerToken(key: String): Boolean =
         key.startsWith("eyJ") && key.count { it == '.' } == 2
 
+    /** Trailing "(YYYY)" suffix many playlists append to VOD display names. */
+    private val trailingYear = Regex("""\(((?:19|20)\d{2})\)\s*$""")
+
+    /**
+     * Split "#1 Cheerleader Camp (2010)" into "#1 Cheerleader Camp" + "2010".
+     * TMDB's search endpoints choke on the embedded year (it is not part of
+     * the canonical title), so it is stripped from the query text and
+     * re-applied as a year filter instead. A name that is ONLY "(2010)"
+     * keeps its original text rather than sending an empty query. Returns
+     * the trimmed title + null when no trailing year is present.
+     */
+    private fun splitTitleYear(raw: String): Pair<String, String?> {
+        val trimmed = raw.trim()
+        val match = trailingYear.find(trimmed) ?: return trimmed to null
+        val cleaned = trimmed.removeRange(match.range).trim()
+        return if (cleaned.isEmpty()) trimmed to null
+        else cleaned to match.groupValues[1]
+    }
+
+    /**
+     * Search-query attempts, in order: the cleaned title, then (when it
+     * differs) the title without leading punctuation -- TMDB search also
+     * trips on a leading "#" et al., so "#1 Cheerleader Camp" gets a second
+     * try as "1 Cheerleader Camp" if the first attempt finds nothing.
+     */
+    private fun searchAttempts(cleaned: String): List<String> =
+        listOf(cleaned, cleaned.trimStart { !it.isLetterOrDigit() }.trim())
+            .filter { it.isNotEmpty() }
+            .distinct()
+
     private suspend fun getJsonOrNull(path: String, query: String, key: String): String? =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -137,22 +167,36 @@ class TMDBService @Inject constructor() {
     /**
      * Poster image URL for a program/VOD title via `/search/multi`
      * (include_adult=false). Returns an image.tmdb.org URL or null. Cached by
-     * lowercased title (misses cached too).
+     * lowercased ORIGINAL title (misses cached too) so callers' cache
+     * semantics are independent of the query cleaning below.
+     *
+     * The query itself is sanitized: a trailing "(YYYY)" is stripped (and
+     * used to prefer the year-matching hit -- /search/multi has no year
+     * param, so the year filter is applied to the parsed results instead),
+     * and a leading-punctuation-stripped variant is retried when the first
+     * attempt finds nothing.
      */
     suspend fun posterUrlForTitle(title: String, rawKey: String, size: String = "w500"): String? {
         val key = rawKey.trim()
         val cacheKey = title.trim().lowercase()
         if (key.isEmpty() || cacheKey.isEmpty()) return null
         cache[cacheKey]?.let { return if (it.isEmpty()) null else imageUrl(it, size) }
-        val body = getJsonOrNull(
-            "/search/multi",
-            "query=${title.encodeURLParameter()}&include_adult=false",
-            key,
-        )
-        val path = body?.let { parseSearchPosterPath(it) }
+        val (cleaned, year) = splitTitleYear(title)
+        var sawResponse = false
+        var path: String? = null
+        for (attempt in searchAttempts(cleaned)) {
+            val body = getJsonOrNull(
+                "/search/multi",
+                "query=${attempt.encodeURLParameter()}&include_adult=false",
+                key,
+            ) ?: continue
+            sawResponse = true
+            path = parseSearchPosterPath(body, year)
+            if (path != null) break
+        }
         // Cache only parsed 200 responses; a failed request (offline, bad key)
         // must stay retryable rather than being poisoned as a confirmed miss.
-        if (body != null) cache[cacheKey] = path ?: ""
+        if (sawResponse) cache[cacheKey] = path ?: ""
         Log.d(TAG, "search '$title' -> ${path ?: "no match"}")
         return path?.let { imageUrl(it, size) }
     }
@@ -192,11 +236,16 @@ class TMDBService @Inject constructor() {
     }
 
     /**
-     * Detail metadata when no tmdb_id is known: resolve an id via the same
-     * `/search/multi` path (and trim+lowercase cache key normalization) the
-     * poster fallback uses, then fetch details by id. The resolved id is
-     * cached in [cache] under a "details-id:" prefix ("" = confirmed miss);
-     * failed requests are never cached.
+     * Detail metadata when no tmdb_id is known: resolve an id via the typed
+     * `/search/movie` | `/search/tv` endpoint (which, unlike `/search/multi`,
+     * accepts a year filter: `year=` for movies, `first_air_date_year=` for
+     * tv), then fetch details by id. The query gets the same sanitize rules
+     * as [posterUrlForTitle] -- trailing "(YYYY)" stripped into the year
+     * param, leading-punctuation variant retried, and a final attempt
+     * WITHOUT the year constraint in case the playlist's year disagrees with
+     * TMDB's. The resolved id is cached in [cache] under a "details-id:"
+     * prefix keyed by the ORIGINAL trim+lowercase title ("" = confirmed
+     * miss); failed requests are never cached.
      */
     suspend fun detailsForTitle(title: String, isMovie: Boolean, rawKey: String): TmdbDetails? {
         val key = rawKey.trim()
@@ -206,13 +255,29 @@ class TMDBService @Inject constructor() {
         val cacheKey = "details-id:$kind:$normalizedTitle"
         val id = when (val cached = cache[cacheKey]) {
             null -> {
-                val body = getJsonOrNull(
-                    "/search/multi",
-                    "query=${title.encodeURLParameter()}&include_adult=false",
-                    key,
-                )
-                val found = body?.let { parseSearchId(it, isMovie) }
-                if (body != null) cache[cacheKey] = found ?: ""
+                val (cleaned, year) = splitTitleYear(title)
+                val yearParam = year?.let {
+                    if (isMovie) "&year=$it" else "&first_air_date_year=$it"
+                } ?: ""
+                // (query text, extra params) attempts in order; the no-year
+                // retry only exists when a year was actually extracted.
+                val attempts = buildList {
+                    searchAttempts(cleaned).forEach { add(it to yearParam) }
+                    if (year != null) add(cleaned to "")
+                }
+                var sawResponse = false
+                var found: String? = null
+                for ((attempt, extra) in attempts) {
+                    val body = getJsonOrNull(
+                        "/search/$kind",
+                        "query=${attempt.encodeURLParameter()}&include_adult=false$extra",
+                        key,
+                    ) ?: continue
+                    sawResponse = true
+                    found = parseFirstSearchId(body)
+                    if (found != null) break
+                }
+                if (sawResponse) cache[cacheKey] = found ?: ""
                 Log.d(TAG, "details search '$title' -> ${found ?: "no match"}")
                 found ?: return null
             }
@@ -222,14 +287,14 @@ class TMDBService @Inject constructor() {
         return detailsForId(id, isMovie, key)
     }
 
-    /** First search hit of the requested media_type. Unlike the poster path
-     *  there is NO cross-type fallback: a tv id fed to /movie/{id} 404s. */
-    private fun parseSearchId(body: String, isMovie: Boolean): String? = runCatching {
-        val want = if (isMovie) "movie" else "tv"
-        val results = json.parseToJsonElement(body).jsonObject["results"]?.jsonArray ?: return null
-        results.firstOrNull {
-            it.jsonObject["media_type"]?.jsonPrimitive?.contentOrNull == want
-        }?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+    /** First hit's id from a typed `/search/movie` | `/search/tv` response.
+     *  Typed endpoints carry no media_type field, and the type is already
+     *  fixed by the path, so no cross-type filtering is needed (or possible:
+     *  a tv id fed to /movie/{id} 404s, which is why the endpoint is typed). */
+    private fun parseFirstSearchId(body: String): String? = runCatching {
+        json.parseToJsonElement(body).jsonObject["results"]?.jsonArray
+            ?.firstOrNull()?.jsonObject?.get("id")
+            ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
     }.getOrNull()
 
     private fun parseDetails(body: String, isMovie: Boolean): TmdbDetails? = runCatching {
@@ -264,13 +329,25 @@ class TMDBService @Inject constructor() {
         )
     }.getOrNull()
 
-    /** Prefer a movie/tv hit with a poster; else any hit with a poster. */
-    private fun parseSearchPosterPath(body: String): String? = runCatching {
+    /** Prefer (when [year] is known) a movie/tv hit with a poster released
+     *  that year, then any movie/tv hit with a poster, then any hit with a
+     *  poster. The year tier is a preference, not a hard filter, so a
+     *  playlist year that disagrees with TMDB's still finds art. */
+    private fun parseSearchPosterPath(body: String, year: String? = null): String? = runCatching {
         val results = json.parseToJsonElement(body).jsonObject["results"]?.jsonArray ?: return null
         fun posterOf(o: kotlinx.serialization.json.JsonElement): String? =
             o.jsonObject["poster_path"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
         fun mediaOf(o: kotlinx.serialization.json.JsonElement): String? =
             o.jsonObject["media_type"]?.jsonPrimitive?.contentOrNull
+        fun yearOf(o: kotlinx.serialization.json.JsonElement): String? =
+            (o.jsonObject["release_date"] ?: o.jsonObject["first_air_date"])
+                ?.jsonPrimitive?.contentOrNull?.take(4)
+        if (year != null) {
+            results.firstOrNull {
+                posterOf(it) != null && (mediaOf(it) == "movie" || mediaOf(it) == "tv") &&
+                    yearOf(it) == year
+            }?.let { return posterOf(it) }
+        }
         results.firstOrNull { posterOf(it) != null && (mediaOf(it) == "movie" || mediaOf(it) == "tv") }
             ?.let { return posterOf(it) }
         results.firstOrNull { posterOf(it) != null }?.let { return posterOf(it) }

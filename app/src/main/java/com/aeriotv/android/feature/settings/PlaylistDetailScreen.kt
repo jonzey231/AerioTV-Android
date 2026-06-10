@@ -54,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aeriotv.android.core.data.db.entity.sourceTypeDisplayLabel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import java.text.DateFormat
 import java.util.Date
@@ -189,7 +190,7 @@ fun PlaylistDetailScreen(
                             )
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                     ) {
-                        DetailRow("Type", playlist.sourceType)
+                        DetailRow("Type", playlist.sourceTypeDisplayLabel())
                         // Checkmark marks whichever URL is currently in effect
                         // per PlaylistRepository.effectiveBaseUrl's decision.
                         val activeRoute = state.activeRoute

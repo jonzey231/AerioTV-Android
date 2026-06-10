@@ -41,15 +41,24 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -145,6 +154,72 @@ fun VODPlayerScreen(
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
 
+    // ── TV transport (task #44) ──────────────────────────────────────────
+    // D-pad / media-key scrub preview. Non-null while the user is stepping
+    // LEFT/RIGHT; holds the pending seek target in ms. The debounced
+    // LaunchedEffect below commits the seek 650ms after the last step (iOS
+    // PlayerView.scheduleScrubCommit parity) so key autorepeat sweeps the
+    // preview instead of queueing one seek per repeat (no stutter).
+    var scrubTargetMs by remember { mutableStateOf<Long?>(null) }
+    // iOS PlayerView.scrubStep acceleration: consecutive same-direction
+    // steps grow the multiplier (1 + count/2, capped 12x of the 10s base).
+    var scrubAccelCount by remember { mutableIntStateOf(0) }
+    var scrubLastDirection by remember { mutableIntStateOf(0) }
+    var scrubLastStepAt by remember { mutableLongStateOf(0L) }
+    // Bumped on every handled remote press so the chrome auto-hide re-arms
+    // (PlayerScreen Phase 172 pattern). Stays 0 on phone.
+    var lastInteractionAt by remember { mutableLongStateOf(0L) }
+    val playbackFocus = remember { FocusRequester() }
+    val isTvForm = (
+        context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_TYPE_MASK
+        ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+
+    // Step the scrub preview one increment. Mirrors iOS PlayerView.scrubStep
+    // (10_000ms base, accelerating to 12x). Autorepeat events are throttled
+    // to one step per 250ms so holding LEFT/RIGHT sweeps smoothly instead of
+    // rocketing at the raw ~50ms system key-repeat rate.
+    val scrubStep: (Int, Boolean) -> Unit = step@{ dir, isRepeat ->
+        val now = android.os.SystemClock.uptimeMillis()
+        if (isRepeat && now - scrubLastStepAt < 250L) return@step
+        if (dir == scrubLastDirection && now - scrubLastStepAt < 1_000L) {
+            scrubAccelCount += 1
+        } else {
+            scrubAccelCount = 0
+        }
+        scrubLastDirection = dir
+        scrubLastStepAt = now
+        val mult = minOf(12, 1 + scrubAccelCount / 2)
+        val base = scrubTargetMs ?: positionMs
+        // Unknown duration (in-progress recording): allow forward stepping
+        // unclamped, same as the touch onSkipForward below.
+        val maxPos = if (durationMs > 0L) durationMs else Long.MAX_VALUE
+        scrubTargetMs = (base + dir * 10_000L * mult).coerceIn(0L, maxPos)
+        chromeVisible = true
+        lastInteractionAt = now
+    }
+    // Commit an in-progress scrub immediately (OK press, iOS "Select commits
+    // an in-progress scrub right away"). Setting scrubTargetMs back to null
+    // also cancels the pending debounce commit.
+    val commitScrub: () -> Unit = {
+        scrubTargetMs?.let { target ->
+            exoPlayer?.seekTo(target)
+            positionMs = target
+        }
+        scrubTargetMs = null
+        scrubAccelCount = 0
+        scrubLastDirection = 0
+    }
+    val togglePlayPause: () -> Unit = {
+        exoPlayer?.let { player ->
+            val nowPaused = !player.playWhenReady
+            player.playWhenReady = nowPaused
+            isPaused = !nowPaused
+        }
+        chromeVisible = true
+        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+    }
+
     // Saved progress lookup. Null while loading; -1L after a confirmed "no
     // saved progress" read. Drives the resume-seek LaunchedEffect.
     var savedPositionMs by remember(videoId) { mutableStateOf<Long?>(null) }
@@ -161,7 +236,63 @@ fun VODPlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            // Android TV transport (task #44, tvOS PlayerView parity).
+            // Live TV keeps its own model in PlayerScreen; this handler is
+            // VOD + DVR recordings only and never runs on phone. Gated on
+            // exoPlayer readiness so the loading screen's Close button
+            // still receives OK presses.
+            .onPreviewKeyEvent { event ->
+                if (!isTvForm || exoPlayer == null) return@onPreviewKeyEvent false
+                val handledKey = when (event.key) {
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter,
+                    Key.DirectionLeft, Key.DirectionRight,
+                    Key.DirectionUp, Key.DirectionDown,
+                    Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause,
+                    Key.MediaRewind, Key.MediaFastForward,
+                    -> true
+                    else -> false
+                }
+                if (!handledKey) return@onPreviewKeyEvent false
+                // Swallow the matching KeyUp too so the focused clickable
+                // underneath never sees a half-delivered press.
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
+                val isRepeat = event.nativeKeyEvent.repeatCount > 0
+                when (event.key) {
+                    // OK: commit an in-progress scrub, else toggle
+                    // pause/play (iOS Select behavior). The chrome
+                    // surfaces either way so the state is visible.
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                        if (scrubTargetMs != null) commitScrub() else togglePlayPause()
+                    }
+                    Key.MediaPlayPause -> {
+                        if (scrubTargetMs != null) commitScrub()
+                        togglePlayPause()
+                    }
+                    Key.MediaPlay -> {
+                        exoPlayer?.playWhenReady = true
+                        isPaused = false
+                        chromeVisible = true
+                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                    }
+                    Key.MediaPause -> {
+                        exoPlayer?.playWhenReady = false
+                        isPaused = true
+                        chromeVisible = true
+                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                    }
+                    Key.DirectionLeft, Key.MediaRewind -> scrubStep(-1, isRepeat)
+                    Key.DirectionRight, Key.MediaFastForward -> scrubStep(+1, isRepeat)
+                    // UP/DOWN just reveal the chrome (no channel flip in
+                    // VOD). Consuming them keeps D-pad focus from
+                    // wandering onto the touch-only chrome buttons.
+                    Key.DirectionUp, Key.DirectionDown -> {
+                        chromeVisible = true
+                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                    }
+                }
+                true
+            },
     ) {
         // Don't mount MPV until the proxy redirect has been resolved into a
         // session URL - otherwise libmpv hits the 301 path that strips our
@@ -316,6 +447,16 @@ fun VODPlayerScreen(
         // Periodic save. Mirrors iOS NowPlayingManager.currentWatchProgress's
         // ~5s persistence cadence. Same logic, just reading from ExoPlayer
         // instead of libmpv property-strings.
+        //
+        // rememberUpdatedState: this loop launches before the nav route's
+        // movie/episode lookup resolves (Navigation.kt passes title/posterUrl
+        // from a route-scoped ViewModel whose library is still loading), and
+        // a LaunchedEffect closure captures its parameters at launch. Without
+        // the indirection every save would persist the initial null poster +
+        // placeholder title, which is how Continue Watching cards ended up
+        // art-less.
+        val latestTitle by rememberUpdatedState(title)
+        val latestPosterUrl by rememberUpdatedState(posterUrl)
         LaunchedEffect(exoPlayer, videoId) {
             val player = exoPlayer ?: return@LaunchedEffect
             if (videoId.isNullOrBlank()) return@LaunchedEffect
@@ -326,8 +467,8 @@ fun VODPlayerScreen(
                 if (pos <= 0L || dur <= 0L) continue
                 watchVm.save(
                     videoId = videoId,
-                    title = title,
-                    posterUrl = posterUrl,
+                    title = latestTitle,
+                    posterUrl = latestPosterUrl,
                     positionMs = pos,
                     durationMs = dur,
                 )
@@ -350,15 +491,39 @@ fun VODPlayerScreen(
             }
         }
 
-        // Tap-to-toggle chrome layer.
+        // Tap-to-toggle chrome layer. On TV it doubles as the D-pad focus
+        // anchor so the root onPreviewKeyEvent above sees every remote press.
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(playbackFocus)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                 ) { chromeVisible = !chromeVisible },
         )
+
+        // TV: park D-pad focus on the playback surface (mount + every chrome
+        // toggle) so key events keep routing through the transport handler.
+        if (isTvForm) {
+            LaunchedEffect(chromeVisible, exoPlayer) {
+                delay(100)
+                runCatching { playbackFocus.requestFocus() }
+            }
+        }
+
+        // Debounced scrub commit: seek 650ms after the last LEFT/RIGHT step
+        // (iOS scheduleScrubCommit parity). Each step restarts this effect;
+        // an OK press commits early by nulling scrubTargetMs itself.
+        LaunchedEffect(scrubTargetMs) {
+            val target = scrubTargetMs ?: return@LaunchedEffect
+            delay(650L)
+            exoPlayer?.seekTo(target)
+            positionMs = target
+            scrubTargetMs = null
+            scrubAccelCount = 0
+            scrubLastDirection = 0
+        }
 
         AnimatedVisibility(
             visible = chromeVisible && !inPip,
@@ -428,8 +593,10 @@ fun VODPlayerScreen(
 
                 // Bottom chrome: scrubber + position/duration + play/pause + skip.
                 // Mirrors iOS PlayerView scrubberBar + transport control row.
+                // While a D-pad scrub is pending, the bar previews the target
+                // position so the user sees the jump before the seek commits.
                 BottomChrome(
-                    positionMs = positionMs,
+                    positionMs = scrubTargetMs ?: positionMs,
                     durationMs = durationMs,
                     isPaused = isPaused,
                     isDragging = isDragging,
@@ -469,8 +636,14 @@ fun VODPlayerScreen(
         }
     }
 
-    LaunchedEffect(chromeVisible, isDragging) {
-        if (chromeVisible && !isDragging) {
+    // Auto-hide. The extra keys are inert on phone (lastInteractionAt stays
+    // 0, scrubTargetMs stays null, tvHoldChrome stays false) so phone timing
+    // is unchanged. On TV: every handled remote press re-arms the timer, a
+    // pending scrub pins the chrome, and pause holds the chrome up until
+    // resume (iOS scheduleControlsHide fires only while playing).
+    val tvHoldChrome = isTvForm && isPaused
+    LaunchedEffect(chromeVisible, isDragging, lastInteractionAt, scrubTargetMs, tvHoldChrome) {
+        if (chromeVisible && !isDragging && scrubTargetMs == null && !tvHoldChrome) {
             delay(AUTO_HIDE_MS)
             if (!isDragging) chromeVisible = false
         }

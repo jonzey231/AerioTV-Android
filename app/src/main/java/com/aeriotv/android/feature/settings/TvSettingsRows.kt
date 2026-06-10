@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -267,6 +268,12 @@ fun OnOffIndicator(on: Boolean) {
  * Action row (View Log File, Share, Clear, ...): leading icon + accent label
  * (red when [destructive]) + optional subtitle, on the shared focus card.
  * tvOS `TVSettingsActionRow`.
+ *
+ * Async actions (Sync Now, Clear Drive Data) pass [running] for a trailing
+ * spinner and [statusLine] for an inline result under the label (primary
+ * tint, or error tint when [statusIsError]). While [running] the click is
+ * swallowed rather than the row disabled: a disabled clickable drops out of
+ * D-pad focus traversal entirely (same guard as PlaylistDetail's ActionRow).
  */
 @Composable
 fun SettingsActionRow(
@@ -277,13 +284,20 @@ fun SettingsActionRow(
     subtitle: String? = null,
     destructive: Boolean = false,
     enabled: Boolean = true,
+    running: Boolean = false,
+    statusLine: String? = null,
+    statusIsError: Boolean = false,
 ) {
     val accent = when {
         !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         destructive -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.primary
     }
-    SettingsRowContainer(onClick = onClick, modifier = modifier, enabled = enabled) {
+    SettingsRowContainer(
+        onClick = { if (!running) onClick() },
+        modifier = modifier,
+        enabled = enabled,
+    ) {
         Icon(
             imageVector = leadingIcon,
             contentDescription = null,
@@ -305,6 +319,21 @@ fun SettingsActionRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (statusLine != null) {
+                Text(
+                    text = statusLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (statusIsError) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        if (running) {
+            Spacer(Modifier.width(12.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+            )
         }
     }
 }
