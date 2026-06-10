@@ -55,6 +55,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -151,7 +154,13 @@ fun SettingsScreen(
         ) {
         LazyColumn(
             modifier = Modifier.adaptiveFormWidth().fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 12.dp,
+                // TV: keep the last About row above the ~5% bottom overscan band.
+                bottom = if (rememberIsTvDevice()) 28.dp else 12.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             // MARK: Playlists
@@ -317,9 +326,12 @@ private fun PlaylistsSection(
             }
             // Add Playlist row — iOS calls this out with a cyan plus glyph
             // (SettingsView line 206-220).
+            var addFocused by remember { mutableStateOf(false) }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onFocusChanged { addFocused = it.isFocused }
+                    .groupRowFocus(addFocused)
                     .clickable(onClick = onAdd)
                     .padding(horizontal = 14.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -340,9 +352,12 @@ private fun PlaylistsSection(
             }
             if (playlists.size > 1) {
                 RowDivider()
+                var manageFocused by remember { mutableStateOf(false) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onFocusChanged { manageFocused = it.isFocused }
+                        .groupRowFocus(manageFocused)
                         .clickable(onClick = onManage)
                         .padding(horizontal = 14.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -363,9 +378,17 @@ private fun PlaylistsSection(
         }
         if (playlists.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            SectionFooter("Tap ○ to set the active playlist · Long press to edit or delete")
-            if (playlists.size > 1) {
-                SectionFooter("Tap Manage Playlists to reorder")
+            // Input-appropriate verbs: a remote has no "tap" or "long press".
+            if (rememberIsTvDevice()) {
+                SectionFooter("Press OK on a playlist to make it active · Hold OK to edit or delete")
+                if (playlists.size > 1) {
+                    SectionFooter("Select Manage Playlists to reorder")
+                }
+            } else {
+                SectionFooter("Tap ○ to set the active playlist · Long press to edit or delete")
+                if (playlists.size > 1) {
+                    SectionFooter("Tap Manage Playlists to reorder")
+                }
             }
         }
     }
@@ -387,10 +410,14 @@ private fun PlaylistRow(
     // the menu opens, wrap() each item: the spurious release-click within the
     // grace window is swallowed, leaving Delete reachable. No-op on touch.
     val tvGuard = rememberTvMenuGuard()
+    val isTv = rememberIsTvDevice()
+    var focused by remember { mutableStateOf(false) }
     Box {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .onFocusChanged { focused = it.isFocused }
+                .groupRowFocus(focused)
                 // Wrap onTap too: on some focus configurations the OK-release
                 // KEY_UP after a long-press is delivered back to the originating
                 // row (firing onTap = "open Edit") rather than to the menu item.
@@ -429,7 +456,8 @@ private fun PlaylistRow(
                 }
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = if (isTv) MaterialTheme.typography.bodyMedium
+                    else MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -439,27 +467,102 @@ private fun PlaylistRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-        ) {
-            DropdownMenuItem(
-                text = { Text("Edit") },
-                leadingIcon = {
-                    Icon(Icons.Filled.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                },
-                onClick = tvGuard.wrap { menuOpen = false; onEdit() },
-            )
-            DropdownMenuItem(
-                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                leadingIcon = {
-                    Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                },
-                onClick = tvGuard.wrap { menuOpen = false; onDelete() },
-            )
+        if (isTv) {
+            // Centered dialog instead of an anchored popup: the app's TV
+            // modal idiom, and the focused action row is plainly visible.
+            if (menuOpen) {
+                Dialog(onDismissRequest = { menuOpen = false }) {
+                    androidx.compose.material3.Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        Column(modifier = Modifier.padding(vertical = 10.dp)) {
+                            Text(
+                                text = playlist.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                            )
+                            PlaylistMenuRow(
+                                label = "Edit",
+                                icon = Icons.Filled.Edit,
+                                destructive = false,
+                                onClick = tvGuard.wrap { menuOpen = false; onEdit() },
+                            )
+                            PlaylistMenuRow(
+                                label = "Delete",
+                                icon = Icons.Filled.Delete,
+                                destructive = true,
+                                onClick = tvGuard.wrap { menuOpen = false; onDelete() },
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Edit") },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    },
+                    onClick = tvGuard.wrap { menuOpen = false; onEdit() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    },
+                    onClick = tvGuard.wrap { menuOpen = false; onDelete() },
+                )
+            }
         }
     }
 }
+
+@Composable
+private fun PlaylistMenuRow(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    destructive: Boolean,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .groupRowFocus(focused)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint)
+        Spacer(Modifier.size(12.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (destructive) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onBackground,
+        )
+    }
+}
+
+
+/**
+ * D-pad focus highlight for rows inside the grouped settings cards. The
+ * default Material ripple is nearly invisible at 10 feet; this paints the
+ * same accent wash the sub-screen rows use. No-op while unfocused (touch).
+ */
+@Composable
+private fun Modifier.groupRowFocus(focused: Boolean): Modifier = this.background(
+    if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent,
+)
 
 // MARK: - Generic grouped section
 
@@ -493,9 +596,12 @@ private fun SettingsSectionGroup(
 
 @Composable
 private fun SectionNavRow(section: SettingsSection, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .groupRowFocus(focused)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -524,7 +630,10 @@ private fun SectionNavRow(section: SettingsSection, onClick: () -> Unit) {
             )
             Text(
                 text = section.subtitle,
-                style = MaterialTheme.typography.bodySmall,
+                // bodySmall is ~10.8sp effective under the 0.9 TV type scale;
+                // bodyMedium keeps the subtitle readable from the couch.
+                style = if (rememberIsTvDevice()) MaterialTheme.typography.bodyMedium
+                else MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -618,9 +727,12 @@ private fun AboutActionRow(
     onClick: () -> Unit,
     external: Boolean = false,
 ) {
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .groupRowFocus(focused)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -667,7 +779,10 @@ private fun SectionHeader(text: String) {
 private fun SectionFooter(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall,
+        // labelSmall lands at ~9.9sp effective under the 0.9 TV type scale --
+        // unreadable from a couch; bodyMedium on TV, labelSmall on phones.
+        style = if (rememberIsTvDevice()) MaterialTheme.typography.bodyMedium
+        else MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
         modifier = Modifier.padding(horizontal = 4.dp),
     )
@@ -761,6 +876,6 @@ enum class SettingsSection(
     Developer(
         title = "Developer",
         subtitle = "Debug logging & diagnostics",
-        icon = Icons.Filled.Movie,
+        icon = Icons.Outlined.BugReport,
     ),
 }
