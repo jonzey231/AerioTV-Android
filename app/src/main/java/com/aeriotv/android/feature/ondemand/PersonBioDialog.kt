@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.ondemand
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,6 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,6 +48,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import com.aeriotv.android.core.network.TmdbPerson
+import com.aeriotv.android.core.tv.qrCodeBitmap
 import com.aeriotv.android.core.network.TmdbPersonBio
 import com.aeriotv.android.feature.settings.SettingsDialogTextButton
 import java.text.DateFormat
@@ -153,6 +158,12 @@ fun PersonBioDialog(
                                 )
                             }
                         }
+
+                        // QR to the person's TMDB page: no browser on a TV, so
+                        // the user scans it to open the full filmography on a
+                        // phone. A real layout child (not an overlay) so it
+                        // never sits on top of the bio text.
+                        TmdbPersonQr(personId = person.id)
                     }
 
                     val knownFor = bio?.knownFor.orEmpty()
@@ -185,6 +196,40 @@ fun PersonBioDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * Small QR in the bio sheet's top-right corner that encodes the person's
+ * TMDB page (themoviedb.org/person/{id}). Android TV has no browser, so the
+ * user scans it with a phone to open the actor's full filmography. Renders
+ * nothing when the QR cannot be generated. Not focusable, matching the rest
+ * of this read-only sheet.
+ */
+@Composable
+private fun TmdbPersonQr(personId: String) {
+    val url = "https://www.themoviedb.org/person/$personId"
+    val qr = remember(url) { qrCodeBitmap(url, sizePx = 256) } ?: return
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White)
+                .padding(6.dp),
+        ) {
+            Image(
+                bitmap = qr.asImageBitmap(),
+                contentDescription = "TMDB page QR code",
+                modifier = Modifier.size(72.dp),
+                filterQuality = FilterQuality.None,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "View on TMDB",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
