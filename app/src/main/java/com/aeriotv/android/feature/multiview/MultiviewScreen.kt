@@ -889,7 +889,12 @@ private fun Tile(
     onTap: () -> Unit,
     onDoubleTap: () -> Unit,
     onPlayer: (ExoPlayer?) -> Unit,
+    // Same activity-scoped Settings VM the screen already uses; the tile
+    // only needs the passthrough flag at player-build time.
+    settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
+    val audioPassthrough by settingsVm.audioPassthroughEnabled
+        .collectAsState(initial = false)
     val shape = if (tileRounded) RoundedCornerShape(8.dp) else RoundedCornerShape(0.dp)
     // D-pad focus (which tile the remote is currently on) is owned by the
     // grid host and passed in as [isDpadFocused]. Distinct from AUDIO focus
@@ -960,6 +965,7 @@ private fun Tile(
             isAudioFocused = isAudioFocused,
             paused = paused,
             onPlayer = onPlayer,
+            audioPassthrough = audioPassthrough,
         )
         // Channel-name overlay (top-left). Fades with the chrome: it's up
         // on launch + whenever the user interacts (tap toggles chrome,
@@ -1037,6 +1043,8 @@ private fun ExoTile(
     // Hoists the tile's player handle to the screen (per-tile track sheets).
     // Called with the player once from factory, with null from onRelease.
     onPlayer: (ExoPlayer?) -> Unit,
+    // Dolby passthrough pref at player-build time (see aerioRenderersFactory).
+    audioPassthrough: Boolean,
 ) {
     val currentUrlRef = remember { mutableStateOf("") }
     val playerRef = remember { mutableStateOf<ExoPlayer?>(null) }
@@ -1063,9 +1071,8 @@ private fun ExoTile(
                     ?.value
                     ?.let(dataSourceFactory::setUserAgent)
             }
-            val renderersFactory = DefaultRenderersFactory(ctx)
-                .setEnableDecoderFallback(true)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            val renderersFactory =
+                com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough)
             // Route raw .ts / /proxy/ts via TsExtractor like the Live
             // TV holder; HLS via HlsMediaSource; everything else via
             // the default factory. Same routing logic as

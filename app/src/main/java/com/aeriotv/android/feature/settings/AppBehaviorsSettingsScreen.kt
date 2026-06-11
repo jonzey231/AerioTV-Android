@@ -74,6 +74,7 @@ fun AppBehaviorsSettingsScreen(
     val autoResumeLastChannel by viewModel.autoResumeLastChannel.collectAsStateWithLifecycle(initialValue = false)
     val defaultTab by viewModel.defaultTab.collectAsStateWithLifecycle(initialValue = "")
     val programPostersTmdb by viewModel.programPostersTmdbEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val audioPassthrough by viewModel.audioPassthroughEnabled.collectAsStateWithLifecycle(initialValue = false)
     val savedTmdbKey by viewModel.tmdbApiKey.collectAsStateWithLifecycle(initialValue = "")
     val tmdbKeyState by viewModel.tmdbKeyTestState.collectAsStateWithLifecycle()
 
@@ -136,6 +137,18 @@ fun AppBehaviorsSettingsScreen(
                         "While the player chrome is visible, swipe up for the next channel and down for the previous. Live single-stream playback only.",
                     checked = appleTVChannelFlip,
                     onCheckedChange = viewModel::setAppleTVChannelFlip,
+                )
+            }
+
+            SettingsSection(
+                header = "Audio",
+                footer = "Passthrough sends Dolby audio as a bitstream for your TV or receiver to decode. Some TVs decode it late, which shows up as voices out of sync with lips on live TV. Off, AerioTV decodes audio itself and stays in sync. Takes effect on the next playback.",
+            ) {
+                SettingsToggleRow(
+                    title = "Dolby passthrough",
+                    subtitle = "Bitstream AC3 to your TV or receiver. Leave off if lip sync drifts.",
+                    checked = audioPassthrough,
+                    onCheckedChange = viewModel::setAudioPassthroughEnabled,
                 )
             }
 

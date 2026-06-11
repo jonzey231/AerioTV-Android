@@ -30,6 +30,8 @@ import com.aeriotv.android.BuildConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -63,10 +65,16 @@ import kotlinx.coroutines.launch
  */
 @OptIn(UnstableApi::class)
 @Singleton
-class AerioExoPlayerHolder @Inject constructor() {
+class AerioExoPlayerHolder @Inject constructor(
+    private val appPreferences: com.aeriotv.android.core.preferences.AppPreferences,
+) {
 
     var player: ExoPlayer? = null
         private set
+
+    /** Passthrough state the current player was built with; a pref flip
+     *  forces a rebuild because sink capabilities are fixed at build. */
+    private var builtWithPassthrough: Boolean? = null
 
     /** Most-recent channel id played, so a resuming PlayerScreen knows
      *  whether to skip the setMediaItem re-init. */
@@ -153,7 +161,12 @@ class AerioExoPlayerHolder @Inject constructor() {
     fun acquireOrCreate(
         context: Context,
     ): ExoPlayer {
-        player?.let { return it }
+        val audioPassthrough = runBlocking { appPreferences.audioPassthroughEnabled.first() }
+        player?.let { existing ->
+            if (builtWithPassthrough == audioPassthrough) return existing
+            Log.i(TAG, "Audio passthrough pref changed; rebuilding player")
+            destroy()
+        }
         Log.i(TAG, "Creating fresh ExoPlayer in holder")
 
         // RenderersFactory: enable SW fallback (Media3 equivalent of
@@ -163,9 +176,8 @@ class AerioExoPlayerHolder @Inject constructor() {
         // MediaCodecRenderer pulls SPS/VPS/PPS out of in-band Annex-B
         // NALs before MediaCodec.configure, so we don't even need the
         // fallback for that case -- HW just works.
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+        val renderersFactory =
+            com.aeriotv.android.core.playback.aerioRenderersFactory(context, audioPassthrough)
 
         // LoadControl: live-stream-friendly buffer durations. The
         // defaults (50s min, 50s max for VOD) over-buffer for live and
@@ -216,6 +228,7 @@ class AerioExoPlayerHolder @Inject constructor() {
             }
 
         player = fresh
+        builtWithPassthrough = audioPassthrough
         startWatchdog()
         return fresh
     }

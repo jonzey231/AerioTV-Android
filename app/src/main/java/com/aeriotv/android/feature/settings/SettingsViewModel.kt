@@ -118,6 +118,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setProgramPostersTmdbEnabled(value) }
     }
 
+    // Dolby passthrough (device-specific; off = in-app decode, fixes lip sync
+    // on TVs that decode the bitstream late).
+    val audioPassthroughEnabled: Flow<Boolean> = prefs.audioPassthroughEnabled
+    fun setAudioPassthroughEnabled(value: Boolean) {
+        viewModelScope.launch { prefs.setAudioPassthroughEnabled(value) }
+    }
+
     val tmdbApiKey: Flow<String> = prefs.tmdbApiKey
 
     enum class TmdbKeyTestState { Idle, Testing, Valid, Invalid, Saved }

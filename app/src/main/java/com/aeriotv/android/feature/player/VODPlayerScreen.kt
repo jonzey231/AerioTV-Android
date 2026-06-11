@@ -125,6 +125,8 @@ fun VODPlayerScreen(
     KeepScreenOnWhilePlaying()
 
     val settingsVm: SettingsViewModel = hiltViewModel()
+    val audioPassthrough by settingsVm.audioPassthroughEnabled
+        .collectAsStateWithLifecycle(initialValue = false)
     val streamBufferSize by settingsVm.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
     val aspectMode by settingsVm.playerAspectMode.collectAsStateWithLifecycle(initialValue = "fit")
     val watchVm: WatchProgressViewModel = hiltViewModel()
@@ -361,9 +363,8 @@ fun VODPlayerScreen(
                         ?.let(dataSourceFactory::setUserAgent)
                 }
 
-                val renderersFactory = DefaultRenderersFactory(ctx)
-                    .setEnableDecoderFallback(true)
-                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                val renderersFactory =
+                    com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough)
 
                 // Wrap the header-aware HTTP factory in DefaultDataSource.Factory
                 // so a local DVR recording's file:// URL resolves through

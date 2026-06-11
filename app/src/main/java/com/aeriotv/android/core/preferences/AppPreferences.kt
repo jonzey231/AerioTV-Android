@@ -177,6 +177,20 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_PROGRAM_POSTERS_TMDB_ENABLED] = value }
     }
 
+    /**
+     * Dolby (AC3/EAC3) bitstream passthrough over HDMI. Off by default:
+     * many TVs decode the bitstream with latency Android reports as zero,
+     * which the player cannot compensate, and it shows up as lip-sync drift
+     * on live TV. Off means AerioTV decodes Dolby audio in-app and outputs
+     * PCM on the latency-compensated path. Device-specific by nature, so
+     * deliberately NOT part of the sync snapshot.
+     */
+    val audioPassthroughEnabled: Flow<Boolean> =
+        store.data.map { it[KEY_AUDIO_PASSTHROUGH] ?: false }
+    suspend fun setAudioPassthroughEnabled(value: Boolean) {
+        store.edit { it[KEY_AUDIO_PASSTHROUGH] = value }
+    }
+
     /** The user's TMDB v3 API key OR v4 read-access token. Empty = unset. */
     val tmdbApiKey: Flow<String> = store.data.map { it[KEY_TMDB_API_KEY] ?: "" }
     suspend fun setTmdbApiKey(value: String) {
@@ -772,6 +786,8 @@ class AppPreferences @Inject constructor(
         val KEY_PROGRAM_POSTERS_TMDB_ENABLED =
             booleanPreferencesKey("app_behaviors_program_posters_tmdb_enabled")
         val KEY_TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
+        // Device-specific (depends on the TV / receiver); never synced.
+        val KEY_AUDIO_PASSTHROUGH = booleanPreferencesKey("audio_passthrough_enabled")
         // In-app updater (github flavor); device-local, never synced.
         val KEY_UPDATE_LAST_CHECK_AT = longPreferencesKey("update_last_check_at")
         val KEY_UPDATE_SKIPPED_VERSION = stringPreferencesKey("update_skipped_version")
