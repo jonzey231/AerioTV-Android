@@ -66,11 +66,19 @@ class SyncSettingsViewModel @Inject constructor(
     private val _clearStatus = MutableStateFlow<ActionStatus>(ActionStatus.Idle)
     val clearStatus: StateFlow<ActionStatus> = _clearStatus
 
+    private val _pushStatus = MutableStateFlow<ActionStatus>(ActionStatus.Idle)
+    val pushStatus: StateFlow<ActionStatus> = _pushStatus
+
+    private val _pullStatus = MutableStateFlow<ActionStatus>(ActionStatus.Idle)
+    val pullStatus: StateFlow<ActionStatus> = _pullStatus
+
     /** Reset both action rows to Idle; the screen calls this on dispose so a
      *  stale result line doesn't greet the next visit. */
     fun clearActionStatuses() {
         _syncNowStatus.value = ActionStatus.Idle
         _clearStatus.value = ActionStatus.Idle
+        _pushStatus.value = ActionStatus.Idle
+        _pullStatus.value = ActionStatus.Idle
     }
 
     fun categoryEnabled(category: SyncCategory): Flow<Boolean> =
@@ -128,15 +136,85 @@ class SyncSettingsViewModel @Inject constructor(
                 _syncNowStatus.value = ActionStatus.Failure("No sync categories enabled")
                 return@launch
             }
-            val pushed = sync.pushAll(token, enabled)
+            // Same blank-install guard as the periodic worker: the push leg
+            // waits until this install has pulled once (the pull below sets
+            // the flag, so the NEXT Sync Now pushes normally).
+            val initialPullDone = prefs.syncInitialPullDone.first()
+            val pushed = if (initialPullDone) sync.pushAll(token, enabled) else emptyMap()
             val pulled = sync.pullAll(token, enabled)
-            val merged = pushed.mapValues { (cat, ok) -> ok && (pulled[cat] != false) }
+            val merged = pulled.mapValues { (cat, ok) ->
+                (pushed[cat] != false) && ok
+            }
             val failed = merged.count { !it.value }
             _syncNowStatus.value = if (failed == 0) {
                 val n = merged.size
                 ActionStatus.Success("Synced $n ${if (n == 1) "category" else "categories"}")
             } else {
                 ActionStatus.Failure("$failed of ${merged.size} categories failed to sync")
+            }
+        }
+    }
+
+    /**
+     * EXPLICIT one-way push: overwrite the Drive backup with this device's
+     * current configuration. Deliberate user action from Settings > Sync, so
+     * it bypasses the initial-pull guard (and satisfies it afterwards: once
+     * the cloud matches this device, automatic pushes can't make it worse).
+     */
+    fun runPushOnly() {
+        if (_pushStatus.value is ActionStatus.Running) return
+        viewModelScope.launch {
+            _pushStatus.value = ActionStatus.Running
+            val token = (sync.status.value as? DriveSyncManager.Status.SignedIn)?.accessToken
+            if (token == null) {
+                _pushStatus.value = ActionStatus.Failure("Not signed in to Drive")
+                return@launch
+            }
+            val enabled = SyncCategory.entries
+                .filter { prefs.syncCategoryEnabled(it).first() }
+                .toSet()
+            if (enabled.isEmpty()) {
+                _pushStatus.value = ActionStatus.Failure("No sync categories enabled")
+                return@launch
+            }
+            val pushed = sync.pushAll(token, enabled)
+            val failed = pushed.count { !it.value }
+            if (failed == 0) prefs.setSyncInitialPullDone(true)
+            _pushStatus.value = if (failed == 0) {
+                ActionStatus.Success("Pushed ${pushed.size} ${if (pushed.size == 1) "category" else "categories"} to Drive")
+            } else {
+                ActionStatus.Failure("$failed of ${pushed.size} categories failed to push")
+            }
+        }
+    }
+
+    /**
+     * EXPLICIT one-way pull: overwrite this device's configuration with the
+     * Drive backup. Reports through [pullStatus]; also satisfies the
+     * initial-pull guard (DriveSyncManager.pullAll sets the flag).
+     */
+    fun runPullOnly() {
+        if (_pullStatus.value is ActionStatus.Running) return
+        viewModelScope.launch {
+            _pullStatus.value = ActionStatus.Running
+            val token = (sync.status.value as? DriveSyncManager.Status.SignedIn)?.accessToken
+            if (token == null) {
+                _pullStatus.value = ActionStatus.Failure("Not signed in to Drive")
+                return@launch
+            }
+            val enabled = SyncCategory.entries
+                .filter { prefs.syncCategoryEnabled(it).first() }
+                .toSet()
+            if (enabled.isEmpty()) {
+                _pullStatus.value = ActionStatus.Failure("No sync categories enabled")
+                return@launch
+            }
+            val pulled = sync.pullAll(token, enabled)
+            val failed = pulled.count { !it.value }
+            _pullStatus.value = if (failed == 0) {
+                ActionStatus.Success("Pulled ${pulled.size} ${if (pulled.size == 1) "category" else "categories"} from Drive")
+            } else {
+                ActionStatus.Failure("$failed of ${pulled.size} categories did not apply (missing in Drive or failed)")
             }
         }
     }

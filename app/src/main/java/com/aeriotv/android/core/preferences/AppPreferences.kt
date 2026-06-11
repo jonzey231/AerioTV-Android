@@ -602,6 +602,19 @@ class AppPreferences @Inject constructor(
     }
 
     val syncLastPullAt: Flow<Long> = store.data.map { it[KEY_SYNC_LAST_PULL] ?: 0L }
+
+    /**
+     * True once THIS INSTALL has completed at least one Drive pull. Gates
+     * every automatic push (periodic worker, Sync Now's push leg): a fresh
+     * blank install that signs in must never shove empty snapshots over a
+     * populated Drive backup (user report: "my saved config keeps getting
+     * overwritten with a blank app"). Device-local, never synced.
+     */
+    val syncInitialPullDone: Flow<Boolean> =
+        store.data.map { it[KEY_SYNC_INITIAL_PULL_DONE] ?: false }
+    suspend fun setSyncInitialPullDone(value: Boolean) {
+        store.edit { it[KEY_SYNC_INITIAL_PULL_DONE] = value }
+    }
     suspend fun setSyncLastPullAt(value: Long) {
         store.edit { it[KEY_SYNC_LAST_PULL] = value }
     }
@@ -788,6 +801,7 @@ class AppPreferences @Inject constructor(
         val KEY_TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
         // Device-specific (depends on the TV / receiver); never synced.
         val KEY_AUDIO_PASSTHROUGH = booleanPreferencesKey("audio_passthrough_enabled")
+        val KEY_SYNC_INITIAL_PULL_DONE = booleanPreferencesKey("sync_initial_pull_done")
         // In-app updater (github flavor); device-local, never synced.
         val KEY_UPDATE_LAST_CHECK_AT = longPreferencesKey("update_last_check_at")
         val KEY_UPDATE_SKIPPED_VERSION = stringPreferencesKey("update_skipped_version")

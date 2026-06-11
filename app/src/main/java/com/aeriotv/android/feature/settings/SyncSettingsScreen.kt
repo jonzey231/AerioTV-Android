@@ -27,7 +27,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Info
@@ -97,6 +99,10 @@ fun SyncSettingsScreen(
     val statusObj by viewModel.driveStatus.collectAsState()
     val syncNowStatus by viewModel.syncNowStatus.collectAsState()
     val clearStatus by viewModel.clearStatus.collectAsState()
+    val pushStatus by viewModel.pushStatus.collectAsState()
+    val pullStatus by viewModel.pullStatus.collectAsState()
+    var pushConfirmOpen by remember { mutableStateOf(false) }
+    var pullConfirmOpen by remember { mutableStateOf(false) }
     val configured = remember { SyncConfig.isConfigured() }
 
     // Silently restore a persisted Drive session on open so the screen shows
@@ -267,7 +273,9 @@ fun SyncSettingsScreen(
                         // which never surfaced on Android TV (rows looked dead).
                         val actionRunning =
                             syncNowStatus is SyncSettingsViewModel.ActionStatus.Running ||
-                                clearStatus is SyncSettingsViewModel.ActionStatus.Running
+                                clearStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                                pushStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                                pullStatus is SyncSettingsViewModel.ActionStatus.Running
                         SettingsActionRow(
                             label = "Sync Now",
                             subtitle = "Last synced: ${formatTimestamp(lastPull)}",
@@ -282,6 +290,38 @@ fun SyncSettingsScreen(
                             onClick = {
                                 if (inFlight || actionRunning) return@SettingsActionRow
                                 viewModel.runSyncNow()
+                            },
+                        )
+                        SettingsActionRow(
+                            label = "Push Config to Drive",
+                            subtitle = "Overwrite the Drive backup with this device's setup",
+                            leadingIcon = Icons.Filled.CloudUpload,
+                            running = pushStatus is SyncSettingsViewModel.ActionStatus.Running,
+                            statusLine = when (val s = pushStatus) {
+                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
+                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
+                                else -> null
+                            },
+                            statusIsError = pushStatus is SyncSettingsViewModel.ActionStatus.Failure,
+                            onClick = {
+                                if (inFlight || actionRunning) return@SettingsActionRow
+                                pushConfirmOpen = true
+                            },
+                        )
+                        SettingsActionRow(
+                            label = "Pull Config from Drive",
+                            subtitle = "Overwrite this device with the Drive backup",
+                            leadingIcon = Icons.Filled.CloudDownload,
+                            running = pullStatus is SyncSettingsViewModel.ActionStatus.Running,
+                            statusLine = when (val s = pullStatus) {
+                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
+                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
+                                else -> null
+                            },
+                            statusIsError = pullStatus is SyncSettingsViewModel.ActionStatus.Failure,
+                            onClick = {
+                                if (inFlight || actionRunning) return@SettingsActionRow
+                                pullConfirmOpen = true
                             },
                         )
                         SettingsActionRow(
@@ -305,6 +345,59 @@ fun SyncSettingsScreen(
             }
         }
         }
+    }
+
+    if (pushConfirmOpen) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pushConfirmOpen = false },
+            title = { Text("Push Config to Drive?") },
+            text = {
+                Text(
+                    "This replaces the entire Drive backup with this device's " +
+                        "current configuration. Other devices that pull later " +
+                        "receive this copy.",
+                )
+            },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Push to Drive",
+                    onClick = {
+                        pushConfirmOpen = false
+                        viewModel.runPushOnly()
+                    },
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { pushConfirmOpen = false })
+            },
+        )
+    }
+
+    if (pullConfirmOpen) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pullConfirmOpen = false },
+            title = { Text("Pull Config from Drive?") },
+            text = {
+                Text(
+                    "This replaces this device's playlists, preferences, and " +
+                        "watch progress with the Drive backup. The current setup " +
+                        "on this device is overwritten.",
+                )
+            },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Pull from Drive",
+                    onClick = {
+                        pullConfirmOpen = false
+                        viewModel.runPullOnly()
+                    },
+                    destructive = true,
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { pullConfirmOpen = false })
+            },
+        )
     }
 
     if (notConfiguredDialogOpen) {

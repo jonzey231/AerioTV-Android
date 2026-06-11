@@ -546,7 +546,12 @@ fun AerioTVNavHost(
                         )
                     } else emptyMap()
                 }
-                val playableChannels = state.channels.filter { it.url.isNotBlank() }
+                // UNFILTERED on purpose: dropping blank-url channels here made the
+                // id lookup miss for event channels whose stream is not assigned
+                // yet, and the old coerce-to-0 then played channels[0]. PlayerScreen
+                // resolves by id against the same list the guide shows; its playUrl
+                // effect already no-ops on a blank url.
+                val playableChannels = state.channels
                 CompositionLocalProvider(
                     LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: false),
                 ) {

@@ -206,6 +206,9 @@ class DriveSyncManager @Inject constructor(
             result[category] = ok
         }
         appPreferences.setSyncLastPullAt(System.currentTimeMillis())
+        // This install has seen the remote state; automatic pushes are now
+        // safe (see AppPreferences.syncInitialPullDone).
+        appPreferences.setSyncInitialPullDone(true)
         return result
     }
 
@@ -235,6 +238,7 @@ class DriveSyncManager @Inject constructor(
             }
         }
         appPreferences.setSyncLastPullAt(System.currentTimeMillis())
+        appPreferences.setSyncInitialPullDone(true)
         return result
     }
 

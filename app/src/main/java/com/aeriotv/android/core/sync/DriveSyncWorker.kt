@@ -56,7 +56,17 @@ class DriveSyncWorker @AssistedInject constructor(
             Log.i(TAG, "No categories enabled — skipping")
             return@runCatching Result.success()
         }
-        val pushed = sync.pushAll(token, enabled)
+        // Never auto-push before this install's first successful pull: a
+        // blank fresh install would overwrite a populated Drive backup with
+        // empty snapshots (user report). The pull below sets the flag, so
+        // the next cycle pushes normally.
+        val initialPullDone = prefs.syncInitialPullDone.first()
+        val pushed = if (initialPullDone) {
+            sync.pushAll(token, enabled)
+        } else {
+            Log.i(TAG, "Skipping push: no pull completed on this install yet")
+            emptyMap()
+        }
         val pulled = sync.pullAll(token, enabled)
         val failures = (pushed + pulled).count { !it.value }
         Log.i(TAG, "Periodic sync done: ${pushed.size}↑ ${pulled.size}↓ failures=$failures")

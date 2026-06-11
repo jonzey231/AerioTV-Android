@@ -99,8 +99,13 @@ fun PlayerScreen(
 
     // Channel-flip state. The MPV view stays alive across flips; only the
     // current channel index changes and we call playFile again with the new URL.
+    // -1 when the id is not in the list yet (hydration race, or an event
+    // channel the playlist refresh re-keyed). NEVER coerce a miss to 0: that
+    // silently played channels[0] (the user report: picking World Cup #5200
+    // played channel #1). getOrNull(-1) renders the loading state instead,
+    // and the remember(channels) below re-resolves when the list lands.
     val initialIndex = remember(channels, initialChannelId) {
-        channels.indexOfFirst { it.id == initialChannelId }.coerceAtLeast(0)
+        channels.indexOfFirst { it.id == initialChannelId }
     }
     var currentIndex by remember(channels) { mutableIntStateOf(initialIndex) }
     val currentChannel = channels.getOrNull(currentIndex)
@@ -337,7 +342,7 @@ fun PlayerScreen(
                         Key.DirectionDown -> -1
                         else -> 0
                     }
-                    if (delta != 0) {
+                    if (delta != 0 && currentIndex >= 0 && channels.isNotEmpty()) {
                         val next = (currentIndex + delta).coerceIn(0, channels.lastIndex)
                         if (next != currentIndex) {
                             currentIndex = next
@@ -367,7 +372,7 @@ fun PlayerScreen(
                         onDragStart = { totalDy = 0f },
                         onDragEnd = {
                             val abs = abs(totalDy)
-                            if (abs > SWIPE_THRESHOLD_PX) {
+                            if (abs > SWIPE_THRESHOLD_PX && currentIndex >= 0 && channels.isNotEmpty()) {
                                 val direction = if (totalDy < 0f) +1 else -1
                                 val next = (currentIndex + direction)
                                     .coerceIn(0, channels.lastIndex)
