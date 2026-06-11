@@ -176,8 +176,16 @@ class AerioExoPlayerHolder @Inject constructor(
         // MediaCodecRenderer pulls SPS/VPS/PPS out of in-band Annex-B
         // NALs before MediaCodec.configure, so we don't even need the
         // fallback for that case -- HW just works.
-        val renderersFactory =
-            com.aeriotv.android.core.playback.aerioRenderersFactory(context, audioPassthrough)
+        // forceVideoCodecReinit: some Codec2 decoders (Exynos C2 h264 in a
+        // GitHub user report) go video-dead when Media3 flushes and reuses
+        // the codec across a channel switch: audio plays, screen stays
+        // black. Re-initialising the video codec per switch is the path
+        // that works everywhere.
+        val renderersFactory = com.aeriotv.android.core.playback.aerioRenderersFactory(
+            context,
+            audioPassthrough,
+            forceVideoCodecReinit = true,
+        )
 
         // LoadControl: live-stream-friendly buffer durations. The
         // defaults (50s min, 50s max for VOD) over-buffer for live and
