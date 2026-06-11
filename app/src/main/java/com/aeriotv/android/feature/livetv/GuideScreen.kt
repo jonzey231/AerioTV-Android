@@ -1289,11 +1289,11 @@ private fun ChannelGuideRow(
     // Compact rail sizing. On TV we keep it tight (narrow rail, small logo) so
     // more channels fit; legibility comes from the name/cell text, not bulk.
     val numberStyle = if (isTv) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall
-    // tvOS minWidth 38pt -> 19dp proportional, but a 4-digit number ("5200") at
-    // labelMedium needs ~24dp; 28dp accommodates 4 digits with margin (24dp
-    // clipped the last digit: both World Cup channels rendered as "520",
-    // user report). Phone keeps the compact 22dp.
-    val numberWidth = if (isTv) 28.dp else 22.dp
+    // Channel numbers run up to 5 digits on large IPTV playlists. Size the
+    // column for "12345" at the rail's type scale so nothing clips (24dp/28dp
+    // rendered "5200" as "520", user reports). The few extra dp for low
+    // numbers is a fair trade for never truncating a channel number.
+    val numberWidth = if (isTv) 40.dp else 36.dp
     // logoBox/logoImage are the PHONE rail's square logo. TV uses a landscape
     // logo-over-name VStack (the isTv branch below) so the channel name gets its
     // own full-width line and shows in full, mirroring tvOS channelLabel.

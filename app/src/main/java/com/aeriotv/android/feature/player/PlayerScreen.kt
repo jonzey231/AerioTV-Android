@@ -34,6 +34,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -311,6 +314,23 @@ fun PlayerScreen(
     }
 
     val streamUrl = currentChannel?.url.orEmpty()
+
+    // Returning to the foreground player must always restore video unless the
+    // user explicitly chose Audio Only. A media-session controller (or the old
+    // car-audio path) could have disabled the video track while we were
+    // backgrounded; without this the user came back to a black screen with
+    // sound and the Audio Only toggle's state did not match the real track
+    // (user report). audioOnly stays the single source of truth.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, audioOnly) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exoHolder.setVideoTrackEnabled(!audioOnly)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // The video PlayerView is mounted at MainActivity root via
     // PersistentExoWindow (state-driven Fullscreen / Mini / Hidden).

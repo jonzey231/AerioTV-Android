@@ -140,6 +140,20 @@ class AerioMediaPlaybackService : MediaLibraryService() {
             LibraryResult.ofItemList(browseTree.children(parentId), params)
         }
 
+        // Android Auto / Automotive controllers play audio-only (no car
+        // surface). EVERY other media-session controller on a PHONE (Bluetooth
+        // device, Assistant, system media-resumption, the notification) also
+        // routes through these callbacks, and blanking video for them left the
+        // foreground player black with audio still running (user report,
+        // Pixel 9 Pro XL). Only a real car controller should drop video.
+        private fun isCarController(controller: MediaSession.ControllerInfo): Boolean {
+            val pkg = controller.packageName
+            return pkg == "com.google.android.projection.gearhead" ||
+                pkg == "com.google.android.apps.automotive.templates.host" ||
+                pkg.startsWith("com.google.android.gms.car") ||
+                packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE)
+        }
+
         override fun onSetMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -152,7 +166,7 @@ class AerioMediaPlaybackService : MediaLibraryService() {
             val info = pickedId?.let { browseTree.resolveForPlayback(it) }
             if (info != null) {
                 exoHolder.httpHeaders = info.headers
-                exoHolder.setVideoTrackEnabled(false) // car is audio-only
+                if (isCarController(controller)) exoHolder.setVideoTrackEnabled(false)
                 MediaSession.MediaItemsWithStartPosition(info.items, info.startIndex, C.TIME_UNSET)
             } else {
                 MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
@@ -167,7 +181,7 @@ class AerioMediaPlaybackService : MediaLibraryService() {
             val resolved = mediaItems.mapNotNull { item ->
                 val info = browseTree.resolveForPlayback(item.mediaId) ?: return@mapNotNull null
                 exoHolder.httpHeaders = info.headers
-                exoHolder.setVideoTrackEnabled(false)
+                if (isCarController(controller)) exoHolder.setVideoTrackEnabled(false)
                 info.items.getOrNull(info.startIndex)
             }
             if (resolved.isNotEmpty()) resolved.toMutableList() else mediaItems
