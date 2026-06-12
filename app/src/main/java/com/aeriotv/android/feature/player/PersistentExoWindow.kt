@@ -11,7 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,6 +25,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -83,7 +91,37 @@ fun BoxScope.PersistentExoWindow(
             .background(Color.Black)
     }
 
+    // Re-anchor the SurfaceView after the activity window is recreated while
+    // this window is Hidden. Repro (user log + emulator, the recurring
+    // "audio plays, screen stays black" report): minimize playback to the
+    // audio chip (Hidden -> the SurfaceView is 0-size and has NO surface),
+    // background the app (Android destroys the activity window), return, and
+    // start a channel. requestFullscreen resizes the old SurfaceView, which
+    // then creates its surface against the DEAD window's layer tree:
+    // SurfaceFlinger shows the layer in the Offscreen Hierarchy, consuming
+    // 1920x1080 buffers nobody composites. onRenderedFirstFrame fires (so the
+    // no-video-frame watchdog rightly stays quiet) but the screen is black
+    // until a force-stop. A view that holds a LIVE surface across the window
+    // teardown re-anchors correctly through the normal surfaceDestroyed /
+    // surfaceCreated cycle, so only the Hidden case needs this; recreating the
+    // PlayerView there is free (no surface, no codec attachment to disturb).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var surfaceEpoch by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START &&
+                state.mode.value == ExoWindowState.Mode.Hidden
+            ) {
+                surfaceEpoch++
+                Log.i(TAG, "window restarted while Hidden; recreating PlayerView (epoch=$surfaceEpoch)")
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Box(modifier = containerModifier) {
+        key(surfaceEpoch) {
         AndroidView(
             factory = { ctx ->
                 Log.i(TAG, "PersistentExoWindow factory: building PlayerView + binding player")
@@ -168,10 +206,15 @@ fun BoxScope.PersistentExoWindow(
                 }
             },
             modifier = Modifier.fillMaxSize(),
-            // No onRelease teardown: this View outlives every composition.
-            // PlayerScreen / mini-overlay only flip ExoWindowState; the
-            // explicit X-close path goes through holder.destroy().
+            // onRelease only runs on a surfaceEpoch swap (the view otherwise
+            // outlives every composition). Detach the player from the dying
+            // view; Media3 ignores the clear when the player's active surface
+            // already belongs to the replacement view, so ordering is safe.
+            onRelease = { view ->
+                view.player = null
+            },
         )
+        }
     }
 }
 
