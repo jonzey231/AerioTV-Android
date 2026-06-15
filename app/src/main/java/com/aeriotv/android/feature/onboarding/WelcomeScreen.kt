@@ -7,7 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,10 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Tv
@@ -100,51 +101,32 @@ private fun WelcomeSingleColumn(
             .background(MaterialTheme.colorScheme.background),
     ) {
         WelcomeAmbientOrbs(modifier = Modifier.fillMaxSize())
-        BoxWithConstraints(
+        // Mirrors the tvOS WelcomeView: a single centered column, brand on top,
+        // the three supported source types, ONE Sync card, a Connect-a-Server
+        // row, then Skip. Sized to fit a 1080p Android TV (~540dp tall, half
+        // tvOS's 1080pt logical height) without scrolling. Centered so it sits
+        // balanced; verticalScroll is only a last-ditch fallback for an
+        // unusually short viewport.
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .fillMaxSize(),
+                .fillMaxHeight()
+                .widthIn(max = 620.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            // Fit the whole page without scrolling, at any screen size. A short
-            // viewport (every Android TV: a 1080p panel is only ~540dp tall, and
-            // landscape phones) can't fit the roomy stacked layout -- its
-            // intrinsic content height alone exceeds the screen. Below the
-            // threshold we switch to a COMPACT layout that spends the ample
-            // WIDTH instead: source types in one row, the two info cards side by
-            // side, a smaller logo, tighter spacing. The roomy stacked layout
-            // stays for tall screens (portrait phones). verticalScroll remains
-            // only as a last-ditch fallback so an unforeseen size never clips.
-            val compact = maxHeight < 640.dp
-            val colMaxWidth = if (compact) 900.dp else 560.dp
-            val vPad = if (compact) 12.dp else 24.dp
-            val gap = if (compact) 12.dp else 18.dp
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxHeight()
-                    .widthIn(max = colMaxWidth)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = vPad),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                // Center the content so, when it fits (the normal case now), it
-                // sits balanced in the viewport instead of pinned to the top.
-                verticalArrangement = Arrangement.Center,
-            ) {
-                BrandBlock(compact = compact)
-                Spacer(Modifier.height(gap))
-                SupportedTypesGroup(alignStart = false, compact = compact)
-                Spacer(Modifier.height(gap))
-                InfoCardsGroup(compact = compact)
-                Spacer(Modifier.height(gap))
-                ActionButtons(
-                    onConnectServer = onConnectServer,
-                    onSkip = onSkip,
-                    onSignInWithGoogle = onSignInWithGoogle,
-                    googleSignInInProgress = googleSignInInProgress,
-                    compact = compact,
-                )
-            }
+            BrandBlock()
+            Spacer(Modifier.height(22.dp))
+            SupportedTypesGroup(alignStart = false)
+            Spacer(Modifier.height(22.dp))
+            SyncCard(inProgress = googleSignInInProgress, onClick = onSignInWithGoogle)
+            if (onSignInWithGoogle != null) Spacer(Modifier.height(12.dp))
+            ConnectServerRow(onClick = onConnectServer)
+            Spacer(Modifier.height(4.dp))
+            SkipRow(onSkip = onSkip)
         }
     }
 }
@@ -204,69 +186,46 @@ private fun WelcomeTwoColumnRow(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
         ) {
-            InfoCardsGroup()
-            Spacer(Modifier.height(20.dp))
-            ActionButtons(
-                onConnectServer = onConnectServer,
-                onSkip = onSkip,
-                onSignInWithGoogle = onSignInWithGoogle,
-                googleSignInInProgress = googleSignInInProgress,
-            )
+            SyncCard(inProgress = googleSignInInProgress, onClick = onSignInWithGoogle)
+            if (onSignInWithGoogle != null) Spacer(Modifier.height(12.dp))
+            ConnectServerRow(onClick = onConnectServer)
+            Spacer(Modifier.height(4.dp))
+            SkipRow(onSkip = onSkip)
         }
     }
 }
 
 @Composable
-private fun BrandBlock(alignStart: Boolean = false, compact: Boolean = false) {
+private fun BrandBlock(alignStart: Boolean = false) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (alignStart) Alignment.Start else Alignment.CenterHorizontally,
     ) {
-        BrandLogo(compact = compact)
-        Spacer(Modifier.height(if (compact) 8.dp else 12.dp))
+        BrandLogo()
+        Spacer(Modifier.height(10.dp))
         Text(
             text = "AerioTV",
-            style = if (compact) MaterialTheme.typography.titleLarge
-            else MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Bold,
         )
-        Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
+        Spacer(Modifier.height(2.dp))
         Text(
             text = "Your IPTV & Media Hub",
-            style = if (compact) MaterialTheme.typography.bodyMedium
-            else MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary,
         )
-        // The platform line is the least essential brand text; drop it in the
-        // compact (short-viewport) layout to reclaim vertical space.
-        if (!compact) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "Android TV · Phone · Tablet",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "Android TV · Phone · Tablet",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
 @Composable
-private fun SupportedTypesGroup(alignStart: Boolean = false, compact: Boolean = false) {
-    if (compact) {
-        // Short viewport: the three supported types ride a single row so they
-        // cost ~one line of height instead of three.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SupportedTypeInline(icon = Icons.Filled.Key, label = "Dispatcharr Direct Connect")
-            SupportedTypeInline(icon = Icons.Filled.Tv, label = "Xtream Codes")
-            SupportedTypeInline(icon = Icons.Filled.Description, label = "M3U + EPG")
-        }
-        return
-    }
+private fun SupportedTypesGroup(alignStart: Boolean = false) {
     Column(modifier = Modifier.fillMaxWidth()) {
         SupportedTypeRow(icon = Icons.Filled.Key, label = "Dispatcharr Direct Connect", alignStart = alignStart)
         SupportedTypeRow(icon = Icons.Filled.Tv, label = "Xtream Codes", alignStart = alignStart)
@@ -274,195 +233,88 @@ private fun SupportedTypesGroup(alignStart: Boolean = false, compact: Boolean = 
     }
 }
 
-@Composable
-private fun InfoCardsGroup(compact: Boolean = false) {
-    if (compact) {
-        // Short viewport: the two info cards sit side by side (each takes half
-        // the wide TV/landscape column) so they cost one card-height, not two.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            SourceTypeCard(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Filled.CloudOff,
-                title = "Sync via Google Account",
-                subtitle = "After setup, sign in to Drive in Settings > Sync to mirror playlists, watch progress, reminders, and preferences across devices.",
-            )
-            SourceTypeCard(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Outlined.Wifi,
-                title = "Automatic LAN Switching",
-                subtitle = "After setup, add a LAN URL to your playlist in Settings and AerioTV uses it automatically whenever your server is reachable locally.",
-            )
-        }
-        return
-    }
-    Column(modifier = Modifier.fillMaxWidth()) {
-        SourceTypeCard(
-            icon = Icons.Filled.CloudOff,
-            title = "Sync via Google Account",
-            subtitle = "After setup, sign in to Drive in Settings > Sync to mirror playlists, watch progress, reminders, and preferences across devices.",
-        )
-        Spacer(Modifier.height(10.dp))
-        SourceTypeCard(
-            icon = Icons.Outlined.Wifi,
-            title = "Automatic LAN Switching",
-            subtitle = "After setup, add a LAN URL to your playlist in Settings and AerioTV uses it automatically whenever your server is reachable locally.",
-        )
-    }
-}
-
-/** One supported-source type as a compact inline icon+label, for the
- *  short-viewport single-row layout. */
-@Composable
-private fun SupportedTypeInline(icon: ImageVector, label: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        GradientIcon(
-            imageVector = icon,
-            brush = accentBrush(),
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-    }
-}
-
-@Composable
-private fun ActionButtons(
-    onConnectServer: () -> Unit,
-    onSkip: () -> Unit,
-    onSignInWithGoogle: (() -> Unit)? = null,
-    googleSignInInProgress: Boolean = false,
-    compact: Boolean = false,
-) {
-    val gradient = accentBrush()
-    val shape = RoundedCornerShape(28.dp)
-    Column(
-        // Cap width in compact so the buttons don't stretch across the wide
-        // TV/landscape column; full-width on the narrow stacked layout.
-        modifier = (if (compact) Modifier.widthIn(max = 520.dp) else Modifier)
-            .fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // iOS WelcomeView line 174: `.background(LinearGradient.accentGradient)`.
-        // Material3 Button can't host a Brush container, so the CTA is a
-        // gradient-backed Box with clickable + same Material ripple behavior.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                // Clip to the rounded shape BEFORE clickable so the D-pad focus
-                // highlight follows the corners instead of a squared rectangle.
-                .clip(shape)
-                .background(brush = gradient, shape = shape)
-                .clickable(onClick = onConnectServer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Hub,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.size(20.dp),
-                )
-                Text(
-                    text = "Connect a Server",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-        if (onSignInWithGoogle != null) {
-            Spacer(Modifier.height(12.dp))
-            // Optional Drive Sign-in path. Lives between Connect (primary) and
-            // Skip (secondary) so it reads as a "I already have devices set
-            // up, pull my data" alternative to fresh-server onboarding. The
-            // visual is the Google-compliant dark variant (#131314 BG +
-            // four-color G mark) so it stays on-brand against AerioTV navy.
-            WelcomeGoogleSignInButton(
-                enabled = !googleSignInInProgress,
-                onClick = onSignInWithGoogle,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onSkip) {
-            Text(
-                text = "Skip for now",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-}
-
 /**
- * Onboarding-flavour of the Google Sign-In button. Mirrors the dark variant
- * in [com.aeriotv.android.feature.settings.SyncSettingsScreen.SignInWithGoogleButton]
- * — same #131314 background, #8E918F border, four-color G mark drawn from
- * res/drawable/ic_google_g.xml. Kept local so the welcome screen doesn't
- * depend on Settings internals.
+ * Sync opt-in card, the Drive analog of the tvOS WelcomeView iCloud card: one
+ * card with an On/Off status pill. On the welcome screen sync is always Off
+ * (signing in transitions onboarding to the restore-progress screen), so the
+ * card is the tap target that launches Google sign-in. Hidden entirely when
+ * the build ships without an OAuth client id (onClick null).
  */
 @Composable
-private fun WelcomeGoogleSignInButton(enabled: Boolean, onClick: () -> Unit) {
-    val bg = if (enabled) Color(0xFF131314) else Color(0xFF131314).copy(alpha = 0.55f)
-    val stroke = Color(0xFF8E918F).copy(alpha = if (enabled) 1f else 0.55f)
-    val fg = if (enabled) Color(0xFFE3E3E3) else Color(0xFFE3E3E3).copy(alpha = 0.55f)
-    Row(
+private fun SyncCard(inProgress: Boolean, onClick: (() -> Unit)?) {
+    if (onClick == null) return
+    SourceTypeCard(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .border(1.dp, stroke, RoundedCornerShape(50))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        Icon(
-            painter = androidx.compose.ui.res.painterResource(
-                id = com.aeriotv.android.R.drawable.ic_google_g,
-            ),
-            contentDescription = null,
-            // Tint.Unspecified preserves the four-color brand mark — Google
-            // brand guidelines forbid tinting the G to a single colour.
-            tint = Color.Unspecified,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.size(12.dp))
-        Text(
-            text = "Sign in with Google",
-            color = fg,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Medium,
-        )
-    }
-    // Stroke goes after content so the rounded outline reads cleanly on top
-    // of the BG fill regardless of which composable above happens to clip
-    // its descendants.
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = !inProgress, onClick = onClick),
+        icon = Icons.Filled.CloudOff,
+        title = "Sync via Google Account",
+        subtitle = "Sign in to mirror playlists, watch progress, reminders, and preferences across your devices.",
+        trailing = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant),
+                )
+                Text(
+                    text = if (inProgress) "..." else "Off",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+        },
+    )
+}
+
+/** "Connect a Server" as a single-line row with a trailing chevron, mirroring
+ *  the tvOS WelcomeView nav row (not a full-bleed gradient button). */
+@Composable
+private fun ConnectServerRow(onClick: () -> Unit) {
+    SourceTypeCard(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        icon = Icons.Outlined.Hub,
+        title = "Connect a Server",
+        subtitle = null,
+        trailing = {
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+    )
 }
 
 @Composable
-private fun BrandLogo(compact: Boolean = false) {
+private fun SkipRow(onSkip: () -> Unit) {
+    TextButton(onClick = onSkip) {
+        Text(
+            text = "Skip for now",
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@Composable
+private fun BrandLogo() {
     // Mirrors iOS WelcomeView's `.shadow(color: aerioCyan @ 0.45, radius: 20, y: 8)`
     // under the logo. Compose's shadow modifier only renders elevation drop-shadows,
     // not colored glows, so we draw a soft radial gradient halo behind the logo
     // bitmap instead — same visual effect, API-agnostic.
     val accent = MaterialTheme.colorScheme.primary
-    val haloSize = if (compact) 64.dp else 96.dp
-    val imageSize = if (compact) 44.dp else 64.dp
+    // Sized to read as a hero logo while still letting the whole stacked page
+    // fit a ~540dp-tall Android TV without scrolling.
+    val haloSize = 84.dp
+    val imageSize = 56.dp
     Box(
         modifier = Modifier.size(haloSize),
         contentAlignment = Alignment.Center,

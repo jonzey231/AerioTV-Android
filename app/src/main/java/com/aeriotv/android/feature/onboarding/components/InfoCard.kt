@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 fun SourceTypeCard(
     icon: ImageVector,
     title: String,
-    subtitle: String,
+    subtitle: String?,
     modifier: Modifier = Modifier,
     trailing: @Composable (() -> Unit)? = null,
 ) {
@@ -72,12 +72,16 @@ fun SourceTypeCard(
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.SemiBold,
             )
-            Spacer(Modifier.size(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Row-style cards (e.g. onboarding "Connect a Server") pass no
+            // subtitle and render as a single title line + trailing affordance.
+            if (subtitle != null) {
+                Spacer(Modifier.size(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (trailing != null) {
             Spacer(Modifier.width(4.dp))
