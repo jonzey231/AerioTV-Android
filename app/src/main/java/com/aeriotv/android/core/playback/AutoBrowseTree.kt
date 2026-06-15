@@ -69,9 +69,16 @@ class AutoBrowseTree @Inject constructor(
 
     /** Children of a browsable node. [parentId] is always a node id. */
     suspend fun children(parentId: String): List<MediaItem> {
-        val playlist = repository.activePlaylist() ?: return emptyList()
+        // No source on this device (fresh install, or a Drive-restored device
+        // before the user signs the server in): show a clear, non-playable row
+        // rather than a blank car screen. Android Auto's review harness opens
+        // a fresh install with no account and checks for exactly this graceful
+        // empty state instead of an unexplained empty list. We never bundle a
+        // source, so this message is the honest car-side equivalent of the
+        // phone's onboarding prompt.
+        val playlist = repository.activePlaylist() ?: return listOf(emptyStateItem())
         val channels = loadChannels(playlist)
-        if (channels.isEmpty()) return emptyList()
+        if (channels.isEmpty()) return listOf(emptyStateItem())
         val nowByTvg = nowPlayingByChannelKey(playlist)
 
         return when {
@@ -223,6 +230,18 @@ class AutoBrowseTree @Inject constructor(
             }
             .toList()
 
+    /** Non-playable, non-browsable row shown when the car has no source yet. */
+    private fun emptyStateItem(): MediaItem {
+        val meta = MediaMetadata.Builder()
+            .setTitle("No playlist configured")
+            .setSubtitle("Open AerioTV on your phone to add a server")
+            .setIsBrowsable(false)
+            .setIsPlayable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .build()
+        return MediaItem.Builder().setMediaId(EMPTY_ID).setMediaMetadata(meta).build()
+    }
+
     private fun browsable(id: String, title: String, subtitle: String? = null): MediaItem {
         val meta = MediaMetadata.Builder()
             .setTitle(title)
@@ -310,5 +329,6 @@ class AutoBrowseTree @Inject constructor(
         private const val GROUPS_ID = "aerio_auto_groups"
         private const val GROUP_PREFIX = "aerio_auto_grp:"
         private const val DISPATCHARR_ID_PREFIX = "disp:"
+        private const val EMPTY_ID = "aerio_auto_empty"
     }
 }

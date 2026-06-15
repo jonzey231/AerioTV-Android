@@ -154,6 +154,24 @@ class AerioMediaPlaybackService : MediaLibraryService() {
                 packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE)
         }
 
+        // Android Auto / Assistant calls this on connect (and "resume" voice
+        // commands) to restart the last session without the user re-browsing.
+        // Supporting it is an Auto quality-guideline checklist item; we resume
+        // the last channel the holder played, rebuilt against the current
+        // LAN/WAN base so a car on cellular gets the remote URL.
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
+            val lastId = exoHolder.currentChannelId
+                ?: throw UnsupportedOperationException("no previous channel to resume")
+            val info = browseTree.resolveForPlayback(lastId)
+                ?: throw UnsupportedOperationException("previous channel no longer available")
+            exoHolder.httpHeaders = info.headers
+            if (isCarController(controller)) exoHolder.setVideoTrackEnabled(false)
+            MediaSession.MediaItemsWithStartPosition(info.items, info.startIndex, C.TIME_UNSET)
+        }
+
         override fun onSetMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
