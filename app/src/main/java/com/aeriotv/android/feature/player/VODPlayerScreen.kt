@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
@@ -176,6 +178,33 @@ fun VODPlayerScreen(
         context.resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_TYPE_MASK
         ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+
+    // GH #7 (True Android Fullscreen), VOD parity with the live player: on
+    // phone/tablet, hide the status + nav bars while the movie plays so it is
+    // genuinely edge-to-edge, plus a manual fullscreen toggle (forcedLandscape)
+    // that force-rotates to landscape and pins it under a portrait rotation-lock
+    // (iOS PlayerView parity). Both are released on dispose. TV has no system
+    // bars and no rotation, so this is phone-only.
+    var forcedLandscape by remember { mutableStateOf(false) }
+    if (!isTvForm) {
+        val activity = context.findActivity()
+        DisposableEffect(activity) {
+            val window = activity?.window
+            val controller = window?.let {
+                androidx.core.view.WindowCompat.getInsetsController(it, it.decorView)
+            }
+            controller?.apply {
+                systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat
+                    .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+            onDispose {
+                controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                activity?.requestedOrientation =
+                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
 
     // "Audio keeps playing after leaving the app" on TV (jonzee222): VOD owns
     // its OWN ExoPlayer (not the live holder MainActivity.onUserLeaveHint tears
@@ -591,6 +620,33 @@ fun VODPlayerScreen(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        IconButton(onClick = {
+                            forcedLandscape = !forcedLandscape
+                            context.findActivity()?.requestedOrientation = if (forcedLandscape) {
+                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                            } else {
+                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                            }
+                        }) {
+                            Icon(
+                                imageVector = if (forcedLandscape) {
+                                    Icons.Filled.FullscreenExit
+                                } else {
+                                    Icons.Filled.Fullscreen
+                                },
+                                contentDescription = if (forcedLandscape) "Exit fullscreen" else "Fullscreen",
+                                tint = Color.White,
+                            )
+                        }
+                    }
                     if (pipAvailable) {
                         Spacer(Modifier.width(8.dp))
                         Box(

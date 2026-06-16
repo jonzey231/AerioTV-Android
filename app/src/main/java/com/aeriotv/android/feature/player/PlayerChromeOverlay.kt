@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.MusicNote
@@ -57,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -132,6 +135,24 @@ fun PlayerChromeOverlay(
     val context = LocalContext.current
     val inPip by PipState.inPictureInPicture
     val pipAvailable = remember { context.supportsPip() }
+
+    // GH #7 follow-up (iOS PlayerView parity): manual fullscreen toggle on the
+    // phone control row. Tapping forces landscape and pins it even under a
+    // portrait rotation-lock; tapping again releases back to the device's own
+    // orientation. The implicit auto bar-hiding (PlayerScreen) already handles
+    // the system chrome; this adds the explicit user control iOS has via its
+    // force-landscape button. Released on dispose so leaving the player restores
+    // the user's orientation. TV is always landscape with no rotation, so it's
+    // only wired into the phone branch below.
+    var forcedLandscape by remember { mutableStateOf(false) }
+    if (!isTv) {
+        DisposableEffect(Unit) {
+            onDispose {
+                context.findActivity()?.requestedOrientation =
+                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
 
     // Tell the host the chrome is "busy" (Options menu or Sleep sheet open) so
     // its auto-hide timer pauses while the user is interacting. tvOS keeps the
@@ -311,6 +332,19 @@ fun PlayerChromeOverlay(
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                CircleIconButton(
+                    icon = if (forcedLandscape) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                    contentDescription = if (forcedLandscape) "Exit fullscreen" else "Fullscreen",
+                    onClick = {
+                        forcedLandscape = !forcedLandscape
+                        context.findActivity()?.requestedOrientation = if (forcedLandscape) {
+                            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                        } else {
+                            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        }
+                    },
+                )
+                Spacer(Modifier.width(8.dp))
                 Box {
                     CircleIconButton(
                         icon = Icons.Filled.MoreHoriz,
