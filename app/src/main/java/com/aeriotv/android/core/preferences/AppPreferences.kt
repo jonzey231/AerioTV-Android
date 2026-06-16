@@ -301,6 +301,34 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Live TV group display order + sort mode (Manage Groups reorder; Android
+     * enhancement, no iOS equivalent since iOS groups are source-ordered).
+     * [groupOrder] is the user's manual order as a newline-delimited list of
+     * group NAMES, preserving order (NOT a set). It is authoritative only when
+     * [groupSortMode] is "Manual"; "Alphabetical" sorts A-Z at display time and
+     * "Default" keeps the playlist's first-occurrence order. The saved order is
+     * always reconciled against the live group list at display time, so renamed
+     * or removed groups drop out and brand-new groups append.
+     */
+    val groupOrder: Flow<List<String>> = store.data.map { prefs ->
+        val raw = prefs[KEY_GROUP_ORDER] ?: ""
+        if (raw.isBlank()) emptyList()
+        else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }
+    }
+    suspend fun setGroupOrder(order: List<String>) {
+        store.edit { prefs ->
+            if (order.isEmpty()) prefs.remove(KEY_GROUP_ORDER)
+            else prefs[KEY_GROUP_ORDER] = order.joinToString("\n")
+        }
+    }
+    val groupSortMode: Flow<String> = store.data.map { prefs ->
+        prefs[KEY_GROUP_SORT_MODE] ?: "Default"
+    }
+    suspend fun setGroupSortMode(mode: String) {
+        store.edit { prefs -> prefs[KEY_GROUP_SORT_MODE] = mode }
+    }
+
+    /**
      * Hidden VOD group titles, separately per Movies and Series. Same storage
      * shape as [hiddenGroups] above (newline-delimited); same semantics
      * (empty = nothing hidden, all visible). Mirrors iOS MoviesView's
@@ -624,6 +652,8 @@ class AppPreferences @Inject constructor(
         // timeout) intentionally stay un-synced because they're device
         // specific.
         data[KEY_HIDDEN_GROUPS]?.let { out["hiddenGroups.v1"] = it }
+        data[KEY_GROUP_ORDER]?.let { out["groupOrder.v1"] = it }
+        data[KEY_GROUP_SORT_MODE]?.let { out["groupSortMode.v1"] = it }
         data[KEY_USE_CUSTOM_ACCENT]?.let { out["useCustomAccent"] = it.toString() }
         data[KEY_CUSTOM_ACCENT_HEX]?.let { out["customAccentHex"] = it }
         ProgramCategory.entries.forEach { bucket ->
@@ -648,6 +678,8 @@ class AppPreferences @Inject constructor(
             keys["customCategoryColors.v1"]?.let { prefs[KEY_CATEGORY_CUSTOM_JSON] = it }
             // Audit task #52: receive the broadened keys.
             keys["hiddenGroups.v1"]?.let { prefs[KEY_HIDDEN_GROUPS] = it }
+            keys["groupOrder.v1"]?.let { prefs[KEY_GROUP_ORDER] = it }
+            keys["groupSortMode.v1"]?.let { prefs[KEY_GROUP_SORT_MODE] = it }
             keys["useCustomAccent"]?.toBooleanStrictOrNull()?.let { prefs[KEY_USE_CUSTOM_ACCENT] = it }
             keys["customAccentHex"]?.let { prefs[KEY_CUSTOM_ACCENT_HEX] = it }
             ProgramCategory.entries.forEach { bucket ->
@@ -788,6 +820,8 @@ class AppPreferences @Inject constructor(
         val KEY_LAST_WATCHED_CHANNEL_ID = stringPreferencesKey("last_watched_channel_id")
         val KEY_LAST_SEEN_WHATSNEW_VERSION = stringPreferencesKey("last_seen_whatsnew_version")
         val KEY_HIDDEN_GROUPS = stringPreferencesKey("hidden_groups")
+        val KEY_GROUP_ORDER = stringPreferencesKey("group_order")
+        val KEY_GROUP_SORT_MODE = stringPreferencesKey("group_sort_mode")
         // Per-tab VOD group filters. iOS persists these under the global
         // UserDefaults keys `hiddenMovieGroups` / `hiddenSeriesGroups`; we
         // namespace into our DataStore the same way the live-TV

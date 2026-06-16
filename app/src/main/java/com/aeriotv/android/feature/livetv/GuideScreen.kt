@@ -227,6 +227,9 @@ fun GuideScreen(
     }
     // tvOS-style guide controls: a search field toggle + a group on/off filter.
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
+    val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
+    val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
+    val groupSortMode = GroupSortMode.from(groupSortModeRaw)
     var searchActive by remember { mutableStateOf(false) }
     var showManageGroups by remember { mutableStateOf(false) }
 
@@ -324,16 +327,18 @@ fun GuideScreen(
 
     // Full set of group names (the Manage Groups picker lists hidden ones too
     // so they can be turned back on).
-    val allGroupNames by remember(state.channels) {
+    val allGroupNames by remember(state.channels, groupSortMode, groupOrder) {
         derivedStateOf {
             // First-occurrence order so groups follow the channel ordering
             // (which the server/playlist defines), NOT alphabetical. distinct()
-            // preserves encounter order.
-            state.channels.asSequence()
+            // preserves encounter order. The user's Manage Groups sort
+            // preference (Default / A-Z / Manual) is then applied on top.
+            val sourceOrder = state.channels.asSequence()
                 .map { it.groupTitle }
                 .filter { it.isNotBlank() }
                 .distinct()
                 .toList()
+            orderGroups(sourceOrder, groupSortMode, groupOrder)
         }
     }
     // Visible chips: all groups minus the ones hidden via the filter picker.
@@ -1229,6 +1234,10 @@ fun GuideScreen(
                     )
                 },
                 onDismiss = { showManageGroups = false },
+                reorderEnabled = true,
+                sortMode = groupSortMode,
+                onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
+                onReorder = { settingsVm.setGroupOrder(it) },
             )
         } else {
             ManageGroupsSheet(
@@ -1236,6 +1245,10 @@ fun GuideScreen(
                 hiddenGroups = hiddenGroups,
                 onSave = { settingsVm.setHiddenGroups(it) },
                 onDismiss = { showManageGroups = false },
+                reorderEnabled = true,
+                sortMode = groupSortMode,
+                onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
+                onReorder = { settingsVm.setGroupOrder(it) },
             )
         }
     }

@@ -120,6 +120,9 @@ fun ChannelListScreen(
     val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
+    val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
+    val groupSortMode = com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw)
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
@@ -132,13 +135,16 @@ fun ChannelListScreen(
     // Earlier Android revisions sorted alphabetically, which scrambled
     // Dispatcharr's curated group ordering. Sequence.distinct() preserves
     // encounter order so dropping the .sortedBy gets us iOS-matching behavior.
-    val allGroupsRaw by remember(state.channels) {
+    val allGroupsRaw by remember(state.channels, groupSortMode, groupOrder) {
         derivedStateOf {
-            state.channels.asSequence()
+            val sourceOrder = state.channels.asSequence()
                 .map { it.groupTitle }
                 .filter { it.isNotBlank() }
                 .distinct()
                 .toList()
+            // Apply the user's Manage Groups sort preference (Default / A-Z /
+            // Manual) on top of the source order.
+            com.aeriotv.android.feature.livetv.orderGroups(sourceOrder, groupSortMode, groupOrder)
         }
     }
 
@@ -388,6 +394,10 @@ fun ChannelListScreen(
             hiddenGroups = hiddenGroups,
             onSave = { settingsVm.setHiddenGroups(it) },
             onDismiss = { manageGroupsOpen = false },
+            reorderEnabled = true,
+            sortMode = groupSortMode,
+            onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
+            onReorder = { settingsVm.setGroupOrder(it) },
         )
     }
 }

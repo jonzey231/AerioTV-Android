@@ -84,6 +84,17 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setHiddenGroups(groups) }
     }
 
+    // Live TV group ordering (Manage Groups reorder). groupSortMode is one of
+    // Default / Alphabetical / Manual; groupOrder is the manual order list.
+    val groupOrder: Flow<List<String>> = prefs.groupOrder
+    fun setGroupOrder(order: List<String>) {
+        viewModelScope.launch { prefs.setGroupOrder(order) }
+    }
+    val groupSortMode: Flow<String> = prefs.groupSortMode
+    fun setGroupSortMode(mode: String) {
+        viewModelScope.launch { prefs.setGroupSortMode(mode) }
+    }
+
     // VOD group filters (iOS MoviesView hiddenMovieGroups / TVShowsView
     // hiddenSeriesGroups). Surfaced via ManageGroupsSheet from the On Demand
     // tab; applied in MoviesSubScreen / SeriesSubScreen to filter the lists.
