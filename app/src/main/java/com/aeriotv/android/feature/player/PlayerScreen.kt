@@ -30,6 +30,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -206,16 +207,20 @@ fun PlayerScreen(
         ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
 
     // GH #7 (True Android Fullscreen): on phone/tablet, hide the status + nav
-    // bars while the player screen is up so landscape playback is genuinely
-    // edge-to-edge instead of letterboxed under the system chrome the rest of
-    // the app draws (we run enableEdgeToEdge app-wide). Transient-by-swipe so
-    // the user can still pull the bars down. Restored on dispose, so leaving
-    // the player (Back to mini, X-close, nav away) brings the bars back; TV
-    // has no system bars, so skip it there. isTvForm is config-derived and
-    // stable, so the conditional composable never flips at runtime.
+    // bars in LANDSCAPE so playback is genuinely edge-to-edge instead of
+    // letterboxed under the system chrome the rest of the app draws (we run
+    // enableEdgeToEdge app-wide). In PORTRAIT we keep the status bar so the top
+    // control banner never slides under a camera cutout: in portrait the OS
+    // always reserves the cutout area with the status bar, which is reliable on
+    // every device, whereas the DisplayCutout inset is not always exposed to
+    // apps (e.g. the Samsung Z Fold cover screen reports none). The banners also
+    // pad by statusBars union displayCutout. Keyed on orientation so a rotation
+    // re-applies the right mode; bars restored on dispose. TV has no system bars.
     if (!isTvForm) {
         val activity = context.findActivity()
-        DisposableEffect(activity) {
+        val isLandscape = LocalConfiguration.current.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        DisposableEffect(activity, isLandscape) {
             val window = activity?.window
             val controller = window?.let {
                 androidx.core.view.WindowCompat.getInsetsController(it, it.decorView)
@@ -223,7 +228,11 @@ fun PlayerScreen(
             controller?.apply {
                 systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat
                     .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                if (isLandscape) {
+                    hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                } else {
+                    show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                }
             }
             onDispose {
                 controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())

@@ -18,11 +18,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -62,6 +66,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -179,16 +184,21 @@ fun VODPlayerScreen(
             android.content.res.Configuration.UI_MODE_TYPE_MASK
         ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
 
-    // GH #7 (True Android Fullscreen), VOD parity with the live player: on
-    // phone/tablet, hide the status + nav bars while the movie plays so it is
-    // genuinely edge-to-edge, plus a manual fullscreen toggle (forcedLandscape)
-    // that force-rotates to landscape and pins it under a portrait rotation-lock
-    // (iOS PlayerView parity). Both are released on dispose. TV has no system
-    // bars and no rotation, so this is phone-only.
+    // GH #7 (True Android Fullscreen), VOD parity with the live player: hide the
+    // status + nav bars in LANDSCAPE for edge-to-edge playback, but keep the
+    // status bar in PORTRAIT so the top control banner never slides under a
+    // camera cutout (in portrait the OS reliably reserves the cutout area with
+    // the status bar on every device; the DisplayCutout inset is not always
+    // exposed to apps, e.g. the Samsung Z Fold cover screen). Plus a manual
+    // fullscreen toggle (forcedLandscape) that force-rotates to landscape and
+    // pins it under a portrait rotation-lock (iOS PlayerView parity). Keyed on
+    // orientation so a rotation re-applies the right mode; restored on dispose.
     var forcedLandscape by remember { mutableStateOf(false) }
     if (!isTvForm) {
         val activity = context.findActivity()
-        DisposableEffect(activity) {
+        val isLandscape = LocalConfiguration.current.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        DisposableEffect(activity, isLandscape) {
             val window = activity?.window
             val controller = window?.let {
                 androidx.core.view.WindowCompat.getInsetsController(it, it.decorView)
@@ -196,7 +206,11 @@ fun VODPlayerScreen(
             controller?.apply {
                 systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat
                     .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                if (isLandscape) {
+                    hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                } else {
+                    show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                }
             }
             onDispose {
                 controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
@@ -360,7 +374,7 @@ fun VODPlayerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
-                    .statusBarsPadding()
+                    .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
                     .padding(horizontal = 12.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -593,7 +607,7 @@ fun VODPlayerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
-                        .statusBarsPadding()
+                        .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
                         .padding(horizontal = 12.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
