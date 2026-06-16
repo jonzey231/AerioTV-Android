@@ -144,12 +144,17 @@ class DvrViewModel @Inject constructor(
                 }
             }.fold(
                 onSuccess = { remote ->
+                    val server = remote.map { it.toRecording(base, dispatcharrClient) }
+                    // Fill in programme title/description from the cached guide for
+                    // rows the server left sparse, so scheduled / ongoing / completed
+                    // recordings all show full EPG (suspend, so computed before the
+                    // non-suspend state update).
+                    val hydrated = hydrateRecordingsFromEpg(playlist.id, server)
                     _state.update { st ->
-                        val server = remote.map { it.toRecording(base, dispatcharrClient) }
                         val local = st.recordings.filter { it.source == Source.Local }
                         st.copy(
                             isLoading = false,
-                            recordings = (server + local).sortedBy { it.startMillis },
+                            recordings = (hydrated + local).sortedBy { it.startMillis },
                             error = null,
                         )
                     }
@@ -392,6 +397,59 @@ class DvrViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Fill in programme title/description for server recordings the server left
+     * sparse. Dispatcharr only stamps `custom_properties.program` on some rows
+     * (e.g. ones scheduled from its own guide), so bare or AerioTV-created
+     * schedules arrive with a generic "Recording N" title and no description.
+     * We join each such recording against the disk EPG cache by the channel's
+     * tvg-id and the programme whose airing overlaps the recording window, so
+     * scheduled / ongoing / completed recordings all show full programme info
+     * consistently. Best-effort and offline-safe: rows whose programme isn't in
+     * the cache (e.g. past programmes already pruned) are left untouched.
+     */
+    private suspend fun hydrateRecordingsFromEpg(
+        playlistId: String,
+        recordings: List<Recording>,
+    ): List<Recording> {
+        fun needsHydration(r: Recording): Boolean {
+            if (r.dispatcharrChannelId == null) return false
+            val rawId = r.id.removePrefix("server-")
+            val genericTitle = r.title.isBlank() || r.title == "Recording $rawId"
+            return genericTitle || r.description.isBlank()
+        }
+        val needy = recordings.filter(::needsHydration)
+        if (needy.isEmpty()) return recordings
+        val tvgByChannelId = playlistRepository.loadCachedChannels(playlistId)
+            .mapNotNull { c -> c.dispatcharrChannelId?.let { id -> id to c.tvgID } }
+            .filter { it.second.isNotBlank() }
+            .toMap()
+        if (tvgByChannelId.isEmpty()) return recordings
+        val from = needy.minOf { it.startMillis }
+        val to = needy.maxOf { it.endMillis }
+        if (from <= 0L || to <= from) return recordings
+        val epgByChannel = playlistRepository.loadCachedEpg(playlistId, from, to)
+            .groupBy { it.channelId }
+        if (epgByChannel.isEmpty()) return recordings
+        return recordings.map { r ->
+            if (!needsHydration(r)) return@map r
+            val tvg = tvgByChannelId[r.dispatcharrChannelId] ?: return@map r
+            val prog = epgByChannel[tvg]
+                ?.maxByOrNull { overlapMillis(it.startMillis, it.endMillis, r.startMillis, r.endMillis) }
+                ?.takeIf { overlapMillis(it.startMillis, it.endMillis, r.startMillis, r.endMillis) > 0L }
+                ?: return@map r
+            val rawId = r.id.removePrefix("server-")
+            val genericTitle = r.title.isBlank() || r.title == "Recording $rawId"
+            r.copy(
+                title = if (genericTitle && prog.title.isNotBlank()) prog.title else r.title,
+                description = if (r.description.isBlank()) prog.description else r.description,
+            )
+        }
+    }
+
+    private fun overlapMillis(aStart: Long, aEnd: Long, bStart: Long, bEnd: Long): Long =
+        (minOf(aEnd, bEnd) - maxOf(aStart, bStart)).coerceAtLeast(0L)
 
     private companion object {
         const val TAG = "DvrViewModel"
