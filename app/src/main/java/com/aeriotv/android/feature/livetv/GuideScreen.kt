@@ -342,15 +342,29 @@ fun GuideScreen(
         }
     }
     // Visible chips: all groups minus the ones hidden via the filter picker.
-    val groups by remember(state.channels) {
+    // Keyed on allGroupNames (not just state.channels) so a group sort/order
+    // change re-creates this derivedStateOf and the pills follow the new order.
+    val groups by remember(allGroupNames, hiddenGroups) {
         derivedStateOf {
             listOf(PlaylistViewModel.ALL_GROUPS) + allGroupNames.filter { it !in hiddenGroups }
         }
     }
 
-    val filteredChannels by remember(state.channels, state.selectedGroup) {
+    val filteredChannels by remember(state.channels, state.selectedGroup, allGroupNames, groupSortMode) {
         derivedStateOf {
             val query = state.searchQuery.trim()
+            // When a non-default group order (A-Z / Manual) is active, cluster the
+            // "All" guide rows by that group order so the channels follow the
+            // groups (primary key = group index, then channel number). A specific
+            // group view or Default order keeps the flat numeric sort.
+            val clusterByGroup = query.isEmpty() &&
+                state.selectedGroup == PlaylistViewModel.ALL_GROUPS &&
+                groupSortMode != GroupSortMode.Default
+            val groupRankIndex = if (clusterByGroup) {
+                allGroupNames.withIndex().associate { (i, g) -> g to i }
+            } else {
+                emptyMap()
+            }
             state.channels.asSequence()
                 .filter { ch ->
                     when {
@@ -364,7 +378,13 @@ fun GuideScreen(
                     }
                 }
                 .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
-                .sortedWith(compareBy({ it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE }, { it.name.lowercase() }))
+                .sortedWith(
+                    compareBy(
+                        { if (clusterByGroup) groupRankIndex[it.groupTitle] ?: Int.MAX_VALUE else 0 },
+                        { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE },
+                        { it.name.lowercase() },
+                    ),
+                )
                 .toList()
         }
     }

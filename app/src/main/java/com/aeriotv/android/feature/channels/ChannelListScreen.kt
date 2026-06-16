@@ -155,7 +155,10 @@ fun ChannelListScreen(
         }
     }
 
-    val filtered by remember(state.channels, state.searchQuery, state.selectedGroup, state.sortMode, favoriteIds, hiddenGroups) {
+    val filtered by remember(
+        state.channels, state.searchQuery, state.selectedGroup, state.sortMode,
+        favoriteIds, hiddenGroups, allGroupsRaw, groupSortMode,
+    ) {
         derivedStateOf {
             val query = state.searchQuery.trim()
             val byGroupAndSearch = state.channels.asSequence()
@@ -172,13 +175,32 @@ fun ChannelListScreen(
                 }
                 .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
                 .toList()
+            // When the user has chosen a non-default group order (A-Z or Manual),
+            // cluster the "All" list by that group order so the channels follow
+            // the groups (iOS sorts by group index then channel number). A
+            // specific-group view or Default order keeps the flat sort. Blank /
+            // unknown groups sort last. Within each group the chosen channel
+            // sort applies as the secondary key.
+            val clusterByGroup = query.isEmpty() &&
+                state.selectedGroup == PlaylistViewModel.ALL_GROUPS &&
+                groupSortMode != com.aeriotv.android.feature.livetv.GroupSortMode.Default
+            val groupRankIndex = if (clusterByGroup) {
+                allGroupsRaw.withIndex().associate { (i, g) -> g to i }
+            } else {
+                emptyMap()
+            }
+            val groupRank: (com.aeriotv.android.core.data.M3UChannel) -> Int =
+                { ch -> if (clusterByGroup) groupRankIndex[ch.groupTitle] ?: Int.MAX_VALUE else 0 }
             when (state.sortMode) {
                 SortMode.ByNumber -> byGroupAndSearch.sortedWith(
-                    compareBy({ it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE }, { it.name.lowercase() }),
+                    compareBy(groupRank, { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE }, { it.name.lowercase() }),
                 )
-                SortMode.ByName -> byGroupAndSearch.sortedBy { it.name.lowercase() }
+                SortMode.ByName -> byGroupAndSearch.sortedWith(
+                    compareBy(groupRank, { it.name.lowercase() }),
+                )
                 SortMode.FavoritesFirst -> byGroupAndSearch.sortedWith(
                     compareBy(
+                        groupRank,
                         { it.id !in favoriteIds }, // false (favorited) sorts before true
                         { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE },
                         { it.name.lowercase() },
