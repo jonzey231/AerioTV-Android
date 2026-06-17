@@ -51,6 +51,12 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AerioTV">
 
+        <!-- Allow shell profiling (simpleperf / am profile) of release builds on
+             production devices, so on-device performance can be measured without
+             a debuggable build. Ship-safe and Google-recommended; no effect on
+             behavior, no debuggability exposure. -->
+        <profileable android:shell="true" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
