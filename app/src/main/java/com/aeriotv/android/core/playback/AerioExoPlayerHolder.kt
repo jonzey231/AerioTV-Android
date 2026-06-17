@@ -254,16 +254,40 @@ class AerioExoPlayerHolder @Inject constructor(
             forceVideoCodecReinit = true,
         )
 
-        // LoadControl: live-stream-friendly buffer durations. The
-        // defaults (50s min, 50s max for VOD) over-buffer for live and
-        // delay channel-tap response. Mirror our libmpv `cache-secs=5`
-        // for live: keep ~2.5s buffered so a brief network hiccup
-        // doesn't stall, but don't wait long before showing first frame.
+        // LoadControl: live-stream buffer durations. The ExoPlayer defaults
+        // (50s) over-buffer for live and delay channel-tap response, but the
+        // original tuning here was the OPPOSITE extreme and was the dominant
+        // cause of the freezing/skipping on the Streamer:
+        //   - bufferForPlaybackMs=500 started playback on ~0.5s of media, i.e.
+        //     on a PARTIAL initial GOP of a freshly-joined Dispatcharr MPEG-TS
+        //     stream. That surfaced as either a cold-start starve->reload (ch103)
+        //     or a MediaTek HW H.264 CodecException on the truncated GOP (ch107),
+        //     each recovered only by the 6s reload-watchdog = a visible freeze+skip.
+        //   - min=2500/max=5000 kept too shallow a steady-state cushion, so the
+        //     jittery ~realtime TS feed drained it to empty ~once a minute, the
+        //     recurring mid-stream micro-stutter seen in a 5-min on-device watch.
+        // This is the Android analog of the iOS v1.7.0 live-startup tuning
+        // (demuxer-lavf-analyzeduration 1.5s / probesize 1MB). The two levers
+        // are deliberately decoupled:
+        //   - The STEADY cushion (min 4s / max 8s) is what suppresses the
+        //     recurring mid-stream micro-stutter: it gives the jittery ~realtime
+        //     TS feed real headroom instead of the old 2.5s that drained to empty
+        //     ~once a minute. A 5-min on-device watch went from ~6 rebuffers to 1.
+        //   - The START gate (bufferForPlaybackMs) governs only tap-to-motion
+        //     latency. 500ms was far too eager (started on a partial GOP -> the
+        //     cold-start starve->reload and the MediaTek decoder CodecException);
+        //     2000ms locked a clean start but cost ~6-7s tap-to-motion on a slow
+        //     Dispatcharr cold-upstream ramp. 1200ms is the chosen balance: ~2x
+        //     the data of a half-GOP start, well past the 500ms failure point,
+        //     while keeping cold channel-taps responsive. afterRebuffer 2000ms
+        //     keeps mid-stream rebuffer recovery snappy.
+        // (Multiview + VOD have their own LoadControls; this governs only the
+        // single live player.)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 2_500,
-                /* maxBufferMs = */ 5_000,
-                /* bufferForPlaybackMs = */ 500,
+                /* minBufferMs = */ 4_000,
+                /* maxBufferMs = */ 8_000,
+                /* bufferForPlaybackMs = */ 1_200,
                 /* bufferForPlaybackAfterRebufferMs = */ 2_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
