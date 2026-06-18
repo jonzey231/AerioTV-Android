@@ -7,6 +7,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1085,7 +1087,15 @@ fun SwitchStreamSheet(
     onDismiss: () -> Unit,
 ) {
     com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+        // verticalScroll so channels with many streams (users keep 2-20) are all
+        // reachable; FormFactorModal caps the modal height, which otherwise just
+        // clipped the rows past the fold (only ~7 were selectable). Works for
+        // touch and for TV D-pad (focusing an off-screen row scrolls it in).
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 20.dp, vertical = 4.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
             Text(
                 text = "Switch Stream",
                 style = MaterialTheme.typography.titleMedium,
