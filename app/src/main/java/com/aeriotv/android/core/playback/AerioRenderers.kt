@@ -235,7 +235,22 @@ private class NoReuseMediaCodecVideoRenderer(
         newFormat: Format,
     ): DecoderReuseEvaluation {
         val evaluation = super.canReuseCodec(codecInfo, oldFormat, newFormat)
+        // Stock already vetoed reuse (a real format/config change) -- respect it.
         if (evaluation.result == DecoderReuseEvaluation.REUSE_RESULT_NO) return evaluation
+        // Only the decoders that actually showed the flush-and-reuse black-screen
+        // (Exynos / Samsung C2 H.264, the 0.2.7 GitHub report) need the forced
+        // re-init. Forcing it EVERYWHERE re-instantiates the codec against the
+        // live persistent Surface every switch, which on MediaTek (c2.mtk.avc.
+        // decoder) bumps the C2 surface generation mid-stream and DECODE-FAILS
+        // (queueInputBuffer errno 14 after "discarded an unknown buffer"). So let
+        // every other vendor take Media3's stock flush-and-reuse path, which never
+        // re-attaches the surface (no generation bump, no race) and is also faster.
+        val name = codecInfo.name.lowercase()
+        val needsForcedReinit =
+            name.startsWith("c2.exynos.") ||
+            name.startsWith("omx.exynos.") ||
+            name.startsWith("omx.samsung.")
+        if (!needsForcedReinit) return evaluation
         return DecoderReuseEvaluation(
             evaluation.decoderName,
             oldFormat,
