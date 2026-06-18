@@ -586,7 +586,13 @@ fun GuideScreen(
         // Control circle sizing. TV values are tvOS-pt x 0.5 (the 960dp canvas
         // is half tvOS's 1920pt, so the same physical size => all the group
         // pills fit across the row exactly like tvOS, no horizontal scroll).
-        val controlCircle = if (isTv) 30.dp else 24.dp
+        // controlCircle sizes the search/filter focus ring + active fill (the
+        // resting TV button is transparent -- just the glyph), so shrinking it
+        // tightens the white focus ring without changing the resting look. 26dp
+        // keeps a clean ring around the 16dp glyph while leaving ~9dp clearance
+        // in the 44dp row so the ring no longer crowds the pills above / time
+        // axis below.
+        val controlCircle = if (isTv) 26.dp else 24.dp
         val controlIcon = if (isTv) 16.dp else 18.dp
         Row(
             modifier = Modifier
@@ -616,36 +622,51 @@ fun GuideScreen(
             // focused (active = search open fills it accent regardless).
             val searchInteraction = remember { MutableInteractionSource() }
             val searchFocused by searchInteraction.collectIsFocusedAsState()
-            FilledTonalIconButton(
-                onClick = {
-                    searchActive = !searchActive
-                    if (!searchActive) viewModel.onSearchQueryChange("")
-                },
+            val searchContainer = when {
+                searchActive -> MaterialTheme.colorScheme.primary
+                isTv && searchFocused -> Color.White.copy(alpha = 0.15f)
+                isTv -> Color.Transparent
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            }
+            // Hand-rolled circle, NOT FilledTonalIconButton: Material's icon button
+            // enforces a 48dp interactive minimum, so a .border() on it landed on
+            // that inflated node and the white focus ring rendered far larger than
+            // controlCircle (a visible gap to the fill) and bled into the rows
+            // above/below. Here the ring + fill are an inner Box sized EXACTLY to
+            // controlCircle; the outer clickable + phone-only padding keeps a
+            // comfortable tap target without inflating the ring.
+            Box(
                 modifier = Modifier
-                    .size(controlCircle)
-                    .then(
-                        if (isTv && searchFocused)
-                            Modifier.border(2.dp, Color.White, CircleShape)
-                        else Modifier,
-                    ),
-                interactionSource = searchInteraction,
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = when {
-                        searchActive -> MaterialTheme.colorScheme.primary
-                        isTv && searchFocused -> Color.White.copy(alpha = 0.15f)
-                        isTv -> Color.Transparent
-                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                    },
-                    contentColor = if (searchActive) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
+                    .clickable(
+                        interactionSource = searchInteraction,
+                        indication = null,
+                    ) {
+                        searchActive = !searchActive
+                        if (!searchActive) viewModel.onSearchQueryChange("")
+                    }
+                    .padding(if (isTv) 0.dp else 8.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = "Search channels",
-                    modifier = Modifier.size(controlIcon),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(controlCircle)
+                        .clip(CircleShape)
+                        .background(searchContainer)
+                        .then(
+                            if (isTv && searchFocused)
+                                Modifier.border(2.dp, Color.White, CircleShape)
+                            else Modifier,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = "Search channels",
+                        modifier = Modifier.size(controlIcon),
+                        tint = if (searchActive) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             // Gap between the two control circles.
             Spacer(Modifier.width(if (isTv) 8.dp else 8.dp))
@@ -655,33 +676,41 @@ fun GuideScreen(
             val filterActive = hiddenGroups.isNotEmpty()
             val filterInteraction = remember { MutableInteractionSource() }
             val filterFocused by filterInteraction.collectIsFocusedAsState()
-            FilledTonalIconButton(
-                onClick = { showManageGroups = true },
+            val filterContainer = when {
+                filterActive -> MaterialTheme.colorScheme.primary
+                isTv && filterFocused -> Color.White.copy(alpha = 0.15f)
+                isTv -> Color.Transparent
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            }
+            Box(
                 modifier = Modifier
-                    .size(controlCircle)
-                    .then(
-                        if (isTv && filterFocused)
-                            Modifier.border(2.dp, Color.White, CircleShape)
-                        else Modifier,
-                    ),
-                interactionSource = filterInteraction,
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = when {
-                        filterActive -> MaterialTheme.colorScheme.primary
-                        isTv && filterFocused -> Color.White.copy(alpha = 0.15f)
-                        isTv -> Color.Transparent
-                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                    },
-                    contentColor = if (filterActive) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
+                    .clickable(
+                        interactionSource = filterInteraction,
+                        indication = null,
+                    ) { showManageGroups = true }
+                    .padding(if (isTv) 0.dp else 8.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.FilterList,
-                    contentDescription = "Filter groups",
-                    modifier = Modifier.size(controlIcon),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(controlCircle)
+                        .clip(CircleShape)
+                        .background(filterContainer)
+                        .then(
+                            if (isTv && filterFocused)
+                                Modifier.border(2.dp, Color.White, CircleShape)
+                            else Modifier,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.FilterList,
+                        contentDescription = "Filter groups",
+                        modifier = Modifier.size(controlIcon),
+                        tint = if (filterActive) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Spacer(Modifier.width(if (isTv) 10.dp else 6.dp))
             if (searchActive) {
