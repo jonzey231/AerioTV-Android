@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -63,10 +64,9 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 private const val TAG = "PlayerScreen"
@@ -342,6 +342,66 @@ fun PlayerScreen(
     // know the proxy's active stream, so track the last one the user switched
     // to (reset on channel change) to radio-mark it on re-open.
     var switchedStreamId by remember(currentChannel?.id) { mutableStateOf<Int?>(null) }
+
+    // Follow EXTERNAL upstream switches we didn't initiate: a stream changed from
+    // the Dispatcharr WebUI Stats page, OR Dispatcharr's automatic server-side
+    // failover when the playing stream dies. Both keep our /proxy/ts/stream
+    // connection open and only mutate the channel's metadata.url (surfaced by
+    // /proxy/ts/status), so the deep live buffer absorbs the splice and ExoPlayer
+    // never self-flushes. Poll status.url while steadily playing a Dispatcharr
+    // channel in the foreground; on a confirmed divergence re-prime (keepalive-held)
+    // onto the new stream. Gated on reachedSteadyPlayback so it can never overlap
+    // the cold-start no-data watchdog, and parked during a manual switch / any
+    // in-flight re-prime. repeatOnLifecycle(RESUMED) pauses it when backgrounded/PiP.
+    val followLifecycleOwner = LocalLifecycleOwner.current
+    val isDispatcharrLive = currentChannel?.dispatcharrChannelId != null &&
+        currentChannel?.id?.startsWith("disp:") == true
+    LaunchedEffect(currentChannel?.id, isDispatcharrLive) {
+        if (!isDispatcharrLive) return@LaunchedEffect
+        val ch = currentChannel ?: return@LaunchedEffect
+        val uuid = ch.id.removePrefix("disp:")
+        val proxyUrl = ch.url
+        followLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var baseline: String? = null     // last-known status.url for this channel/foreground session
+            var backoffMs = 4_000L
+            while (isActive) {
+                delay(backoffMs)
+                if (currentChannel?.id != ch.id) break
+                // a manual switch or any re-prime owns the player -> park, re-seed after
+                if (switchStream != null || exoHolder.isReprimeInFlight) { baseline = null; continue }
+                // only while steady: mutually exclusive with the cold-start no-data watchdog
+                if (!exoHolder.reachedSteadyPlayback.value) { baseline = null; continue }
+                // OFF the main thread: the GET + JSON parse + auth-retry must never run on
+                // Main or it drops frames every tick (a periodic judder with no rebuffer).
+                val statusUrl = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
+                if (statusUrl.isNullOrBlank()) {     // 404 / stopped / transient: back off, never treat as divergence
+                    backoffMs = (backoffMs + 4_000L).coerceAtMost(12_000L)
+                    continue
+                }
+                backoffMs = 4_000L
+                if (baseline == null) { baseline = statusUrl; continue }   // seed
+                if (statusUrl != baseline) {
+                    // confirm with one re-read so a momentary mid-switch blip can't trip us
+                    val confirm = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
+                    if (confirm != statusUrl) continue
+                    if (switchStream != null || exoHolder.isReprimeInFlight ||
+                        !exoHolder.reachedSteadyPlayback.value || currentChannel?.id != ch.id) continue
+                    android.util.Log.w(
+                        "DispatcharrSwitch",
+                        "[FOLLOW] external switch ch=${ch.id} re-priming onto $statusUrl",
+                    )
+                    val ran = exoHolder.reprimeWithKeepalive(
+                        url = proxyUrl,
+                        title = ch.name,
+                        subtitle = nowProgramme?.title.orEmpty(),
+                        artworkUri = ch.tvgLogo.takeIf { it.isNotBlank() }
+                            ?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() },
+                    )
+                    if (ran) baseline = statusUrl    // adopt new baseline only after a real re-prime
+                }
+            }
+        }
+    }
     var playbackSpeedSheet by remember { mutableStateOf<Float?>(null) }
     var multiviewPickerOpen by remember { mutableStateOf(false) }
     // True while the chrome's Options menu or Sleep sheet is open; pauses the
@@ -791,46 +851,18 @@ fun PlayerScreen(
                         }
 
                         Toast.makeText(context, "Switching stream...", Toast.LENGTH_SHORT).show()
-                        // Keepalive: a bare GET to the AllowAny /proxy/ts/stream URL, read +
-                        // discarded on IO, holding the client count >= 1 across the re-prime.
-                        val connHolder = java.util.concurrent.atomic.AtomicReference<java.net.HttpURLConnection?>()
-                        val connected = CompletableDeferred<Boolean>()
-                        val keepAlive = launch(Dispatchers.IO) {
-                            try {
-                                val c = (java.net.URL(proxyUrl).openConnection() as java.net.HttpURLConnection).apply {
-                                    connectTimeout = 4000
-                                    readTimeout = 8000
-                                    requestMethod = "GET"
-                                    setRequestProperty("User-Agent", "AerioTV-switch-keepalive")
-                                }
-                                connHolder.set(c)
-                                c.inputStream.use { ins ->
-                                    val buf = ByteArray(32 * 1024)
-                                    if (ins.read(buf) >= 0 && !connected.isCompleted) connected.complete(true)
-                                    while (isActive) { if (ins.read(buf) < 0) break }
-                                }
-                            } catch (_: Throwable) {
-                                // best-effort; fall through to the re-prime regardless
-                            } finally {
-                                if (!connected.isCompleted) connected.complete(false)
-                                runCatching { connHolder.get()?.disconnect() }
-                            }
-                        }
-                        // Ensure the keepalive is actually attached (or definitively failed)
-                        // before we drop ExoPlayer's connection. Proceed either way.
-                        withTimeoutOrNull(4_000L) { connected.await() }
-                        exoHolder.playUrl(
+                        // Re-prime onto the switched upstream with a keepalive held across the
+                        // flush (see AerioExoPlayerHolder.reprimeWithKeepalive). bypassCooldown:
+                        // a user-initiated switch always re-primes, even if an auto-reload or the
+                        // follow-poller fired within the shared cooldown window.
+                        exoHolder.reprimeWithKeepalive(
                             url = proxyUrl,
                             title = ch.name,
                             subtitle = nowProgramme?.title.orEmpty(),
                             artworkUri = ch.tvgLogo.takeIf { it.isNotBlank() }
                                 ?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() },
+                            bypassCooldown = true,
                         )
-                        // Hold the keepalive long enough for ExoPlayer's reconnect to be
-                        // established (client count back >= 2) before releasing it.
-                        delay(5_000L)
-                        keepAlive.cancel()
-                        runCatching { connHolder.get()?.disconnect() }
                     }
                 }
             },

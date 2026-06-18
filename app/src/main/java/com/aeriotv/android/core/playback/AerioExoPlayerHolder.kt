@@ -21,6 +21,8 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.Extractor
+import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.common.Format
 import androidx.media3.common.VideoSize
@@ -29,6 +31,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import com.aeriotv.android.BuildConfig
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +44,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Media3 ExoPlayer holder mirroring [MPVPlayerHolder]'s lifetime contract.
@@ -127,8 +134,14 @@ class AerioExoPlayerHolder @Inject constructor(
     private var lastForcedReloadAtMs = 0L
     // Armed only once the stream reaches steady playback (iOS
     // hasReachedPlaybackRestartForStream) so a slow cold-start probe is never
-    // mistaken for a wedge.
-    private var hasReachedPlaybackRestart = false
+    // mistaken for a wedge. Backed by an observable flow so the live
+    // follow-poller (PlayerScreen) can gate itself ON only while steady,
+    // keeping it mutually exclusive with the cold-start no-data watchdog.
+    private val _reachedSteadyPlayback = MutableStateFlow(false)
+    val reachedSteadyPlayback: StateFlow<Boolean> = _reachedSteadyPlayback.asStateFlow()
+    private var hasReachedPlaybackRestart: Boolean
+        get() = _reachedSteadyPlayback.value
+        set(value) { _reachedSteadyPlayback.value = value }
     private var consecutiveReloads = 0
     // Last foreground play() args, replayed by the watchdog to reload the same url.
     private var lastPlayUrl: String? = null
@@ -140,6 +153,80 @@ class AerioExoPlayerHolder @Inject constructor(
     private val reloadCooldownMs = 5_000L
     private val watchdogPollMs = 1_000L
     private val maxConsecutiveReloads = 3
+
+    // ---- shared keepalive re-prime (manual Switch Stream + live follow-poller) ----
+    private val reprimeMutex = Mutex()
+    @Volatile private var reprimeInFlight = false
+    /** True while a keepalive re-prime is mid-flight; the follow-poller parks on it. */
+    val isReprimeInFlight: Boolean get() = reprimeInFlight
+
+    /**
+     * Re-prime the SAME proxy [url], holding a SECOND bare AllowAny GET to it open
+     * across the flush so the channel's client count never hits 0. The server's
+     * stop_channel (default channel_shutdown_delay=0) otherwise deletes
+     * channel_stream:{id} and the reconnect cold-resolves to the channel DEFAULT
+     * stream. This forces ProgressiveMediaSource to re-sync onto a stream
+     * Dispatcharr swapped in place (manual change_stream, WebUI switch, or
+     * automatic failover -- all keep our connection open + only mutate
+     * metadata.url, so ExoPlayer never self-flushes).
+     *
+     * Serialised via [reprimeMutex] and gated on the shared [reloadCooldownMs]
+     * (same window the stall watchdog uses) UNLESS [bypassCooldown] -- the
+     * user-initiated manual switch sets it so its own re-prime always runs.
+     * Returns true if the re-prime ran.
+     */
+    suspend fun reprimeWithKeepalive(
+        url: String,
+        title: String? = null,
+        subtitle: String? = null,
+        artworkUri: android.net.Uri? = null,
+        bypassCooldown: Boolean = false,
+        keepaliveHoldMs: Long = 5_000L,
+    ): Boolean = reprimeMutex.withLock {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!bypassCooldown && now - lastForcedReloadAtMs < reloadCooldownMs) {
+            Log.i(TAG, "[FOLLOW] re-prime skipped (within ${reloadCooldownMs}ms cooldown)")
+            return@withLock false
+        }
+        lastForcedReloadAtMs = now
+        reprimeInFlight = true
+        try {
+            val connHolder = java.util.concurrent.atomic.AtomicReference<java.net.HttpURLConnection?>(null)
+            val connected = CompletableDeferred<Boolean>()
+            val keepAlive = watchdogScope.launch(Dispatchers.IO) {
+                try {
+                    val c = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 4000
+                        readTimeout = 8000
+                        requestMethod = "GET"
+                        httpHeaders.forEach { (k, v) -> setRequestProperty(k, v) }
+                        setRequestProperty("User-Agent", "AerioTV-switch-keepalive")
+                    }
+                    connHolder.set(c)
+                    c.inputStream.use { ins ->
+                        val buf = ByteArray(32 * 1024)
+                        if (ins.read(buf) >= 0 && !connected.isCompleted) connected.complete(true)
+                        while (isActive) { if (ins.read(buf) < 0) break }
+                    }
+                } catch (_: Throwable) {
+                    // best-effort; re-prime proceeds regardless
+                } finally {
+                    if (!connected.isCompleted) connected.complete(false)
+                    runCatching { connHolder.get()?.disconnect() }
+                }
+            }
+            // Attach (or definitively fail) the keepalive before dropping the player's connection.
+            withTimeoutOrNull(4_000L) { connected.await() }
+            withContext(Dispatchers.Main) { playUrl(url, title, subtitle, artworkUri) }
+            // Hold until ExoPlayer's reconnect is established (client count back >= 2).
+            delay(keepaliveHoldMs)
+            keepAlive.cancel()
+            runCatching { connHolder.get()?.disconnect() }
+            true
+        } finally {
+            reprimeInFlight = false
+        }
+    }
     // ---- black-screen (no-video-frame) net ----
     // The position poll above cannot see the field-reported black screen:
     // audio keeps currentPosition advancing while the video renderer never
@@ -415,9 +502,24 @@ class AerioExoPlayerHolder @Inject constructor(
                 // available is FLAG_EMIT_RAW_SUBTITLE_DATA which we leave
                 // off (subtitle handling is task #66 and the parser
                 // factory route is cleaner anyway).
-                val extractorsFactory = DefaultExtractorsFactory()
-                    .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
-                ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+                // TS-ONLY extractor factory (no container sniff). ProgressiveMediaSource's
+                // BundledExtractorsAdapter skips the sniff entirely when exactly one
+                // extractor is supplied. Sniffing the default 21 extractors against the
+                // first bytes of /proxy/ts/stream intermittently fails when the proxy
+                // starts mid-packet (not 0x47-aligned) -> UnrecognizedInputFormatException
+                // -> forceReload -> the cold start is doubled. TsExtractor scans for the
+                // sync byte itself, so a single forced TsExtractor handles the unaligned
+                // join with no sniff and no reload. We still source it from
+                // DefaultExtractorsFactory(MODE_SINGLE_PMT) so its TsExtractor config is
+                // identical to before; we just hand ProgressiveMediaSource that one extractor.
+                val tsExtractorsFactory = ExtractorsFactory {
+                    val all: Array<Extractor> = DefaultExtractorsFactory()
+                        .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
+                        .createExtractors()
+                    val tsOnly: List<Extractor> = all.filterIsInstance<TsExtractor>()
+                    if (tsOnly.isNotEmpty()) tsOnly.toTypedArray() else all
+                }
+                ProgressiveMediaSource.Factory(dataSourceFactory, tsExtractorsFactory)
                     .createMediaSource(mediaItem)
             }
             url.endsWith(".m3u8", ignoreCase = true) -> {
