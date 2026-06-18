@@ -600,6 +600,42 @@ class PlaylistRepository @Inject constructor(
         }.map { ChannelProfileOption(id = it.id, name = it.name, channelCount = it.channels.size) }
     }
 
+    /**
+     * The ordered member streams of a Dispatcharr channel (highest-priority
+     * first) with their probed quality stats, for the player's "Switch Stream"
+     * sheet. [channelIntPk] is M3UChannel.dispatcharrChannelId. Empty for
+     * non-Dispatcharr sources or when there is no active playlist. AuthBroker-
+     * wrapped so a rotated api_key silently rebootstraps instead of surfacing 401.
+     */
+    suspend fun listDispatcharrChannelStreams(
+        channelIntPk: Int,
+    ): List<com.aeriotv.android.core.network.DispatcharrChannelStream> {
+        val playlist = activePlaylist() ?: return emptyList()
+        val sourceType = playlist.resolvedSourceType()
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+            sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr) return emptyList()
+        val base = effectiveBaseUrl(playlist)
+        return dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            dispatcharrClient.listChannelStreams(base, key, channelIntPk)
+        }
+    }
+
+    /**
+     * Switch a Dispatcharr channel's active upstream to [streamId] (a Stream pk
+     * from [listDispatcharrChannelStreams]). [channelUuid] is the channel UUID
+     * (M3UChannel.id minus the "disp:" prefix). Dispatcharr swaps the source
+     * server-side behind the unchanged /proxy/ts/stream/<uuid> URL; the caller
+     * re-primes that URL afterwards so playback pulls the new source.
+     */
+    suspend fun switchDispatcharrStream(channelUuid: String, streamId: Int) {
+        val playlist = activePlaylist() ?: error("No active playlist for stream switch")
+        val base = effectiveBaseUrl(playlist)
+        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            dispatcharrClient.changeStream(base, key, channelUuid, streamId)
+        }
+    }
+
     suspend fun clear() {
         dispatcharrTokenStore.clearAll()
         dao.clear()

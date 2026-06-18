@@ -27,6 +27,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -82,6 +84,8 @@ fun PlayerScreen(
     epgByChannel: Map<String, List<EPGProgramme>> = emptyMap(),
     onClose: () -> Unit = {},
     onLaunchMultiview: () -> Unit = {},
+    onLoadChannelStreams: suspend (Int) -> List<StreamOption> = { emptyList() },
+    onSwitchChannelStream: suspend (String, Int) -> Unit = { _, _ -> },
 ) {
     // Hold the screen awake while the fullscreen player is mounted. Without
     // this the system screen-timeout fires mid-stream after its idle window
@@ -94,6 +98,7 @@ fun PlayerScreen(
     KeepScreenOnWhilePlaying()
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val settingsVm: SettingsViewModel = hiltViewModel()
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val appleTVChannelFlip by settingsVm.appleTVChannelFlip.collectAsStateWithLifecycle(initialValue = true)
@@ -326,6 +331,11 @@ fun PlayerScreen(
     var streamInfo by remember { mutableStateOf<StreamInfoSnapshot?>(null) }
     var subtitles by remember { mutableStateOf<SubtitlesState?>(null) }
     var audioTracks by remember { mutableStateOf<AudioTracksState?>(null) }
+    var switchStream by remember { mutableStateOf<SwitchStreamState?>(null) }
+    // Marked-current stream id for the Switch Stream sheet. We don't cheaply
+    // know the proxy's active stream, so track the last one the user switched
+    // to (reset on channel change) to radio-mark it on re-open.
+    var switchedStreamId by remember(currentChannel?.id) { mutableStateOf<Int?>(null) }
     var playbackSpeedSheet by remember { mutableStateOf<Float?>(null) }
     var multiviewPickerOpen by remember { mutableStateOf(false) }
     // True while the chrome's Options menu or Sleep sheet is open; pauses the
@@ -520,6 +530,15 @@ fun PlayerScreen(
                     syncLines = emptyList(),
                 )
             },
+            onShowSwitchStream = {
+                val chPk = currentChannel?.dispatcharrChannelId ?: return@PlayerChromeOverlay
+                scope.launch {
+                    switchStream = SwitchStreamState(
+                        streams = onLoadChannelStreams(chPk),
+                        currentStreamId = switchedStreamId,
+                    )
+                }
+            },
             onShowSubtitles = {
                 val player = exoHolder.player ?: return@PlayerChromeOverlay
                 subtitles = SubtitlesState(
@@ -582,7 +601,7 @@ fun PlayerScreen(
     // panel up until it is dismissed.
     val interactionLocked = chromeMenuOpen || recordTarget != null || streamInfo != null ||
         subtitles != null || audioTracks != null || playbackSpeedSheet != null ||
-        multiviewPickerOpen
+        switchStream != null || multiviewPickerOpen
     LaunchedEffect(chromeVisible, lastInteractionAt, interactionLocked) {
         if (chromeVisible && !interactionLocked) {
             delay(AUTO_HIDE_MS)
@@ -688,6 +707,33 @@ fun PlayerScreen(
             onDismiss = { audioTracks = null },
         )
     }
+    switchStream?.let { state ->
+        SwitchStreamSheet(
+            streams = state.streams,
+            currentStreamId = state.currentStreamId,
+            onSelect = { id ->
+                val ch = currentChannel
+                switchStream = null
+                if (ch != null) {
+                    switchedStreamId = id
+                    scope.launch {
+                        runCatching { onSwitchChannelStream(ch.id.removePrefix("disp:"), id) }
+                        // Re-prime the SAME proxy URL so ExoPlayer pulls the newly
+                        // selected source (Dispatcharr swapped it server-side behind
+                        // the unchanged /proxy/ts/stream/<uuid>).
+                        exoHolder.playUrl(
+                            url = ch.url,
+                            title = ch.name,
+                            subtitle = nowProgramme?.title.orEmpty(),
+                            artworkUri = ch.tvgLogo.takeIf { it.isNotBlank() }
+                                ?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() },
+                        )
+                    }
+                }
+            },
+            onDismiss = { switchStream = null },
+        )
+    }
     playbackSpeedSheet?.let { current ->
         PlaybackSpeedSheet(
             currentSpeed = current,
@@ -712,6 +758,11 @@ private data class SubtitlesState(
 private data class AudioTracksState(
     val tracks: List<AudioTrack>,
     val currentAid: Int?,
+)
+
+private data class SwitchStreamState(
+    val streams: List<StreamOption>,
+    val currentStreamId: Int?,
 )
 
 /**

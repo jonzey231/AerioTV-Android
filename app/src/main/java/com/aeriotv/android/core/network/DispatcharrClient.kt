@@ -915,6 +915,50 @@ class DispatcharrClient @Inject constructor() {
     }
 
     /**
+     * GET /api/channels/channels/{channelId}/streams/ — the ordered list of a
+     * Dispatcharr channel's member streams (highest-priority first), each with
+     * the quality stats Dispatcharr probed for it. [channelId] is the channel's
+     * INTEGER pk (M3UChannel.dispatcharrChannelId). Direct Connect only.
+     */
+    suspend fun listChannelStreams(
+        baseUrl: String,
+        apiKey: String,
+        channelId: Int,
+    ): List<DispatcharrChannelStream> =
+        fetchListOrResults(
+            "${baseUrl.trimEnd('/')}/api/channels/channels/$channelId/streams/",
+            apiKey,
+        )
+
+    /**
+     * POST /proxy/ts/change_stream/{channelUuid} — switch the channel's active
+     * upstream to [streamId] (a Stream pk from [listChannelStreams]). Dispatcharr
+     * swaps the source server-side behind the same /proxy/ts/stream/<uuid> URL;
+     * the caller re-primes that URL so ExoPlayer pulls the new source. Keyed by
+     * the channel UUID (the proxy path uses UUIDs, like [streamUrl]). Requires an
+     * admin-level api_key (Direct Connect authenticates as admin).
+     */
+    suspend fun changeStream(
+        baseUrl: String,
+        apiKey: String,
+        channelUuid: String,
+        streamId: Int,
+    ) {
+        val url = "${baseUrl.trimEnd('/')}/proxy/ts/change_stream/$channelUuid"
+        val response: HttpResponse = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(JsonObject(mapOf("stream_id" to JsonPrimitive(streamId))))
+        }
+        unauthorizedCheck(response, url)
+        if (!response.status.isSuccess()) {
+            throw DispatcharrError.Transport(
+                "Switch Stream failed: HTTP ${response.status.value} ${response.status.description}",
+            )
+        }
+    }
+
+    /**
      * Playback URL for a completed Dispatcharr recording. The endpoint is
      * `AllowAny` on the server (no auth headers required), supports HTTP
      * Range, and serves the raw media file — safe to hand straight to
@@ -1021,6 +1065,36 @@ data class DispatcharrChannel(
     @SerialName("effective_epg_data_id")
     val effectiveEpgDataId: Int? = null,
 )
+
+/**
+ * One member stream of a Dispatcharr channel, from
+ * GET /api/channels/channels/{channelId}/streams/ (highest-priority first).
+ * [id] is the Stream pk that change_stream switches to. Quality params live in
+ * [streamStats], a freeform JSON blob Dispatcharr fills from its ffmpeg probe
+ * -- it is null until that source has actually been played, so the typed
+ * accessors below degrade to null and the UI falls back to a name-only row.
+ * Parsed as a JsonObject (not a typed class) so a number-vs-string probe field
+ * can never crash deserialization.
+ */
+@Serializable
+data class DispatcharrChannelStream(
+    val id: Int,
+    val name: String? = null,
+    @SerialName("stream_stats")
+    val streamStats: JsonObject? = null,
+) {
+    private fun stat(key: String): String? =
+        (streamStats?.get(key) as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+
+    /** e.g. "1920x1080" (lowercase, as Dispatcharr stores it). */
+    val resolution: String? get() = stat("resolution")
+    val sourceFps: Double? get() = stat("source_fps")?.toDoubleOrNull()
+    val videoCodec: String? get() = stat("video_codec")
+    /** ffmpeg output bitrate in kbps (the "Output Bitrate" the Dispatcharr UI shows). */
+    val outputBitrateKbps: Double? get() = stat("ffmpeg_output_bitrate")?.toDoubleOrNull()
+    val audioCodec: String? get() = stat("audio_codec")
+}
 
 /**
  * One EPGData record from /api/epg/epgdata/. Maps the channel's epg_data_id FK

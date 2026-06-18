@@ -1123,6 +1123,26 @@ class PlaylistViewModel @Inject constructor(
             _state.update { UiState(phase = Phase.NeedsUrl) }
         }
     }
+
+    /**
+     * Player "Switch Stream" (Dispatcharr Direct Connect): the active channel's
+     * member streams with quality stats. [channelIntPk] is
+     * M3UChannel.dispatcharrChannelId. Returns empty on any failure or a
+     * non-Dispatcharr source so the sheet simply shows the empty state.
+     */
+    suspend fun loadChannelStreams(
+        channelIntPk: Int,
+    ): List<com.aeriotv.android.core.network.DispatcharrChannelStream> =
+        runCatching { repository.listDispatcharrChannelStreams(channelIntPk) }
+            .getOrDefault(emptyList())
+
+    /**
+     * Player "Switch Stream": ask Dispatcharr to switch the channel's active
+     * upstream to [streamId] (a Stream pk). [channelUuid] is M3UChannel.id minus
+     * the "disp:" prefix. Result so the caller can Toast success/failure.
+     */
+    suspend fun switchChannelStream(channelUuid: String, streamId: Int): Result<Unit> =
+        runCatching { repository.switchDispatcharrStream(channelUuid, streamId) }
 }
 
 /** Find the programme containing `now` for a given channel. */

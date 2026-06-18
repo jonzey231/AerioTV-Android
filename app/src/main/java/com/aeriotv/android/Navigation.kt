@@ -572,6 +572,25 @@ fun AerioTVNavHost(
                             launchSingleTop = true
                         }
                     },
+                    // Player Options > Switch Stream (Dispatcharr Direct Connect):
+                    // list the channel's member streams + their quality, then ask
+                    // Dispatcharr to switch the active upstream.
+                    onLoadChannelStreams = { channelIntPk ->
+                        vm.loadChannelStreams(channelIntPk).map { s ->
+                            com.aeriotv.android.feature.player.StreamOption(
+                                id = s.id,
+                                name = s.name.orEmpty(),
+                                resolution = s.resolution,
+                                fps = s.sourceFps,
+                                bitrateKbps = s.outputBitrateKbps,
+                                videoCodec = s.videoCodec,
+                                audioCodec = s.audioCodec,
+                            )
+                        }
+                    },
+                    onSwitchChannelStream = { channelUuid, streamId ->
+                        vm.switchChannelStream(channelUuid, streamId).getOrThrow()
+                    },
                 )
                 }
             }
