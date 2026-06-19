@@ -88,6 +88,7 @@ import com.aeriotv.android.core.pip.supportsPip
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.settings.bufferMillisFor
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
+import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -107,6 +108,16 @@ import kotlinx.coroutines.delay
 
 private const val TAG = "VODPlayerScreen"
 private const val AUTO_HIDE_MS = 4_000L
+
+/**
+ * Android-TV VOD transport focus zones (Archie spec, task #44). The whole
+ * D-pad model is driven from the single root onPreviewKeyEvent below, so
+ * "focus" here is app-owned state rather than Compose focus traversal
+ * (the catch-all handler swallows every D-pad key before a child could
+ * receive it). PlayPause is the default landing spot when controls reveal;
+ * LEFT/RIGHT cycle Rewind <-> PlayPause <-> Forward; UP enters Scrubber.
+ */
+private enum class TvVodFocusZone { None, Rewind, PlayPause, Forward, Scrubber }
 
 /**
  * VOD playback. Task #62: rebuilt on Media3 ExoPlayer.
@@ -188,6 +199,9 @@ fun VODPlayerScreen(
     // (PlayerScreen Phase 172 pattern). Stays 0 on phone.
     var lastInteractionAt by remember { mutableLongStateOf(0L) }
     val playbackFocus = remember { FocusRequester() }
+    // Which transport control the D-pad is "on" while chrome is up (TV only).
+    // None on phone / while chrome hidden. PlayPause is the reveal default.
+    var tvFocusZone by remember { mutableStateOf(TvVodFocusZone.None) }
     val isTvForm = (
         context.resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_TYPE_MASK
@@ -336,37 +350,82 @@ fun VODPlayerScreen(
                 // underneath never sees a half-delivered press.
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                 val isRepeat = event.nativeKeyEvent.repeatCount > 0
+                val now = android.os.SystemClock.uptimeMillis()
+                val reveal = {
+                    chromeVisible = true
+                    if (tvFocusZone == TvVodFocusZone.None) tvFocusZone = TvVodFocusZone.PlayPause
+                    lastInteractionAt = now
+                }
                 when (event.key) {
-                    // OK: commit an in-progress scrub, else toggle
-                    // pause/play (iOS Select behavior). The chrome
-                    // surfaces either way so the state is visible.
-                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                        if (scrubTargetMs != null) commitScrub() else togglePlayPause()
-                    }
-                    Key.MediaPlayPause -> {
-                        if (scrubTargetMs != null) commitScrub()
-                        togglePlayPause()
-                    }
+                    // Hardware media keys keep working regardless of zone.
                     Key.MediaPlay -> {
-                        exoPlayer?.playWhenReady = true
-                        isPaused = false
-                        chromeVisible = true
-                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                        exoPlayer?.playWhenReady = true; isPaused = false; reveal()
                     }
                     Key.MediaPause -> {
-                        exoPlayer?.playWhenReady = false
-                        isPaused = true
-                        chromeVisible = true
-                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                        exoPlayer?.playWhenReady = false; isPaused = true; reveal()
                     }
-                    Key.DirectionLeft, Key.MediaRewind -> scrubStep(-1, isRepeat)
-                    Key.DirectionRight, Key.MediaFastForward -> scrubStep(+1, isRepeat)
-                    // UP/DOWN just reveal the chrome (no channel flip in
-                    // VOD). Consuming them keeps D-pad focus from
-                    // wandering onto the touch-only chrome buttons.
-                    Key.DirectionUp, Key.DirectionDown -> {
+                    Key.MediaPlayPause -> {
+                        if (scrubTargetMs != null) commitScrub(); togglePlayPause()
+                        reveal()
+                    }
+                    Key.MediaRewind -> { reveal(); tvFocusZone = TvVodFocusZone.Scrubber; scrubStep(-1, isRepeat) }
+                    Key.MediaFastForward -> { reveal(); tvFocusZone = TvVodFocusZone.Scrubber; scrubStep(+1, isRepeat) }
+
+                    // OK / Select.
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                        if (!chromeVisible) {
+                            // First OK only reveals controls + lands on Play/Pause.
+                            reveal()
+                        } else when (tvFocusZone) {
+                            TvVodFocusZone.Scrubber -> {
+                                // Commit an in-progress scrub (iOS Select-commits).
+                                if (scrubTargetMs != null) commitScrub()
+                                lastInteractionAt = now
+                            }
+                            TvVodFocusZone.Rewind -> {
+                                val target = max(0L, positionMs - 10_000L)
+                                exoPlayer?.seekTo(target); positionMs = target; reveal()
+                            }
+                            TvVodFocusZone.Forward -> {
+                                val maxPos = if (durationMs > 0L) {
+                                    if (isDvr) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
+                                } else Long.MAX_VALUE
+                                val target = min(maxPos, positionMs + 10_000L)
+                                exoPlayer?.seekTo(target); positionMs = target; reveal()
+                            }
+                            else -> { togglePlayPause() } // PlayPause / None
+                        }
+                    }
+
+                    Key.DirectionLeft -> {
+                        if (!chromeVisible) { reveal() }
+                        else when (tvFocusZone) {
+                            TvVodFocusZone.Scrubber -> scrubStep(-1, isRepeat)
+                            TvVodFocusZone.PlayPause -> { tvFocusZone = TvVodFocusZone.Rewind; lastInteractionAt = now }
+                            TvVodFocusZone.Forward -> { tvFocusZone = TvVodFocusZone.PlayPause; lastInteractionAt = now }
+                            else -> { tvFocusZone = TvVodFocusZone.Rewind; lastInteractionAt = now } // Rewind/None: stay leftmost
+                        }
                         chromeVisible = true
-                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                    }
+                    Key.DirectionRight -> {
+                        if (!chromeVisible) { reveal() }
+                        else when (tvFocusZone) {
+                            TvVodFocusZone.Scrubber -> scrubStep(+1, isRepeat)
+                            TvVodFocusZone.PlayPause -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now }
+                            TvVodFocusZone.Rewind -> { tvFocusZone = TvVodFocusZone.PlayPause; lastInteractionAt = now }
+                            else -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now } // Forward/None: stay rightmost
+                        }
+                        chromeVisible = true
+                    }
+                    // UP enters the scrubber so the user can D-pad scrub.
+                    Key.DirectionUp -> {
+                        reveal(); tvFocusZone = TvVodFocusZone.Scrubber
+                    }
+                    // DOWN drops back from the scrubber to the control row
+                    // (Play/Pause); from the control row it just keeps chrome up.
+                    Key.DirectionDown -> {
+                        reveal()
+                        if (tvFocusZone == TvVodFocusZone.Scrubber) tvFocusZone = TvVodFocusZone.PlayPause
                     }
                 }
                 true
@@ -619,6 +678,11 @@ fun VODPlayerScreen(
                 delay(100)
                 runCatching { playbackFocus.requestFocus() }
             }
+            // Reset the transport zone when chrome hides so the next reveal
+            // always lands back on Play/Pause (Archie spec default focus).
+            LaunchedEffect(chromeVisible) {
+                if (!chromeVisible) tvFocusZone = TvVodFocusZone.None
+            }
         }
 
         // Debounced scrub commit: seek 650ms after the last LEFT/RIGHT step
@@ -735,6 +799,7 @@ fun VODPlayerScreen(
                     positionMs = scrubTargetMs ?: positionMs,
                     livePositionMs = positionMs,
                     isTvForm = isTvForm,
+                    tvFocusZone = tvFocusZone,
                     durationMs = durationMs,
                     isPaused = isPaused,
                     isDragging = isDragging,
@@ -807,6 +872,7 @@ private fun BottomChrome(
     positionMs: Long,
     livePositionMs: Long,   // un-previewed playback position, for the delta
     isTvForm: Boolean,
+    tvFocusZone: TvVodFocusZone = TvVodFocusZone.None,
     durationMs: Long,
     isPaused: Boolean,
     isDragging: Boolean,
@@ -844,6 +910,7 @@ private fun BottomChrome(
                 durationMs = durationMs,
                 isDragging = isDragging,
                 dragFraction = dragFraction,
+                tvScrubberFocused = isTvForm && tvFocusZone == TvVodFocusZone.Scrubber,
                 onDragStart = onDragStart,
                 onDragChanged = onDragChanged,
                 onDragEnd = onDragEnd,
@@ -861,20 +928,20 @@ private fun BottomChrome(
                 color = Color.White,
             )
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = onSkipBack) {
-                Icon(
-                    imageVector = Icons.Filled.Replay10,
-                    contentDescription = "Back 10 seconds",
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp),
-                )
-            }
+            TransportIconButton(
+                icon = Icons.Filled.Replay10,
+                contentDescription = "Back 10 seconds",
+                onClick = onSkipBack,
+                focused = isTvForm && tvFocusZone == TvVodFocusZone.Rewind,
+            )
             Spacer(Modifier.width(8.dp))
+            val ppFocused = isTvForm && tvFocusZone == TvVodFocusZone.PlayPause
             Box(
                 modifier = Modifier
+                    .tvFocusScale(ppFocused)
                     .size(52.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.18f))
+                    .background(if (ppFocused) Color.White else Color.White.copy(alpha = 0.18f))
                     .pointerInput(Unit) {
                         detectTapGestures(onTap = { onTogglePlay() })
                     },
@@ -883,19 +950,17 @@ private fun BottomChrome(
                 Icon(
                     imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                     contentDescription = if (isPaused) "Play" else "Pause",
-                    tint = Color.White,
+                    tint = if (ppFocused) Color.Black else Color.White,
                     modifier = Modifier.size(34.dp),
                 )
             }
             Spacer(Modifier.width(8.dp))
-            IconButton(onClick = onSkipForward) {
-                Icon(
-                    imageVector = Icons.Filled.Forward10,
-                    contentDescription = "Forward 10 seconds",
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp),
-                )
-            }
+            TransportIconButton(
+                icon = Icons.Filled.Forward10,
+                contentDescription = "Forward 10 seconds",
+                onClick = onSkipForward,
+                focused = isTvForm && tvFocusZone == TvVodFocusZone.Forward,
+            )
             Spacer(Modifier.weight(1f))
             if (isDvr) {
                 // LIVE pill (iOS PlayerView): filled red within 15s of the
@@ -949,6 +1014,35 @@ private fun BottomChrome(
             thumbCenterPx = thumbCenterPx,
             trackWidthPx = trackWidthPx,
             isTvForm = isTvForm,
+        )
+    }
+}
+
+@Composable
+private fun TransportIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    focused: Boolean,
+) {
+    // Touch: plain IconButton. TV: white-fill + grow focus visual matching
+    // PlayerPill so the targeted skip button reads as selected under the
+    // app-owned D-pad zone model (focus is driven by the root key handler,
+    // not Compose traversal, so this is purely a visual treatment).
+    Box(
+        modifier = Modifier
+            .tvFocusScale(focused)
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(if (focused) Color.White else Color.Transparent)
+            .pointerInput(Unit) { detectTapGestures(onTap = { onClick() }) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (focused) Color.Black else Color.White,
+            modifier = Modifier.size(28.dp),
         )
     }
 }
@@ -1036,6 +1130,7 @@ private fun ScrubberBar(
     durationMs: Long,
     isDragging: Boolean,
     dragFraction: Float,
+    tvScrubberFocused: Boolean = false,
     onDragStart: () -> Unit,
     onDragChanged: (Float) -> Unit,
     onDragEnd: (Float) -> Unit,
@@ -1046,8 +1141,9 @@ private fun ScrubberBar(
     val durationFloat = max(1L, durationMs).toFloat()
     val raw = if (isDragging) dragFraction else positionMs.toFloat() / durationFloat
     val filledFraction = raw.coerceIn(0f, 1f)
-    val trackHeight = if (isDragging) 6.dp else 3.dp
-    val thumbSize = if (isDragging) 18.dp else 12.dp
+    val active = isDragging || tvScrubberFocused
+    val trackHeight = if (active) 6.dp else 3.dp
+    val thumbSize = if (active) 18.dp else 12.dp
 
     Box(
         modifier = Modifier
