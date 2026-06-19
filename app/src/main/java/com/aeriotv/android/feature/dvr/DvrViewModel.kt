@@ -216,9 +216,13 @@ class DvrViewModel @Inject constructor(
                     )
                     _state.update { st ->
                         val local = st.recordings.filter { it.source == Source.Local }
+                        // Authoritative server list wins by id, so an
+                        // optimistically-inserted row from scheduleServerRecording
+                        // (same "server-$id") is replaced, never duplicated.
+                        val serverById = hydrated.associateBy { it.id }
                         st.copy(
                             isLoading = false,
-                            recordings = (hydrated + local).sortedBy { it.startMillis },
+                            recordings = (serverById.values + local).sortedBy { it.startMillis },
                             error = null,
                         )
                     }
@@ -324,6 +328,20 @@ class DvrViewModel @Inject constructor(
                     description = description,
                     comskip = comskip,
                 )
+            }
+            // Optimistic insert: the POST already returned the full server row
+            // (real id, channel, window). Merge it into state NOW so the
+            // "Recording (N)" pill + red row appear immediately, instead of
+            // waiting for the second LIST round-trip + EPG hydration in
+            // refresh(). effectiveStatus() reclassifies an airing-now row as
+            // Recording on its own, so no status guessing. The row uses the
+            // same "server-$id" key the refresh-produced row will, so the
+            // dedup-by-id guard in refresh() reconciles it in place.
+            val base = playlistRepository.effectiveBaseUrl(playlist)
+            val optimistic = result.toRecording(base, dispatcharrClient)
+            _state.update { st ->
+                val without = st.recordings.filterNot { it.id == optimistic.id }
+                st.copy(recordings = (without + optimistic).sortedBy { it.startMillis })
             }
             refresh()
             result
