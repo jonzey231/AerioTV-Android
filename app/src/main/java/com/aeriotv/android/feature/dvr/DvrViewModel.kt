@@ -98,6 +98,16 @@ class DvrViewModel @Inject constructor(
          * VOD (isDvr=false).
          */
         val isDvr: Boolean = false,
+        /**
+         * EPG programme id surfaced from the server recording JSON
+         * (DispatcharrRecording.programId: a top-level int FK or the nested
+         * custom_properties.program.id). The async category resolver uses it
+         * to fetch /api/epg/programs/<id>/ (the only endpoint that returns
+         * `<category>`) for completed rows that arrive with a blank category.
+         * Null on local recordings and on server rows that carry no program
+         * id (those stay best-effort blank, no pill).
+         */
+        val programId: Int? = null,
     ) {
         enum class Status { Scheduled, Recording, Completed, Failed, Stopped, Unknown }
 
@@ -211,31 +221,42 @@ class DvrViewModel @Inject constructor(
             }.fold(
                 onSuccess = { remote ->
                     val server = remote.map { it.toRecording(base, dispatcharrClient) }
-                    // Fill in programme title/description from the cached guide for
-                    // rows the server left sparse, so scheduled / ongoing / completed
-                    // recordings all show full EPG (suspend, so computed before the
-                    // non-suspend state update).
+                    // Fill in programme title/description (and any cached category)
+                    // from the on-disk guide for rows the server left sparse. This
+                    // is a fast LOCAL pass (Room reads only, no network), plus it
+                    // applies any category we already resolved on a prior refresh
+                    // from [categoryCache]. We update _state from THIS immediately
+                    // so the DVR tab + list paint instantly; network category
+                    // resolution happens afterward in a separate coroutine.
                     val fromCache = hydrateRecordingsFromEpg(playlist.id, server)
-                    // Completed recordings whose programme already aged out of the
-                    // on-disk EPG window still have a blank category after the cache
-                    // pass; resolve those over the network (Streamer feedback #6).
-                    val hydrated = hydrateCompletedCategoriesFromNetwork(
-                        playlistId = playlist.id,
-                        baseUrl = playlist.urlString,
-                        recordings = fromCache,
-                    )
+                        .map { r ->
+                            val cached = categoryCache[r.id]
+                            if (r.category.isBlank() && !cached.isNullOrBlank()) {
+                                r.copy(category = cached)
+                            } else r
+                        }
                     _state.update { st ->
                         val local = st.recordings.filter { it.source == Source.Local }
                         // Authoritative server list wins by id, so an
                         // optimistically-inserted row from scheduleServerRecording
                         // (same "server-$id") is replaced, never duplicated.
-                        val serverById = hydrated.associateBy { it.id }
+                        val serverById = fromCache.associateBy { it.id }
                         st.copy(
                             isLoading = false,
                             recordings = (serverById.values + local).sortedBy { it.startMillis },
                             error = null,
                         )
                     }
+                    // Completed recordings whose programme already aged out of the
+                    // on-disk EPG window still have a blank category. Resolve those
+                    // over the network OFF the critical path so the recordings
+                    // already painted above. Each resolved category is patched back
+                    // into _state as it lands (pills appear a moment later).
+                    resolveCompletedCategoriesAsync(
+                        playlistId = playlist.id,
+                        baseUrl = playlist.urlString,
+                        recordings = fromCache,
+                    )
                 },
                 onFailure = { t ->
                     Log.w(TAG, "listRecordings failed", t)
@@ -542,131 +563,94 @@ class DvrViewModel @Inject constructor(
     }
 
     /**
-     * Resolve a genre/category for recordings whose programme has already
-     * rolled out of the on-disk EPG window (i.e. COMPLETED rows), which the
-     * cache pass [hydrateRecordingsFromEpg] can't reach. Fixes Streamer
-     * feedback #6: only the currently-airing recording showed pills because
-     * the cache only holds the live now-window; past programmes resolved
-     * blank so the pill gate hid them.
+     * Resolve a genre/category for COMPLETED recordings that arrived with a
+     * blank category (their programme has already rolled out of the on-disk
+     * EPG window, so the local cache pass [hydrateRecordingsFromEpg] couldn't
+     * reach it). Fixes Streamer feedback #6 where only the currently-airing
+     * recording showed pills.
      *
-     * Resolution path (this is the part the first cut got wrong). Dispatcharr's
-     * bulk list endpoint `/api/epg/programs/?tvg_id=<id>` strips `<category>`
-     * for perf exactly like the grid does, so the per-programme `categories`
-     * array on those rows is essentially always empty. The genre therefore can
-     * NOT be read straight off the list row; we have to take the matched row's
-     * programme id and call the per-id rich-detail endpoint
-     * (`getProgramDetail` -> `/api/epg/programs/<id>/`), which is the only REST
-     * endpoint that carries `categories` (same path ProgramInfoSheet uses for
-     * the guide pills). The list call also now follows the DRF `next` cursor so
-     * a recently-completed programme (1-3 days back) is reachable even though
-     * the feed is ordered oldest-first.
+     * CRITICAL: this is fire-and-forget. The caller has ALREADY pushed the
+     * recordings to _state (so the DVR tab + list painted instantly); this
+     * launches a separate coroutine that resolves each category and patches it
+     * into _state as it lands, so pills appear a moment later WITHOUT blocking
+     * the first list render. The previous cut computed categories synchronously
+     * before the first _state update, which stalled the DVR tab ~55s.
      *
-     * Throttled so it doesn't hammer the server every 30s:
-     *  - Only blank-category, channel-bearing rows are considered.
-     *  - DEFINITIVE results (a resolved genre, or a confirmed "programme has no
-     *    category") are memoised in [categoryCache] by recording id, so each row
-     *    is fetched at most once. An INCOMPLETE result (no programme matched, or
-     *    the detail fetch failed) is intentionally NOT cached, so the next
-     *    refresh retries instead of permanently hiding the pills.
-     *  - One list call per distinct tvg-id per refresh (de-duplicated), so a
-     *    burst of completed rows on the same channel shares a single feed walk.
-     * Best-effort and offline-safe: a failed fetch leaves the row blank (pills
-     * stay hidden, retried next pass) rather than throwing.
+     * Resolution path: a completed recording carries no category field of its
+     * own, but it does surface an EPG programme id (top-level int FK or nested
+     * custom_properties.program.id, exposed as Recording.programId). We feed
+     * that id to getProgramDetail (`/api/epg/programs/<id>/`), the ONLY REST
+     * endpoint that returns `categories` (the bulk list / grid strip them for
+     * perf). This is the same endpoint ProgramInfoSheet uses for guide pills.
+     * NO unfiltered programme-list fetch: the old `?tvg_id=` walk returned the
+     * server's entire ~53k-row programme list (the param didn't filter), which
+     * is what made a refresh take ~55s and never matched.
+     *
+     * Cache discipline ([categoryCache], keyed by recording id):
+     *  - A DEFINITIVE result is memoised so the row is fetched at most once:
+     *    a resolved genre, OR a confirmed "programme has no category" (cached
+     *    as the empty string so we don't re-hit the network for a feed without
+     *    `<category>`).
+     *  - A FETCH FAILURE is NOT cached, so the next 30s refresh retries.
+     *  - Per-programme-id detail fetches are de-duplicated within a single
+     *    pass so two recordings of the same programme don't double-fetch.
+     * Best-effort and offline-safe: a row with no resolvable programme id, or
+     * one whose detail fetch fails, just stays blank (no pill) for now.
      */
-    private suspend fun hydrateCompletedCategoriesFromNetwork(
+    private fun resolveCompletedCategoriesAsync(
         playlistId: String,
         baseUrl: String,
         recordings: List<Recording>,
-    ): List<Recording> {
-        // Apply anything we already resolved on a prior refresh first.
-        val seeded = recordings.map { r ->
-            val cached = categoryCache[r.id]
-            if (r.category.isBlank() && !cached.isNullOrBlank()) r.copy(category = cached) else r
-        }
-        val needy = seeded.filter {
-            it.category.isBlank() &&
-                it.dispatcharrChannelId != null &&
+    ) {
+        // Only blank-category, server rows that carry a programme id and that we
+        // haven't already resolved definitively are worth a lookup.
+        val needy = recordings.filter {
+            it.source == Source.Server &&
+                it.category.isBlank() &&
+                it.programId != null &&
                 !categoryCache.containsKey(it.id)
         }
-        if (needy.isEmpty()) return seeded
-        val needyIds = needy.mapTo(HashSet()) { it.id }
-        val tvgByChannelId = playlistRepository.loadCachedChannels(playlistId)
-            .mapNotNull { c -> c.dispatcharrChannelId?.let { id -> id to c.tvgID } }
-            .filter { it.second.isNotBlank() }
-            .toMap()
-        if (tvgByChannelId.isEmpty()) return seeded
-        // One feed walk per distinct tvg-id this batch needs.
-        val tvgIds = needy.mapNotNull { tvgByChannelId[it.dispatcharrChannelId] }.toSet()
-        val programsByTvg = HashMap<String, List<DispatcharrProgramEntryLite>>()
-        for (tvg in tvgIds) {
-            val rows = runCatching {
-                dispatcharrAuth.withApiKeyRetry(playlistId) { k ->
-                    dispatcharrClient.getProgramsByTvgId(baseUrl, k, tvg)
-                }
-            }.getOrNull().orEmpty()
-            programsByTvg[tvg] = rows.map {
-                DispatcharrProgramEntryLite(
-                    programId = it.programIdInt,
-                    startMillis = parseIsoMillis(it.startTime) ?: 0L,
-                    endMillis = parseIsoMillis(it.endTime) ?: 0L,
-                    categories = it.categories.orEmpty(),
-                )
+        if (needy.isEmpty()) return
+        viewModelScope.launch {
+            // De-dup detail fetches by programme id within this pass; two
+            // recordings of the same programme share one round-trip.
+            val byProgramId = HashMap<Int, String?>()
+            suspend fun categoriesForProgram(programId: Int): String? {
+                if (byProgramId.containsKey(programId)) return byProgramId[programId]
+                val detail = runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlistId) { k ->
+                        dispatcharrClient.getProgramDetail(baseUrl, k, programId)
+                    }
+                }.getOrNull()
+                // null result (fetch failed) is NOT memoised, so a transient
+                // failure retries next pass; a definitive empty/non-empty IS.
+                val joined = detail?.categories
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
+                    ?.joinToString(", ")
+                if (joined != null) byProgramId[programId] = joined
+                return joined
             }
-        }
-        // Resolve the genre for each needy row, fetching per-programme detail
-        // only when the list row didn't already carry categories. Detail fetches
-        // are memoised by programme id within this pass so two recordings of the
-        // same programme don't double-fetch.
-        val detailCategoryByProgramId = HashMap<Int, String>()
-        suspend fun categoriesForProgram(programId: Int?): String? {
-            if (programId == null) return null
-            detailCategoryByProgramId[programId]?.let { return it }
-            val detail = runCatching {
-                dispatcharrAuth.withApiKeyRetry(playlistId) { k ->
-                    dispatcharrClient.getProgramDetail(baseUrl, k, programId)
+            for (rec in needy) {
+                val programId = rec.programId ?: continue
+                // null = fetch failed (leave uncached, retry next pass);
+                // "" = programme genuinely has no category (definitive);
+                // non-blank = resolved genre.
+                val resolved = categoriesForProgram(programId) ?: continue
+                categoryCache[rec.id] = resolved
+                if (resolved.isBlank()) continue
+                // Patch just this row into _state as its category lands, so the
+                // pill appears without re-rendering or re-sorting the whole list.
+                _state.update { st ->
+                    val idx = st.recordings.indexOfFirst { it.id == rec.id }
+                    if (idx < 0 || st.recordings[idx].category.isNotBlank()) return@update st
+                    val patched = st.recordings.toMutableList()
+                    patched[idx] = patched[idx].copy(category = resolved)
+                    st.copy(recordings = patched)
                 }
-            }.getOrNull() ?: return null
-            val joined = detail.categories
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .joinToString(", ")
-            detailCategoryByProgramId[programId] = joined
-            return joined
-        }
-        return seeded.map { r ->
-            if (r.id !in needyIds) return@map r
-            val tvg = tvgByChannelId[r.dispatcharrChannelId] ?: return@map r
-            val match = programsByTvg[tvg]
-                ?.maxByOrNull { overlapMillis(it.startMillis, it.endMillis, r.startMillis, r.endMillis) }
-                ?.takeIf { overlapMillis(it.startMillis, it.endMillis, r.startMillis, r.endMillis) > 0L }
-                // No programme overlaps the recording window: the feed walk
-                // didn't reach it (or the channel has no EPG). Leave UN-cached
-                // so the next refresh retries; pills just stay hidden for now.
-                ?: return@map r
-            // Prefer categories the list row already carried (rare, but a free
-            // upgrade on builds that don't strip them); else fetch detail.
-            val fromRow = match.categories
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .joinToString(", ")
-            val resolved = if (fromRow.isNotBlank()) {
-                fromRow
-            } else {
-                // null = detail fetch failed (incomplete); "" = programme truly
-                // has no category (definitive). Only the latter is cacheable.
-                categoriesForProgram(match.programId) ?: return@map r
             }
-            categoryCache[r.id] = resolved
-            if (resolved.isNotBlank()) r.copy(category = resolved) else r
         }
     }
-
-    private data class DispatcharrProgramEntryLite(
-        val programId: Int?,
-        val startMillis: Long,
-        val endMillis: Long,
-        val categories: List<String>,
-    )
 
     private fun overlapMillis(aStart: Long, aEnd: Long, bStart: Long, bEnd: Long): Long =
         (minOf(aEnd, bEnd) - maxOf(aStart, bStart)).coerceAtLeast(0L)
@@ -724,6 +708,7 @@ private fun DispatcharrRecording.toRecording(
         dispatcharrChannelId = channel,
         inProgressUrl = inProgress,
         isDvr = dvr,
+        programId = programId,
     )
 }
 

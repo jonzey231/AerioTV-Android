@@ -1716,7 +1716,62 @@ data class DispatcharrRecording(
     val taskId: String? = null,
     @SerialName("custom_properties")
     val customProperties: JsonObject? = null,
+    // Possible TOP-LEVEL program-id foreign keys. The wire shape varies by
+    // Dispatcharr build / how the recording was created: some rows carry an
+    // integer FK to the EPG programme at the top level, under one of several
+    // names. They are NOT inside custom_properties. We have to declare each
+    // explicitly because the decoder runs with ignoreUnknownKeys=true, so an
+    // undeclared field would be silently dropped before we could read it. Any
+    // that the server omits decode as null. The first non-null one (plus the
+    // nested custom_properties.program.id fallback) drives [programId], which
+    // the DVR tab feeds to getProgramDetail to resolve a completed
+    // recording's category. Stored as JsonElement for Int-or-String tolerance.
+    @SerialName("program")
+    val programField: JsonElement? = null,
+    @SerialName("epg")
+    val epgField: JsonElement? = null,
+    @SerialName("epg_program")
+    val epgProgramField: JsonElement? = null,
+    @SerialName("program_id")
+    val programIdField: JsonElement? = null,
 ) {
+    /**
+     * Resolved EPG programme id for this recording, or null when none is
+     * surfaced. This is the ONLY reliable handle for fetching the
+     * recording's category: /api/epg/programs/<id>/ (getProgramDetail) is the
+     * single endpoint that returns the `<category>` list (the bulk list /
+     * grid strip it for perf), and a finalized recording carries no category
+     * field of its own anywhere in its JSON.
+     *
+     * Two places the id can live, checked in order:
+     *  1. A TOP-LEVEL integer FK: `program`, `epg`, `epg_program`, or
+     *     `program_id`. Only an int counts as an id; a `program` that arrived
+     *     as a nested object is handled in (2), not here.
+     *  2. The nested `custom_properties.program.id` (server-scheduled rows
+     *     that embed the programme object sometimes include its id).
+     *
+     * Measured on a v0.27.0 server: some completed recordings expose the
+     * nested program.id, others expose nothing. Rows with neither resolve
+     * null and stay best-effort blank (no pill).
+     */
+    val programId: Int?
+        get() {
+            // Top-level integer FKs. A JsonObject `program` (the embedded
+            // programme) is intentionally skipped here; its id is read in the
+            // nested branch below.
+            fun asTopLevelInt(el: JsonElement?): Int? =
+                (el as? JsonPrimitive)?.let { it.intOrNull ?: it.content.toIntOrNull() }
+            asTopLevelInt(programField)?.let { return it }
+            asTopLevelInt(epgField)?.let { return it }
+            asTopLevelInt(epgProgramField)?.let { return it }
+            asTopLevelInt(programIdField)?.let { return it }
+            // Nested custom_properties.program.id. Tolerate the id arriving
+            // as a JSON number or a numeric string.
+            val nested = customProperties?.objectField("program")
+                ?.get("id") as? JsonPrimitive
+            return nested?.let { it.intOrNull ?: it.content.toIntOrNull() }
+        }
+
     /** Recording status (`scheduled`, `recording`, `in_progress`, `completed`,
      *  `stopped`, `failed`, ...). iOS reads this from custom_properties.status
      *  (line 2297); the top-level field doesn't exist on the wire. */
