@@ -6,7 +6,10 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -69,6 +73,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -94,6 +99,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.delay
@@ -687,6 +693,8 @@ fun VODPlayerScreen(
                 // position so the user sees the jump before the seek commits.
                 BottomChrome(
                     positionMs = scrubTargetMs ?: positionMs,
+                    livePositionMs = positionMs,
+                    isTvForm = isTvForm,
                     durationMs = durationMs,
                     isPaused = isPaused,
                     isDragging = isDragging,
@@ -747,6 +755,8 @@ fun VODPlayerScreen(
 @Composable
 private fun BottomChrome(
     positionMs: Long,
+    livePositionMs: Long,   // un-previewed playback position, for the delta
+    isTvForm: Boolean,
     durationMs: Long,
     isPaused: Boolean,
     isDragging: Boolean,
@@ -759,26 +769,39 @@ private fun BottomChrome(
     onSkipForward: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    var thumbCenterPx by remember { mutableFloatStateOf(0f) }
+    var trackWidthPx by remember { mutableFloatStateOf(1f) }
+    // The preview/target position the bubble reflects: the dragged spot
+    // while a finger is down, else the D-pad scrub target, else live.
+    val targetMs = when {
+        isDragging -> (dragFraction * durationMs).toLong()
+        else -> positionMs            // already = scrubTargetMs ?: live from caller
+    }
+    val showBubble = isDragging || (positionMs != livePositionMs)
+    val delta = targetMs - livePositionMs
+
+    Box(
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f))
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        ScrubberBar(
-            positionMs = positionMs,
-            durationMs = durationMs,
-            isDragging = isDragging,
-            dragFraction = dragFraction,
-            onDragStart = onDragStart,
-            onDragChanged = onDragChanged,
-            onDragEnd = onDragEnd,
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Column {
+            ScrubberBar(
+                positionMs = positionMs,
+                durationMs = durationMs,
+                isDragging = isDragging,
+                dragFraction = dragFraction,
+                onDragStart = onDragStart,
+                onDragChanged = onDragChanged,
+                onDragEnd = onDragEnd,
+                onThumbGeometry = { c, w -> thumbCenterPx = c; trackWidthPx = w },
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             val displayMs = if (isDragging) (dragFraction * durationMs).toLong() else positionMs
             Text(
                 text = formatTime(displayMs),
@@ -827,8 +850,97 @@ private fun BottomChrome(
                 style = MaterialTheme.typography.labelMedium,
                 color = Color.White,
             )
+            }
+        }
+        // Floating scrub-readout bubble (iOS PlayerView.scrubReadout parity,
+        // commit b7b7f6387). Overlay so it never shifts the timeline; it sits
+        // above the thumb and fades/scales in only while the playhead moves.
+        ScrubReadoutBubble(
+            visible = showBubble,
+            targetMs = targetMs,
+            deltaMs = delta,
+            thumbCenterPx = thumbCenterPx,
+            trackWidthPx = trackWidthPx,
+            isTvForm = isTvForm,
+        )
+    }
+}
+
+@Composable
+private fun ScrubReadoutBubble(
+    visible: Boolean,
+    targetMs: Long,
+    deltaMs: Long,
+    thumbCenterPx: Float,
+    trackWidthPx: Float,
+    isTvForm: Boolean,
+) {
+    val density = LocalDensity.current
+    // Approx bubble half-width so it clamps inside the track instead of
+    // clipping at the edges. Two lines of short monospace text ~ 56dp wide.
+    val halfWidthPx = with(density) { 40.dp.toPx() }
+    val clampedCenter = thumbCenterPx.coerceIn(
+        halfWidthPx,
+        (trackWidthPx - halfWidthPx).coerceAtLeast(halfWidthPx),
+    )
+    val bubbleXDp = with(density) { (clampedCenter - halfWidthPx).toDp() }
+    // Sits above the track. TV chrome is larger so it lifts higher.
+    val liftDp = if (isTvForm) (-78).dp else (-52).dp
+
+    Box(
+        modifier = Modifier
+            .padding(start = bubbleXDp.coerceAtLeast(0.dp))
+            .offset(y = liftDp),
+    ) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn() + scaleIn(initialScale = 0.9f),
+            exit = fadeOut() + scaleOut(targetScale = 0.9f),
+        ) {
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .border(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    .padding(
+                        horizontal = if (isTvForm) 22.dp else 14.dp,
+                        vertical = if (isTvForm) 12.dp else 8.dp,
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = formatTime(targetMs.coerceAtLeast(0L)),
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    style = if (isTvForm) MaterialTheme.typography.headlineSmall
+                            else MaterialTheme.typography.titleMedium,
+                )
+                if (deltaMs != 0L) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = signedDelta(deltaMs),
+                        color = if (deltaMs < 0L) Color(0xFFFF9800) else Color(0xFF4CAF50),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        style = if (isTvForm) MaterialTheme.typography.labelLarge
+                                else MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
         }
     }
+}
+
+/** "+2:30" / "-0:45": signed offset of the scrub target from the live
+ * position. iOS PlayerView.signedDelta parity (commit b7b7f6387). */
+private fun signedDelta(ms: Long): String {
+    val sign = if (ms < 0L) "-" else "+"
+    return sign + formatTime(abs(ms))
 }
 
 @Composable
@@ -840,6 +952,7 @@ private fun ScrubberBar(
     onDragStart: () -> Unit,
     onDragChanged: (Float) -> Unit,
     onDragEnd: (Float) -> Unit,
+    onThumbGeometry: (thumbCenterPx: Float, trackWidthPx: Float) -> Unit = { _, _ -> },
 ) {
     val density = LocalDensity.current
     var widthPx by remember { mutableFloatStateOf(1f) }
@@ -870,8 +983,16 @@ private fun ScrubberBar(
                 .background(MaterialTheme.colorScheme.primary),
         )
         val thumbHalf = with(density) { (thumbSize / 2).toPx() }
-        val thumbXPx = (widthPx * filledFraction) - thumbHalf
+        val thumbCenterPx = widthPx * filledFraction
+        val thumbXPx = thumbCenterPx - thumbHalf
         val thumbX = with(density) { thumbXPx.toDp() }
+        // Report the thumb center + active-track width so the floating
+        // scrub-readout bubble (owned by BottomChrome) can sit above it.
+        // widthPx starts at 1f and is set on first gesture; emit only once
+        // it has been measured so the bubble doesn't snap from x=0.
+        androidx.compose.runtime.LaunchedEffect(thumbCenterPx, widthPx) {
+            if (widthPx > 1f) onThumbGeometry(thumbCenterPx, widthPx)
+        }
         Box(
             modifier = Modifier
                 .padding(start = thumbX.coerceAtLeast(0.dp))
