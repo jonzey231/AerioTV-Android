@@ -807,6 +807,12 @@ fun PlayerScreen(
                 // Guide-staged set survives an opened-then-cancelled picker.
                 multiviewStore.restore(mvSnapshot, mvSnapshotFocus)
             },
+            // BACK / scrim / swipe KEEPS whatever the user just toggled (mirrors
+            // MultiviewScreen's re-entrant picker). Only the explicit "Cancel"
+            // text button (onCancel) reverts to the pre-open snapshot. Without
+            // this, onDismiss defaulted to onCancel and BACK silently discarded
+            // the picks the user added while watching.
+            onDismiss = { multiviewPickerOpen = false },
         )
     }
     streamInfo?.let { snapshot ->

@@ -802,6 +802,9 @@ fun AerioTVNavHost(
                 MultiviewScreen(
                     onClose = { navController.popBackStack() },
                     httpHeaders = headers,
+                    // Pass the PLAYLIST_GRAPH-scoped VM so the re-entrant
+                    // "Add streams" picker reuses this single instance.
+                    playlistVm = playlistVm,
                 )
             }
 

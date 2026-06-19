@@ -129,6 +129,11 @@ fun MultiviewScreen(
     storeHandle: MultiviewStoreHandle = rememberMultiviewStoreHandle(),
     settingsVm: SettingsViewModel = hiltViewModel(),
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel = hiltViewModel(),
+    // The PLAYLIST_GRAPH-scoped PlaylistViewModel (Navigation.kt hoists the same
+    // instance via hiltViewModel(parent)). Forwarded to the re-entrant
+    // AddToMultiviewSheet below so the "Add streams" picker reuses the single
+    // graph-attached VM instead of spinning up a 2nd, graph-detached one.
+    playlistVm: com.aeriotv.android.feature.playlist.PlaylistViewModel = hiltViewModel(),
 ) {
     // Keep the screen on while multiview is active. Same reason as
     // PlayerScreen -- watching 2-9 live streams without the screen
@@ -302,6 +307,7 @@ fun MultiviewScreen(
             finishedTiles = finishedTiles,
             scrubberTiles = scrubberTiles,
             tilePlayers = tilePlayers,
+            onHideScrubber = { idx -> scrubberTiles = scrubberTiles - idx },
             onTileFinished = onTileFinished,
             onReplayTile = { idx ->
                 finishedTiles = finishedTiles - idx
@@ -407,6 +413,33 @@ fun MultiviewScreen(
                     .statusBarsPadding()
                     .padding(end = 18.dp, top = 18.dp),
             )
+            // Item #7 phone parity: TV reaches "Add streams" through the BACK
+            // exit dialog, but on phone BACK exits outright (no dialog), so the
+            // re-entrant picker was unreachable. Surface a small touch "+" in
+            // the chrome (phone only) when not mid-relocate/fullscreen and below
+            // the tile cap. It opens the SAME picker the TV menu does; the store
+            // appends, so the live grid grows in place.
+            if (!isTvDevice && relocatingIndex == null && fullscreenIndex == null &&
+                selected.size < storeHandle.maxTiles) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(end = 14.dp, top = 44.dp)
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconButton(onClick = { addPickerOpen = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = "Add streams",
+                            tint = Color.White,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -452,6 +485,10 @@ fun MultiviewScreen(
         AddToMultiviewSheet(
             currentChannel = null,
             multiviewStore = storeHandle,
+            // Reuse the screen's graph-scoped PlaylistViewModel rather than
+            // hiltViewModel()'s fresh, graph-detached instance, matching
+            // Navigation.kt's hiltViewModel(parent) wiring.
+            playlistVm = playlistVm,
             onLaunch = { addPickerOpen = false },
             onCancel = { addPickerOpen = false },
             onDismiss = { addPickerOpen = false },
@@ -689,6 +726,7 @@ private fun TileGrid(
     finishedTiles: Set<Int>,
     scrubberTiles: Set<Int>,
     tilePlayers: Map<Int, ExoPlayer>,
+    onHideScrubber: (Int) -> Unit,
     onTileFinished: (Int) -> Unit,
     onReplayTile: (Int) -> Unit,
     onRemoveTile: (Int) -> Unit,
@@ -719,6 +757,12 @@ private fun TileGrid(
     val gridFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         if (isTv) runCatching { gridFocusRequester.requestFocus() }
+    }
+    // Item #16 focus-trap fix: while a per-tile scrubber strip is up it owns
+    // focus; once every scrubber is hidden/removed, pull focus back to the grid
+    // host so the remote drives tile nav again instead of landing nowhere.
+    LaunchedEffect(scrubberTiles.isEmpty()) {
+        if (isTv && scrubberTiles.isEmpty()) runCatching { gridFocusRequester.requestFocus() }
     }
     // Re-arm the chrome (channel names + count chip) on every navigation.
     LaunchedEffect(dpadIndex) { if (isTv) onTileFocused() }
@@ -983,6 +1027,13 @@ private fun TileGrid(
                         player = tilePlayers[index],
                         isTv = isTv,
                         isDvr = tile.kind == TileKind.Dvr,
+                        // Item #16 focus-trap fix: the strip must be able to hand
+                        // the D-pad back to the single grid host (which owns ALL
+                        // nav + the long-OK tile menu where "Hide Scrubber"
+                        // lives). UP/DOWN/BACK return focus; BACK also hides the
+                        // scrubber so a remote can never get pinned on the strip.
+                        gridFocusRequester = gridFocusRequester,
+                        onHideScrubber = { onHideScrubber(index) },
                     )
                 }
             }
@@ -1512,6 +1563,13 @@ private fun BoxScope.TileScrubberOverlay(
     player: ExoPlayer?,
     isTv: Boolean,
     isDvr: Boolean,
+    // Item #16 focus-trap fix: the single grid host that owns ALL D-pad nav and
+    // the long-OK tile menu (where "Hide Scrubber" lives). The strip hands focus
+    // back to it on UP/DOWN/BACK so the remote is never pinned on the scrubber.
+    gridFocusRequester: FocusRequester,
+    // Hide this tile's scrubber (drops it from scrubberTiles). Called on BACK so
+    // a remote escapes the strip without dumping the user into the exit dialog.
+    onHideScrubber: () -> Unit,
 ) {
     if (player == null) return
     var positionMs by remember { mutableStateOf(0L) }
@@ -1551,8 +1609,12 @@ private fun BoxScope.TileScrubberOverlay(
             .fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.55f))
             .padding(horizontal = 10.dp, vertical = 6.dp)
-            // TV: focusable strip. LEFT/RIGHT preview +/-10s; OK commits early;
-            // BACK is left to MultiviewScreen's BackHandler / dialog cascade.
+            // TV: focusable strip. LEFT/RIGHT preview +/-10s. OK commits a pending
+            // seek; a plain OK with nothing pending BUBBLES to the grid host
+            // (return false) so its long-OK opens the tile menu where "Hide
+            // Scrubber" lives. UP/DOWN/BACK hand focus back to the grid host so
+            // the remote is never trapped on the strip (Item #16 focus-trap fix);
+            // BACK also hides the scrubber instead of hitting the exit dialog.
             .then(
                 if (isTv) Modifier
                     .focusRequester(focusReq)
@@ -1571,11 +1633,32 @@ private fun BoxScope.TileScrubberOverlay(
                                 scrubTargetMs = (base - 10_000L).coerceAtLeast(0L)
                                 true
                             }
-                            Key.DirectionCenter, Key.Enter -> {
-                                scrubTargetMs?.let {
-                                    player.seekTo(it); positionMs = it; scrubTargetMs = null
-                                }
+                            Key.DirectionUp, Key.DirectionDown -> {
+                                // Leave the strip: hand the D-pad back to the grid
+                                // host so the user can navigate / re-open the tile
+                                // menu (and Hide Scrubber). Fixes the ring desync
+                                // where UP/DOWN moved the ring but focus stayed.
+                                runCatching { gridFocusRequester.requestFocus() }
                                 true
+                            }
+                            Key.Back -> {
+                                // Escape the strip without falling through to the
+                                // MultiviewScreen exit dialog: hide this scrubber
+                                // and return focus to the grid host.
+                                onHideScrubber()
+                                runCatching { gridFocusRequester.requestFocus() }
+                                true
+                            }
+                            Key.DirectionCenter, Key.Enter -> {
+                                val t = scrubTargetMs
+                                if (t != null) {
+                                    player.seekTo(t); positionMs = t; scrubTargetMs = null
+                                    true
+                                } else {
+                                    // No pending seek: bubble to the grid host so
+                                    // its long-OK opens the tile menu.
+                                    false
+                                }
                             }
                             else -> false
                         }
@@ -1597,7 +1680,12 @@ private fun BoxScope.TileScrubberOverlay(
                                 change.consume()
                                 val w = size.width.toFloat().coerceAtLeast(1f)
                                 val f = (change.position.x / w).coerceIn(0f, 1f)
-                                if (durationMs > 0L) scrubTargetMs = (f * durationMs).toLong()
+                                if (durationMs > 0L) {
+                                    // Same DVR live-edge clamp as the D-pad path:
+                                    // never seek past duration - 5s on a DVR tile.
+                                    scrubTargetMs = (f * durationMs).toLong()
+                                        .coerceIn(0L, if (maxPos > 0L) maxPos else durationMs)
+                                }
                             },
                             onDragEnd = {
                                 scrubTargetMs?.let { player.seekTo(it); positionMs = it; scrubTargetMs = null }
