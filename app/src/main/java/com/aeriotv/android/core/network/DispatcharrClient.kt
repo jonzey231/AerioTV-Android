@@ -750,6 +750,43 @@ class DispatcharrClient @Inject constructor() {
     }
 
     /**
+     * GET /api/vod/movies/?page_size=N&category=<name>|movie -- first page of
+     * movies in ONE Dispatcharr VOD category. The movie LIST response omits the
+     * item's category (custom_properties.category_id is absent on this server;
+     * verified: unfiltered rows carry only actors/director/backdrop_path), so a
+     * per-category fetch is the only way to know a movie's real group. Dispatcharr
+     * MovieFilter.filter_category matches m3u_relations__category name+type when
+     * the value is "name|type"; a bare name is ambiguous across the movie/series
+     * category namespaces, so we pin |movie. Mirrors iOS StreamingAPIs.swift
+     * moviesPath(category:) (line 2046). Caller walks .next via getVODMoviesPage.
+     */
+    suspend fun getVODMoviesByCategory(
+        baseUrl: String,
+        apiKey: String,
+        category: String,
+        pageSize: Int = 100,
+    ): VODMoviesPage {
+        val typed = if (category.contains('|')) category else "$category|movie"
+        val encoded = java.net.URLEncoder.encode(typed, "UTF-8")
+        val url = "${baseUrl.trimEnd('/')}/api/vod/movies/?page_size=$pageSize&category=$encoded"
+        return getVODMoviesPage(url, apiKey)
+    }
+
+    /** Series counterpart of [getVODMoviesByCategory]; pins |series. Mirrors iOS
+     *  StreamingAPIs.swift seriesPath(category:) (line 2061). */
+    suspend fun getVODSeriesByCategory(
+        baseUrl: String,
+        apiKey: String,
+        category: String,
+        pageSize: Int = 100,
+    ): VODSeriesPage {
+        val typed = if (category.contains('|')) category else "$category|series"
+        val encoded = java.net.URLEncoder.encode(typed, "UTF-8")
+        val url = "${baseUrl.trimEnd('/')}/api/vod/series/?page_size=$pageSize&category=$encoded"
+        return getVODSeriesPage(url, apiKey)
+    }
+
+    /**
      * GET /api/vod/categories/ - every VOD category (movie + series) the
      * server knows, as a plain JSON array (no pagination). The list payloads
      * from /api/vod/movies|series/ carry an item's category ONLY inside

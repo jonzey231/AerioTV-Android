@@ -171,6 +171,8 @@ class OnDemandViewModel @Inject constructor(
         dispatcharrSeriesCategoryNames = emptyMap()
         dispatcharrMovieFallbackGroup = null
         dispatcharrSeriesFallbackGroup = null
+        dispatcharrEnabledMovieCats = emptyList()
+        dispatcharrEnabledSeriesCats = emptyList()
         _state.value = UiState()
     }
 
@@ -378,63 +380,129 @@ class OnDemandViewModel @Inject constructor(
             // edits become visible without an app restart). Series refresh,
             // pagination, and search all reuse this fetch's maps.
             ensureDispatcharrCategories(playlist, invalidate = true)
-            runCatching {
-                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.getVODMoviesFirstPage(playlist.urlString, key)
+            val cats = dispatcharrEnabledMovieCats
+            if (cats.isEmpty()) {
+                // No category endpoint / nothing enabled: keep the legacy
+                // unfiltered cursor walk as the fallback.
+                loadDispatcharrMoviesUnfiltered(playlist)
+                return@launch
+            }
+            // Per-category sweep. The movie LIST endpoint omits category_id on
+            // this server, so the only way to learn a movie's real group (and
+            // make the Manage Groups filter work) is to query each enabled
+            // category endpoint and stamp the result directly. Mirrors iOS
+            // StreamingAPIs.swift per-category VOD load. A failing category is
+            // logged and skipped; one bad group never aborts the sweep.
+            val totalCap = VOD_TOTAL_CAP
+            val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
+            val merged = mutableListOf<DispatcharrVODMovie>()
+            val seen = HashSet<String>()
+            var firstPainted = false
+            for (catName in cats) {
+                if (merged.size >= totalCap) break
+                var nextUrl: String? = null
+                var fetchedForCat = 0
+                // First page for this category.
+                val firstPage = runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                        dispatcharrClient.getVODMoviesByCategory(playlist.urlString, key, catName)
+                    }
+                }.onFailure { Log.w(TAG, "VOD movies cat='$catName' failed; continuing", it) }.getOrNull()
+                if (firstPage != null) {
+                    firstPage.results.forEach { m ->
+                        if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
+                    }
+                    nextUrl = firstPage.next
+                    if (!firstPainted) {
+                        firstPainted = true
+                        _state.update { it.copy(isLoading = false, movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null, error = null) }
+                    } else {
+                        _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
+                    }
                 }
-            }.fold(
-                onSuccess = { page ->
-                    _state.update {
-                        it.copy(
-                            isLoading = false,
-                            movies = page.results.map(::stampMovieGroup),
-                            totalCount = page.count,
-                            moviesNextCursor = page.next,
-                            error = null,
-                        )
+                // Walk this category's cursor up to its fair share.
+                while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
+                    val captured = nextUrl
+                    val p = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            dispatcharrClient.getVODMoviesPage(captured, key)
+                        }
+                    }.onFailure { Log.w(TAG, "VOD movies cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
+                    if (p == null) break
+                    p.results.forEach { m ->
+                        if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
                     }
-                    // Audit task #42: walk the `next` cursor in the background
-                    // so the user gets the full library appended progressively
-                    // instead of just the first 100. First-page paint already
-                    // landed above so the grid is interactive; subsequent
-                    // pages append as they arrive. De-dup on uuid in case two
-                    // pages share a row.
-                    var nextUrl = page.next
-                    var pagesLoaded = 1
-                    while (nextUrl != null && pagesLoaded < MAX_EAGER_VOD_PAGES) {
-                        val captured = nextUrl
-                        val nextResult = runCatching {
-                            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                                dispatcharrClient.getVODMoviesPage(captured, key)
-                            }
-                        }
-                        nextUrl = nextResult.getOrNull()?.next
-                        pagesLoaded++
-                        nextResult.getOrNull()?.let { p ->
-                            _state.update { st ->
-                                val merged = st.movies.toMutableList()
-                                val seen = merged.mapTo(HashSet()) { it.uuid }
-                                p.results.forEach { m ->
-                                    if (m.uuid !in seen) {
-                                        merged += stampMovieGroup(m)
-                                        seen += m.uuid
-                                    }
-                                }
-                                st.copy(movies = merged, totalCount = p.count, moviesNextCursor = p.next)
-                            }
-                        }
-                        nextResult.exceptionOrNull()?.let { t ->
-                            Log.w(TAG, "VOD movies next-page fetch failed; stopping", t)
-                            nextUrl = null
-                        }
-                    }
-                },
-                onFailure = { t ->
-                    Log.w(TAG, "getVODMovies failed", t)
-                    _state.update { it.copy(isLoading = false, error = t.message ?: t::class.simpleName) }
-                },
-            )
+                    nextUrl = p.next
+                    _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
+                }
+            }
+            // Ensure the spinner clears even if every category returned empty.
+            _state.update { it.copy(isLoading = false, movies = merged.toList(), totalCount = if (merged.isEmpty()) it.totalCount else merged.size, moviesNextCursor = null) }
         }
+    }
+
+    /**
+     * Legacy unfiltered movie load: first-page paint + a capped `next`-cursor
+     * walk (Audit task #42). Used as the fallback when the category endpoint
+     * returned nothing, so per-category fetch is impossible. Stamps via
+     * stampMovieGroup (a no-op/Uncategorized when there are no categories).
+     */
+    private suspend fun loadDispatcharrMoviesUnfiltered(playlist: PlaylistEntity) {
+        runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getVODMoviesFirstPage(playlist.urlString, key)
+            }
+        }.fold(
+            onSuccess = { page ->
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        movies = page.results.map(::stampMovieGroup),
+                        totalCount = page.count,
+                        moviesNextCursor = page.next,
+                        error = null,
+                    )
+                }
+                // Walk the `next` cursor in the background so the user gets the
+                // full library appended progressively instead of just the first
+                // 100. First-page paint already landed above so the grid is
+                // interactive; subsequent pages append as they arrive. De-dup on
+                // uuid in case two pages share a row.
+                var nextUrl = page.next
+                var pagesLoaded = 1
+                while (nextUrl != null && pagesLoaded < MAX_EAGER_VOD_PAGES) {
+                    val captured = nextUrl
+                    val nextResult = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            dispatcharrClient.getVODMoviesPage(captured, key)
+                        }
+                    }
+                    nextUrl = nextResult.getOrNull()?.next
+                    pagesLoaded++
+                    nextResult.getOrNull()?.let { p ->
+                        _state.update { st ->
+                            val merged = st.movies.toMutableList()
+                            val seen = merged.mapTo(HashSet()) { it.uuid }
+                            p.results.forEach { m ->
+                                if (m.uuid !in seen) {
+                                    merged += stampMovieGroup(m)
+                                    seen += m.uuid
+                                }
+                            }
+                            st.copy(movies = merged, totalCount = p.count, moviesNextCursor = p.next)
+                        }
+                    }
+                    nextResult.exceptionOrNull()?.let { t ->
+                        Log.w(TAG, "VOD movies next-page fetch failed; stopping", t)
+                        nextUrl = null
+                    }
+                }
+            },
+            onFailure = { t ->
+                Log.w(TAG, "getVODMovies failed", t)
+                _state.update { it.copy(isLoading = false, error = t.message ?: t::class.simpleName) }
+            },
+        )
     }
 
     fun refreshSeries() {
@@ -471,59 +539,111 @@ class OnDemandViewModel @Inject constructor(
             // Piggybacks on refresh()'s category fetch when both run in the
             // same cycle (the usual case); only starts one if none exists.
             ensureDispatcharrCategories(playlist)
-            runCatching {
-                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.getVODSeriesFirstPage(playlist.urlString, key)
+            val cats = dispatcharrEnabledSeriesCats
+            if (cats.isEmpty()) {
+                loadDispatcharrSeriesUnfiltered(playlist)
+                return@launch
+            }
+            // Per-category sweep, mirror of refresh()'s movie path. Series dedup
+            // by id (Int) to match the rest of the codebase (loadMoreSeries,
+            // seriesById). A failing category is logged and skipped.
+            val totalCap = VOD_TOTAL_CAP
+            val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
+            val merged = mutableListOf<DispatcharrVODSeries>()
+            val seen = HashSet<Int>()
+            var firstPainted = false
+            for (catName in cats) {
+                if (merged.size >= totalCap) break
+                var nextUrl: String? = null
+                var fetchedForCat = 0
+                val firstPage = runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                        dispatcharrClient.getVODSeriesByCategory(playlist.urlString, key, catName)
+                    }
+                }.onFailure { Log.w(TAG, "VOD series cat='$catName' failed; continuing", it) }.getOrNull()
+                if (firstPage != null) {
+                    firstPage.results.forEach { s ->
+                        if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
+                    }
+                    nextUrl = firstPage.next
+                    if (!firstPainted) {
+                        firstPainted = true
+                        _state.update { it.copy(isLoadingSeries = false, series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null, seriesError = null) }
+                    } else {
+                        _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
+                    }
                 }
-            }.fold(
-                onSuccess = { page ->
-                    _state.update {
-                        it.copy(
-                            isLoadingSeries = false,
-                            series = page.results.map(::stampSeriesGroup),
-                            seriesTotalCount = page.count,
-                            seriesNextCursor = page.next,
-                            seriesError = null,
-                        )
+                while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
+                    val captured = nextUrl
+                    val p = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            dispatcharrClient.getVODSeriesPage(captured, key)
+                        }
+                    }.onFailure { Log.w(TAG, "VOD series cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
+                    if (p == null) break
+                    p.results.forEach { s ->
+                        if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
                     }
-                    // Audit task #42: same next-cursor walk as movies above.
-                    // Series use `id` as the de-dup key. Stops on first error.
-                    var nextUrl = page.next
-                    var pagesLoaded = 1
-                    while (nextUrl != null && pagesLoaded < MAX_EAGER_VOD_PAGES) {
-                        val captured = nextUrl
-                        val nextResult = runCatching {
-                            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                                dispatcharrClient.getVODSeriesPage(captured, key)
-                            }
-                        }
-                        nextUrl = nextResult.getOrNull()?.next
-                        pagesLoaded++
-                        nextResult.getOrNull()?.let { p ->
-                            _state.update { st ->
-                                val merged = st.series.toMutableList()
-                                val seen = merged.mapTo(HashSet()) { it.id }
-                                p.results.forEach { s ->
-                                    if (s.id !in seen) {
-                                        merged += stampSeriesGroup(s)
-                                        seen += s.id
-                                    }
-                                }
-                                st.copy(series = merged, seriesTotalCount = p.count, seriesNextCursor = p.next)
-                            }
-                        }
-                        nextResult.exceptionOrNull()?.let { t ->
-                            Log.w(TAG, "VOD series next-page fetch failed; stopping", t)
-                            nextUrl = null
-                        }
-                    }
-                },
-                onFailure = { t ->
-                    Log.w(TAG, "getVODSeries failed", t)
-                    _state.update { it.copy(isLoadingSeries = false, seriesError = t.message ?: t::class.simpleName) }
-                },
-            )
+                    nextUrl = p.next
+                    _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
+                }
+            }
+            _state.update { it.copy(isLoadingSeries = false, series = merged.toList(), seriesTotalCount = if (merged.isEmpty()) it.seriesTotalCount else merged.size, seriesNextCursor = null) }
         }
+    }
+
+    /** Series counterpart of [loadDispatcharrMoviesUnfiltered]; dedup by id. */
+    private suspend fun loadDispatcharrSeriesUnfiltered(playlist: PlaylistEntity) {
+        runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getVODSeriesFirstPage(playlist.urlString, key)
+            }
+        }.fold(
+            onSuccess = { page ->
+                _state.update {
+                    it.copy(
+                        isLoadingSeries = false,
+                        series = page.results.map(::stampSeriesGroup),
+                        seriesTotalCount = page.count,
+                        seriesNextCursor = page.next,
+                        seriesError = null,
+                    )
+                }
+                var nextUrl = page.next
+                var pagesLoaded = 1
+                while (nextUrl != null && pagesLoaded < MAX_EAGER_VOD_PAGES) {
+                    val captured = nextUrl
+                    val nextResult = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            dispatcharrClient.getVODSeriesPage(captured, key)
+                        }
+                    }
+                    nextUrl = nextResult.getOrNull()?.next
+                    pagesLoaded++
+                    nextResult.getOrNull()?.let { p ->
+                        _state.update { st ->
+                            val merged = st.series.toMutableList()
+                            val seen = merged.mapTo(HashSet()) { it.id }
+                            p.results.forEach { s ->
+                                if (s.id !in seen) {
+                                    merged += stampSeriesGroup(s)
+                                    seen += s.id
+                                }
+                            }
+                            st.copy(series = merged, seriesTotalCount = p.count, seriesNextCursor = p.next)
+                        }
+                    }
+                    nextResult.exceptionOrNull()?.let { t ->
+                        Log.w(TAG, "VOD series next-page fetch failed; stopping", t)
+                        nextUrl = null
+                    }
+                }
+            },
+            onFailure = { t ->
+                Log.w(TAG, "getVODSeries failed", t)
+                _state.update { it.copy(isLoadingSeries = false, seriesError = t.message ?: t::class.simpleName) }
+            },
+        )
     }
 
     // ──────────────────── Dispatcharr VOD categories ────────────────────
@@ -544,6 +664,12 @@ class OnDemandViewModel @Inject constructor(
     // today's no-groups behavior.
     private var dispatcharrMovieFallbackGroup: String? = null
     private var dispatcharrSeriesFallbackGroup: String? = null
+    // Enabled-category NAME lists captured in fetchDispatcharrCategories, in the
+    // same name-sorted order as movieGroupNames/seriesGroupNames. Drive the
+    // per-category VOD fetch in refresh()/refreshSeries(). Empty => fall back to
+    // the unfiltered cursor walk (older/edge servers with no category endpoint).
+    private var dispatcharrEnabledMovieCats: List<String> = emptyList()
+    private var dispatcharrEnabledSeriesCats: List<String> = emptyList()
 
     /**
      * Await this cycle's categories fetch, starting one if none is in
@@ -581,6 +707,8 @@ class OnDemandViewModel @Inject constructor(
         dispatcharrSeriesCategoryNames = seriesCats.associate { it.id.toString() to it.name }
         dispatcharrMovieFallbackGroup = movieCats.firstOrNull()?.name
         dispatcharrSeriesFallbackGroup = seriesCats.firstOrNull()?.name
+        dispatcharrEnabledMovieCats = movieCats.map { it.name }.distinct()
+        dispatcharrEnabledSeriesCats = seriesCats.map { it.name }.distinct()
         _state.update {
             it.copy(
                 movieGroupNames = movieCats.map { c -> c.name }.distinct().sorted(),
@@ -1271,6 +1399,14 @@ class OnDemandViewModel @Inject constructor(
          * movies + ~1,000 series up front.
          */
         const val MAX_EAGER_VOD_PAGES = 10
+
+        /**
+         * Total VOD rows loaded up front in the per-category fetch path, shared
+         * across all enabled categories (each category gets a page-aligned fair
+         * share). Mirrors iOS StreamingAPIs totalCap = 5000. The legacy
+         * unfiltered fallback still uses MAX_EAGER_VOD_PAGES.
+         */
+        const val VOD_TOTAL_CAP = 5000
 
         /** Debounce before a keystroke fires a server-side VOD search. */
         const val SEARCH_DEBOUNCE_MS = 300L
