@@ -309,6 +309,21 @@ class PlaylistRepository @Inject constructor(
                 null
             }
         val effectiveAccountIds = liveAccountIds ?: playlist.dispatcharrAccountProfileIdList()
+        // Audit gap: re-capture the account level on every refresh so a
+        // server-side demote/promote is reflected without a full Edit-Playlist
+        // Save. Best-effort: a null read keeps the persisted level (never
+        // clobbers a good value with the recording-capable default). Mirrors
+        // the loadAndPersist level capture and the liveAccountIds self-heal
+        // just above. iOS d8aa76b re-reads dispatcharrUserLevel on reconnect.
+        val liveUserLevel: Int? =
+            if (sourceType == SourceType.DispatcharrApiKey ||
+                sourceType == SourceType.DispatcharrUserPass
+            ) {
+                playlist.apiKey?.takeIf { it.isNotBlank() }
+                    ?.let { dispatcharrClient.fetchUserLevel(base, it) }
+            } else {
+                null
+            }
         val channels = when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass ->
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -332,6 +347,8 @@ class PlaylistRepository @Inject constructor(
             dispatcharrAccountProfileIds =
                 if (liveAccountIds != null) liveAccountIds.joinToString(",")
                 else playlist.dispatcharrAccountProfileIds,
+            dispatcharrUserLevel =
+                liveUserLevel ?: playlist.dispatcharrUserLevel,
         )
         dao.update(refreshed)
         // Persist the freshly-fetched channels so the next cold launch repaints

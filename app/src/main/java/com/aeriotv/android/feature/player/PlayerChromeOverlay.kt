@@ -85,7 +85,6 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.size.Size
 import com.aeriotv.android.core.data.EPGProgramme
-import com.aeriotv.android.ui.LocalCanRecordToServer
 import com.aeriotv.android.ui.LocalIsDispatcharrAdmin
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -186,7 +185,11 @@ fun PlayerChromeOverlay(
     // Record pill + the Options menu's Record row on it. recordCurrent
     // builds a target from live EPG, falling back to a generic 60-minute
     // window when EPG isn't loaded (Dispatcharr playlists often lack it).
-    val canRecord = channel?.dispatcharrChannelId != null && LocalCanRecordToServer.current
+    // iOS parity: a live channel can always be recorded; a non-admin
+    // Dispatcharr account is coerced to a local device recording inside
+    // RecordProgramSheet. Keep the dispatcharrChannelId gate so M3U/Xtream
+    // channels (no recordable id) still hide the pill.
+    val canRecord = channel?.dispatcharrChannelId != null
     // Switch Stream needs a Dispatcharr Direct Connect ADMIN account: the streams
     // list + change_stream live behind it, and change_stream is IsAdmin on the
     // server. Gate on the admin signal (LocalIsDispatcharrAdmin, which implies

@@ -167,7 +167,8 @@ fun PlaylistEntity.isDispatcharrAdmin(): Boolean =
  * (10 = admin; 1 = standard and 0 = streamer both read as Standard), which
  * only the row carries. Caveat: the column defaults to 10 when the
  * /api/accounts/users/me/ capture fails or for pre-DB-v15 rows, so those
- * read as Admin until the next successful connect refreshes the level.
+ * read as Admin until the next successful connect (any refresh / Test
+ * Connection) refreshes the level.
  */
 fun PlaylistEntity.sourceTypeDisplayLabel(): String = when (sourceType) {
     SourceType.DispatcharrUserPass.name ->

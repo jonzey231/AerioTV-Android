@@ -17,8 +17,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
@@ -44,6 +47,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.aeriotv.android.core.data.ProgramInfoTarget
+import com.aeriotv.android.core.data.db.entity.canRecordToServer
+import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.feature.dvr.DvrViewModel
 import com.aeriotv.android.feature.dvr.LocalRecordingService
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -85,9 +90,20 @@ fun RecordProgramSheet(
     val storageCapMB by settingsViewModel.dvrMaxLocalStorageMB.collectAsStateWithLifecycle(initialValue = 10_240)
     val dvrState by dvrViewModel.state.collectAsStateWithLifecycle()
 
+    // iOS parity: derive recording capability from the ACTIVE playlist. A
+    // non-admin Dispatcharr account (or any non-Dispatcharr source) can only
+    // record to this device, so the destination toggle is hidden and the
+    // record defaults to local. Mirrors iOS RecordProgramSheet.swift.
+    val activePlaylist = playlistViewModel.state.value.playlist
+    val canRecordToServer = activePlaylist?.canRecordToServer() == true
+    val isDispatcharr = activePlaylist?.isDispatcharrDirectConnect() == true
+
     var preRoll by remember(defaultPreRoll) { mutableStateOf(defaultPreRoll) }
     var postRoll by remember(defaultPostRoll) { mutableStateOf(defaultPostRoll) }
-    var destinationServer by remember { mutableStateOf(true) }
+    // Seed the destination from capability; re-seed if it resolves after the
+    // first composition. Non-admin seeds false and the toggle is hidden, so it
+    // can never flip back to server.
+    var destinationServer by remember(canRecordToServer) { mutableStateOf(canRecordToServer) }
     var removeCommercials by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
 
@@ -246,49 +262,92 @@ fun RecordProgramSheet(
                     onSelect = { postRoll = it },
                 )
 
-                Spacer(Modifier.height(18.dp))
-                SectionLabel("Destination")
-                Spacer(Modifier.height(6.dp))
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    SegmentedButton(
-                        selected = destinationServer,
-                        onClick = { destinationServer = true },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text("Dispatcharr server") }
-                    SegmentedButton(
-                        selected = !destinationServer,
-                        onClick = { destinationServer = false },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text("This device") }
+                // Destination toggle only for admins. A non-admin Dispatcharr
+                // account (or any non-Dispatcharr source) can only record to
+                // this device, so the server option is hidden and the record is
+                // forced local (destinationServer seeded false above).
+                if (canRecordToServer) {
+                    Spacer(Modifier.height(18.dp))
+                    SectionLabel("Destination")
+                    Spacer(Modifier.height(6.dp))
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = destinationServer,
+                            onClick = { destinationServer = true },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        ) { Text("Dispatcharr server") }
+                        SegmentedButton(
+                            selected = !destinationServer,
+                            onClick = { destinationServer = false },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        ) { Text("This device") }
+                    }
                 }
 
-                Spacer(Modifier.height(18.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Remove commercials (Comskip)",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontWeight = FontWeight.Medium,
+                // iOS parity: a Dispatcharr non-admin live recording lands on
+                // this device. Surface an orange callout explaining why the
+                // server option isn't available. Mirrors iOS .orange
+                // "Saving to this device" hint.
+                if (isDispatcharr && !canRecordToServer) {
+                    Spacer(Modifier.height(18.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Storage,
+                            contentDescription = null,
+                            tint = Color(0xFFFF9500), // iOS .orange
+                            modifier = Modifier.size(20.dp),
                         )
-                        Text(
-                            text = "Detect and remove ad breaks after recording. Processed server-side.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Spacer(Modifier.size(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Saving to this device",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = "Recording to the Dispatcharr server requires a Dispatcharr admin account.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                // Comskip is server-side only; hide it entirely when the account
+                // can't record to the server (iOS parity).
+                if (canRecordToServer) {
+                    Spacer(Modifier.height(18.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Remove commercials (Comskip)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                text = "Detect and remove ad breaks after recording. Processed server-side.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = removeCommercials,
+                            onCheckedChange = { removeCommercials = it },
+                            enabled = destinationServer,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                            ),
                         )
                     }
-                    Switch(
-                        checked = removeCommercials,
-                        onCheckedChange = { removeCommercials = it },
-                        enabled = destinationServer,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                        ),
-                    )
                 }
 
                 Spacer(Modifier.height(20.dp))

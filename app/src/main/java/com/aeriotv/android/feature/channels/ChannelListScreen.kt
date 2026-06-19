@@ -78,7 +78,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import com.aeriotv.android.core.category.CategoryPaletteState
-import com.aeriotv.android.ui.LocalCanRecordToServer
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -847,7 +846,6 @@ internal fun ChannelRow(
             // the anchored DropdownMenu on phone. Same actions either way.
             if (isTv) {
                 if (menuOpen) {
-                    val canRecordToServer = LocalCanRecordToServer.current
                     TvActionMenuDialog(
                         title = channel.name,
                         actions = buildList {
@@ -864,7 +862,11 @@ internal fun ChannelRow(
                                     },
                                 )
                             }
-                            if (channel.url.isNotBlank() && channel.dispatcharrChannelId != null && canRecordToServer) {
+                            // iOS parity: live channel Record surfaces for any
+                            // Dispatcharr account (non-admin lands on-device via
+                            // RecordProgramSheet). Server-side admin gating now
+                            // lives in the sheet, not here.
+                            if (channel.url.isNotBlank() && channel.dispatcharrChannelId != null) {
                                 add(
                                     TvMenuAction(
                                         if (nowProgramme != null) "Record from Now" else "Record",
@@ -916,7 +918,7 @@ internal fun ChannelRow(
                 // iOS canon: the channel long-press menu hides irrelevant
                 // actions instead of greying them out for context-free
                 // sources.
-                if (channel.url.isNotBlank() && channel.dispatcharrChannelId != null && LocalCanRecordToServer.current) {
+                if (channel.url.isNotBlank() && channel.dispatcharrChannelId != null) {
                     val recordLabel = if (nowProgramme != null) "Record from Now" else "Record"
                     DropdownMenuItem(
                         leadingIcon = {

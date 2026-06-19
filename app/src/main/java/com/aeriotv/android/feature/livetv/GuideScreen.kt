@@ -2063,7 +2063,14 @@ private fun ProgrammeCell(
                     ) { onToggleMultiview() },
                 )
             }
-            if (programme.endMillis > System.currentTimeMillis() && canRecordToServer) {
+            // iOS parity: a LIVE program can always be recorded (coerced to a
+            // local device recording inside RecordProgramSheet when the account
+            // isn't a Dispatcharr admin). A FUTURE program can only be scheduled
+            // server-side, so it stays gated on canRecordToServer. Keep the
+            // not-yet-ended gate either way.
+            val notEnded = programme.endMillis > System.currentTimeMillis()
+            val showRecord = notEnded && (isLive || canRecordToServer)
+            if (showRecord) {
                 add(
                     TvMenuAction(
                         if (isLive) "Record from Now" else "Record",
