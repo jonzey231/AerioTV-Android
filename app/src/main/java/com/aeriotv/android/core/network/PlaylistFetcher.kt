@@ -1,5 +1,6 @@
 package com.aeriotv.android.core.network
 
+import com.aeriotv.android.core.debug.LogSanitizer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
@@ -48,7 +49,9 @@ class PlaylistFetcher @Inject constructor() {
             for ((k, v) in extraHeaders) header(k, v)
         }
         if (!response.status.isSuccess()) {
-            throw IllegalStateException("HTTP ${response.status.value} ${response.status.description} from $url")
+            throw IllegalStateException(
+                "HTTP ${response.status.value} ${response.status.description} from ${LogSanitizer.redactUrl(url)}",
+            )
         }
         return response.readRawBytes()
     }

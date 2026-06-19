@@ -27,11 +27,19 @@ package com.aeriotv.android.core.debug
  */
 internal object LogSanitizer {
 
+    private val URL_USERINFO = Regex(
+        // HTTP basic-auth userinfo embedded in a URL: scheme://user:pass@host.
+        // Common in raw M3U playlists, which QUERY_PARAM does NOT cover. Redacts
+        // the whole userinfo to ***@, keeping scheme+host so the log still shows
+        // which server was contacted. Mirrors iOS urlUserInfoRegex (24297b5ea).
+        "(://)[^/@\\s]+@",
+    )
+
     private val QUERY_PARAM = Regex(
         // [?&]name=value where name is one of the secret-y param names. The
         // value runs until the next `&`, whitespace, or end-of-line. We
         // capture the prefix so the replacement keeps `&password=` intact.
-        "(?i)([?&](?:api[_-]?key|apikey|key|token|password|pass|secret|username|user)=)([^&\\s]+)",
+        "(?i)([?&](?:api[_-]?key|apikey|key|token|auth|authkey|sig|signature|password|pass|pwd|secret|hash|username|user)=)([^&\\s]+)",
     )
 
     private val HEADER_LINE = Regex(
@@ -51,13 +59,31 @@ internal object LogSanitizer {
     fun redact(message: String): String {
         if (message.isEmpty()) return message
         var out = message
-        // Order matters: header form first (keeps the header name visible),
-        // then JWT (longest pattern, prevents query-param regex from chopping
-        // a JWT mid-base64), then prefix forms, then query params last.
+        // Order matters: userinfo first (scheme://user:pass@ in raw M3U URLs),
+        // then header form (keeps the header name visible), then JWT (longest
+        // pattern, prevents query-param regex from chopping a JWT mid-base64),
+        // then prefix forms, then query params last.
+        out = URL_USERINFO.replace(out, "$1***@")
         out = HEADER_LINE.replace(out) { mr -> mr.groupValues[1] + "***" }
         out = JWT.replace(out, "eyJ***")
         out = INLINE_PREFIX.replace(out) { mr -> "${mr.groupValues[1]} ***" }
         out = QUERY_PARAM.replace(out) { mr -> mr.groupValues[1] + "***" }
         return out
     }
+
+    /**
+     * Reduce a (possibly credentialed) URL to scheme://host[:port]/path for a
+     * USER-FACING message. Strips query, fragment, and userinfo entirely so a
+     * screenshot or pasted bug report can't leak an Xtream username/password or
+     * an api_key. Falls back to [redact] if the string can't be parsed as a
+     * URI. Mirrors iOS safeURL (commit 22b125a65).
+     */
+    fun redactUrl(raw: String): String = runCatching {
+        val u = java.net.URI(raw)
+        val scheme = u.scheme ?: return@runCatching redact(raw)
+        val host = u.host ?: return@runCatching redact(raw)
+        val port = if (u.port > 0) ":${u.port}" else ""
+        val path = u.rawPath.orEmpty()
+        "$scheme://$host$port$path"
+    }.getOrElse { redact(raw) }
 }

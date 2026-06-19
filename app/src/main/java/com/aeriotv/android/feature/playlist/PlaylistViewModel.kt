@@ -7,6 +7,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.core.debug.LogSanitizer
 import com.aeriotv.android.core.data.bridgeChannelIds
 import com.aeriotv.android.core.data.buildChannelEpgKeyBridge
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
@@ -1041,7 +1042,7 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             testStatus = ActionStatus.Failure(
-                                "Connection failed: ${t.message ?: t::class.simpleName}",
+                                "Connection failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                             ),
                         )
                     }
