@@ -127,6 +127,10 @@ fun ChannelListScreen(
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var manageGroupsOpen by remember { mutableStateOf(false) }
+    // Search is a reveal-on-tap button (parity with Guide view), not an
+    // always-on field, so the channel list gets full height until the user
+    // opts into searching. Closing it clears the query.
+    var searchActive by remember { mutableStateOf(false) }
 
     // Preserve the order groups appear in the source channel list. iOS does
     // this on the parse step (HomeView.swift `fetchM3U` lines 1869-1872) — an
@@ -235,6 +239,17 @@ fun ChannelListScreen(
                         )
                     }
                 }
+                IconButton(onClick = {
+                    searchActive = !searchActive
+                    if (!searchActive) viewModel.onSearchQueryChange("")
+                }) {
+                    Icon(
+                        imageVector = Icons.Outlined.Search,
+                        contentDescription = if (searchActive) "Close search" else "Search channels",
+                        tint = if (searchActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 SortMenu(
                     currentMode = state.sortMode,
                     onSelect = viewModel::onSortModeChange,
@@ -246,7 +261,7 @@ fun ChannelListScreen(
             ),
         )
 
-        OutlinedTextField(
+        if (searchActive) OutlinedTextField(
             value = state.searchQuery,
             onValueChange = viewModel::onSearchQueryChange,
             modifier = Modifier
