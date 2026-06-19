@@ -131,6 +131,7 @@ fun ChannelListScreen(
     // always-on field, so the channel list gets full height until the user
     // opts into searching. Closing it clears the query.
     var searchActive by remember { mutableStateOf(false) }
+    val isTv = rememberIsTvDevice()
 
     // Preserve the order groups appear in the source channel list. iOS does
     // this on the parse step (HomeView.swift `fetchM3U` lines 1869-1872) — an
@@ -219,7 +220,10 @@ fun ChannelListScreen(
         // title within the bar regardless of action button width on the
         // trailing edge, matching iOS `.navigationBarTitleDisplayMode(.inline)`
         // which iOS UIKit centers automatically (ChannelListView.swift:191).
-        CenterAlignedTopAppBar(
+        // Android TV drops the "Live TV" title bar entirely (wasted 10-foot
+        // space): the Guide / Search / Sort controls move down onto the group-pill
+        // control row (see below). Phone / tablet keep the titled app bar.
+        if (!isTv) CenterAlignedTopAppBar(
             title = {
                 Text(
                     text = "Live TV",
@@ -302,7 +306,7 @@ fun ChannelListScreen(
             derivedStateOf { listState.firstVisibleItemIndex == 0 }
         }
         AnimatedVisibility(
-            visible = chipsVisible && groups.size > 1,
+            visible = chipsVisible && (isTv || groups.size > 1),
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
@@ -313,6 +317,38 @@ fun ChannelListScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // On Android TV the List has no top app bar, so the Guide / Search /
+                // Sort controls live here, to the LEFT of the Filter (Manage Groups)
+                // button, ahead of the group pills (parity with the Guide control row).
+                if (isTv) {
+                    if (canToggleViewMode) {
+                        item {
+                            ListControlCircle(
+                                icon = Icons.Filled.CalendarMonth,
+                                contentDescription = "Switch to Guide",
+                                onClick = onToggleViewMode,
+                            )
+                        }
+                    }
+                    item {
+                        ListControlCircle(
+                            icon = Icons.Outlined.Search,
+                            contentDescription = if (searchActive) "Close search" else "Search channels",
+                            active = searchActive,
+                            onClick = {
+                                searchActive = !searchActive
+                                if (!searchActive) viewModel.onSearchQueryChange("")
+                            },
+                        )
+                    }
+                    item {
+                        SortMenu(
+                            currentMode = state.sortMode,
+                            onSelect = viewModel::onSortModeChange,
+                            circular = true,
+                        )
+                    }
+                }
                 item {
                     Box(
                         modifier = Modifier
@@ -439,19 +475,58 @@ fun ChannelListScreen(
     }
 }
 
+/** Round 36dp control button used on the Android TV List control row (Guide
+ *  toggle / Search / Sort), styled to match the Filter (Manage Groups) circle. */
+@Composable
+private fun ListControlCircle(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    active: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(50))
+            .background(
+                if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (active) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
 @Composable
 private fun SortMenu(
     currentMode: SortMode,
     onSelect: (SortMode) -> Unit,
+    circular: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
-            Icon(
-                imageVector = Icons.Filled.SwapVert,
+        if (circular) {
+            ListControlCircle(
+                icon = Icons.Filled.SwapVert,
                 contentDescription = "Sort channels",
-                tint = MaterialTheme.colorScheme.primary,
+                onClick = { expanded = true },
             )
+        } else {
+            IconButton(onClick = { expanded = true }) {
+                Icon(
+                    imageVector = Icons.Filled.SwapVert,
+                    contentDescription = "Sort channels",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
         DropdownMenu(
             expanded = expanded,
