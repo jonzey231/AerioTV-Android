@@ -835,7 +835,14 @@ private fun SettingsTabContent() {
         )
         addPlaylistStep is AddPlaylistStep.ChooseType -> ChooseSourceTypeScreen(
             onBack = { addPlaylistStep = AddPlaylistStep.None },
-            onChoose = { type -> addPlaylistStep = AddPlaylistStep.Configure(type) },
+            onChoose = { type ->
+                // Start a FRESH draft so the add creates a NEW row and can't
+                // carry over the active server's bootstrap-prefilled API key
+                // (which would win over typed user/pass and re-add the active
+                // server's account). Mirrors the onboarding CHOOSE_TYPE path.
+                playlistVm.startNewSource(type)
+                addPlaylistStep = AddPlaylistStep.Configure(type)
+            },
         )
         playlistsOpen -> com.aeriotv.android.feature.settings.PlaylistsScreen(
             onBack = { playlistsOpen = false },
