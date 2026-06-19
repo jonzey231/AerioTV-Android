@@ -409,33 +409,56 @@ class OnDemandViewModel @Inject constructor(
             val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
             val merged = mutableListOf<DispatcharrVODMovie>()
             val seen = HashSet<String>()
-            // Only categories that yield >=1 movie for THIS account are real
+            // Categories that have >=1 movie for THIS account are the real
             // groups for this playlist; Manage Groups is published from here.
+            // Presence is recorded from the category's OWN first-page response
+            // (count/results), NOT from whether a row survived the merged-list
+            // de-dup or made it under the row cap. Two regressions this guards:
+            //   (1) row-cap: once `merged` hits totalCap we stop APPENDING rows
+            //       and skip the cursor walk, but we still do the cheap one-page
+            //       probe for every remaining enabled category so a real,
+            //       content-bearing category past the cap is still offered (with
+            //       many categories, 5000 rows is exhausted after ~50 of them).
+            //   (2) overlap: Dispatcharr categories are many-to-many over items,
+            //       so a category whose items were all added by an earlier
+            //       category adds nothing to `seen`; presence keys off the
+            //       category response being non-empty, not seen.add() succeeding.
             val groupsWithContent = LinkedHashSet<String>()
             var firstPainted = false
             for (catName in cats) {
-                if (merged.size >= totalCap) break
+                val capped = merged.size >= totalCap
                 var nextUrl: String? = null
                 var fetchedForCat = 0
-                // First page for this category.
+                // First page for this category. Doubles as the presence probe:
+                // a single page_size=100 GET we already make per category, so
+                // marking presence here adds no extra requests beyond running
+                // it for the categories past the row cap too.
                 val firstPage = runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                         dispatcharrClient.getVODMoviesByCategory(playlist.urlString, key, catName)
                     }
                 }.onFailure { Log.w(TAG, "VOD movies cat='$catName' failed; continuing", it) }.getOrNull()
                 if (firstPage != null) {
-                    firstPage.results.forEach { m ->
-                        if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++; groupsWithContent += catName }
-                    }
-                    nextUrl = firstPage.next
-                    if (!firstPainted) {
-                        firstPainted = true
-                        _state.update { it.copy(isLoading = false, movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null, error = null) }
-                    } else {
-                        _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
+                    // Presence is the category's own signal, independent of the
+                    // row cap and the shared `seen` de-dup set.
+                    if (firstPage.count > 0 || firstPage.results.isNotEmpty()) groupsWithContent += catName
+                    // Stop appending rows once the cap is hit, but keep probing
+                    // the remaining categories above for presence.
+                    if (!capped) {
+                        firstPage.results.forEach { m ->
+                            if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
+                        }
+                        nextUrl = firstPage.next
+                        if (!firstPainted) {
+                            firstPainted = true
+                            _state.update { it.copy(isLoading = false, movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null, error = null) }
+                        } else {
+                            _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
+                        }
                     }
                 }
-                // Walk this category's cursor up to its fair share.
+                // Walk this category's cursor up to its fair share (skipped once
+                // capped: nextUrl stays null above).
                 while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
                     val captured = nextUrl
                     val p = runCatching {
@@ -445,7 +468,7 @@ class OnDemandViewModel @Inject constructor(
                     }.onFailure { Log.w(TAG, "VOD movies cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
                     if (p == null) break
                     p.results.forEach { m ->
-                        if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++; groupsWithContent += catName }
+                        if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
                     }
                     nextUrl = p.next
                     _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
@@ -579,10 +602,15 @@ class OnDemandViewModel @Inject constructor(
             val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
             val merged = mutableListOf<DispatcharrVODSeries>()
             val seen = HashSet<Int>()
+            // Presence is recorded from each category's own first-page response,
+            // independent of the row cap and the shared `seen` de-dup set. See
+            // the longer note in refresh()'s movie sweep for the two regressions
+            // this guards (row-cap reached before the loop, and fully-overlapping
+            // many-to-many categories).
             val groupsWithContent = LinkedHashSet<String>()
             var firstPainted = false
             for (catName in cats) {
-                if (merged.size >= totalCap) break
+                val capped = merged.size >= totalCap
                 var nextUrl: String? = null
                 var fetchedForCat = 0
                 val firstPage = runCatching {
@@ -591,15 +619,18 @@ class OnDemandViewModel @Inject constructor(
                     }
                 }.onFailure { Log.w(TAG, "VOD series cat='$catName' failed; continuing", it) }.getOrNull()
                 if (firstPage != null) {
-                    firstPage.results.forEach { s ->
-                        if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++; groupsWithContent += catName }
-                    }
-                    nextUrl = firstPage.next
-                    if (!firstPainted) {
-                        firstPainted = true
-                        _state.update { it.copy(isLoadingSeries = false, series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null, seriesError = null) }
-                    } else {
-                        _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
+                    if (firstPage.count > 0 || firstPage.results.isNotEmpty()) groupsWithContent += catName
+                    if (!capped) {
+                        firstPage.results.forEach { s ->
+                            if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
+                        }
+                        nextUrl = firstPage.next
+                        if (!firstPainted) {
+                            firstPainted = true
+                            _state.update { it.copy(isLoadingSeries = false, series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null, seriesError = null) }
+                        } else {
+                            _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
+                        }
                     }
                 }
                 while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
@@ -611,7 +642,7 @@ class OnDemandViewModel @Inject constructor(
                     }.onFailure { Log.w(TAG, "VOD series cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
                     if (p == null) break
                     p.results.forEach { s ->
-                        if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++; groupsWithContent += catName }
+                        if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
                     }
                     nextUrl = p.next
                     _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
