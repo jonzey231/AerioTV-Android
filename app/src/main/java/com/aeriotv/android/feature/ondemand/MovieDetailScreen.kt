@@ -623,7 +623,10 @@ private fun InfoSection(
     val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
     val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
     val country = info?.effectiveCountry?.takeIf { it.isNotBlank() }
-    val trailerUrl = info?.effectiveTrailer?.let { youtubeUrl(it) }
+    // Native Dispatcharr movies get the trailer from provider-info; XC movies
+    // carry it on the movie row itself (toMovie copies youtube_trailer).
+    val trailerUrl = (info?.effectiveTrailer ?: movie.youtubeTrailer?.takeIf { it.isNotBlank() })
+        ?.let { youtubeUrl(it) }
     val tmdbUrl = (info?.tmdbId ?: movie.tmdbId)?.takeIf { it.isNotBlank() }?.let {
         "https://www.themoviedb.org/movie/$it"
     }
@@ -662,6 +665,10 @@ private fun InfoSection(
                 }
             }
         }
+        // v0.26.0 reliably populates release_date. The hero already shows the
+        // year, so only surface the full date here when it carries more than a
+        // bare year (month/day). Mirrors iOS VODDetailView (count > 4).
+        info?.releaseDate?.takeIf { it.length > 4 }?.let { MetaRow("Released", it) }
         if (!genre.isNullOrBlank()) MetaRow("Genre", genre)
         // The text rows duplicate the Cast & Crew photo strip when it
         // renders; they stay as the fallback when TMDB enrichment is off

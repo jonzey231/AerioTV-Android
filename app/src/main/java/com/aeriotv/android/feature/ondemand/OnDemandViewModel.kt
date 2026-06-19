@@ -1007,6 +1007,9 @@ class OnDemandViewModel @Inject constructor(
         rating = rating,
         year = year,
         logo = icon?.let { DispatcharrVODLogo(url = it) },
+        // v0.26.0: surface the XC trailer so XC movies get a Trailer button too
+        // (native Dispatcharr movies already do via provider-info).
+        youtubeTrailer = youtubeTrailer,
         // Resolve category_id -> display name from the lookup the probe /
         // walk pre-fetched. Falls back to null when the panel omitted the id
         // or the id has no matching row in get_vod_categories -- the filter

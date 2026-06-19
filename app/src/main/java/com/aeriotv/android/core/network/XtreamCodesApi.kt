@@ -110,6 +110,9 @@ class XtreamCodesApi @Inject constructor() {
          *  from getVodCategories() (id->name lookup) since the per-stream
          *  row only carries the id. Null when the panel omits it. */
         val categoryId: String?,
+        /** v0.26.0: get_vod_streams carries the YouTube trailer key. youtubeUrl()
+         *  in the detail screen builds the watch URL. Null when the panel omits it. */
+        val youtubeTrailer: String?,
     )
 
     data class XtreamSeries(
@@ -170,6 +173,7 @@ class XtreamCodesApi @Inject constructor() {
                 // panel; the helper coerces both to String. Drives the VOD
                 // group-hide filter via the id->name map from getVodCategories.
                 categoryId = o.str("category_id"),
+                youtubeTrailer = o.str("youtube_trailer"),
             )
         }
     }

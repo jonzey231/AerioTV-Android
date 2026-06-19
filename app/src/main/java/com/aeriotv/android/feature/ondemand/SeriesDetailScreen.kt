@@ -789,6 +789,9 @@ private fun SeriesInfoSection(
                 }
             }
         }
+        // v0.26.0 release_date as its own row when it carries more than the
+        // bare year already shown in the hero. Mirrors iOS VODDetailView.
+        info?.releaseDate?.takeIf { it.length > 4 }?.let { MetaRow("Released", it) }
         if (!genre.isNullOrBlank()) MetaRow("Genre", genre)
         // The text rows duplicate the Cast & Crew photo strip when it
         // renders; they stay as the fallback when TMDB enrichment is off

@@ -31,6 +31,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -1356,9 +1357,15 @@ data class DispatcharrVODProviderInfo(
     @SerialName("release_date")
     val releaseDate: String? = null,
     val genre: String? = null,
-    val director: String? = null,
-    val actors: String? = null,
-    val cast: String? = null,
+    // v0.26.0: director/actors/cast may arrive as a JSON ARRAY (["A","B"])
+    // instead of a string. A typed String? throws SerializationException on the
+    // array shape, which nukes the WHOLE provider-info decode (response.body()
+    // in getMovie/SeriesProviderInfo has no per-field tolerance) so every field
+    // would vanish. JsonElement? accepts both; the effective* getters join
+    // arrays via flexString(). Mirrors iOS decodeFlexibleString (4ba8d1aaf).
+    val director: JsonElement? = null,
+    val actors: JsonElement? = null,
+    val cast: JsonElement? = null,
     val country: String? = null,
     val rating: String? = null,
     @SerialName("tmdb_id")
@@ -1366,7 +1373,8 @@ data class DispatcharrVODProviderInfo(
     @SerialName("imdb_id")
     val imdbId: String? = null,
     @SerialName("youtube_trailer")
-    val youtubeTrailer: String? = null,
+    // Usually a scalar key string; tolerate an array shape for safety.
+    val youtubeTrailer: JsonElement? = null,
     @SerialName("duration_secs")
     val durationSecs: Int? = null,
     val age: String? = null,
@@ -1390,12 +1398,12 @@ data class DispatcharrVODProviderInfo(
             ?: overview?.takeIf { it.isNotBlank() }
 
     val effectiveCast: String?
-        get() = (cast ?: actors)?.takeIf { it.isNotBlank() }
+        get() = (cast.flexString() ?: actors.flexString())
             ?: customProperties?.stringField("cast")
             ?: customProperties?.stringField("actors")
 
     val effectiveDirector: String?
-        get() = director?.takeIf { it.isNotBlank() }
+        get() = director.flexString()
             ?: customProperties?.stringField("director")
 
     val effectiveCountry: String?
@@ -1407,7 +1415,7 @@ data class DispatcharrVODProviderInfo(
             ?: customProperties?.stringField("genre")
 
     val effectiveTrailer: String?
-        get() = youtubeTrailer?.takeIf { it.isNotBlank() }
+        get() = youtubeTrailer.flexString()
             ?: customProperties?.stringField("youtube_trailer")
 
     /** Backdrop URL. Dispatcharr stores backdrops as an array of strings;
@@ -1537,6 +1545,12 @@ data class DispatcharrVODMovie(
     val tmdbId: String? = null,
     @SerialName("imdb_id")
     val imdbId: String? = null,
+    /** YouTube trailer key/URL. Populated for XC movies by toMovie() (the XC
+     *  list endpoint carries it in v0.26.0); native Dispatcharr movies surface
+     *  the trailer via provider-info.effectiveTrailer, so this stays null for
+     *  them. Defaulted + nullable so the list decode is unaffected. */
+    @SerialName("youtube_trailer")
+    val youtubeTrailer: String? = null,
     val logo: DispatcharrVODLogo? = null,
     val streams: List<DispatcharrVODStreamOption> = emptyList(),
     /** Server-side group name. See DispatcharrVODSeries.categoryName. */
@@ -1669,6 +1683,30 @@ private fun JsonObject.longField(name: String): Long? {
 
 private fun JsonObject.objectField(name: String): JsonObject? =
     this[name] as? JsonObject
+
+/**
+ * v0.26.0 tolerance: a Dispatcharr field that may arrive as a JSON string
+ * ("Actor A, Actor B") OR a JSON array (["Actor A","Actor B"]). Returns the
+ * primitive string, or an array joined with ", ", null/blank-safe. Mirrors iOS
+ * KeyedDecodingContainer.decodeFlexibleString (commit 4ba8d1aaf). Null when the
+ * element is absent, JsonNull, an empty/blank/"null" string, or an array with
+ * no non-blank entries.
+ */
+fun JsonElement?.flexString(): String? {
+    val el = this ?: return null
+    if (el is JsonNull) return null
+    if (el is JsonPrimitive) {
+        val s = el.contentOrNull?.trim()
+        return s?.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
+    }
+    if (el is JsonArray) {
+        val joined = el.mapNotNull { item ->
+            (item as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        }.joinToString(", ")
+        return joined.takeIf { it.isNotBlank() }
+    }
+    return null
+}
 
 @Serializable
 data class DispatcharrEpgEntry(
