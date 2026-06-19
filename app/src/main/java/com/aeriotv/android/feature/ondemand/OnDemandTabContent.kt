@@ -1583,10 +1583,14 @@ private fun VodSearchField(
         )
         return
     }
-    // TV: collapsed unless the user explicitly expands. A non-empty query
-    // forces expansion so a saved state restoration doesn't strand the
-    // user with a filter they can't see.
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    // TV: collapsed unless the user explicitly expands. Use plain `remember`
+    // (NOT rememberSaveable) so leaving and re-entering the On Demand tab
+    // always resets to the collapsed magnifier button instead of restoring an
+    // expanded, auto-focused field that pops the soft keyboard on every entry.
+    // A non-empty query still forces expansion so an active search stays
+    // visible (the query is held in the ViewModel, so it survives tab switches
+    // and re-expands the field when you come back to a search in progress).
+    var expanded by remember { mutableStateOf(false) }
     if (query.isNotEmpty()) expanded = true
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(expanded) {
