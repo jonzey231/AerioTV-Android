@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Close
@@ -184,6 +185,11 @@ fun MultiviewScreen(
     // + title + Replay/Remove only on a Vod tile in this set. iOS parity:
     // MultiviewTile.isFinished + the "Finished" card.
     var finishedTiles by remember { mutableStateOf(setOf<Int>()) }
+    // VOD/DVR tiles whose per-tile scrubber overlay is toggled ON (Item #16).
+    // Keyed by tile POSITION, same as tilePlayers/finishedTiles. The overlay
+    // reads tilePlayers[idx].currentPosition and seeks that same player. LIVE
+    // tiles never enter this set (the menu row is kind-gated below).
+    var scrubberTiles by remember { mutableStateOf(setOf<Int>()) }
     // EOF handler. iOS reassignAudioIfFinishedTileWasAudio: when the audio tile
     // finishes, audio promotes to the newest remaining tile (the removeAt
     // newest-tile rule) so sound never goes silent on the grid.
@@ -250,6 +256,7 @@ fun MultiviewScreen(
         // removal shifted the grid), so a stale checkmark never paints over a
         // different tile that slid into the slot.
         finishedTiles = finishedTiles.filter { it < selected.size }.toSet()
+        scrubberTiles = scrubberTiles.filter { it < selected.size }.toSet()
     }
 
     if (selected.isEmpty()) {
@@ -293,6 +300,8 @@ fun MultiviewScreen(
             focusFadedOut = focusFadedOut,
             watchVm = watchVm,
             finishedTiles = finishedTiles,
+            scrubberTiles = scrubberTiles,
+            tilePlayers = tilePlayers,
             onTileFinished = onTileFinished,
             onReplayTile = { idx ->
                 finishedTiles = finishedTiles - idx
@@ -532,6 +541,23 @@ fun MultiviewScreen(
                         ),
                     )
                 }
+                // Item #16: scrubber toggle, VOD/DVR only (Live has no finite
+                // duration). Toggles this tile's position in scrubberTiles;
+                // the overlay (sibling of Tile in TileGrid) reads/seeks the
+                // already-hoisted tilePlayers[menuIdx].
+                if (menuTile.kind == TileKind.Vod || menuTile.kind == TileKind.Dvr) {
+                    val scrubOn = menuIdx in scrubberTiles
+                    add(
+                        TvMenuAction(
+                            label = if (scrubOn) "Hide Scrubber" else "Show Scrubber",
+                            icon = Icons.Filled.Timeline,
+                            onClick = {
+                                scrubberTiles = if (scrubOn) scrubberTiles - menuIdx
+                                else scrubberTiles + menuIdx
+                            },
+                        ),
+                    )
+                }
                 add(
                     TvMenuAction(
                         label = "Move Tile",
@@ -661,6 +687,8 @@ private fun TileGrid(
     focusFadedOut: Boolean,
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel,
     finishedTiles: Set<Int>,
+    scrubberTiles: Set<Int>,
+    tilePlayers: Map<Int, ExoPlayer>,
     onTileFinished: (Int) -> Unit,
     onReplayTile: (Int) -> Unit,
     onRemoveTile: (Int) -> Unit,
@@ -943,6 +971,18 @@ private fun TileGrid(
                         title = tile.displayName,
                         onReplay = { onReplayTile(index) },
                         onRemove = { onRemoveTile(index) },
+                    )
+                }
+                // Item #16: per-tile scrubber overlay. VOD/DVR only (the menu
+                // row that fills scrubberTiles is itself kind-gated; the extra
+                // guard here is belt-and-suspenders against a stale index after
+                // a swap). Reads/seeks the hoisted player for THIS position.
+                if (index in scrubberTiles &&
+                    (tile.kind == TileKind.Vod || tile.kind == TileKind.Dvr)) {
+                    TileScrubberOverlay(
+                        player = tilePlayers[index],
+                        isTv = isTv,
+                        isDvr = tile.kind == TileKind.Dvr,
                     )
                 }
             }
@@ -1455,4 +1495,135 @@ private fun buildTileMediaSource(
         }
         else -> DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)
     }
+}
+
+/**
+ * Item #16: a thin per-tile transport overlay for VOD / DVR tiles. Pinned to
+ * the bottom of the tile; reads [player].currentPosition on a 500ms tick and
+ * seeks the same player. TV-D-pad-friendly: a focusable strip captures
+ * LEFT/RIGHT to preview +/-10s and commits the seek 650ms after the last step
+ * (the same debounced-commit shape as VODPlayerScreen). Touch users drag the
+ * bar directly. No new player is created, the handle is the one ExoTile
+ * already hoisted into tilePlayers.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun BoxScope.TileScrubberOverlay(
+    player: ExoPlayer?,
+    isTv: Boolean,
+    isDvr: Boolean,
+) {
+    if (player == null) return
+    var positionMs by remember { mutableStateOf(0L) }
+    var durationMs by remember { mutableStateOf(0L) }
+    // Pending D-pad scrub target (preview); committed by the debounce below.
+    var scrubTargetMs by remember { mutableStateOf<Long?>(null) }
+    val focusReq = remember { FocusRequester() }
+
+    // Poll live position/duration every 500ms while the overlay is up.
+    LaunchedEffect(player) {
+        while (true) {
+            positionMs = player.currentPosition.coerceAtLeast(0L)
+            durationMs = player.duration.coerceAtLeast(0L)
+            kotlinx.coroutines.delay(500L)
+        }
+    }
+    // Debounced D-pad seek commit (VODPlayerScreen parity, 650ms).
+    LaunchedEffect(scrubTargetMs) {
+        val target = scrubTargetMs ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(650L)
+        player.seekTo(target)
+        positionMs = target
+        scrubTargetMs = null
+    }
+    // Park focus on the strip so the remote drives it as soon as it appears.
+    LaunchedEffect(Unit) { if (isTv) runCatching { focusReq.requestFocus() } }
+
+    val shown = scrubTargetMs ?: positionMs
+    val fraction = if (durationMs > 0L)
+        (shown.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+    val maxPos = if (isDvr && durationMs > 0L) (durationMs - 5_000L).coerceAtLeast(0L)
+    else durationMs
+
+    Column(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.55f))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            // TV: focusable strip. LEFT/RIGHT preview +/-10s; OK commits early;
+            // BACK is left to MultiviewScreen's BackHandler / dialog cascade.
+            .then(
+                if (isTv) Modifier
+                    .focusRequester(focusReq)
+                    .focusable()
+                    .onKeyEvent { ev ->
+                        if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
+                        when (ev.key) {
+                            Key.DirectionRight -> {
+                                val base = scrubTargetMs ?: positionMs
+                                scrubTargetMs = (base + 10_000L)
+                                    .coerceIn(0L, if (maxPos > 0L) maxPos else Long.MAX_VALUE)
+                                true
+                            }
+                            Key.DirectionLeft -> {
+                                val base = scrubTargetMs ?: positionMs
+                                scrubTargetMs = (base - 10_000L).coerceAtLeast(0L)
+                                true
+                            }
+                            Key.DirectionCenter, Key.Enter -> {
+                                scrubTargetMs?.let {
+                                    player.seekTo(it); positionMs = it; scrubTargetMs = null
+                                }
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+                else Modifier,
+            ),
+    ) {
+        // Thin progress bar. Touch: tap/drag to seek by fraction.
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .then(
+                    if (!isTv) Modifier.pointerInput(durationMs) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {},
+                            onDrag = { change, _ ->
+                                change.consume()
+                                val w = size.width.toFloat().coerceAtLeast(1f)
+                                val f = (change.position.x / w).coerceIn(0f, 1f)
+                                if (durationMs > 0L) scrubTargetMs = (f * durationMs).toLong()
+                            },
+                            onDragEnd = {
+                                scrubTargetMs?.let { player.seekTo(it); positionMs = it; scrubTargetMs = null }
+                            },
+                            onDragCancel = { scrubTargetMs = null },
+                        )
+                    } else Modifier,
+                ),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = Color.White.copy(alpha = 0.25f),
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = "${mvFormatTime(shown)} / ${mvFormatTime(durationMs)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+        )
+    }
+}
+
+/** Local copy of VODPlayerScreen.formatTime (that one is file-private). */
+private fun mvFormatTime(ms: Long): String {
+    if (ms <= 0L) return "--:--"
+    val totalSecs = ms / 1000L
+    val h = totalSecs / 3600
+    val m = (totalSecs % 3600) / 60
+    val s = totalSecs % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
