@@ -1,5 +1,7 @@
 package com.aeriotv.android.feature.ondemand
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.ui.input.key.Key
@@ -30,7 +32,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -94,6 +95,7 @@ import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.main.LocalTvChromeCollapsed
+import com.aeriotv.android.feature.main.collapsibleChrome
 import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
@@ -178,17 +180,29 @@ fun OnDemandTabContent(
             )
         }
 
-        // The Movies / TV Shows segment pills stay full-height and visible at
-        // ALL times: they are the primary sub-tab affordance, and collapsing
-        // them on scroll (while pinning the rail above a weighted grid) let the
-        // rail overlap the first poster row on the Series tab. The fold layout
-        // below (rail / count / state as full-span grid headers) removes the
-        // overlap, so the pills no longer need to shrink to reclaim height. The
-        // shell's top nav bar still collapses on scroll via `chromeCollapsed`.
-        SegmentPills(
-            current = section,
-            onSelect = { section = it },
+        // Same collapse treatment as the shell's top tab bar: shrink, never
+        // unmount (the pills hold D-pad focus targets), and focus arriving on
+        // a pill expands the row back even while scrolled.
+        var pillsHaveFocus by remember { mutableStateOf(false) }
+        val pillsFraction by animateFloatAsState(
+            targetValue = if (tabIsTv && scrolled && !pillsHaveFocus) 0f else 1f,
+            animationSpec = tween(durationMillis = 250),
+            label = "vodPillsCollapse",
         )
+        Box(
+            modifier = if (tabIsTv) {
+                Modifier
+                    .onFocusChanged { pillsHaveFocus = it.hasFocus }
+                    .collapsibleChrome(pillsFraction)
+            } else {
+                Modifier
+            },
+        ) {
+            SegmentPills(
+                current = section,
+                onSelect = { section = it },
+            )
+        }
 
         when (section) {
             OnDemandSection.Movies -> MoviesSubScreen(
@@ -379,20 +393,6 @@ private fun MoviesSubScreen(
                     (row.durationMs <= 0L || row.positionMs < row.durationMs - 5 * 60 * 1000L)
         }.take(8)
     }
-    // The "Continue Watching" label is now pinned above the grid (see
-    // ContinueWatchingHeader below), so it can't be clipped. This snap still
-    // resets a stale scroll offset on entry so the rail's first card row rests
-    // flush under the pinned header, and so railHeaderVisible (gated on
-    // firstVisibleItemIndex == 0) stays true on entry. Gated on being at item
-    // 0, so a user who scrolled deep into the grid is never yanked back.
-    LaunchedEffect(continueWatching.isNotEmpty()) {
-        if (continueWatching.isNotEmpty() &&
-            gridState.firstVisibleItemIndex == 0 &&
-            gridState.firstVisibleItemScrollOffset != 0
-        ) {
-            gridState.scrollToItem(0)
-        }
-    }
     val movieByUuid = remember(state.movies) { state.movies.associateBy { it.uuid } }
 
     // Apply the hide filter once at this point in the pipeline; everything
@@ -402,21 +402,6 @@ private fun MoviesSubScreen(
         if (hiddenMovieGroups.isEmpty()) state.visible
         else state.visible.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenMovieGroups }
     }
-
-    // The "Continue Watching" label is pinned here, ABOVE the scrolling grid,
-    // not rendered inside the rail's grid item: on TV focus lands on the first
-    // rail card on entry and its bringIntoView scroll pushed the in-grid label
-    // off the top of the viewport (it was rendered but above the visible area).
-    // Pinning it next to the count/search row keeps it un-clippable, while the
-    // cards stay in the grid (no rail/grid overlap). It is shown only while the
-    // rail is present and the grid is resting on its first item, so it vanishes
-    // as the user scrolls down into the poster grid.
-    val railHeaderVisible by remember(gridState) {
-        derivedStateOf { gridState.firstVisibleItemIndex == 0 }
-    }
-    val showRailHeader = continueWatching.isNotEmpty() &&
-        state.searchQuery.isBlank() &&
-        railHeaderVisible
 
     Column(modifier = Modifier.fillMaxSize()) {
         VodHeaderRow(
@@ -436,17 +421,72 @@ private fun MoviesSubScreen(
             },
         )
 
-        if (showRailHeader) {
-            ContinueWatchingHeader(isTv = isTv)
+        if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
+            ContinueWatchingRail(
+                items = continueWatching,
+                // The stored row often has no posterUrl (Navigation captures
+                // movie?.posterUrl before the route-scoped library finishes
+                // loading, and many Dispatcharr rows carry no logo at all),
+                // so fall back to the loaded library's poster for the card.
+                posterFor = { row ->
+                    row.posterUrl?.takeIf { it.isNotBlank() }
+                        ?: movieByUuid[row.videoId]?.posterUrl
+                },
+                onItemClick = { progress ->
+                    movieByUuid[progress.videoId]?.let { movie ->
+                        returnFocus.arm("cw:${progress.videoId}")
+                        onMovieClick(movie)
+                    }
+                },
+                onRemove = { watchVm.delete(it.videoId) },
+                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
+            )
         }
 
-        // The Continue Watching rail + count label + loading / empty / error
-        // states ALL render as full-span items INSIDE the single grid below.
-        // The grid is the always-rendered scrolling surface so the rail shows
-        // in every state (cold load, empty library, all groups hidden) without
-        // the bare-spinner/empty early-returns that hid it, and a single lazy
-        // layout still owns rail + posters so the grid can never be placed
-        // underneath the rail. ITEM #8 overlap fix + regression follow-up.
+        val countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
+            "${visibleFiltered.size} / $total"
+        }
+        if (countLabel != null && !isTv) {
+            Text(
+                text = countLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            )
+        }
+
+        if (state.isLoading && state.movies.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+            return@Column
+        }
+        state.error?.let { err ->
+            if (state.movies.isEmpty()) {
+                Text(
+                    text = "Couldn't load movies: $err",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(24.dp),
+                )
+                return@Column
+            }
+        }
+        if (visibleFiltered.isEmpty()) {
+            EmptyState(
+                title = when {
+                    state.searchQuery.isNotBlank() -> "No matches"
+                    hiddenMovieGroups.isNotEmpty() -> "Everything's hidden"
+                    else -> "No movies"
+                },
+                body = when {
+                    state.searchQuery.isNotBlank() -> "Try a different search term."
+                    hiddenMovieGroups.isNotEmpty() -> "All ${hiddenMovieGroups.size} group${if (hiddenMovieGroups.size == 1) "" else "s"} you chose to hide accounts for every movie in this library. Use the filter button to show some again."
+                    else -> "Dispatcharr returned an empty Movies library. Confirm VOD is enabled on the server."
+                },
+            )
+            return@Column
+        }
 
         // TV: deadband spec kills the horizontal-move vertical jump (see
         // com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec). Phone keeps the inherited default.
@@ -472,82 +512,6 @@ private fun MoviesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
-            if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
-                item(key = "cw-rail", span = { GridItemSpan(maxLineSpan) }) {
-                    ContinueWatchingRail(
-                        items = continueWatching,
-                        // The stored row often has no posterUrl (Navigation captures
-                        // movie?.posterUrl before the route-scoped library finishes
-                        // loading, and many Dispatcharr rows carry no logo at all),
-                        // so fall back to the loaded library's poster for the card.
-                        posterFor = { row ->
-                            row.posterUrl?.takeIf { it.isNotBlank() }
-                                ?: movieByUuid[row.videoId]?.posterUrl
-                        },
-                        onItemClick = { progress ->
-                            movieByUuid[progress.videoId]?.let { movie ->
-                                returnFocus.arm("cw:${progress.videoId}")
-                                onMovieClick(movie)
-                            }
-                        },
-                        onRemove = { watchVm.delete(it.videoId) },
-                        focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
-                        // Header is pinned above the grid (un-clippable); the
-                        // grid item carries only the rail's cards.
-                        showHeader = false,
-                    )
-                }
-            }
-            val phoneCountLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
-                "${visibleFiltered.size} / $total"
-            }
-            if (phoneCountLabel != null && !isTv && visibleFiltered.isNotEmpty()) {
-                item(key = "cw-count", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = phoneCountLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-            }
-            // Loading / error / empty states render as a full-span body item
-            // BELOW the rail when there are no posters, so the rail above stays
-            // visible. Only one of these branches is ever taken.
-            val movieError = state.error
-            if (visibleFiltered.isEmpty()) {
-                item(key = "vod-state", span = { GridItemSpan(maxLineSpan) }) {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        when {
-                            state.isLoading && state.movies.isEmpty() ->
-                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                            movieError != null && state.movies.isEmpty() ->
-                                Text(
-                                    text = "Couldn't load movies: $movieError",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(24.dp),
-                                )
-                            else ->
-                                EmptyState(
-                                    title = when {
-                                        state.searchQuery.isNotBlank() -> "No matches"
-                                        hiddenMovieGroups.isNotEmpty() -> "Everything's hidden"
-                                        else -> "No movies"
-                                    },
-                                    body = when {
-                                        state.searchQuery.isNotBlank() -> "Try a different search term."
-                                        hiddenMovieGroups.isNotEmpty() -> "All ${hiddenMovieGroups.size} group${if (hiddenMovieGroups.size == 1) "" else "s"} you chose to hide accounts for every movie in this library. Use the filter button to show some again."
-                                        else -> "Dispatcharr returned an empty Movies library. Confirm VOD is enabled on the server."
-                                    },
-                                )
-                        }
-                    }
-                }
-            }
             itemsIndexed(items = visibleFiltered, key = { _, it -> it.id }) { index, movie ->
                 // Prefetch the next page as the user nears the end of what's
                 // loaded. Browse only -- search results aren't paginated here,
@@ -651,19 +615,6 @@ private fun SeriesSubScreen(
     val continueWatchingEpisodes = remember(recentProgress) {
         recentProgress.filter { it.vodType == "episode" && !it.isFinished }.take(8)
     }
-    // The "Continue Watching" label is pinned above the grid now (see
-    // ContinueWatchingHeader), so it can't be clipped. This snap resets a stale
-    // scroll offset on entry so the rail's first card row rests flush under the
-    // pinned header and railHeaderVisible stays true. Gated on item 0, so a user
-    // scrolled deep into the grid is never yanked back.
-    LaunchedEffect(continueWatchingEpisodes.isNotEmpty()) {
-        if (continueWatchingEpisodes.isNotEmpty() &&
-            gridState.firstVisibleItemIndex == 0 &&
-            gridState.firstVisibleItemScrollOffset != 0
-        ) {
-            gridState.scrollToItem(0)
-        }
-    }
 
     if (state.unsupportedSource) {
         EmptyState(
@@ -677,17 +628,6 @@ private fun SeriesSubScreen(
         if (hiddenSeriesGroups.isEmpty()) state.visibleSeries
         else state.visibleSeries.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenSeriesGroups }
     }
-
-    // Pinned "Continue Watching" label, mirrors MoviesSubScreen above: kept out
-    // of the rail's grid item so the focus-driven bringIntoView scroll of the
-    // first card can never clip it on TV. Shown only while the rail is present
-    // and the grid rests on its first item.
-    val railHeaderVisible by remember(gridState) {
-        derivedStateOf { gridState.firstVisibleItemIndex == 0 }
-    }
-    val showRailHeader = continueWatchingEpisodes.isNotEmpty() &&
-        state.seriesSearchQuery.isBlank() &&
-        railHeaderVisible
 
     Column(modifier = Modifier.fillMaxSize()) {
         VodHeaderRow(
@@ -707,16 +647,68 @@ private fun SeriesSubScreen(
             },
         )
 
-        if (showRailHeader) {
-            ContinueWatchingHeader(isTv = isTv)
+        if (continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()) {
+            SeriesContinueWatchingRail(
+                items = continueWatchingEpisodes,
+                seriesById = seriesById,
+                onItemClick = { row ->
+                    returnFocus.arm("cw:${row.videoId}")
+                    onEpisodeResume(row.videoId)
+                },
+                onRemove = { watchVm.delete(it.videoId) },
+                onOpenSeries = { row ->
+                    row.seriesId?.toIntOrNull()?.let { id ->
+                        seriesById[id]?.let(onSeriesClick)
+                    }
+                },
+                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
+            )
         }
 
-        // The Continue Watching rail + count label + loading / empty / error
-        // states ALL render as full-span items INSIDE the single grid below, so
-        // the rail shows in every state (cold load, empty library, all groups
-        // hidden) and a single lazy layout still owns rail + posters so the
-        // grid can never be placed underneath the rail. ITEM #8 overlap fix +
-        // regression follow-up. Mirrors MoviesSubScreen above.
+        val countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
+            "${visibleSeriesFiltered.size} / $total"
+        }
+        if (countLabel != null && !isTv) {
+            Text(
+                text = countLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            )
+        }
+
+        if (state.isLoadingSeries && state.series.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+            return@Column
+        }
+        state.seriesError?.let { err ->
+            if (state.series.isEmpty()) {
+                Text(
+                    text = "Couldn't load series: $err",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(24.dp),
+                )
+                return@Column
+            }
+        }
+        if (visibleSeriesFiltered.isEmpty()) {
+            EmptyState(
+                title = when {
+                    state.seriesSearchQuery.isNotBlank() -> "No matches"
+                    hiddenSeriesGroups.isNotEmpty() -> "Everything's hidden"
+                    else -> "No series"
+                },
+                body = when {
+                    state.seriesSearchQuery.isNotBlank() -> "Try a different search term."
+                    hiddenSeriesGroups.isNotEmpty() -> "All ${hiddenSeriesGroups.size} group${if (hiddenSeriesGroups.size == 1) "" else "s"} you chose to hide accounts for every series in this library. Use the filter button to show some again."
+                    else -> "Dispatcharr returned an empty Series library. Confirm VOD is enabled on the server."
+                },
+            )
+            return@Column
+        }
 
         // TV: same deadband spec as the Movies grid (com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec).
         val bringIntoViewSpec =
@@ -739,78 +731,6 @@ private fun SeriesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
-            if (continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()) {
-                item(key = "cw-rail", span = { GridItemSpan(maxLineSpan) }) {
-                    SeriesContinueWatchingRail(
-                        items = continueWatchingEpisodes,
-                        seriesById = seriesById,
-                        onItemClick = { row ->
-                            returnFocus.arm("cw:${row.videoId}")
-                            onEpisodeResume(row.videoId)
-                        },
-                        onRemove = { watchVm.delete(it.videoId) },
-                        onOpenSeries = { row ->
-                            row.seriesId?.toIntOrNull()?.let { id ->
-                                seriesById[id]?.let(onSeriesClick)
-                            }
-                        },
-                        focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
-                        // Header is pinned above the grid (un-clippable); the
-                        // grid item carries only the rail's cards.
-                        showHeader = false,
-                    )
-                }
-            }
-            val phoneCountLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
-                "${visibleSeriesFiltered.size} / $total"
-            }
-            if (phoneCountLabel != null && !isTv && visibleSeriesFiltered.isNotEmpty()) {
-                item(key = "cw-count", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = phoneCountLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-            }
-            // Loading / error / empty states render as a full-span body item
-            // BELOW the rail when there are no posters, so the rail above stays
-            // visible. Only one of these branches is ever taken.
-            val seriesErr = state.seriesError
-            if (visibleSeriesFiltered.isEmpty()) {
-                item(key = "vod-state", span = { GridItemSpan(maxLineSpan) }) {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        when {
-                            state.isLoadingSeries && state.series.isEmpty() ->
-                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                            seriesErr != null && state.series.isEmpty() ->
-                                Text(
-                                    text = "Couldn't load series: $seriesErr",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(24.dp),
-                                )
-                            else ->
-                                EmptyState(
-                                    title = when {
-                                        state.seriesSearchQuery.isNotBlank() -> "No matches"
-                                        hiddenSeriesGroups.isNotEmpty() -> "Everything's hidden"
-                                        else -> "No series"
-                                    },
-                                    body = when {
-                                        state.seriesSearchQuery.isNotBlank() -> "Try a different search term."
-                                        hiddenSeriesGroups.isNotEmpty() -> "All ${hiddenSeriesGroups.size} group${if (hiddenSeriesGroups.size == 1) "" else "s"} you chose to hide accounts for every series in this library. Use the filter button to show some again."
-                                        else -> "Dispatcharr returned an empty Series library. Confirm VOD is enabled on the server."
-                                    },
-                                )
-                        }
-                    }
-                }
-            }
             itemsIndexed(items = visibleSeriesFiltered, key = { _, it -> it.id }) { index, series ->
                 if (state.seriesNextCursor != null &&
                     state.seriesSearchQuery.isBlank() &&
@@ -1115,29 +1035,6 @@ private fun SeriesPoster(
     }
 }
 
-/** The "Continue Watching" label, rendered as a pinned Column sibling ABOVE
- *  the scrolling grid (next to the count/search row) so it can never be
- *  clipped by the focus-driven bringIntoView scroll of the rail's first card.
- *  The matching rail is rendered inside the grid with showHeader = false, so
- *  only the cards live in the lazy layout. The caller gates visibility on the
- *  rail being present AND the grid resting at item 0, so the label disappears
- *  as soon as the user scrolls down into the poster grid. */
-@Composable
-private fun ContinueWatchingHeader(isTv: Boolean) {
-    Text(
-        text = "Continue Watching",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(
-            start = if (isTv) 48.dp else 20.dp,
-            end = if (isTv) 48.dp else 20.dp,
-            top = 8.dp,
-            bottom = 4.dp,
-        ),
-    )
-}
-
 @Composable
 private fun ContinueWatchingRail(
     items: List<WatchProgressEntity>,
@@ -1147,26 +1044,18 @@ private fun ContinueWatchingRail(
     /** BACK-from-detail refocus hook: non-null only for the card the focus
      *  restore should land on (see VodReturnFocusState). */
     focusRequesterFor: (WatchProgressEntity) -> FocusRequester? = { null },
-    /** When false, the "Continue Watching" label is omitted so a pinned
-     *  sibling header (above the scrolling grid) can own it instead. The
-     *  in-grid header is what got clipped on TV: focus lands on the first
-     *  rail card and the bringIntoView scroll pushed the label (which lives
-     *  in the same grid item, above the card) off the top of the viewport. */
-    showHeader: Boolean = true,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        if (showHeader) {
-            Text(
-                text = "Continue Watching",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(
-                    horizontal = if (rememberLiveTvFormFactor().isTv) 48.dp else 20.dp,
-                    vertical = 8.dp,
-                ),
-            )
-        }
+        Text(
+            text = "Continue Watching",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(
+                horizontal = if (rememberLiveTvFormFactor().isTv) 48.dp else 20.dp,
+                vertical = 8.dp,
+            ),
+        )
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(
@@ -1354,25 +1243,18 @@ private fun SeriesContinueWatchingRail(
     /** BACK-from-player refocus hook: non-null only for the card the focus
      *  restore should land on (see VodReturnFocusState). */
     focusRequesterFor: (WatchProgressEntity) -> FocusRequester? = { null },
-    /** When false, the "Continue Watching" label is omitted so a pinned
-     *  sibling header (above the scrolling grid) can own it instead. See the
-     *  matching note on ContinueWatchingRail for why the in-grid header
-     *  clipped on TV. */
-    showHeader: Boolean = true,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        if (showHeader) {
-            Text(
-                text = "Continue Watching",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(
-                    horizontal = if (rememberLiveTvFormFactor().isTv) 48.dp else 20.dp,
-                    vertical = 8.dp,
-                ),
-            )
-        }
+        Text(
+            text = "Continue Watching",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(
+                horizontal = if (rememberLiveTvFormFactor().isTv) 48.dp else 20.dp,
+                vertical = 8.dp,
+            ),
+        )
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(
@@ -1688,14 +1570,10 @@ private fun VodSearchField(
         )
         return
     }
-    // TV: collapsed unless the user explicitly expands. Use plain `remember`
-    // (NOT rememberSaveable) so leaving and re-entering the On Demand tab
-    // always resets to the collapsed magnifier button instead of restoring an
-    // expanded, auto-focused field that pops the soft keyboard on every entry.
-    // A non-empty query still forces expansion so an active search stays
-    // visible (the query is held in the ViewModel, so it survives tab switches
-    // and re-expands the field when you come back to a search in progress).
-    var expanded by remember { mutableStateOf(false) }
+    // TV: collapsed unless the user explicitly expands. A non-empty query
+    // forces expansion so a saved state restoration doesn't strand the
+    // user with a filter they can't see.
+    var expanded by rememberSaveable { mutableStateOf(false) }
     if (query.isNotEmpty()) expanded = true
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(expanded) {
