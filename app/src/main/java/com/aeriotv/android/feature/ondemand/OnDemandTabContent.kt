@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -421,27 +422,18 @@ private fun MoviesSubScreen(
             },
         )
 
-        if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
-            ContinueWatchingRail(
-                items = continueWatching,
-                // The stored row often has no posterUrl (Navigation captures
-                // movie?.posterUrl before the route-scoped library finishes
-                // loading, and many Dispatcharr rows carry no logo at all),
-                // so fall back to the loaded library's poster for the card.
-                posterFor = { row ->
-                    row.posterUrl?.takeIf { it.isNotBlank() }
-                        ?: movieByUuid[row.videoId]?.posterUrl
-                },
-                onItemClick = { progress ->
-                    movieByUuid[progress.videoId]?.let { movie ->
-                        returnFocus.arm("cw:${progress.videoId}")
-                        onMovieClick(movie)
-                    }
-                },
-                onRemove = { watchVm.delete(it.videoId) },
-                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
-            )
-        }
+        // Whether the Continue Watching rail should render. tvOS keeps this rail
+        // INSIDE the same vertical scroll as the library grid (it is the first
+        // child of the scroll content, the LazyVGrid is the second), so the rail
+        // scrolls off the top as you move down into the grid. We mirror that by
+        // rendering the rail as a full-span header ITEM of the LazyVerticalGrid
+        // below (see the `if (showContinueWatching) item(span = full) {...}`),
+        // NOT as a sibling Column child. That is the structural fix for the old
+        // overlap bug (#8): the rail is no longer a wrap-content sibling sitting
+        // above a fillMaxSize grid that over-claimed the Column height -- it is
+        // index 0 of the grid's own layout, so the first poster row is always
+        // measured and placed cleanly BELOW it.
+        val showContinueWatching = continueWatching.isNotEmpty() && state.searchQuery.isBlank()
 
         val countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
             "${visibleFiltered.size} / $total"
@@ -512,6 +504,38 @@ private fun MoviesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
+            // Continue Watching rail as a full-span header item -- the tvOS
+            // structure (rail is the first child of the SAME scroll as the
+            // grid, scrolls away with it). Spanning maxLineSpan makes it own a
+            // full row so the A-Z posters always begin on the row beneath it;
+            // there is no separate sibling to overlap.
+            if (showContinueWatching) {
+                item(
+                    key = "continue-watching",
+                    span = { GridItemSpan(maxLineSpan) },
+                ) {
+                    ContinueWatchingRail(
+                        items = continueWatching,
+                        // The stored row often has no posterUrl (Navigation
+                        // captures movie?.posterUrl before the route-scoped
+                        // library finishes loading, and many Dispatcharr rows
+                        // carry no logo at all), so fall back to the loaded
+                        // library's poster for the card.
+                        posterFor = { row ->
+                            row.posterUrl?.takeIf { it.isNotBlank() }
+                                ?: movieByUuid[row.videoId]?.posterUrl
+                        },
+                        onItemClick = { progress ->
+                            movieByUuid[progress.videoId]?.let { movie ->
+                                returnFocus.arm("cw:${progress.videoId}")
+                                onMovieClick(movie)
+                            }
+                        },
+                        onRemove = { watchVm.delete(it.videoId) },
+                        focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
+                    )
+                }
+            }
             itemsIndexed(items = visibleFiltered, key = { _, it -> it.id }) { index, movie ->
                 // Prefetch the next page as the user nears the end of what's
                 // loaded. Browse only -- search results aren't paginated here,
@@ -647,23 +671,14 @@ private fun SeriesSubScreen(
             },
         )
 
-        if (continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()) {
-            SeriesContinueWatchingRail(
-                items = continueWatchingEpisodes,
-                seriesById = seriesById,
-                onItemClick = { row ->
-                    returnFocus.arm("cw:${row.videoId}")
-                    onEpisodeResume(row.videoId)
-                },
-                onRemove = { watchVm.delete(it.videoId) },
-                onOpenSeries = { row ->
-                    row.seriesId?.toIntOrNull()?.let { id ->
-                        seriesById[id]?.let(onSeriesClick)
-                    }
-                },
-                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
-            )
-        }
+        // tvOS keeps this rail INSIDE the same vertical scroll as the grid (see
+        // the long note in MoviesSubScreen). We render it as a full-span header
+        // ITEM of the LazyVerticalGrid below, not a sibling Column child, which
+        // is the structural fix for the old Series overlap bug (#8): the rail is
+        // index 0 of the grid's layout, so episode/series posters always begin
+        // on the row beneath it.
+        val showContinueWatching =
+            continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()
 
         val countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
             "${visibleSeriesFiltered.size} / $total"
@@ -731,6 +746,31 @@ private fun SeriesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
+            // Continue Watching rail as a full-span header item (mirrors tvOS:
+            // rail shares the grid's scroll and scrolls away with it). See the
+            // MoviesSubScreen note for why this kills the overlap bug.
+            if (showContinueWatching) {
+                item(
+                    key = "continue-watching",
+                    span = { GridItemSpan(maxLineSpan) },
+                ) {
+                    SeriesContinueWatchingRail(
+                        items = continueWatchingEpisodes,
+                        seriesById = seriesById,
+                        onItemClick = { row ->
+                            returnFocus.arm("cw:${row.videoId}")
+                            onEpisodeResume(row.videoId)
+                        },
+                        onRemove = { watchVm.delete(it.videoId) },
+                        onOpenSeries = { row ->
+                            row.seriesId?.toIntOrNull()?.let { id ->
+                                seriesById[id]?.let(onSeriesClick)
+                            }
+                        },
+                        focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
+                    )
+                }
+            }
             itemsIndexed(items = visibleSeriesFiltered, key = { _, it -> it.id }) { index, series ->
                 if (state.seriesNextCursor != null &&
                     state.seriesSearchQuery.isBlank() &&
