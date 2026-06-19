@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -421,39 +422,8 @@ private fun MoviesSubScreen(
             },
         )
 
-        if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
-            ContinueWatchingRail(
-                items = continueWatching,
-                // The stored row often has no posterUrl (Navigation captures
-                // movie?.posterUrl before the route-scoped library finishes
-                // loading, and many Dispatcharr rows carry no logo at all),
-                // so fall back to the loaded library's poster for the card.
-                posterFor = { row ->
-                    row.posterUrl?.takeIf { it.isNotBlank() }
-                        ?: movieByUuid[row.videoId]?.posterUrl
-                },
-                onItemClick = { progress ->
-                    movieByUuid[progress.videoId]?.let { movie ->
-                        returnFocus.arm("cw:${progress.videoId}")
-                        onMovieClick(movie)
-                    }
-                },
-                onRemove = { watchVm.delete(it.videoId) },
-                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
-            )
-        }
-
-        val countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
-            "${visibleFiltered.size} / $total"
-        }
-        if (countLabel != null && !isTv) {
-            Text(
-                text = countLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-            )
-        }
+        // CW rail + count label render as full-span grid header items below
+        // (ITEM #8 overlap fix; same treatment as SeriesSubScreen).
 
         if (state.isLoading && state.movies.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -512,6 +482,42 @@ private fun MoviesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
+            if (continueWatching.isNotEmpty() && state.searchQuery.isBlank()) {
+                item(key = "cw-rail", span = { GridItemSpan(maxLineSpan) }) {
+                    ContinueWatchingRail(
+                        items = continueWatching,
+                        // The stored row often has no posterUrl (Navigation captures
+                        // movie?.posterUrl before the route-scoped library finishes
+                        // loading, and many Dispatcharr rows carry no logo at all),
+                        // so fall back to the loaded library's poster for the card.
+                        posterFor = { row ->
+                            row.posterUrl?.takeIf { it.isNotBlank() }
+                                ?: movieByUuid[row.videoId]?.posterUrl
+                        },
+                        onItemClick = { progress ->
+                            movieByUuid[progress.videoId]?.let { movie ->
+                                returnFocus.arm("cw:${progress.videoId}")
+                                onMovieClick(movie)
+                            }
+                        },
+                        onRemove = { watchVm.delete(it.videoId) },
+                        focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
+                    )
+                }
+            }
+            val phoneCountLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
+                "${visibleFiltered.size} / $total"
+            }
+            if (phoneCountLabel != null && !isTv) {
+                item(key = "cw-count", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = phoneCountLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
             itemsIndexed(items = visibleFiltered, key = { _, it -> it.id }) { index, movie ->
                 // Prefetch the next page as the user nears the end of what's
                 // loaded. Browse only -- search results aren't paginated here,
@@ -647,35 +653,10 @@ private fun SeriesSubScreen(
             },
         )
 
-        if (continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()) {
-            SeriesContinueWatchingRail(
-                items = continueWatchingEpisodes,
-                seriesById = seriesById,
-                onItemClick = { row ->
-                    returnFocus.arm("cw:${row.videoId}")
-                    onEpisodeResume(row.videoId)
-                },
-                onRemove = { watchVm.delete(it.videoId) },
-                onOpenSeries = { row ->
-                    row.seriesId?.toIntOrNull()?.let { id ->
-                        seriesById[id]?.let(onSeriesClick)
-                    }
-                },
-                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
-            )
-        }
-
-        val countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
-            "${visibleSeriesFiltered.size} / $total"
-        }
-        if (countLabel != null && !isTv) {
-            Text(
-                text = countLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-            )
-        }
+        // Continue Watching rail + count label now render as full-span header
+        // items INSIDE the grid below, so a single lazy layout owns rail +
+        // posters and the grid can no longer be placed underneath the rail.
+        // ITEM #8 overlap fix.
 
         if (state.isLoadingSeries && state.series.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -731,6 +712,38 @@ private fun SeriesSubScreen(
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
         ) {
+            if (continueWatchingEpisodes.isNotEmpty() && state.seriesSearchQuery.isBlank()) {
+                item(key = "cw-rail", span = { GridItemSpan(maxLineSpan) }) {
+                    SeriesContinueWatchingRail(
+                        items = continueWatchingEpisodes,
+                        seriesById = seriesById,
+                        onItemClick = { row ->
+                            returnFocus.arm("cw:${row.videoId}")
+                            onEpisodeResume(row.videoId)
+                        },
+                        onRemove = { watchVm.delete(it.videoId) },
+                        onOpenSeries = { row ->
+                            row.seriesId?.toIntOrNull()?.let { id ->
+                                seriesById[id]?.let(onSeriesClick)
+                            }
+                        },
+                        focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
+                    )
+                }
+            }
+            val phoneCountLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
+                "${visibleSeriesFiltered.size} / $total"
+            }
+            if (phoneCountLabel != null && !isTv) {
+                item(key = "cw-count", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = phoneCountLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
             itemsIndexed(items = visibleSeriesFiltered, key = { _, it -> it.id }) { index, series ->
                 if (state.seriesNextCursor != null &&
                     state.seriesSearchQuery.isBlank() &&
