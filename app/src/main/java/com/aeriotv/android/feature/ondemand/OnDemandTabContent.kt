@@ -656,6 +656,11 @@ private fun SeriesSubScreen(
                     onEpisodeResume(row.videoId)
                 },
                 onRemove = { watchVm.delete(it.videoId) },
+                onOpenSeries = { row ->
+                    row.seriesId?.toIntOrNull()?.let { id ->
+                        seriesById[id]?.let(onSeriesClick)
+                    }
+                },
                 focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
             )
         }
@@ -1189,19 +1194,33 @@ private fun ContinueWatchingActionMenu(
     guard: TvMenuGuard,
     onDismiss: () -> Unit,
     onRemove: () -> Unit,
+    // iOS parity (16e3b8377, Models/VODModels.swift): the series-variant card
+    // offers "Open Series" above Remove. Null for the movie variant, and null
+    // when the parent series can't be resolved from the library cache.
+    onOpenSeries: (() -> Unit)? = null,
 ) {
     TvActionMenuDialog(
         title = title,
-        actions = listOf(
-            TvMenuAction(
-                label = "Remove from Continue Watching",
-                icon = Icons.Outlined.Delete,
-                destructive = true,
-            ) { onRemove() },
+        actions = buildList {
+            if (onOpenSeries != null) {
+                add(
+                    TvMenuAction(
+                        label = "Open Series",
+                        icon = Icons.Outlined.Tv,
+                    ) { onOpenSeries() },
+                )
+            }
+            add(
+                TvMenuAction(
+                    label = "Remove from Continue Watching",
+                    icon = Icons.Outlined.Delete,
+                    destructive = true,
+                ) { onRemove() },
+            )
             // Dismiss-only escape hatch; the dialog itself dismisses before
             // running any action, so the click body is intentionally empty.
-            TvMenuAction(label = "Cancel") {},
-        ),
+            add(TvMenuAction(label = "Cancel") {})
+        },
         guard = guard,
         onDismiss = onDismiss,
     )
@@ -1219,6 +1238,8 @@ private fun SeriesContinueWatchingRail(
     seriesById: Map<Int, DispatcharrVODSeries>,
     onItemClick: (WatchProgressEntity) -> Unit,
     onRemove: (WatchProgressEntity) -> Unit,
+    // iOS parity: long-press -> Open Series jumps to the full show page.
+    onOpenSeries: (WatchProgressEntity) -> Unit = {},
     /** BACK-from-player refocus hook: non-null only for the card the focus
      *  restore should land on (see VodReturnFocusState). */
     focusRequesterFor: (WatchProgressEntity) -> FocusRequester? = { null },
@@ -1254,6 +1275,9 @@ private fun SeriesContinueWatchingRail(
                     focusRequester = focusRequesterFor(row),
                     onClick = { onItemClick(row) },
                     onRemove = { onRemove(row) },
+                    // Only offer Open Series when the parent series is in the
+                    // loaded library (mirrors iOS `if let parentSeries`).
+                    onOpenSeries = series?.let { { onOpenSeries(row) } },
                 )
             }
         }
@@ -1269,6 +1293,8 @@ private fun SeriesContinueWatchingCard(
     focusRequester: FocusRequester? = null,
     onClick: () -> Unit,
     onRemove: () -> Unit,
+    // Non-null only when the parent series resolved in the library cache.
+    onOpenSeries: (() -> Unit)? = null,
 ) {
     val progress = if (row.durationMs > 0L) {
         (row.positionMs.toFloat() / row.durationMs.toFloat()).coerceIn(0f, 1f)
@@ -1277,7 +1303,7 @@ private fun SeriesContinueWatchingCard(
         row.seasonNumber.takeIf { it > 0 }?.let { "S$it" },
         row.episodeNumber.takeIf { it > 0 }?.let { "E$it" },
     ).joinToString(":")
-    val subtitle = listOf(tag, row.title).filter { it.isNotBlank() }.joinToString(" · ")
+    val subtitle = listOf(tag, row.title).filter { it.isNotBlank() }.joinToString(" - ")
     var cardFocused by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     val tvGuard = rememberTvMenuGuard()
@@ -1367,6 +1393,7 @@ private fun SeriesContinueWatchingCard(
             guard = tvGuard,
             onDismiss = { menuOpen = false },
             onRemove = onRemove,
+            onOpenSeries = onOpenSeries,
         )
     }
 }
