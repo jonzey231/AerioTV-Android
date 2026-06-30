@@ -61,10 +61,18 @@ fun OnboardingSyncProgressScreen(
     steps: List<DriveSyncManager.RestoreStep>,
     channelsState: DriveSyncManager.RestoreStepState,
 ) {
-    // Swallow BACK while visible -- interrupting mid-apply could leave a
-    // half-restored DB (playlists without credentials). The host dismisses
-    // this screen on its own once the restore settles.
-    BackHandler(enabled = true) { /* no-op: restore is not interruptible */ }
+    // Swallow BACK ONLY while a category is actively applying -- interrupting
+    // mid-apply could leave a half-restored DB. Once the restore finishes,
+    // fails, or stalls (e.g. a dead-network pull stuck in Pending), nothing is
+    // Running, so let BACK through: this screen has nothing focusable, so an
+    // always-on BackHandler would trap the user on a dead-end with no way out
+    // on any non-success outcome. The host still dismisses on its own in the
+    // success case (ChannelsReady -> MAIN). Leaving between two category applies
+    // is safe -- each apply is its own transaction; the next sync completes it.
+    val restoreInProgress = steps.any {
+        it.state == DriveSyncManager.RestoreStepState.Running
+    } || channelsState == DriveSyncManager.RestoreStepState.Running
+    BackHandler(enabled = restoreInProgress) { /* no-op while a step is applying */ }
 
     // Before the tracked pull publishes its list there is a brief window with
     // no steps; render every category as Pending so the card doesn't pop in.
