@@ -356,7 +356,7 @@ class PlaylistViewModel @Inject constructor(
                             it.copy(
                                 phase = Phase.NeedsUrl,
                                 isLoading = false,
-                                error = "Failed to refresh saved source: ${t.message ?: t::class.simpleName}",
+                                error = "Failed to refresh saved source: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                             )
                         }
                     }
@@ -520,7 +520,7 @@ class PlaylistViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             channels = emptyList(),
-                            error = "Failed to load: ${t.message ?: t::class.simpleName}",
+                            error = "Failed to load: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                         )
                     }
                 },
@@ -840,9 +840,9 @@ class PlaylistViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             playlistRefreshStatus = ActionStatus.Failure(
-                                "Refresh failed: ${t.message ?: t::class.simpleName}",
+                                "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                             ),
-                            error = "Refresh failed: ${t.message ?: t::class.simpleName}",
+                            error = "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                         )
                     }
                 },
@@ -929,7 +929,7 @@ class PlaylistViewModel @Inject constructor(
                             "EPG updated (${outcome.getOrThrow()} programmes)",
                         )
                         else -> ActionStatus.Failure(
-                            "EPG refresh failed: ${outcome.exceptionOrNull()?.message ?: "unknown error"}",
+                            "EPG refresh failed: ${LogSanitizer.redact(outcome.exceptionOrNull()?.message ?: "unknown error")}",
                         )
                     },
                 )
@@ -991,9 +991,9 @@ class PlaylistViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             refreshAllStatus = ActionStatus.Failure(
-                                "Refresh failed: ${t.message ?: t::class.simpleName}",
+                                "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                             ),
-                            error = "Refresh failed: ${t.message ?: t::class.simpleName}",
+                            error = "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                         )
                     }
                 },
@@ -1102,7 +1102,7 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            error = "Save failed: ${t.message ?: t::class.simpleName}",
+                            error = "Save failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                         )
                     }
                 },
@@ -1217,7 +1217,7 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            error = "Switch failed: ${t.message ?: t::class.simpleName}",
+                            error = "Switch failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                         )
                     }
                 },
