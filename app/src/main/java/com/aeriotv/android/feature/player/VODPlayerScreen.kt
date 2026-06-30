@@ -632,6 +632,13 @@ fun VODPlayerScreen(
             if (videoId.isNullOrBlank()) return@LaunchedEffect
             while (true) {
                 delay(5_000L)
+                // Once playback has ENDED, stop persisting: contentPosition pins
+                // at the end, so the loop would keep re-saving a stale past-EOF
+                // position and could overwrite the finished / advanced-up-next
+                // state the final save already recorded. `continue` (not break)
+                // so a seek back into the movie -- which leaves STATE_ENDED --
+                // resumes saving for the re-watch.
+                if (player.playbackState == androidx.media3.common.Player.STATE_ENDED) continue
                 val pos = player.contentPosition
                 val dur = player.contentDuration
                 if (pos <= 0L || dur <= 0L) continue
