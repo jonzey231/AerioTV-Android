@@ -1420,6 +1420,21 @@ private fun ExoTile(
                 override fun onPlayerError(error: PlaybackException) {
                     val retryUrl = currentUrlRef.value
                     if (retryUrl.isBlank()) return
+                    // A format this device's decoders can NEVER play (wrong
+                    // codec/profile, or beyond the SoC's capabilities) fails
+                    // identically on every re-prepare, so skip the bounded retry
+                    // and surface the dead tile immediately instead of burning
+                    // 3 attempts x 5s of futile codec init. Decoder-INIT failures
+                    // are deliberately NOT treated as fatal here: on a multiview
+                    // grid they're usually transient hardware-decoder contention
+                    // (another tile holds the codec), which the cooldown-gated
+                    // retry below recovers once a tile frees a decoder.
+                    if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+                    ) {
+                        Log.w(TAG, "Tile format unplayable on this device, not retrying: $channelName (${error.errorCodeName})")
+                        return
+                    }
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastRetryAtMs < 5_000L) return
                     if (consecutiveRetries >= 3) {
