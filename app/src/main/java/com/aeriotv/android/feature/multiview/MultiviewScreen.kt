@@ -29,7 +29,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
@@ -150,6 +154,11 @@ fun MultiviewScreen(
     val audioFocusStyle by settingsVm.multiviewAudioFocusStyle.collectAsState(initial = "centerIcon")
     val tilePadding by settingsVm.multiviewTilePadding.collectAsState(initial = false)
     val tileRounded by settingsVm.multiviewTileCornersRounded.collectAsState(initial = false)
+    // Issue #48: the selectable, persisted grid layout (Default / Even Grid /
+    // Spotlight / Hero + Corner). Picked from the tile context menu; one global
+    // value for all tile counts, mirroring iOS @AppStorage multiviewLayoutMode.
+    val layoutModeKey by settingsVm.multiviewLayoutMode.collectAsState(initial = "auto")
+    val layoutMode = MultiviewLayoutMode.from(layoutModeKey)
 
     var chromeVisible by remember { mutableStateOf(true) }
     // Bumped whenever the user navigates between tiles (D-pad focus change)
@@ -296,6 +305,7 @@ fun MultiviewScreen(
             relocatingIndex = relocatingIndex,
             fullscreenIndex = fullscreenIndex,
             spotlightIndex = spotlightIndex,
+            layoutMode = layoutMode,
             httpHeaders = httpHeaders,
             cachingMs = bufferMillisFor(bufferSize),
             audioFocusStyle = audioFocusStyle,
@@ -560,6 +570,32 @@ fun MultiviewScreen(
                         },
                     ),
                 )
+                // Issue #48: grid layout picker. Grid-wide (any tile sets the
+                // shared, persisted layout); hidden when there is no real choice
+                // (<= 1 tile). The active mode shows a checkmark. Picking any
+                // NON-spotlight mode clears the per-tile spotlight so a leftover
+                // spotlight can't override the choice and make the switch a
+                // no-op (iOS MultiviewTileView layout rows).
+                val availableModes = MultiviewLayoutMode.available(selected.size)
+                // If the persisted mode isn't offered at this count (e.g. a
+                // Hero + Corner choice after dropping below 6 tiles), rects()
+                // falls back to Default -- so mark Default active rather than
+                // leaving no row checkmarked.
+                val effectiveMode =
+                    if (layoutMode in availableModes) layoutMode else MultiviewLayoutMode.Auto
+                availableModes.forEach { mode ->
+                    val activeMode = effectiveMode == mode
+                    add(
+                        TvMenuAction(
+                            label = "Layout: ${mode.displayName}",
+                            icon = if (activeMode) Icons.Filled.Check else mode.menuIcon(),
+                            onClick = {
+                                settingsVm.setMultiviewLayoutMode(mode.key)
+                                if (mode != MultiviewLayoutMode.Spotlight) spotlightId = null
+                            },
+                        ),
+                    )
+                }
                 if (menuAudioTracks.size > 1) {
                     add(
                         TvMenuAction(
@@ -695,18 +731,14 @@ private fun BoxScope.CloseButton(onClose: () -> Unit) {
     }
 }
 
-/**
- * Compute (rows, cols) for an N-tile grid. iOS reference values:
- *   1 -> 1x1, 2 -> 1x2, 3 -> 2x2 (one empty),
- *   4 -> 2x2, 5/6 -> 2x3, 7/8/9 -> 3x3.
- */
-private fun gridShapeFor(count: Int): Pair<Int, Int> = when {
-    count <= 1 -> 1 to 1
-    count == 2 -> 1 to 2
-    count <= 4 -> 2 to 2
-    count <= 6 -> 2 to 3
-    else -> 3 to 3
-}
+/** Menu icon for each layout mode (the active mode shows a checkmark instead). */
+private fun MultiviewLayoutMode.menuIcon(): androidx.compose.ui.graphics.vector.ImageVector =
+    when (this) {
+        MultiviewLayoutMode.Auto -> Icons.Filled.GridView
+        MultiviewLayoutMode.EvenGrid -> Icons.Filled.Apps
+        MultiviewLayoutMode.Spotlight -> Icons.Filled.ViewSidebar
+        MultiviewLayoutMode.HeroCorner -> Icons.Filled.Dashboard
+    }
 
 @Composable
 private fun TileGrid(
@@ -715,6 +747,7 @@ private fun TileGrid(
     relocatingIndex: Int?,
     fullscreenIndex: Int?,
     spotlightIndex: Int?,
+    layoutMode: MultiviewLayoutMode,
     httpHeaders: Map<String, String>,
     cachingMs: Int,
     audioFocusStyle: String,
@@ -775,7 +808,13 @@ private fun TileGrid(
     // resume instantly -- no factory rebuild, no reload, no black flash. (The
     // old code early-returned with only the focused Tile composed, which
     // dropped every other AndroidView and fired its onRelease { destroy() }.)
-    val (rows, cols) = gridShapeFor(tiles.size)
+    // D-pad neighbor topology runs against a fixed 16:9 reference so it is
+    // size-independent (iOS physicalNeighbor uses a 1920x1080 default). Unlike
+    // iOS it uses the ACTUAL displayed rects (mode + spotlight applied) so
+    // navigation always tracks what is on screen.
+    val neighborRects = MultiviewGridMath.resolvedRects(
+        layoutMode, tiles.size, spotlightIndex, 1920f, 1080f, 0f,
+    )
     val pad = if (tilePadding) 4.dp else 0.dp
     val anyFullscreen = fullscreenIndex != null
 
@@ -828,39 +867,21 @@ private fun TileGrid(
                     return@onKeyEvent true
                 }
                 if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
-                // One neighbor topology for both cursor navigation and the
-                // Move Tile stepping. Spotlight layout (left 2/3 tile + right
-                // stack) gets its own graph: on a small tile Left jumps to the
-                // spotlight and Up/Down step the stack; on the spotlight tile
-                // Right enters the top of the stack.
+                // One neighbor topology for both cursor navigation and the Move
+                // Tile stepping, computed geometrically from the ACTUAL layout
+                // rects (any mode + spotlight). Nearest edge-adjacent tile with
+                // perpendicular overlap wins, so every mode -- even grid,
+                // spotlight, hero-corner, the holes in layout5/7/8 -- gets a
+                // correct graph without a per-mode special case.
                 fun neighborOf(from: Int, key: Key): Int? {
-                    if (spotlightIndex != null && tiles.size > 1) {
-                        val others = tiles.indices.filter { it != spotlightIndex }
-                        if (from == spotlightIndex) {
-                            return if (key == Key.DirectionRight) others.firstOrNull() else null
-                        }
-                        val k = others.indexOf(from)
-                        return when (key) {
-                            Key.DirectionLeft -> spotlightIndex
-                            Key.DirectionUp -> others.getOrNull(k - 1)
-                            Key.DirectionDown -> others.getOrNull(k + 1)
-                            else -> null
-                        }
+                    val dir = when (key) {
+                        Key.DirectionLeft -> NeighborDirection.Left
+                        Key.DirectionRight -> NeighborDirection.Right
+                        Key.DirectionUp -> NeighborDirection.Up
+                        Key.DirectionDown -> NeighborDirection.Down
+                        else -> return null
                     }
-                    val (gr, gc) = gridShapeFor(tiles.size)
-                    val r = from / gc
-                    val c = from % gc
-                    return when (key) {
-                        Key.DirectionRight ->
-                            (from + 1).takeIf { c + 1 < gc && it < tiles.size }
-                        Key.DirectionLeft ->
-                            (from - 1).takeIf { c > 0 }
-                        Key.DirectionDown ->
-                            (from + gc).takeIf { r + 1 < gr && it < tiles.size }
-                        Key.DirectionUp ->
-                            (from - gc).takeIf { r > 0 }
-                        else -> null
-                    }
+                    return MultiviewGridMath.neighbor(from, neighborRects, dir)
                 }
                 when (ev.key) {
                     Key.DirectionRight, Key.DirectionLeft,
@@ -890,34 +911,36 @@ private fun TileGrid(
     ) {
         val gridW = maxWidth
         val gridH = maxHeight
-        val cellWDp = gridW / cols
-        val cellHDp = gridH / rows
-        val cellW = (constraints.maxWidth.toFloat() / cols).coerceAtLeast(1f)
-        val cellH = (constraints.maxHeight.toFloat() / rows).coerceAtLeast(1f)
-        fun cellIndexAt(pos: Offset): Int {
-            val c = (pos.x / cellW).toInt().coerceIn(0, cols - 1)
-            val r = (pos.y / cellH).toInt().coerceIn(0, rows - 1)
-            return (r * cols + c).coerceIn(0, tiles.size - 1)
-        }
-        val hoverIndex = dragSource?.let { cellIndexAt(dragPos) }
+        // Per-tile rects for THIS container -- Dp for on-screen placement, px
+        // for pointer hit-testing (drag-to-reorder). Both from the same layout
+        // math (mode + spotlight reconciled); spacing 0 because the inter-tile
+        // gap is the per-tile .padding below.
+        val dpRects = MultiviewGridMath.resolvedRects(
+            layoutMode, tiles.size, spotlightIndex, gridW.value, gridH.value, 0f,
+        )
+        val pxRects = MultiviewGridMath.resolvedRects(
+            layoutMode, tiles.size, spotlightIndex,
+            constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), 0f,
+        )
+        val hoverIndex = dragSource?.let { MultiviewGridMath.indexAt(dragPos, pxRects) }
 
         // Every selected tile is placed absolutely (NOT via a Column/Row that
         // would drop tiles from the composition), so toggling fullscreen never
         // releases an AndroidView / destroys an mpv handle. Normal mode tiles
         // the grid; fullscreen promotes the focused tile to the whole viewport
         // (zIndex on top) and parks the rest just off the right edge, paused.
-        val spotIdx = spotlightIndex
         tiles.forEachIndexed { index, tile ->
             val isFull = fullscreenIndex == index
-            val col = index % cols
-            val row = index / cols
-            // Per-tile rect. Fullscreen branch stays OUTERMOST (fullscreen
-            // overrides spotlight visually, matching iOS render priority).
-            // Spotlight mirrors iOS MultiviewGridMath.spotlightRects: the
-            // spotlit tile takes the left 2/3 at full height; the remaining
-            // N-1 tiles stack equally in the right 1/3 column in list order.
-            // The spotlight toggle deliberately does NOT animate (iOS snaps;
-            // snapping also avoids TextureView resize churn).
+            // This tile's rect in the current layout (mode + spotlight already
+            // reconciled into dpRects). Fullscreen branch stays OUTERMOST
+            // (fullscreen overrides the layout visually, matching iOS render
+            // priority); the layout transition deliberately does NOT animate
+            // (iOS snaps; snapping also avoids TextureView resize churn).
+            val dr = dpRects.getOrNull(index)
+            val drX = (dr?.left ?: 0f).dp
+            val drY = (dr?.top ?: 0f).dp
+            val drW = (dr?.width ?: 0f).dp
+            val drH = (dr?.height ?: 0f).dp
             val tileX: Dp
             val tileY: Dp
             val tileW: Dp
@@ -928,26 +951,15 @@ private fun TileGrid(
                     tileW = gridW; tileH = gridH
                 }
                 anyFullscreen -> {
-                    tileX = gridW + cellWDp * col // parked off-screen (right)
-                    tileY = cellHDp * row
-                    tileW = cellWDp; tileH = cellHDp
-                }
-                spotIdx != null && tiles.size > 1 -> {
-                    val bigW = gridW * (2f / 3f)
-                    if (index == spotIdx) {
-                        tileX = 0.dp; tileY = 0.dp
-                        tileW = bigW; tileH = gridH
-                    } else {
-                        val k = if (index < spotIdx) index else index - 1
-                        val smallH = gridH / (tiles.size - 1)
-                        tileX = bigW; tileY = smallH * k
-                        tileW = gridW - bigW; tileH = smallH
-                    }
+                    // Parked just off the right edge (paused) at its slot size.
+                    tileX = gridW + drX
+                    tileY = drY
+                    tileW = drW; tileH = drH
                 }
                 else -> {
-                    tileX = cellWDp * col
-                    tileY = cellHDp * row
-                    tileW = cellWDp; tileH = cellHDp
+                    tileX = drX
+                    tileY = drY
+                    tileW = drW; tileH = drH
                 }
             }
             Box(
@@ -958,11 +970,15 @@ private fun TileGrid(
                     .padding(pad)
                     .then(
                         if (!anyFullscreen) {
-                            Modifier.pointerInput(index, cols, rows, tiles.size, cellW, cellH) {
+                            Modifier.pointerInput(index, tiles.size, pxRects.getOrNull(index)) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { offset ->
                                         dragSource = index
-                                        dragPos = Offset(col * cellW + offset.x, row * cellH + offset.y)
+                                        val pr = pxRects.getOrNull(index)
+                                        dragPos = Offset(
+                                            (pr?.left ?: 0f) + offset.x,
+                                            (pr?.top ?: 0f) + offset.y,
+                                        )
                                         onTileLongPress(index)
                                     },
                                     onDrag = { change, amount ->
@@ -972,7 +988,7 @@ private fun TileGrid(
                                     onDragEnd = {
                                         val from = dragSource
                                         if (from != null) {
-                                            val to = cellIndexAt(dragPos)
+                                            val to = MultiviewGridMath.indexAt(dragPos, pxRects)
                                             if (to != from) onReorder(from, to)
                                         }
                                         dragSource = null

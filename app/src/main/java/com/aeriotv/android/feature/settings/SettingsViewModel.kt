@@ -253,6 +253,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setMultiviewTileCornersRounded(value) }
     }
 
+    val multiviewLayoutMode: Flow<String> = prefs.multiviewLayoutMode
+    fun setMultiviewLayoutMode(value: String) {
+        viewModelScope.launch { prefs.setMultiviewLayoutMode(value) }
+    }
+
     // DVR (Phase 9b-3)
     val dvrMaxLocalStorageMB: Flow<Int> = prefs.dvrMaxLocalStorageMB
     fun setDvrMaxLocalStorageMB(value: Int) {

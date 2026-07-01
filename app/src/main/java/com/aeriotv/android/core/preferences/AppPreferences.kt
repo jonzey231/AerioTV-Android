@@ -468,6 +468,19 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED] = value }
     }
 
+    /**
+     * iOS `multiviewLayoutMode` parity. One of "auto" (default) / "evenGrid" /
+     * "spotlight" / "heroCorner". Selectable per-session from the tile context
+     * menu; persisted so the choice survives a relaunch. Unknown values fall
+     * back to "auto".
+     */
+    val multiviewLayoutMode: Flow<String> = store.data.map {
+        it[KEY_MULTIVIEW_LAYOUT_MODE] ?: "auto"
+    }
+    suspend fun setMultiviewLayoutMode(value: String) {
+        store.edit { it[KEY_MULTIVIEW_LAYOUT_MODE] = value }
+    }
+
     // ── Category Palette ────────────────────────────────────────────────
     //
     // Master enable + per-bucket hex overrides + per-bucket enable + custom
@@ -948,6 +961,7 @@ class AppPreferences @Inject constructor(
         val KEY_MULTIVIEW_AUDIO_FOCUS_STYLE = stringPreferencesKey("multiview_audio_focus_style")
         val KEY_MULTIVIEW_TILE_PADDING = booleanPreferencesKey("multiview_tile_padding")
         val KEY_MULTIVIEW_TILE_CORNERS_ROUNDED = booleanPreferencesKey("multiview_tile_corners_rounded")
+        val KEY_MULTIVIEW_LAYOUT_MODE = stringPreferencesKey("multiview_layout_mode")
         val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")
         val KEY_DVR_DEFAULT_PRE_ROLL = intPreferencesKey("dvr_default_pre_roll_mins")
         val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")
