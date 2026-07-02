@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.FiberManualRecord
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -1697,6 +1698,51 @@ private fun ChannelGuideRow(
                         .fillMaxHeight()
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
                 )
+            }
+            // iOS #35: guide-rail favorite star, top-trailing on the rail cell.
+            // Phone/tablet: ALWAYS visible and tap-toggles -- subtle outline when
+            // off, gold when on (iOS: star / star.fill, statusWarning #FFA502).
+            // The old display-only star + hidden long-press was the real cause
+            // of the recurring "can't add favorites" reports, so the visible
+            // affordance IS the feature. Its own clickable sits on top of the
+            // rail's combinedClickable, so a star tap never also plays the
+            // channel. TV mirrors tvOS: display-only gold star on favorited
+            // rows (the rail is deliberately not a D-pad target; the toggle
+            // lives in the rail long-press menu).
+            if (isTv) {
+                if (isFavorite) {
+                    Icon(
+                        imageVector = Icons.Filled.Star,
+                        contentDescription = null,
+                        tint = Color(0xFFFFA502),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 3.dp, end = 5.dp)
+                            .size(10.dp),
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onToggleFavorite() }
+                        .padding(6.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
+                        contentDescription = if (isFavorite) {
+                            "Remove ${channel.name} from Favorites"
+                        } else {
+                            "Add ${channel.name} to Favorites"
+                        },
+                        tint = if (isFavorite) Color(0xFFFFA502)
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier.size(12.dp),
+                    )
+                }
             }
         }
 
