@@ -202,37 +202,51 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Switch Stream",
-            body = "On Dispatcharr Direct Connect, the player options menu now " +
-                "lists every stream behind a channel with its quality and the " +
-                "source playlist it comes from, so you can switch on the fly. " +
-                "AerioTV also follows along automatically when Dispatcharr " +
-                "changes the stream on the server.",
+            title = "Global Search",
+            body = "One search covers everything. Look across live channels and " +
+                "the guide, movies, and series at once, and narrow the results " +
+                "with the scope chips at the top.",
         ),
         WhatsNewItem(
-            title = "Smoother live playback",
-            body = "Broadcast audio (AC-3 and E-AC-3) now plays on devices that " +
-                "could not decode it before, and a new audio path stops the " +
-                "brief stutters some channels caused. The live buffer is also " +
-                "deeper, so streams ride out short network hiccups.",
+            title = "Channel Collections",
+            body = "Build your own channel groups (Favorites, Kids, Sports, " +
+                "anything you like) and they show up as pills right on Live TV.",
         ),
         WhatsNewItem(
-            title = "Faster channel start",
-            body = "Channels start noticeably quicker, and a stream that sends " +
-                "no data now times out and reconnects instead of hanging on a " +
-                "black screen.",
+            title = "List or Guide, your choice",
+            body = "Switch Live TV between a clean channel list and the classic " +
+                "grid guide with one tap.",
         ),
         WhatsNewItem(
-            title = "Channel groups, your way",
-            body = "Reorder channel groups alphabetically or by hand, and the " +
-                "channel list now clusters by the order you choose.",
+            title = "Multiview, upgraded",
+            body = "Pick a layout (Even Grid, Hero and Corner, and more), scrub " +
+                "each tile on its own, and mix live channels with movies, " +
+                "series, and recordings in the same view.",
         ),
         WhatsNewItem(
-            title = "TV and phone polish",
-            body = "Fixed guide navigation lag and oversized focus rings on " +
-                "Android TV, added long-press BACK to bring the mini-player " +
-                "back to fullscreen, and on phones added a fullscreen button " +
-                "and fixed the player banner under the camera cutout.",
+            title = "DVR that keeps up",
+            body = "Start watching a recording while it is still recording, see " +
+                "genre pills on your recordings, and get a Recording indicator " +
+                "the moment one starts.",
+        ),
+        WhatsNewItem(
+            title = "On Demand, richer",
+            body = "A Continue Watching tab picks up where you left off, movie " +
+                "and series pages now show cast bios and Known For, and you can " +
+                "jump straight to a show with Open Series.",
+        ),
+        WhatsNewItem(
+            title = "Kid-safe channels",
+            body = "AerioTV now respects a Dispatcharr account's Channel " +
+                "Profile, so a child profile only ever sees the channels it is " +
+                "allowed to.",
+        ),
+        WhatsNewItem(
+            title = "Safer, smoother, more polished",
+            body = "Your server credentials are now encrypted on the device and " +
+                "kept out of logs. Plus smoother live playback, readable detail " +
+                "text on unfolded foldables, cleaner Picture-in-Picture, and a " +
+                "raft of Android TV navigation fixes.",
         ),
     )
 }
