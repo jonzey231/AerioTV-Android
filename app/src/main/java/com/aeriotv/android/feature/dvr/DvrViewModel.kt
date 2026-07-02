@@ -128,8 +128,29 @@ class DvrViewModel @Inject constructor(
         fun isAiringNow(now: Long = System.currentTimeMillis()): Boolean =
             !isTerminal && startMillis <= now && now < endMillis
 
-        fun effectiveStatus(now: Long = System.currentTimeMillis()): Status =
-            if (isAiringNow(now)) Status.Recording else status
+        /**
+         * Effective status for bucketing + counts. Terminal states and an
+         * explicit "recording" win; OTHERWISE derive from the [start, end)
+         * window exactly like Dispatcharr's own web UI (DVRUtils.categorize /
+         * RecordingCard).
+         *
+         * GH #11 fix: a one-off scheduled recording is a real Recording row
+         * returned by GET /api/channels/recordings/, but it arrives with NO
+         * `custom_properties.status` -- Dispatcharr only writes
+         * `status="scheduled"` on recurring-RULE materializations, never on a
+         * single future program. So the status-only mapping left every future
+         * one-off as `Unknown`, and it never matched the Scheduled bucket
+         * ("Scheduled (0)"). Bucketing by time: future = Scheduled, inside the
+         * window = Recording, past = Completed. (The server sets an explicit
+         * `completed`/`stopped`/`interrupted` status when a recording actually
+         * finalizes, so real completions still carry their playback URL via the
+         * terminal branch.)
+         */
+        fun effectiveStatus(now: Long = System.currentTimeMillis()): Status {
+            if (isTerminal) return status
+            if (status == Status.Recording || isAiringNow(now)) return Status.Recording
+            return if (now < startMillis) Status.Scheduled else Status.Completed
+        }
     }
 
     data class UiState(
@@ -717,7 +738,12 @@ private fun DispatcharrRecording.toRecording(
     val status = when (this.status?.lowercase()) {
         "scheduled" -> DvrViewModel.Recording.Status.Scheduled
         "recording", "in_progress" -> DvrViewModel.Recording.Status.Recording
-        "completed" -> DvrViewModel.Recording.Status.Completed
+        // "interrupted" = a partial file Dispatcharr left when a recording was
+        // cut short; it is playable and Dispatcharr's own UI buckets it as
+        // completed, so treat it as a terminal Completed (builds a playback URL
+        // below). A blank/absent status is deliberately left Unknown here so
+        // effectiveStatus() can bucket it by time (GH #11).
+        "completed", "interrupted" -> DvrViewModel.Recording.Status.Completed
         "stopped" -> DvrViewModel.Recording.Status.Stopped
         "failed", "error" -> DvrViewModel.Recording.Status.Failed
         else -> DvrViewModel.Recording.Status.Unknown
