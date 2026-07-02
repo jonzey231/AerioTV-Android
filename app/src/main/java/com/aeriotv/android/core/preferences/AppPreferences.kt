@@ -469,6 +469,18 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * iOS `multiviewPerfWarningSuppressed` parity (issue #46). Set by the
+     * "Don't Show Again" button on the soft-limit performance warning;
+     * device-local, never reset (no Settings toggle on iOS either).
+     */
+    val multiviewPerfWarningSuppressed: Flow<Boolean> = store.data.map {
+        it[KEY_MULTIVIEW_PERF_WARNING_SUPPRESSED] ?: false
+    }
+    suspend fun setMultiviewPerfWarningSuppressed(value: Boolean) {
+        store.edit { it[KEY_MULTIVIEW_PERF_WARNING_SUPPRESSED] = value }
+    }
+
+    /**
      * iOS `multiviewLayoutMode` parity. One of "auto" (default) / "evenGrid" /
      * "spotlight" / "heroCorner". Selectable per-session from the tile context
      * menu; persisted so the choice survives a relaunch. Unknown values fall
@@ -962,6 +974,8 @@ class AppPreferences @Inject constructor(
         val KEY_MULTIVIEW_TILE_PADDING = booleanPreferencesKey("multiview_tile_padding")
         val KEY_MULTIVIEW_TILE_CORNERS_ROUNDED = booleanPreferencesKey("multiview_tile_corners_rounded")
         val KEY_MULTIVIEW_LAYOUT_MODE = stringPreferencesKey("multiview_layout_mode")
+        val KEY_MULTIVIEW_PERF_WARNING_SUPPRESSED =
+            booleanPreferencesKey("multiview_perf_warning_suppressed")
         val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")
         val KEY_DVR_DEFAULT_PRE_ROLL = intPreferencesKey("dvr_default_pre_roll_mins")
         val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")

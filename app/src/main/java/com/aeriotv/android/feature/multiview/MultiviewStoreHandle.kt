@@ -22,6 +22,9 @@ class MultiviewStoreHandleVm @Inject constructor(
     val selected: StateFlow<List<MultiviewTile>> get() = store.selected
     val audioFocusedIndex: StateFlow<Int> get() = store.audioFocusedIndex
     val maxTiles: Int get() = store.maxTiles
+    val softLimit: Int get() = store.softLimit
+    fun warningRecentlyShown(): Boolean = store.warningRecentlyShown()
+    fun noteWarningShown() = store.noteWarningShown()
     fun toggle(channel: M3UChannel) = store.toggle(channel)
     fun isSelected(channel: M3UChannel): Boolean = store.isSelected(channel)
     fun addTile(tile: MultiviewTile): Boolean = store.addTile(tile)
@@ -44,6 +47,9 @@ class MultiviewStoreHandle(
     val selected: StateFlow<List<MultiviewTile>>,
     val audioFocusedIndex: StateFlow<Int>,
     val maxTiles: Int,
+    val softLimit: Int,
+    val warningRecentlyShown: () -> Boolean,
+    val noteWarningShown: () -> Unit,
     val toggle: (M3UChannel) -> Unit,
     val addTile: (MultiviewTile) -> Boolean,
     val removeTile: (String) -> Unit,
@@ -64,6 +70,9 @@ fun rememberMultiviewStoreHandle(
         selected = vm.selected,
         audioFocusedIndex = vm.audioFocusedIndex,
         maxTiles = vm.maxTiles,
+        softLimit = vm.softLimit,
+        warningRecentlyShown = vm::warningRecentlyShown,
+        noteWarningShown = vm::noteWarningShown,
         toggle = vm::toggle,
         addTile = vm::addTile,
         removeTile = vm::removeTile,

@@ -258,6 +258,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setMultiviewLayoutMode(value) }
     }
 
+    val multiviewPerfWarningSuppressed: Flow<Boolean> = prefs.multiviewPerfWarningSuppressed
+    fun setMultiviewPerfWarningSuppressed(value: Boolean) {
+        viewModelScope.launch { prefs.setMultiviewPerfWarningSuppressed(value) }
+    }
+
     // DVR (Phase 9b-3)
     val dvrMaxLocalStorageMB: Flow<Int> = prefs.dvrMaxLocalStorageMB
     fun setDvrMaxLocalStorageMB(value: Int) {

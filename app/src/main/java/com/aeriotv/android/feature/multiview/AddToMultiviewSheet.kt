@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -209,6 +210,28 @@ fun AddToMultiviewSheet(
     // Tile count gates the Play action: need the seeded current channel PLUS
     // at least one picked channel (>= 2 tiles) for a real multiview grid.
     val canLaunch = selected.size >= 2
+
+    // #46: soft-limit performance warning. Gates every ADD path in this sheet
+    // once the grid already holds softLimit (4) tiles -- i.e. adding the
+    // 5th+ -- unless the user picked Don't Show Again (persisted) or a
+    // warning already fired within the last 2h (in-memory throttle on the
+    // store, iOS warningRecentlyShown). Removals never warn. The commit
+    // closure is stashed; Continue / Don't Show Again run it, Cancel drops
+    // it. Unlike iOS (whose addVOD path forgot the suppression key), ONE
+    // gate covers channel, movie, episode and recording adds uniformly.
+    val perfWarnSuppressed by settingsVm.multiviewPerfWarningSuppressed
+        .collectAsStateWithLifecycle(initialValue = false)
+    var pendingWarnedAdd by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val gateAdd: (Boolean, () -> Unit) -> Unit = { isAdding, commit ->
+        if (isAdding && selected.size >= multiviewStore.softLimit &&
+            !perfWarnSuppressed && !multiviewStore.warningRecentlyShown()
+        ) {
+            multiviewStore.noteWarningShown()
+            pendingWarnedAdd = commit
+        } else {
+            commit()
+        }
+    }
     // FORM-FACTOR SPLIT: phones/tablets get the native ModalBottomSheet (with
     // its natural swipe-to-dismiss); Android TV gets a centered Dialog panel. A
     // bottom sheet's drag / nested-scroll dismiss is a touch idiom that misfires
@@ -391,7 +414,7 @@ fun AddToMultiviewSheet(
                                     nowTitle = now?.title.orEmpty(),
                                     selected = isSel,
                                     atCap = !isSel && atCapNow,
-                                    onToggle = { multiviewStore.toggle(channel) },
+                                    onToggle = { gateAdd(!isSel) { multiviewStore.toggle(channel) } },
                                 )
                             }
                             item(key = "hdr_all") { SectionHeader("All Channels") }
@@ -404,7 +427,7 @@ fun AddToMultiviewSheet(
                                 nowTitle = now?.title.orEmpty(),
                                 selected = isSel,
                                 atCap = !isSel && atCapNow,
-                                onToggle = { multiviewStore.toggle(channel) },
+                                onToggle = { gateAdd(!isSel) { multiviewStore.toggle(channel) } },
                             )
                         }
                     }
@@ -422,25 +445,27 @@ fun AddToMultiviewSheet(
                                 atCap = !isSel && atCapNow,
                                 onPick = {
                                     if (isSel) return@VodPickerRow
-                                    scope.launch {
-                                        resolving = resolving + movie.uuid
-                                        onDemandVm.resolveMovieUrl(movie.uuid).onSuccess { url ->
-                                            val resume = watchVm.get(movie.uuid)?.positionMs ?: 0L
-                                            multiviewStore.addTile(
-                                                MultiviewTile(
-                                                    id = tileId,
-                                                    kind = TileKind.Vod,
-                                                    displayName = movie.displayName,
-                                                    resolvedUrl = url,
-                                                    httpHeaders = vodHeaders,
-                                                    vodId = movie.uuid,
-                                                    vodType = "movie",
-                                                    posterUrl = movie.posterUrl,
-                                                    resumePositionMs = resume,
-                                                ),
-                                            )
+                                    gateAdd(true) {
+                                        scope.launch {
+                                            resolving = resolving + movie.uuid
+                                            onDemandVm.resolveMovieUrl(movie.uuid).onSuccess { url ->
+                                                val resume = watchVm.get(movie.uuid)?.positionMs ?: 0L
+                                                multiviewStore.addTile(
+                                                    MultiviewTile(
+                                                        id = tileId,
+                                                        kind = TileKind.Vod,
+                                                        displayName = movie.displayName,
+                                                        resolvedUrl = url,
+                                                        httpHeaders = vodHeaders,
+                                                        vodId = movie.uuid,
+                                                        vodType = "movie",
+                                                        posterUrl = movie.posterUrl,
+                                                        resumePositionMs = resume,
+                                                    ),
+                                                )
+                                            }
+                                            resolving = resolving - movie.uuid
                                         }
-                                        resolving = resolving - movie.uuid
                                     }
                                 },
                             )
@@ -508,29 +533,31 @@ fun AddToMultiviewSheet(
                                     atCap = !isSel && atCapNow,
                                     onPick = {
                                         if (isSel) return@VodPickerRow
-                                        scope.launch {
-                                            resolving = resolving + ep.uuid
-                                            onDemandVm.resolveEpisodeUrl(ep.uuid, ep.firstStreamId)
-                                                .onSuccess { url ->
-                                                    val resume = watchVm.get(ep.uuid)?.positionMs ?: 0L
-                                                    multiviewStore.addTile(
-                                                        MultiviewTile(
-                                                            id = tileId,
-                                                            kind = TileKind.Vod,
-                                                            displayName = ep.displayName.ifBlank { "Episode $e" },
-                                                            resolvedUrl = url,
-                                                            httpHeaders = vodHeaders,
-                                                            vodId = ep.uuid,
-                                                            vodType = "episode",
-                                                            seriesId = drillId.toString(),
-                                                            seasonNumber = s,
-                                                            episodeNumber = e,
-                                                            posterUrl = ep.stillImageUrl,
-                                                            resumePositionMs = resume,
-                                                        ),
-                                                    )
-                                                }
-                                            resolving = resolving - ep.uuid
+                                        gateAdd(true) {
+                                            scope.launch {
+                                                resolving = resolving + ep.uuid
+                                                onDemandVm.resolveEpisodeUrl(ep.uuid, ep.firstStreamId)
+                                                    .onSuccess { url ->
+                                                        val resume = watchVm.get(ep.uuid)?.positionMs ?: 0L
+                                                        multiviewStore.addTile(
+                                                            MultiviewTile(
+                                                                id = tileId,
+                                                                kind = TileKind.Vod,
+                                                                displayName = ep.displayName.ifBlank { "Episode $e" },
+                                                                resolvedUrl = url,
+                                                                httpHeaders = vodHeaders,
+                                                                vodId = ep.uuid,
+                                                                vodType = "episode",
+                                                                seriesId = drillId.toString(),
+                                                                seasonNumber = s,
+                                                                episodeNumber = e,
+                                                                posterUrl = ep.stillImageUrl,
+                                                                resumePositionMs = resume,
+                                                            ),
+                                                        )
+                                                    }
+                                                resolving = resolving - ep.uuid
+                                            }
                                         }
                                     },
                                 )
@@ -565,16 +592,18 @@ fun AddToMultiviewSheet(
                                 atCap = !isSel && atCapNow,
                                 onPick = {
                                     if (isSel) return@VodPickerRow
-                                    multiviewStore.addTile(
-                                        MultiviewTile(
-                                            id = tileId,
-                                            kind = TileKind.Vod,
-                                            displayName = rec.title,
-                                            resolvedUrl = playUrl,
-                                            httpHeaders = if (remote) vodHeaders else emptyMap(),
-                                            vodId = null,
-                                        ),
-                                    )
+                                    gateAdd(true) {
+                                        multiviewStore.addTile(
+                                            MultiviewTile(
+                                                id = tileId,
+                                                kind = TileKind.Vod,
+                                                displayName = rec.title,
+                                                resolvedUrl = playUrl,
+                                                httpHeaders = if (remote) vodHeaders else emptyMap(),
+                                                vodId = null,
+                                            ),
+                                        )
+                                    }
                                 },
                             )
                         }
@@ -615,6 +644,42 @@ fun AddToMultiviewSheet(
             sheetState = sheetState,
             containerColor = MaterialTheme.colorScheme.background,
             content = body,
+        )
+    }
+
+    // #46: the soft-limit warning itself. iOS-verbatim copy and outcomes:
+    // Continue commits the stashed add; Don't Show Again persists the
+    // suppression AND commits (matching iOS, which treats it as consent);
+    // Cancel drops the add. Composes its own window, so it overlays both the
+    // TV Dialog panel and the phone bottom sheet.
+    pendingWarnedAdd?.let { commit ->
+        AlertDialog(
+            onDismissRequest = { pendingWarnedAdd = null },
+            title = { Text("Performance may degrade") },
+            text = {
+                Text(
+                    "Adding more than ${multiviewStore.softLimit} streams may cause " +
+                        "audio drops, buffering, or overheating on some devices.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingWarnedAdd = null
+                        commit()
+                    },
+                ) { Text("Continue", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        settingsVm.setMultiviewPerfWarningSuppressed(true)
+                        pendingWarnedAdd = null
+                        commit()
+                    },
+                ) { Text("Don't Show Again") }
+                TextButton(onClick = { pendingWarnedAdd = null }) { Text("Cancel") }
+            },
         )
     }
 }

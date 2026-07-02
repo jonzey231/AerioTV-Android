@@ -23,6 +23,32 @@ class MultiviewStore @Inject constructor() {
     /** iOS hard cap: 9 tiles. The picker enforces this. */
     val maxTiles: Int = 9
 
+    /**
+     * iOS `MultiviewStore.softLimit` (issue #46): tile count at/above which
+     * adding ANOTHER tile triggers the performance-warning confirmation
+     * (softLimit + 1 == 5 is where it fires). Arguably more valuable on
+     * Android TV hardware, where MediaTek decoders cap concurrent instances.
+     */
+    val softLimit: Int = 4
+
+    /**
+     * When the perf warning was last shown (iOS `warningLastShownAt`).
+     * Deliberately in-memory, NOT persisted: iOS keeps it as a plain var on
+     * the singleton so the warning re-fires after 2h (or a process restart),
+     * while repeat over-limit adds in one sitting are not nagged.
+     */
+    private var warningLastShownAt: Long? = null
+
+    /** 2h throttle window (iOS `warningThrottleInterval` = 7200s). */
+    fun warningRecentlyShown(): Boolean {
+        val last = warningLastShownAt ?: return false
+        return System.currentTimeMillis() - last < 7_200_000L
+    }
+
+    fun noteWarningShown() {
+        warningLastShownAt = System.currentTimeMillis()
+    }
+
     private val _selected = MutableStateFlow<List<MultiviewTile>>(emptyList())
     val selected: StateFlow<List<MultiviewTile>> = _selected.asStateFlow()
 
