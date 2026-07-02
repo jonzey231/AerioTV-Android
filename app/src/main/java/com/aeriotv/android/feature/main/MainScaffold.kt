@@ -391,7 +391,7 @@ fun MainScaffold(
                 //  - Other tabs / fullscreen (Pending): none (no hints shown).
                 val miniActive = miniPlayerState is MiniPlayerSession.State.Active
                 val topHintGap = when {
-                    miniActive -> 90.dp
+                    miniActive -> 64.dp
                     selectedTab == AppTab.LiveTV &&
                         miniPlayerState !is MiniPlayerSession.State.Pending -> 40.dp
                     else -> 0.dp

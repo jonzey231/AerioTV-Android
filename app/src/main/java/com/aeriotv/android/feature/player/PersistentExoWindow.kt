@@ -86,7 +86,12 @@ fun BoxScope.PersistentExoWindow(
             .zIndex(1f)
             .align(Alignment.TopEnd)
             .padding(end = 24.dp, top = 12.dp)
-            .size(width = 210.dp, height = 118.dp)
+            // 16:9. Grown from 210x118 to fill the reserved band below it; width
+            // is capped here because the top-right corner butts up against the
+            // centered top-nav ("Settings") -- wider would overlap it. The
+            // MainScaffold mini spacer is trimmed to match so the group pills
+            // sit just under this.
+            .size(width = 240.dp, height = 135.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
     }
