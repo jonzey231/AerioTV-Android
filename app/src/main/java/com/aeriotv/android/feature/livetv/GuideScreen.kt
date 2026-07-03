@@ -1311,7 +1311,7 @@ fun GuideScreen(
         // vertical row scrolling is unaffected (rows are shorter than the viewport).
         // The spec also returns 0 while a vertical move is in flight (see Bug 1).
         val bringIntoViewSpec = remember {
-            GuideLeadingEdgeBringIntoViewSpec { guideNav.suppressHorizontalScroll }
+            GuideLeadingEdgeBringIntoViewSpec { guideNav.leadingEdgeTargetPx }
         }
         CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
         LazyColumn(
@@ -1470,11 +1470,20 @@ fun GuideScreen(
                     // don't wrap or escape downward.
                     if (target > filteredChannels.lastIndex) return@onPreviewKeyEvent true
                     // In range: consume and move focus to the time-aligned cell in
-                    // the target row, composing it first if it scrolled off. Hold
-                    // the timeline still for the whole move (released on the next
-                    // LEFT/RIGHT) so a wide cell's bring-into-view never pans it.
+                    // the target row, composing it first if it scrolled off. Capture
+                    // where the outgoing cell's leading edge currently sits on screen
+                    // (content px - scroll, clamped to the viewport) so the landing
+                    // cell left-aligns to the SAME x: the highlight's left edge stays
+                    // put and the shared timeline slides under it instead of the
+                    // highlight jumping to each program's true start (the "stable
+                    // highlight" model). Null when no cell is focused (fresh entry),
+                    // which keeps the default bring-into-view.
                     guideNav.lastVerticalMoveAtMs = nowMs
-                    guideNav.beginVerticalMove()
+                    val outgoingStartPx = guideNav.focusedCellStartPx
+                    val leadingEdgeTargetPx = if (outgoingStartPx >= 0)
+                        (outgoingStartPx - horizontalScrollState.value).toFloat().coerceAtLeast(0f)
+                    else null
+                    guideNav.beginVerticalMove(leadingEdgeTargetPx)
                     navScope.launch {
                         guideNav.moveFocusToChannel(target, listState)
                     }
@@ -2580,8 +2589,9 @@ private fun msToDp(ms: Long, hourWidth: androidx.compose.ui.unit.Dp): androidx.c
  *    [onCellFocused], which records the focused channel index and the anchor
  *    time (the column the user is "in").
  *  - [moveFocusToChannel] scrolls the target row into existence if needed, then
- *    focuses its cell at the anchor time, with [suppressHorizontalScroll] held
- *    true across the move so the shared timeline never pans.
+ *    focuses its cell at the anchor time; [leadingEdgeTargetPx] pins that cell's
+ *    leading edge to the outgoing highlight's x so the highlight stays put while
+ *    the shared timeline slides under it (the "stable highlight" model).
  */
 private class GuideVerticalNavState {
     /** Index (into the filtered channel list) of the row whose cell is focused;
@@ -2637,13 +2647,16 @@ private class GuideVerticalNavState {
         focusedCellEndPx = endPx
     }
 
-    /** While true the [GuideLeadingEdgeBringIntoViewSpec] returns 0 so a
-     *  vertical move never scrolls the shared horizontal timeline. Set true at
-     *  the start of a channel up/down move and held until the user next presses
-     *  LEFT/RIGHT (a deliberate horizontal move). A plain volatile flag, not a
-     *  Compose state -- the spec reads it imperatively, not in composition. */
+    /** On-screen x (relative to the strip viewport start) that the highlighted
+     *  cell's LEADING EDGE should stay pinned to during a channel up/down move,
+     *  or null when no vertical move is in flight. The
+     *  [GuideLeadingEdgeBringIntoViewSpec] reads it and scrolls the shared
+     *  timeline so the newly-focused cell left-aligns here, keeping the highlight
+     *  put while the time axis slides under it (the "stable highlight" model).
+     *  Captured from the outgoing cell so the first press doesn't snap. A plain
+     *  volatile field, not Compose state -- the spec reads it imperatively. */
     @Volatile
-    var suppressHorizontalScroll: Boolean = false
+    var leadingEdgeTargetPx: Float? = null
         private set
 
     /** True only between a programmatic (vertical-move) requestFocus and the
@@ -2658,10 +2671,25 @@ private class GuideVerticalNavState {
      *  final landing instead of an earlier move's finally releasing it early. */
     private var moveGeneration: Int = 0
 
-    /** Begin a vertical (channel up/down) move: freeze the shared timeline so the
-     *  focus-driven bring-into-view of a wide cell can't pan it sideways. */
-    fun beginVerticalMove() {
-        suppressHorizontalScroll = true
+    /** Begin a vertical (channel up/down) move. [leadingEdgeTargetPx] is the
+     *  on-screen x to pin the landing cell's leading edge to (captured from the
+     *  outgoing cell) so the highlight's left edge stays put; null keeps the
+     *  default bring-into-view (used by programmatic focus / focus-on-return). A
+     *  null target while a sweep is already in flight is ignored so a rapid
+     *  auto-repeat holds the first captured x for the whole hold. */
+    fun beginVerticalMove(leadingEdgeTargetPx: Float? = null) {
+        // Capture the pin x at the START of a sweep (no move currently in flight)
+        // and HOLD it across a rapid auto-repeat so the pin can't drift toward a
+        // mid-animation position on each repeat. A programmatic move (null target)
+        // always clears the pin so its focus uses the default bring-into-view. The
+        // pin is NOT released on the per-move timer below (the left-align scroll is
+        // animated and outlives it); it is refreshed by the next fresh press or
+        // dropped on the next LEFT/RIGHT (allowHorizontalScroll).
+        if (leadingEdgeTargetPx == null) {
+            this.leadingEdgeTargetPx = null
+        } else if (!verticalMoveInFlight) {
+            this.leadingEdgeTargetPx = leadingEdgeTargetPx
+        }
         verticalMoveInFlight = true
     }
 
@@ -2672,10 +2700,10 @@ private class GuideVerticalNavState {
         anchorTimeMs = timeMs
     }
 
-    /** The user pressed LEFT/RIGHT (or clicked): release the timeline so normal
-     *  horizontal navigation scrolls again. */
+    /** The user pressed LEFT/RIGHT (or clicked): drop the vertical-move pin so
+     *  normal horizontal bring-into-view (leading-edge / minimal-nudge) runs. */
     fun allowHorizontalScroll() {
-        suppressHorizontalScroll = false
+        leadingEdgeTargetPx = null
     }
 
     /** Per-row hook: focus the cell at [anchorTimeMs]; returns true if a cell
@@ -2783,15 +2811,17 @@ private class GuideVerticalNavState {
                 kotlinx.coroutines.delay(8L)
             }
         } finally {
-            // Hold the freeze a few frames so a bring-into-view that lands a frame
-            // late is still suppressed, then release -- but only if this is still
-            // the most recent move (rapid auto-repeat keeps it frozen until the
-            // final landing). NonCancellable so a superseding press that cancels
-            // this coroutine still runs the release decision.
+            // End the move a few frames after landing -- but only if this is still
+            // the most recent move (a rapid auto-repeat keeps the sweep in flight
+            // until the final landing). NonCancellable so a superseding press that
+            // cancels this coroutine still runs the reset. NOTE: this does NOT drop
+            // leadingEdgeTargetPx -- the left-align scroll is animated and outlives
+            // 48ms, so the pin is held (refreshed by the next fresh press, dropped
+            // on the next LEFT/RIGHT) or an early release would truncate the scroll
+            // and leave the highlight un-pinned.
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                 kotlinx.coroutines.delay(48L)
                 if (gen == moveGeneration) {
-                    suppressHorizontalScroll = false
                     verticalMoveInFlight = false
                     pendingTargetIndex = -1
                 }
@@ -2880,29 +2910,32 @@ private class GuideVerticalNavState {
  * otherwise falls back to the default minimal-nudge, so ordinary navigation
  * feels unchanged.
  *
- * [suppressHorizontalScroll] is consulted on every focus-driven bring-into-view:
- * while a D-pad UP/DOWN vertical move is in flight (the guide's own key handler
- * is moving focus to a time-aligned cell in the prev/next row), it returns 0 so
- * the SHARED horizontal timeline does NOT pan. Without this, focusing a long
- * program whose leading edge sits off the left of the viewport would fling every
- * row sideways on a plain channel-up/down -- the "jumps around a lot" report.
- * LEFT/RIGHT navigation leaves the flag false, so horizontal scroll behaves
- * exactly as before.
+ * [verticalMoveLeadingEdgeTargetPx] drives the "stable highlight" model on a
+ * D-pad UP/DOWN move. While a vertical move is in flight it returns the on-screen
+ * x (relative to the strip viewport start) at which the highlight's leading edge
+ * should stay; the spec then scrolls the SHARED timeline so the newly-focused
+ * cell's leading edge lands there. That keeps the highlighted cell's LEFT EDGE
+ * fixed while the time axis slides under it, instead of the old freeze that left
+ * the highlight jumping to each program's true (wildly varying) start position.
+ * It returns null on LEFT/RIGHT and when no vertical move is in flight, where the
+ * leading-edge / minimal-nudge logic below runs exactly as before.
  */
 @OptIn(ExperimentalFoundationApi::class)
 private class GuideLeadingEdgeBringIntoViewSpec(
-    private val suppressHorizontalScroll: () -> Boolean,
+    private val verticalMoveLeadingEdgeTargetPx: () -> Float?,
 ) : BringIntoViewSpec {
     override fun calculateScrollDistance(
         offset: Float,
         size: Float,
         containerSize: Float,
     ): Float {
-        // Vertical (channel up/down) move in flight: never scroll the shared
-        // timeline horizontally. The target cell is chosen at the current
-        // anchor time so it is already in the right column; any nudge here
-        // would desync every other row.
-        if (suppressHorizontalScroll()) return 0f
+        // Vertical (channel up/down) move in flight: left-align the newly-focused
+        // cell's leading edge to the captured target x (where the highlight
+        // already sat) so the highlight stays put and the shared timeline scrolls
+        // under it. `offset` is the cell's leading edge relative to the viewport
+        // start, so scrolling by (offset - target) lands it exactly at target; the
+        // ScrollState clamps to its own [0, maxValue] at the window edges.
+        verticalMoveLeadingEdgeTargetPx()?.let { target -> return offset - target }
         // Already fully visible: no scroll.
         if (offset >= 0f && offset + size <= containerSize) return 0f
         // Oversized cell (wider than the viewport): if ANY part already overlaps
