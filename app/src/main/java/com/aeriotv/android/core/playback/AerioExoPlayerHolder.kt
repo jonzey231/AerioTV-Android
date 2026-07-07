@@ -655,6 +655,12 @@ class AerioExoPlayerHolder @Inject constructor(
             // so a silent connection survives the server-side dead-source failover
             // instead of erroring out mid-waterfall. VOD/Auto keep the tight 30s.
             .setReadTimeoutMs(if (isLive) liveReadTimeoutMs else 30_000)
+            // Always send a real player User-Agent. Without it Media3 falls back
+            // to the platform default ("Dalvik/2.1.0 ..."), which Xtream reseller
+            // panels' anti-restream WAFs drop on LIVE ("connection closed before
+            // status line") while leaving VOD /movie/ files ungated. iOS does the
+            // same (PlayerView headers.isEmpty -> DeviceInfo.defaultUserAgent).
+            .setUserAgent(DEFAULT_PLAYBACK_USER_AGENT)
         // Apply Dispatcharr API-key / custom User-Agent. Headers are
         // applied verbatim; the User-Agent header (if present) replaces
         // the default.
@@ -1080,5 +1086,16 @@ class AerioExoPlayerHolder @Inject constructor(
     companion object {
         private const val TAG = "AerioExoPlayer"
         private const val TAG_DIAG = "AerioPlayerDiag"
+
+        /**
+         * Default player User-Agent. Without an explicit UA, Media3's
+         * DefaultHttpDataSource falls back to the platform default
+         * ("Dalvik/2.1.0 ..."), which Xtream reseller panels' anti-restream
+         * WAFs fingerprint as a bot and drop on LIVE ("connection closed
+         * before status line") while leaving VOD /movie/ files ungated. Same
+         * shape as DispatcharrClient's UA + iOS DeviceInfo.defaultUserAgent.
+         */
+        private val DEFAULT_PLAYBACK_USER_AGENT =
+            "AerioTV/${BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
     }
 }

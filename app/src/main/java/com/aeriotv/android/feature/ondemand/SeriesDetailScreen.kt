@@ -121,8 +121,10 @@ fun SeriesDetailScreen(
     val context = LocalContext.current
 
     LaunchedEffect(seriesId) {
+        // loadEpisodes now primes provider-info (Dispatcharr series_info) FIRST so the
+        // lazy-scrape populates the episode table before /episodes/ is hit, and caches
+        // seriesProviderInfo, so the separate loadSeriesProviderInfo() call is gone.
         viewModel.loadEpisodes(seriesId)
-        viewModel.loadSeriesProviderInfo(seriesId)
     }
 
     // TMDB poster fallback (opt-in): only when the server gave no artwork.

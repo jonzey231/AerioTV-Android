@@ -1103,7 +1103,35 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             if (playlist.apiKey.isNullOrBlank()) return@launch
-            _state.update { it.copy(episodesLoadingFor = it.episodesLoadingFor + seriesId) }
+            _state.update {
+                it.copy(
+                    episodesLoadingFor = it.episodesLoadingFor + seriesId,
+                    seriesProviderInfoLoading = it.seriesProviderInfoLoading + seriesId,
+                )
+            }
+            // Dispatcharr lazy-scrape ordering (iOS VODService.dispatcharrSeriesDetail,
+            // v1.6.16.x): the /provider-info/ (series_info) call is what triggers
+            // Dispatcharr to populate the per-series episode table from the upstream
+            // provider. Hitting /episodes/ first (or concurrently) returns an EMPTY
+            // array for any series that hasn't been scraped yet; that empty list then
+            // sticks for the session (episodesBySeries caches it) so the detail screen
+            // shows no episode rows and therefore no Play affordance. Prime
+            // provider-info FIRST, best-effort, before the episodes fetch; also caches
+            // the payload so the separate loadSeriesProviderInfo() is unnecessary.
+            if (!current.seriesProviderInfo.containsKey(seriesId)) {
+                runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                        dispatcharrClient.getSeriesProviderInfo(playlist.urlString, key, seriesId)
+                    }
+                }.onSuccess { info ->
+                    _state.update { st ->
+                        st.copy(seriesProviderInfo = st.seriesProviderInfo + (seriesId to info))
+                    }
+                }.onFailure { t ->
+                    Log.w(TAG, "prime getSeriesProviderInfo($seriesId) failed; loading episodes anyway", t)
+                }
+            }
+            _state.update { it.copy(seriesProviderInfoLoading = it.seriesProviderInfoLoading - seriesId) }
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getSeriesEpisodesFirstPage(playlist.urlString, key, seriesId)

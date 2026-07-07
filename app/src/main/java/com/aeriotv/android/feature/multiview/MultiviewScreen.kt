@@ -69,6 +69,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -346,6 +347,30 @@ fun MultiviewScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            // TV Back is claimed HERE (ancestor of the focused grid host), so it
+            // fires before both the grid host's onKeyEvent AND MainActivity's
+            // onKeyDown/onKeyLongPress -- neutralizing the 0.3.0 held-Back
+            // "Close AerioTV?" hijack that shadowed the multiview exit. Consuming
+            // BOTH edges keeps the Activity from ever starting long-press
+            // tracking, so exit is press-duration-independent. Deferred while a
+            // per-tile scrubber is open (scrubberTiles): that overlay owns Back
+            // itself (Key.Back -> hide scrubber). The exit dialog / tile menu /
+            // Add-streams picker / track sheets each run in their OWN window, so
+            // this main-window handler never fires while one of them is up.
+            .onPreviewKeyEvent { ev ->
+                if (!isTvDevice || ev.key != Key.Back || scrubberTiles.isNotEmpty()) {
+                    return@onPreviewKeyEvent false
+                }
+                if (ev.type == KeyEventType.KeyUp) {
+                    when {
+                        relocatingIndex != null -> relocatingIndex = null
+                        fullscreenIndex != null -> fullscreenIndex = null
+                        selected.isNotEmpty() -> { exitDialogOpen = true; exitGuard.arm() }
+                        else -> onClose()
+                    }
+                }
+                true
+            }
             .clickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 indication = null,
@@ -485,6 +510,35 @@ fun MultiviewScreen(
             // the chrome (phone only) when not mid-relocate/fullscreen and below
             // the tile cap. It opens the SAME picker the TV menu does; the store
             // appends, so the live grid grows in place.
+            // Tablet parity: the selectable grid layouts live inside the per-tile
+            // context menu, which is TV-only (opened via D-pad long-OK). Touch
+            // long-press maps to relocate, so tablets had no way to reach it.
+            // Surface a layout button on large-screen non-TV devices; it opens the
+            // same tile menu (grid-wide "Layout:" rows appear there at 3/5/6 tiles).
+            if (!isTvDevice && LocalConfiguration.current.screenWidthDp >= 600 &&
+                relocatingIndex == null && fullscreenIndex == null && selected.size > 1) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(end = 14.dp, top = 94.dp)
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconButton(onClick = {
+                        tileMenuIndex = focused.coerceIn(0, selected.size - 1)
+                        tileMenuGuard.arm()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Filled.GridView,
+                            contentDescription = "Grid layout",
+                            tint = Color.White,
+                        )
+                    }
+                }
+            }
             if (!isTvDevice && relocatingIndex == null && fullscreenIndex == null &&
                 selected.size < storeHandle.maxTiles) {
                 Box(
@@ -587,6 +641,18 @@ fun MultiviewScreen(
         TvActionMenuDialog(
             title = menuTile.displayName,
             actions = buildList {
+                // Select (long-OK) opens this menu, so "Add streams" must live
+                // here too -- it previously existed ONLY behind the Back exit
+                // dialog. Same re-entrant picker; the store APPENDS.
+                if (selected.size < storeHandle.maxTiles) {
+                    add(
+                        TvMenuAction(
+                            label = "Add streams",
+                            icon = Icons.Filled.Add,
+                            onClick = { addPickerOpen = true },
+                        ),
+                    )
+                }
                 if (menuIdx != focused) {
                     add(
                         TvMenuAction(
@@ -1406,6 +1472,9 @@ private fun ExoTile(
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(30_000)
                 .setReadTimeoutMs(30_000)
+                // Send a real player UA (parity with live path); some panels
+                // reject the platform "Dalvik/..." default.
+                .setUserAgent("AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})")
             if (headers.isNotEmpty()) {
                 httpFactory.setDefaultRequestProperties(headers)
                 headers.entries

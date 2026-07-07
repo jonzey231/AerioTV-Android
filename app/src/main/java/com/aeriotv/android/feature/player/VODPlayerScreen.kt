@@ -519,6 +519,9 @@ fun VODPlayerScreen(
                     .setAllowCrossProtocolRedirects(true)
                     .setConnectTimeoutMs(30_000)
                     .setReadTimeoutMs(30_000)
+                    // Send a real player UA (parity with live path); some
+                    // panels reject the platform "Dalvik/..." default.
+                    .setUserAgent("AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})")
                 if (httpHeaders.isNotEmpty()) {
                     dataSourceFactory.setDefaultRequestProperties(httpHeaders)
                     httpHeaders.entries

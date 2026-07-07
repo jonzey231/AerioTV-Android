@@ -259,7 +259,14 @@ class DispatcharrClient @Inject constructor() {
         val response = client.get(url) { applyAuth(apiKey) }
         if (!response.status.isSuccess()) return@runCatching null
         val me: MeResponse = response.body()
-        me.userLevel
+        // A Dispatcharr superuser / staff account is a functional admin even
+        // when its custom user_level is still 0 (STREAMER) or 1 (STANDARD):
+        // Django superusers created before Dispatcharr v0.20.0 (or via the API)
+        // never had user_level defaulted to 10. Treat is_superuser / is_staff as
+        // admin so a real admin is never demoted below the server-recording bar
+        // (user_level >= 10). Mirrors Dispatcharr's own pre-v0.20.0
+        // is_superuser/is_staff admin checks.
+        if (me.isSuperuser || me.isStaff) 10 else me.userLevel
     }.getOrNull()
 
     /**
@@ -1289,6 +1296,16 @@ data class MeResponse(
      *  DispatcharrUser.channelProfiles (decodeIfPresent ?? []). */
     @SerialName("channel_profiles")
     val channelProfiles: List<Int> = emptyList(),
+    /** Django superuser flag. A superuser is a Dispatcharr admin regardless of
+     *  its custom user_level (often still 0 for accounts created before the
+     *  v0.20.0 createsuperuser fix, or via the API). Defaulted false so older
+     *  payloads that omit the key still parse. */
+    @SerialName("is_superuser")
+    val isSuperuser: Boolean = false,
+    /** Django staff flag; also treated as admin-equivalent, matching
+     *  Dispatcharr's historical is_superuser/is_staff admin checks. */
+    @SerialName("is_staff")
+    val isStaff: Boolean = false,
 )
 
 @Serializable
