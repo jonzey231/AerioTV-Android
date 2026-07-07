@@ -630,6 +630,7 @@ private fun MainTabContent(
                 onSeriesClick = { series -> onSeriesClick(series.id) },
                 onEpisodeResume = onEpisodeResume,
                 onResumeMovie = onResumeMovie,
+                onOpenSearch = onOpenSearch,
             )
             AppTab.Settings -> SettingsTabContent()
         }

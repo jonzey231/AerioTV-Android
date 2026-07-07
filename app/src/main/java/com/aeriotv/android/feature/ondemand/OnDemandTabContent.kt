@@ -59,6 +59,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -127,6 +128,11 @@ fun OnDemandTabContent(
     // tab (opens the movie detail, which surfaces the Resume button). Episodes
     // use onEpisodeResume.
     onResumeMovie: (String) -> Unit = {},
+    // Global Search (parity #41): opens the full Search screen (movies / shows /
+    // EPG). Surfaced on the Movies / Series header rows here in addition to the
+    // Live TV globe, because "search for shows" is naturally looked for on the
+    // On Demand tab (Discord discoverability report).
+    onOpenSearch: () -> Unit = {},
     viewModel: OnDemandViewModel = hiltViewModel(),
     watchVm: WatchProgressViewModel = hiltViewModel(),
 ) {
@@ -258,12 +264,14 @@ fun OnDemandTabContent(
                 viewModel = viewModel,
                 onMovieClick = onMovieClick,
                 gridState = moviesGridState,
+                onOpenSearch = onOpenSearch,
             )
             OnDemandSection.Series -> SeriesSubScreen(
                 viewModel = viewModel,
                 onSeriesClick = onSeriesClick,
                 onEpisodeResume = onEpisodeResume,
                 gridState = seriesGridState,
+                onOpenSearch = onOpenSearch,
             )
         }
     }
@@ -423,6 +431,7 @@ private fun MoviesSubScreen(
     viewModel: OnDemandViewModel,
     onMovieClick: (DispatcharrVODMovie) -> Unit,
     gridState: LazyGridState,
+    onOpenSearch: () -> Unit = {},
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -513,6 +522,7 @@ private fun MoviesSubScreen(
             },
             hiddenCount = hiddenMovieGroups.size,
             onManageGroups = { showManageGroups = true },
+            onOpenSearch = onOpenSearch,
             isTv = isTv,
             countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
                 "${visibleFiltered.size} / $total"
@@ -637,6 +647,7 @@ private fun SeriesSubScreen(
     onSeriesClick: (DispatcharrVODSeries) -> Unit,
     onEpisodeResume: (String) -> Unit = {},
     gridState: LazyGridState,
+    onOpenSearch: () -> Unit = {},
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -710,6 +721,7 @@ private fun SeriesSubScreen(
             },
             hiddenCount = hiddenSeriesGroups.size,
             onManageGroups = { showManageGroups = true },
+            onOpenSearch = onOpenSearch,
             isTv = isTv,
             countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
                 "${visibleSeriesFiltered.size} / $total"
@@ -831,6 +843,7 @@ private fun VodHeaderRow(
     searchField: @Composable RowScope.() -> Unit,
     hiddenCount: Int,
     onManageGroups: () -> Unit,
+    onOpenSearch: (() -> Unit)? = null,
     isTv: Boolean = false,
     countLabel: String? = null,
 ) {
@@ -852,6 +865,33 @@ private fun VodHeaderRow(
         }
         Box(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) { searchField() }
+        }
+        // Global Search (parity #41): the globe-magnifier opens the full Search
+        // screen (movies / shows / EPG), matching the Live TV header. Sits to the
+        // left of the group filter, in the same relative slot as the guide's
+        // globe, so "search for shows" is discoverable right here on On Demand.
+        if (onOpenSearch != null) {
+            if (isTv) {
+                TvHeaderIconButton(
+                    icon = Icons.Filled.TravelExplore,
+                    contentDescription = "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = onOpenSearch,
+                )
+            } else {
+                IconButton(
+                    onClick = onOpenSearch,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.TravelExplore,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(if (isTv) 8.dp else 4.dp))
         }
         if (isTv) {
             TvHeaderIconButton(
