@@ -127,7 +127,7 @@ fun AddMoreCategoriesScreen(
                 Text(
                     text = "Extra buckets",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
@@ -153,7 +153,7 @@ fun AddMoreCategoriesScreen(
                         Text(
                             text = "Custom",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(

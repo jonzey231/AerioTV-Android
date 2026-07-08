@@ -586,7 +586,7 @@ private fun MoviesSubScreen(
             // Larger posters + overscan-safe padding on the 10-foot TV; phone
             // keeps the compact grid whose 104dp bottom clears the bottom
             // NavigationBar (TV has top tabs, so it needs far less bottom inset).
-            columns = GridCells.Adaptive(minSize = if (isTv) 128.dp else 120.dp),
+            columns = GridCells.Adaptive(minSize = if (isTv) 108.dp else 120.dp),
             modifier = Modifier.fillMaxSize(),
             state = gridState,
             contentPadding = PaddingValues(
@@ -782,7 +782,7 @@ private fun SeriesSubScreen(
         ) {
         LazyVerticalGrid(
             // Series tab matches the Movies tab's TV / phone grid metrics.
-            columns = GridCells.Adaptive(minSize = if (isTv) 128.dp else 120.dp),
+            columns = GridCells.Adaptive(minSize = if (isTv) 108.dp else 120.dp),
             modifier = Modifier.fillMaxSize(),
             state = gridState,
             contentPadding = PaddingValues(
@@ -1096,6 +1096,8 @@ private fun SeriesPoster(
                     modifier = Modifier.size(40.dp),
                 )
             }
+            // iOS parity: rating as an on-poster corner badge, see MoviePoster.
+            VodRatingBadge(series.rating, Modifier.align(Alignment.BottomEnd))
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -1104,23 +1106,21 @@ private fun SeriesPoster(
             else MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Medium,
-            // minLines 2 keeps the year/rating meta line at the same height
+            // minLines 2 keeps the year meta line at the same height
             // across a grid row whether the title wraps or not.
             minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp),
         )
-        if (series.year != null || !series.rating.isNullOrBlank()) {
-            val meta = listOfNotNull(
-                series.year?.toString(),
-                series.rating?.takeIf { it.isNotBlank() },
-            ).joinToString("  ·  ")
+        series.year?.let { year ->
             Text(
-                text = meta,
+                text = year.toString(),
                 style = if (isTv) MaterialTheme.typography.labelMedium
                 else MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // iOS parity: year = textSecondary tvOS / textTertiary iPhone.
+                color = if (isTv) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.padding(horizontal = 2.dp),
             )
         }
@@ -1142,7 +1142,7 @@ private fun ContinueWatchingRail(
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(
                 horizontal = if (rememberLiveTvFormFactor().isTv) 48.dp else 20.dp,
@@ -1342,7 +1342,7 @@ private fun SeriesContinueWatchingRail(
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(
                 horizontal = if (rememberLiveTvFormFactor().isTv) 48.dp else 20.dp,
@@ -1549,6 +1549,10 @@ private fun MoviePoster(
                     modifier = Modifier.size(40.dp),
                 )
             }
+            // iOS parity: the rating lives ON the poster as a small
+            // white-on-black corner badge (MoviesView VODPosterCard), not in
+            // an accent meta line under the title.
+            VodRatingBadge(movie.rating, Modifier.align(Alignment.BottomEnd))
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -1559,27 +1563,46 @@ private fun MoviePoster(
             else MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Medium,
-            // minLines 2 keeps the year/rating meta line at the same height
+            // minLines 2 keeps the year meta line at the same height
             // across a grid row whether the title wraps or not.
             minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp),
         )
-        if (movie.year != null || !movie.rating.isNullOrBlank()) {
-            val meta = listOfNotNull(
-                movie.year?.toString(),
-                movie.rating?.takeIf { it.isNotBlank() },
-            ).joinToString("  ·  ")
+        movie.year?.let { year ->
             Text(
-                text = meta,
+                text = year.toString(),
                 style = if (isTv) MaterialTheme.typography.labelMedium
                 else MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // iOS parity: year = textSecondary on tvOS, textTertiary on
+                // iPhone (VODPosterCard).
+                color = if (isTv) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.padding(horizontal = 2.dp),
             )
         }
     }
+}
+
+/**
+ * iOS VODPosterCard rating badge: small white-on-black capsule pinned to the
+ * poster's bottom-trailing corner on both platforms. Renders nothing when the
+ * rating is missing/blank.
+ */
+@Composable
+private fun VodRatingBadge(rating: String?, modifier: Modifier = Modifier) {
+    val text = rating?.takeIf { it.isNotBlank() } ?: return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = Color.White,
+        modifier = modifier
+            .padding(4.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.Black.copy(alpha = 0.7f))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+    )
 }
 
 @Composable

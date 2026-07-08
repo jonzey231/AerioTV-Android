@@ -33,11 +33,22 @@ fun AerioTVTheme(
     // branded feel. Mapped through Material3 onSurfaceVariant so every call site
     // (`MaterialTheme.colorScheme.onSurfaceVariant`) picks it up.
     val textSecondary = effectivePrimary.copy(alpha = if (isTv) 0.75f else 0.65f)
+    // Visual-parity polish: iOS has a SECOND, dimmer rung under textSecondary.
+    // Colors.swift textTertiary = accent.opacity(0.45 tvOS / 0.28 phone), used
+    // for channel numbers, time ranges, and hints so they recede behind the
+    // title/description hierarchy. Android previously rendered all of those on
+    // the single textSecondary rung, which is a big part of why the Apple apps
+    // read "cleaner". Carried on Material3's otherwise-unused `tertiary` slot
+    // (same pattern as textSecondary riding onSurfaceVariant above); reach it
+    // via `MaterialTheme.colorScheme.tertiary`.
+    val textTertiary = effectivePrimary.copy(alpha = if (isTv) 0.45f else 0.28f)
     val colorScheme = darkColorScheme(
         primary = effectivePrimary,
         onPrimary = appTheme.appBackground,
         secondary = appTheme.accentSecondary,
         onSecondary = TextPrimary,
+        tertiary = textTertiary,
+        onTertiary = appTheme.appBackground,
         background = appTheme.appBackground,
         onBackground = TextPrimary,
         surface = appTheme.cardBackground,

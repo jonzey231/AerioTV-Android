@@ -304,7 +304,7 @@ private fun LazyListScope.settingsCard(
             Text(
                 text = header.uppercase(),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
@@ -484,7 +484,7 @@ private fun PreviewCard(theme: AppTheme, customAccentHex: String?) {
         Text(
             text = "PREVIEW",
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
