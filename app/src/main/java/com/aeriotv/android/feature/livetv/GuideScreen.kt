@@ -1277,6 +1277,31 @@ fun GuideScreen(
                 val (rowIndex, anchorMs) = dialogFocusOrigin ?: return@LaunchedEffect
                 guideNav.focusChannelAt(rowIndex, anchorMs, listState)
             }
+            // GH #15: focus restore after PlayerScreen's hidden-window self-pop
+            // (HOME -> resume). MainActivity.onStop dismissed the mini, so the
+            // miniState effect above bails and nothing re-focuses the guide --
+            // and Chromecast/Google TV drops Compose focus across the
+            // stop/restart, leaving hold-Left (and the rest of the D-pad focus
+            // path) dead. Consume the one-shot request PlayerScreen set right
+            // before popping and re-land focus on the watched channel's NOW
+            // cell; if the filter hides it, the All pill (inside the control
+            // row's hold-Left handler subtree) is the fallback. Keyed on
+            // channels-loaded so a slow cold list doesn't strand the request;
+            // consumeGuideFocusRestore() is one-shot + age-capped, so normal
+            // guide entries and tab switches never steal focus here.
+            LaunchedEffect(filteredChannels.isNotEmpty()) {
+                if (filteredChannels.isEmpty()) return@LaunchedEffect
+                if (!miniPlayerVm.session.consumeGuideFocusRestore()) return@LaunchedEffect
+                // Mini somehow Active again: the miniState effect above owns
+                // focus; the request is already consumed, just stand down.
+                if (miniState is MiniPlayerSession.State.Active) return@LaunchedEffect
+                val idx = filteredChannels.indexOfFirst { it.id == lastWatchedId }
+                if (idx >= 0) {
+                    guideNav.focusChannelAtNow(idx, nowMillis, listState)
+                } else {
+                    runCatching { allPillFocus.requestFocus() }
+                }
+            }
         }
         // EPG-search guide jump (iOS commit e3ccf439d consumePendingGuideJump).
         // Warm path: a Search EPG result was tapped in-process; the VM emits a

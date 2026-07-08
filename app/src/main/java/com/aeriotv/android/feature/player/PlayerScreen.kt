@@ -541,6 +541,12 @@ fun PlayerScreen(
                 exoWindowState.mode.value == ExoWindowState.Mode.Hidden
             ) {
                 Log.i(TAG, "resumed onto a hidden player window (PiP X-dismiss) -> popping player")
+                // GH #15: this pop lands on a fresh guide composition with the
+                // mini already dismissed, so no effect restores D-pad focus and
+                // Google TV devices drop Compose focus across the stop/restart,
+                // deadening the remote. Hand the guide a one-shot restore
+                // request before popping.
+                miniPlayerVm.session.requestGuideFocusRestore()
                 onClose()
             }
         }

@@ -74,6 +74,37 @@ class MiniPlayerSession @Inject constructor() {
     }
 
     /**
+     * GH #15: one-shot handoff from PlayerScreen's resume-time self-pop to
+     * the guide. HOME on TV stops playback and hides the player window
+     * (MainActivity.onStop); on return PlayerScreen resumes onto that Hidden
+     * window and pops itself, landing on a fresh guide composition with the
+     * mini already dismissed -- so the mini-keyed focus-on-return effect
+     * bails and NOTHING is focused. Chromecast/Google TV drops Compose focus
+     * across the stop/restart (Shield restores it), leaving every D-pad key
+     * -- including hold-Left-to-All -- dead.
+     *
+     * Not a SharedFlow like the requests above: at emit time the guide is
+     * NOT composed yet (it composes only after the pop), and a replay-0
+     * SharedFlow drops events with no subscriber. A timestamped consume-once
+     * slot survives that gap; the age cap discards it if the pop lands
+     * somewhere that never consumes (List view, phone).
+     */
+    @Volatile
+    private var guideFocusRestoreAtMs: Long? = null
+
+    /** Called by PlayerScreen right before its hidden-window self-pop. */
+    fun requestGuideFocusRestore() {
+        guideFocusRestoreAtMs = android.os.SystemClock.elapsedRealtime()
+    }
+
+    /** True exactly once per request, and only while the request is fresh. */
+    fun consumeGuideFocusRestore(maxAgeMs: Long = 5_000L): Boolean {
+        val at = guideFocusRestoreAtMs ?: return false
+        guideFocusRestoreAtMs = null
+        return android.os.SystemClock.elapsedRealtime() - at <= maxAgeMs
+    }
+
+    /**
      * Called from MainActivity.onKeyLongPress when BACK is held and the
      * mini-player is Active. Promotes Active -> Pending (so the mini overlay
      * vanishes) and emits a resume event for the NavController to navigate on.
