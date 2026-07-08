@@ -193,6 +193,7 @@ fun GuideScreen(
     val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
     val epgWindowHours by settingsVm.epgWindowHours.collectAsStateWithLifecycle(initialValue = 24)
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val multiviewStore = rememberMultiviewStoreHandle()
     // Observe the mini-player session so the guide's Back handler can stand
     // down while the mini is showing (see the BackHandler below for why).
@@ -1575,6 +1576,7 @@ fun GuideScreen(
                     palette = palette,
                     multiviewStore = multiviewStore,
                     showLogo = showChannelLogos,
+                    showNumber = showChannelNumbers,
                     collectionsMenu = collectionsMenu,
                 )
                 HorizontalDivider(color = guideRowDivider, thickness = guideRowDividerThickness)
@@ -1663,6 +1665,8 @@ private fun ChannelGuideRow(
     palette: CategoryPaletteState,
     multiviewStore: MultiviewStoreHandle,
     showLogo: Boolean = true,
+    /** GH #19: when false the channel-number text is omitted from the rail. */
+    showNumber: Boolean = true,
     collectionsMenu: CollectionsMenuContext? = null,
 ) {
     val multiviewSelected by multiviewStore.selected.collectAsStateWithLifecycle()
@@ -1758,17 +1762,21 @@ private fun ChannelGuideRow(
                 // column width (single line, like tvOS lineLimit(1)) so it reads in
                 // full instead of being squeezed in beside the number + logo. Names
                 // longer than the column truncate, exactly like tvOS.
-                channel.channelNumber?.let { num ->
-                    Text(
-                        text = num.toString(),
-                        style = numberStyle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.End,
-                        maxLines = 1,
-                        modifier = Modifier.width(numberWidth),
-                    )
+                // GH #19: number column collapses entirely when numbers are
+                // off, handing its width to the logo + name column.
+                if (showNumber) {
+                    channel.channelNumber?.let { num ->
+                        Text(
+                            text = num.toString(),
+                            style = numberStyle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.End,
+                            maxLines = 1,
+                            modifier = Modifier.width(numberWidth),
+                        )
+                    }
+                    Spacer(Modifier.width(3.dp))
                 }
-                Spacer(Modifier.width(3.dp))
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1825,15 +1833,18 @@ private fun ChannelGuideRow(
                     )
                 }
             } else {
-                channel.channelNumber?.let { num ->
-                    Text(
-                        text = num.toString(),
-                        style = numberStyle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(numberWidth),
-                    )
+                // GH #19: same collapse on the phone rail.
+                if (showNumber) {
+                    channel.channelNumber?.let { num ->
+                        Text(
+                            text = num.toString(),
+                            style = numberStyle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(numberWidth),
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
                 }
-                Spacer(Modifier.width(4.dp))
                 if (showLogo) {
                 Box(
                     modifier = Modifier

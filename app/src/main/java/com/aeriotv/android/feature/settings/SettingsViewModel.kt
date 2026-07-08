@@ -48,6 +48,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setShowChannelLogos(value) }
     }
 
+    val showChannelNumbers: Flow<Boolean> = prefs.showChannelNumbers
+    fun setShowChannelNumbers(value: Boolean) {
+        viewModelScope.launch { prefs.setShowChannelNumbers(value) }
+    }
+
     val playerAspectMode: Flow<String> = prefs.playerAspectMode
     fun setPlayerAspectMode(value: String) {
         viewModelScope.launch { prefs.setPlayerAspectMode(value) }

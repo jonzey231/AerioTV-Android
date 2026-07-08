@@ -83,6 +83,7 @@ fun AppearanceSettingsScreen(
     val useCustomAccent by viewModel.useCustomAccent.collectAsStateWithLifecycle(initialValue = false)
     val customAccentHex by viewModel.customAccentHex.collectAsStateWithLifecycle(initialValue = "")
     val showChannelLogos by viewModel.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNumbers by viewModel.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
     var accentPickerOpen by remember { mutableStateOf(false) }
@@ -181,17 +182,25 @@ fun AppearanceSettingsScreen(
                     )
                 }
 
-                // Channel List card (iOS Issue #28). Hide logos so long
-                // channel names get the full row width.
+                // Channel List card (iOS Issue #28 logos + GH #19 numbers).
+                // Hide logos/numbers so long channel names get the full row
+                // width. Both apply to the Live TV list AND the Guide rail.
                 settingsCard(
                     header = "Channel List",
-                    footer = "Turn logos off to give long channel names the full row width.",
+                    footer = "Turn logos or numbers off to give long channel names more row width. Applies to the Live TV list and the Guide.",
                 ) {
                     ToggleRow(
                         title = "Show Channel Logos",
                         subtitle = "Display each channel's logo in the Live TV list.",
                         checked = showChannelLogos,
                         onCheckedChange = viewModel::setShowChannelLogos,
+                    )
+                    DividerRow()
+                    ToggleRow(
+                        title = "Show Channel Numbers",
+                        subtitle = "Display each channel's number in the Live TV list and Guide.",
+                        checked = showChannelNumbers,
+                        onCheckedChange = viewModel::setShowChannelNumbers,
                     )
                 }
 

@@ -126,6 +126,7 @@ fun ChannelListScreen(
     val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
     val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
     val groupSortMode = com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw)
@@ -533,6 +534,7 @@ fun ChannelListScreen(
                         onShowRecord = { recordTarget = it },
                         palette = palette,
                         showLogo = showChannelLogos,
+                        showNumber = showChannelNumbers,
                         collectionsMenu = collectionsMenu,
                     )
                 }
@@ -694,6 +696,9 @@ internal fun ChannelRow(
     /** iOS Issue #28: when false the channel logo is omitted so long channel
      *  names use the full row width. */
     showLogo: Boolean = true,
+    /** GH #19: when false the channel-number column is omitted, same idea as
+     *  showLogo. */
+    showNumber: Boolean = true,
     /**
      * Optional leading drag handle, rendered at the very start of the row
      * before the channel number. Only the Favorites tab passes this (to back
@@ -791,19 +796,23 @@ internal fun ChannelRow(
                     reorderHandle()
                     Spacer(Modifier.width(8.dp))
                 }
-                Box(
-                    modifier = Modifier.width(28.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    channel.channelNumber?.let { num ->
-                        Text(
-                            text = num.toString(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                // GH #19: the whole 28dp number column collapses when numbers
+                // are off, so the logo/name reclaim the width.
+                if (showNumber) {
+                    Box(
+                        modifier = Modifier.width(28.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        channel.channelNumber?.let { num ->
+                            Text(
+                                text = num.toString(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
+                    Spacer(Modifier.width(8.dp))
                 }
-                Spacer(Modifier.width(8.dp))
 
                 // Channel logo — matches iOS ChannelListView.swift:1754-1758
                 // `CachedLogoImage(width: 38, height: 26)` on iPhone. The

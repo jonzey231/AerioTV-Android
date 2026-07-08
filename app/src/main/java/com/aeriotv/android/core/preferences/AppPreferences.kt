@@ -79,6 +79,15 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * GH #19 (`ui.showChannelNumbers` on iOS). When off, the Live TV list and
+     * Guide hide the channel number column. Default ON.
+     */
+    val showChannelNumbers: Flow<Boolean> = store.data.map { it[KEY_SHOW_CHANNEL_NUMBERS] ?: true }
+    suspend fun setShowChannelNumbers(value: Boolean) {
+        store.edit { it[KEY_SHOW_CHANNEL_NUMBERS] = value }
+    }
+
+    /**
      * iOS Issue #26 player aspect mode: "fit" (letterbox, default), "zoom"
      * (crop to fill while preserving aspect), or "fill" (stretch). Maps to
      * Media3 AspectRatioFrameLayout RESIZE_MODE_FIT / ZOOM / FILL in the player.
@@ -995,6 +1004,7 @@ class AppPreferences @Inject constructor(
         val KEY_SELECTED_THEME = stringPreferencesKey("selected_theme")
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
+        val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
         val KEY_PLAYER_ASPECT_MODE = stringPreferencesKey("player_aspect_mode")
         val KEY_CUSTOM_ACCENT_HEX = stringPreferencesKey("custom_accent_hex")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")
