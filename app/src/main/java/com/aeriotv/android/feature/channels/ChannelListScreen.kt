@@ -751,10 +751,19 @@ internal fun ChannelRow(
         fallback = channel.groupTitle,
     )
     val baseSurface = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
-    val cardBrush = if (tint != null) {
-        Brush.horizontalGradient(listOf(tint, baseSurface))
-    } else {
-        Brush.horizontalGradient(listOf(baseSurface, baseSurface))
+    // iOS parity (ChannelListView row card): the card itself is FLAT, and the
+    // category tint is a leading-edge wash that fades out by ~65% of the
+    // width (bucket 0.30 -> 0.18 @22% -> 0.06 @45% -> clear @65%), not a
+    // full-width gradient into the surface color. The old full-span gradient
+    // is what made tinted rows read as "colored cards" instead of cards with
+    // a category cue, a visible chunk of the busier-than-iOS feel.
+    val tintWash = tint?.let {
+        Brush.horizontalGradient(
+            0.00f to it.copy(alpha = 0.30f),
+            0.22f to it.copy(alpha = 0.18f),
+            0.45f to it.copy(alpha = 0.06f),
+            0.65f to Color.Transparent,
+        )
     }
 
     Column(
@@ -765,17 +774,23 @@ internal fun ChannelRow(
             // focus via the primary border below (a scaled-up list row reads as
             // jumpy at 10 feet). Phone rows never focus, so this was a no-op there.
             .clip(RoundedCornerShape(12.dp))
-            .background(cardBrush)
+            .background(baseSurface)
+            .then(if (tintWash != null) Modifier.background(tintWash) else Modifier)
             .then(
                 // D-pad focus ring for the TV List view (the guide is the TV
                 // default, but the List/Guide toggle reaches this row too).
-                // Phone rows never gain focus, so `focused` stays false and
-                // this is a no-op there.
+                // At rest every card gets iOS's borderSubtle hairline
+                // (accent at 0.10) so cards are defined by an edge, not a
+                // fill contrast.
                 if (focused) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
                     RoundedCornerShape(12.dp),
-                ) else Modifier,
+                ) else Modifier.border(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    RoundedCornerShape(12.dp),
+                ),
             ),
     ) {
         Box {
