@@ -29,8 +29,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -553,9 +551,16 @@ private fun ToggleRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    // Whole row is the toggle target, same as CustomAccentRow above. The
+    // tvOS-chrome migration (cad31c2) swapped the Switch for the static
+    // On/Off indicator but dropped the click along with it, leaving these
+    // rows unfocusable on TV (D-pad skipped them) and inert to taps on
+    // phone.
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .dpadFocusWash()
+            .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
