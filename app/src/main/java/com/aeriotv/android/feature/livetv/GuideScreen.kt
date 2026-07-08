@@ -336,9 +336,11 @@ fun GuideScreen(
     // Channel-to-channel separator: stronger than the header hairline so two
     // adjacent rows with the SAME category tint still read as distinct rows
     // (user request -- the 0.5dp / 15% line was nearly invisible between
-    // same-colored channels).
-    val guideRowDivider = if (isTv) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
-        else MaterialTheme.colorScheme.outline
+    // same-colored channels). Phone now shares the accent hairline: with the
+    // flat Emby-style phone cells (visual-parity polish) the divider is the
+    // only row separation, same as TV, and the old Material `outline` gray
+    // was the one off-palette line in the guide.
+    val guideRowDivider = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
     val guideRowDividerThickness = if (isTv) 0.75.dp else 1.dp
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
@@ -2217,12 +2219,11 @@ private fun ProgrammeCell(
     // tvOS guide cells are flat, full-height "Emby-style" rectangles separated
     // only by the row hairlines: NO rounded corners or always-on border at rest;
     // focus / live / future are conveyed purely by fill brightness, plus a thin
-    // focus ring for D-pad clarity. Phone keeps the rounded, bordered card cell.
-    val cellShape = when {
-        !isTv -> RoundedCornerShape(6.dp)
-        focused -> RoundedCornerShape(4.dp)
-        else -> RectangleShape
-    }
+    // focus ring for D-pad clarity. Visual-parity polish: the PHONE guide now
+    // matches too (iOS renders the same flat cells with 1px seams on iPhone,
+    // EPGGuideView cellGap/rowGap = 1, no radius); the old rounded, floating,
+    // bordered phone cell was Android-only chrome.
+    val cellShape = if (focused) RoundedCornerShape(4.dp) else RectangleShape
     val phoneBaseBg = categoryTint ?: if (isLive)
         MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     else
@@ -2243,19 +2244,15 @@ private fun ProgrammeCell(
     } else {
         if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.32f) else phoneBaseBg
     }
-    val phoneBaseBorder = if (isLive)
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-    else
-        MaterialTheme.colorScheme.surfaceVariant
     // tvOS focus ring is a 4pt WHITE inset border (Emby style, line 3339); the
-    // Android-TV proportional is 2dp white. Phone keeps the cyan accent border.
-    val cellBorderColor = if (focused) {
-        if (isTv) Color.White else MaterialTheme.colorScheme.primary
-    } else phoneBaseBorder
-    val cellBorderWidth = if (isTv) {
-        if (focused) 2.dp else 0.dp
-    } else {
-        if (focused) 3.dp else 0.5.dp
+    // Android-TV proportional is 2dp white. Phone keeps the cyan accent border
+    // when focused; at rest there is NO border on either platform (iOS cells
+    // are borderless fills, live conveyed by the brighter fill alone).
+    val cellBorderColor = if (isTv) Color.White else MaterialTheme.colorScheme.primary
+    val cellBorderWidth = when {
+        !focused -> 0.dp
+        isTv -> 2.dp
+        else -> 3.dp
     }
     // Phone title keeps the cyan live tint; the tvOS title stays neutral (turning
     // white only on focus, like the source).
@@ -2291,12 +2288,10 @@ private fun ProgrammeCell(
             // cell by anchor time via this requester. Must precede the focusable
             // (combinedClickable) below so the requester binds to that node.
             .focusRequester(focusRequester)
-            .then(
-                // TV: a 1dp trailing seam so adjacent flat cells stay distinct.
-                // Phone: the original inset that floats the rounded card.
-                if (isTv) Modifier.padding(end = 1.dp)
-                else Modifier.padding(start = 1.dp, end = 1.dp, top = 4.dp, bottom = 4.dp),
-            )
+            // Both platforms: a 1dp trailing seam so adjacent flat cells stay
+            // distinct (iOS cellGap = 1). The phone's old 4dp vertical float
+            // went with its rounded-card cell.
+            .padding(end = 1.dp)
             // NOTE: deliberately NO per-cell focus scale here. The guide renders
             // 50-100 cells at once; a graphicsLayer (from tvFocusScale) on every
             // one makes the Streamer GPU composite that many render layers every
