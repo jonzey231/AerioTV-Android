@@ -4,6 +4,9 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -21,9 +24,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -479,22 +479,16 @@ fun MainScaffold(
         return
     }
 
-    // GH #20: auto-hide the bottom nav bar while scrolling down, reveal on
-    // scroll up, so phone browsing reclaims the bar's vertical space. A
-    // NestedScrollConnection on the content host sees every tab's Lazy*/
-    // ScrollView deltas without hoisting any per-tab scroll state; it only
-    // OBSERVES (returns Offset.Zero) so list scrolling is untouched, and only
-    // reads vertical deltas so the guide's horizontal timeline can't toggle
-    // the bar. Hide needs a deliberate ~48dp downward pull; reveal is eager
-    // (~12dp up) plus any tab switch. Only the NavigationBar collapses -- the
-    // phone MiniPlayerRow above it stays put, since hiding an actively
-    // playing stream's controls on scroll would orphan it.
+    // GH #20: auto-hide the floating tab pill while scrolling down, reveal on
+    // scroll up. A NestedScrollConnection on the content host sees every
+    // tab's Lazy*/ScrollView deltas without hoisting any per-tab scroll
+    // state; it only OBSERVES (returns Offset.Zero) so list scrolling is
+    // untouched, and only reads vertical deltas so the guide's horizontal
+    // timeline can't toggle the bar. Hide needs a deliberate ~48dp downward
+    // pull; reveal is eager (~12dp up) plus any tab switch. Only the pill
+    // slides away -- the floating MiniPlayerRow card above it stays put,
+    // since hiding an actively playing stream's controls would orphan it.
     var bottomBarVisible by remember { mutableStateOf(true) }
-    val bottomBarFraction by animateFloatAsState(
-        targetValue = if (bottomBarVisible) 1f else 0f,
-        animationSpec = tween(durationMillis = 250),
-        label = "bottomBarAutoHide",
-    )
     val density = LocalDensity.current
     val bottomBarScrollConnection = remember(density) {
         val hidePx = with(density) { 48.dp.toPx() }
@@ -531,70 +525,12 @@ fun MainScaffold(
         // Each tab owns its own TopAppBar with its own status-bar inset. Without
         // overriding here, Scaffold would also add a status-bar top inset to the
         // content padding, producing a ~30dp empty gap above every TopAppBar.
-        // Bottom + horizontal insets stay system-managed so the navigation bar
-        // sits correctly above the system gesture area.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        bottomBar = {
-            androidx.compose.foundation.layout.Column {
-                val miniState = miniPlayerState
-                // Phase 139 / audit #22: on TV the mini-player is a top-right
-                // video window (TvMiniPlayerOverlay, mounted at NavHost root).
-                // Suppress the phone-style row above the bottom nav so we
-                // don't double-render the same session.
-                if (miniState is MiniPlayerSession.State.Active && !isTv) {
-                    val channel = miniState.channel
-                    val nowProgramme = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
-                    MiniPlayerRow(
-                        channel = channel,
-                        nowProgramme = nowProgramme,
-                        isPaused = miniPaused,
-                        onResume = {
-                            val resumed = miniPlayerVm.resumeChannel()
-                            if (resumed != null) onChannelClick(resumed)
-                        },
-                        onTogglePause = {
-                            exoHolder.setPaused(!exoHolder.isPaused())
-                            miniPaused = exoHolder.isPaused()
-                        },
-                        onDismiss = {
-                            miniPlayerVm.dismiss()
-                            exoHolder.destroy()
-                            com.aeriotv.android.core.playback.AerioMediaPlaybackService
-                                .stop(context)
-                        },
-                    )
-                }
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    // GH #20: geometric hide (height + alpha) so the Scaffold
-                    // padding shrinks with it and content reclaims the space.
-                    modifier = Modifier.collapsibleChrome(bottomBarFraction),
-                ) {
-                    tabs.forEach { tab ->
-                        val selected = tab == selectedTab
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = { selectedTab = tab; initialTabApplied = true },
-                            icon = {
-                                Icon(
-                                    imageVector = if (selected) tab.iconSelected else tab.iconUnselected,
-                                    contentDescription = tab.label,
-                                )
-                            },
-                            label = { Text(tab.label) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            ),
-                        )
-                    }
-                }
-            }
-        },
+        // iOS 26 parity: no Scaffold bottomBar. The tab bar is a floating pill
+        // OVERLAYING the content (below), so every tab keeps the full screen
+        // height and content scrolls behind the pill, exactly like the iPhone
+        // app's Liquid-Glass bar. Tab screens already reserve ~104dp of bottom
+        // content padding, so their last rows scroll clear of the pill.
     ) { padding ->
         Box(
             modifier = Modifier
@@ -628,6 +564,129 @@ fun MainScaffold(
                     .statusBarsPadding()
                     .padding(start = 16.dp, top = 8.dp),
             )
+            // Bottom overlay: floating mini-player card above the floating tab
+            // pill. The mini stays put while the pill slides away on scroll
+            // (GH #20) so an active stream's controls are never hidden.
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                val miniState = miniPlayerState
+                // Phase 139 / audit #22: on TV the mini-player is a top-right
+                // video window (TvMiniPlayerOverlay, mounted at NavHost root).
+                // Suppress the phone-style card so we don't double-render the
+                // same session.
+                if (miniState is MiniPlayerSession.State.Active && !isTv) {
+                    val channel = miniState.channel
+                    val nowProgramme = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                RoundedCornerShape(20.dp),
+                            ),
+                    ) {
+                        MiniPlayerRow(
+                            channel = channel,
+                            nowProgramme = nowProgramme,
+                            isPaused = miniPaused,
+                            onResume = {
+                                val resumed = miniPlayerVm.resumeChannel()
+                                if (resumed != null) onChannelClick(resumed)
+                            },
+                            onTogglePause = {
+                                exoHolder.setPaused(!exoHolder.isPaused())
+                                miniPaused = exoHolder.isPaused()
+                            },
+                            onDismiss = {
+                                miniPlayerVm.dismiss()
+                                exoHolder.destroy()
+                                com.aeriotv.android.core.playback.AerioMediaPlaybackService
+                                    .stop(context)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = bottomBarVisible,
+                    enter = androidx.compose.animation.slideInVertically { it } +
+                        androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.slideOutVertically { it } +
+                        androidx.compose.animation.fadeOut(),
+                ) {
+                    FloatingTabBar(
+                        tabs = tabs,
+                        selected = selectedTab,
+                        onSelect = { selectedTab = it; initialTabApplied = true },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * iOS 26 parity: the phone tab bar as a centered, floating, rounded pill
+ * (the iPhone app's Liquid-Glass bar) instead of a full-width Material
+ * NavigationBar. Wrap-content width, surface fill with the shared accent
+ * hairline, selected tab gets a soft accent capsule behind icon + label.
+ */
+@Composable
+private fun FloatingTabBar(
+    tabs: List<AppTab>,
+    selected: AppTab,
+    onSelect: (AppTab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(32.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                RoundedCornerShape(32.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tabs.forEach { tab ->
+            val isSel = tab == selected
+            androidx.compose.foundation.layout.Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else Color.Transparent,
+                    )
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            ) {
+                Icon(
+                    imageVector = if (isSel) tab.iconSelected else tab.iconUnselected,
+                    contentDescription = tab.label,
+                    tint = if (isSel) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+                Text(
+                    text = tab.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSel) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
