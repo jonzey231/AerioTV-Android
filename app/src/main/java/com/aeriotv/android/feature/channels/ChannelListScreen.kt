@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -479,13 +480,23 @@ fun ChannelListScreen(
                     key = { "coll_${it.id}" },
                 ) { c -> collectionPillItem(c) }
                 items(groups, key = { "grp_$it" }) { group ->
+                    // Same capsule treatment as the Guide's phone pills (user
+                    // report: the two views' pills didn't match; Material's
+                    // default FilterChip is an 8dp rounded rect).
                     FilterChip(
                         selected = state.selectedGroup == group,
                         onClick = { viewModel.onGroupSelected(group) },
-                        label = { Text(group) },
+                        label = { Text(group, style = MaterialTheme.typography.labelLarge) },
+                        shape = CircleShape,
                         colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color.Transparent,
+                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             selectedContainerColor = MaterialTheme.colorScheme.primary,
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = state.selectedGroup == group,
                         ),
                     )
                 }
