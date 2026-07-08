@@ -44,8 +44,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.border
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -474,6 +479,51 @@ fun MainScaffold(
         return
     }
 
+    // GH #20: auto-hide the bottom nav bar while scrolling down, reveal on
+    // scroll up, so phone browsing reclaims the bar's vertical space. A
+    // NestedScrollConnection on the content host sees every tab's Lazy*/
+    // ScrollView deltas without hoisting any per-tab scroll state; it only
+    // OBSERVES (returns Offset.Zero) so list scrolling is untouched, and only
+    // reads vertical deltas so the guide's horizontal timeline can't toggle
+    // the bar. Hide needs a deliberate ~48dp downward pull; reveal is eager
+    // (~12dp up) plus any tab switch. Only the NavigationBar collapses -- the
+    // phone MiniPlayerRow above it stays put, since hiding an actively
+    // playing stream's controls on scroll would orphan it.
+    var bottomBarVisible by remember { mutableStateOf(true) }
+    val bottomBarFraction by animateFloatAsState(
+        targetValue = if (bottomBarVisible) 1f else 0f,
+        animationSpec = tween(durationMillis = 250),
+        label = "bottomBarAutoHide",
+    )
+    val density = LocalDensity.current
+    val bottomBarScrollConnection = remember(density) {
+        val hidePx = with(density) { 48.dp.toPx() }
+        val showPx = with(density) { 12.dp.toPx() }
+        object : NestedScrollConnection {
+            // Distance accumulated in the current direction; direction flips
+            // reset the opposite counter so slow jittery drags near a
+            // threshold can't oscillate the bar.
+            private var downDistance = 0f
+            private var upDistance = 0f
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val dy = available.y
+                if (dy < -0.5f) {
+                    downDistance += -dy
+                    upDistance = 0f
+                    if (downDistance > hidePx) bottomBarVisible = false
+                } else if (dy > 0.5f) {
+                    upDistance += dy
+                    downDistance = 0f
+                    if (upDistance > showPx) bottomBarVisible = true
+                }
+                return Offset.Zero
+            }
+        }
+    }
+    // Switching tabs must always reveal the bar: the new tab may be short
+    // enough that no upward scroll is possible to bring it back.
+    LaunchedEffect(selectedTab) { bottomBarVisible = true }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -517,6 +567,9 @@ fun MainScaffold(
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     contentColor = MaterialTheme.colorScheme.onSurface,
+                    // GH #20: geometric hide (height + alpha) so the Scaffold
+                    // padding shrinks with it and content reclaims the space.
+                    modifier = Modifier.collapsibleChrome(bottomBarFraction),
                 ) {
                     tabs.forEach { tab ->
                         val selected = tab == selectedTab
@@ -543,7 +596,13 @@ fun MainScaffold(
             }
         },
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                // GH #20: observe every tab's scroll for the bottom-bar hide.
+                .nestedScroll(bottomBarScrollConnection),
+        ) {
             MainTabContent(
                 selectedTab = selectedTab,
                 onChannelClick = onChannelClick,
@@ -822,6 +881,8 @@ private fun TvTab(
  *
  * Internal (not private) because the On Demand tab applies the same treatment
  * to its Movies/Series pills; the behavior must stay identical in both spots.
+ * Also drives the phone bottom NavigationBar's scroll auto-hide (GH #20),
+ * where the height collapse is what lets Scaffold hand the space to content.
  */
 internal fun Modifier.collapsibleChrome(visibleFraction: Float): Modifier = this
     .graphicsLayer { alpha = visibleFraction }
