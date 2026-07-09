@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -1280,14 +1282,37 @@ private fun ChannelGuidePanel(
             .toList()
     }
 
+    // The panel is its own bounded scroll area so expanding a channel LANDS
+    // on the upcoming schedule (first row = the show after the one airing,
+    // Archie spec) while all retained history stays reachable by scrolling
+    // UP from there. initialFirstVisibleItemIndex points past the aired
+    // block; the finite max height is what makes a vertical LazyColumn legal
+    // inside the outer channel list.
+    val panelState = remember(channelId) {
+        LazyListState(firstVisibleItemIndex = recentlyAired.size)
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         HorizontalDivider(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.padding(horizontal = 14.dp),
         )
-        if (recentlyAired.isNotEmpty()) {
-            Column(modifier = Modifier.padding(top = 6.dp)) {
-                recentlyAired.forEach { programme ->
+        if (recentlyAired.isEmpty() && upcoming.isEmpty()) {
+            Text(
+                text = "No upcoming schedule available",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        } else {
+            LazyColumn(
+                state = panelState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .padding(vertical = 6.dp),
+            ) {
+                items(recentlyAired.size) { i ->
+                    val programme = recentlyAired[i]
                     val replayable = channel.canReplay(programme, now)
                     UpcomingProgrammeRow(
                         programme = programme,
@@ -1304,22 +1329,16 @@ private fun ChannelGuidePanel(
                         onShowRecord = { onShowRecord(programme.toInfoTarget(channelName, channelDispatcharrId)) },
                     )
                 }
-            }
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.padding(horizontal = 14.dp),
-            )
-        }
-        if (upcoming.isEmpty()) {
-            Text(
-                text = "No upcoming schedule available",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            )
-        } else {
-            Column(modifier = Modifier.padding(bottom = 6.dp)) {
-                upcoming.forEach { programme ->
+                if (recentlyAired.isNotEmpty() && upcoming.isNotEmpty()) {
+                    item {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                        )
+                    }
+                }
+                items(upcoming.size) { i ->
+                    val programme = upcoming[i]
                     UpcomingProgrammeRow(
                         programme = programme,
                         channelName = channelName,
