@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
@@ -271,17 +272,67 @@ fun PlayerChromeOverlay(
 
             if (isTv) {
             // Android TV (tvOS parity): a centered row of action pills at the
-            // bottom -- Options | Record | Add Stream. The channel info card is
-            // rendered top-left by the sibling AnimatedVisibility below.
-            Row(
+            // bottom -- Options | Record | Add Stream. With Live Rewind
+            // buffering, a read-only timeline rides above the row and the
+            // transport joins the SAME focus row as pills (identical focus
+            // visuals; Options keeps initial focus, LEFT reaches transport).
+            val tvRewind = timeshiftState?.buffering == true
+            // Anchor skips on wall-clock "now" when live: the head in the
+            // composed state can lag several seconds (or worse if a
+            // recomposition was starved), and System.currentTimeMillis()
+            // tracks the true live edge by definition while the tee runs.
+            val tvCurrentWall = if (timeshiftState?.timeshifting == true) {
+                timeshiftPositionWallMs
+            } else {
+                System.currentTimeMillis()
+            }
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 28.dp)
-                    .focusGroup(),
+                    .padding(bottom = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+            if (tvRewind) {
+                timeshiftState?.let { ts ->
+                    TvRewindTimeline(
+                        state = ts,
+                        positionWallMs = timeshiftPositionWallMs,
+                        programme = nowProgramme,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+            Row(
+                modifier = Modifier.focusGroup(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (tvRewind) {
+                    PlayerPill(
+                        icon = Icons.Filled.Replay30,
+                        label = "Rewind",
+                        onClick = { onRewindSeekWall(tvCurrentWall - 30_000) },
+                    )
+                    PlayerPill(
+                        icon = if (isPlayerPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                        label = if (isPlayerPaused) "Play" else "Pause",
+                        onClick = onRewindTogglePause,
+                    )
+                    PlayerPill(
+                        icon = Icons.Filled.Forward30,
+                        label = "Forward",
+                        onClick = { onRewindSeekWall(tvCurrentWall + 30_000) },
+                    )
+                    if (timeshiftState?.timeshifting == true) {
+                        PlayerPill(
+                            icon = Icons.Filled.PlayArrow,
+                            label = "Go Live",
+                            onClick = onGoLive,
+                        )
+                    }
+                }
                 Box {
                     PlayerPill(
                         icon = Icons.Filled.Tune,
@@ -346,6 +397,7 @@ fun PlayerChromeOverlay(
                     label = "Add Stream",
                     onClick = onAddToMultiview,
                 )
+            }
             }
             } else {
             // Phone / tablet (iOS PlayerView parity): top bar with Close on the
@@ -575,20 +627,35 @@ private fun CircleIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // D-pad focus must be VISIBLE on TV: track focus state and draw a
+    // white ring + brightened fill (same treatment as the settings
+    // pills' dpadFocusRing, drawn inline here because the button also
+    // needs the fill swap). Focus and click share one target.
+    var focused by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .size(44.dp)
+            .onFocusChanged { focused = it.isFocused }
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.55f)),
+            .background(
+                if (focused) Color.White.copy(alpha = 0.28f)
+                else Color.Black.copy(alpha = 0.55f),
+            )
+            .then(
+                if (focused) {
+                    Modifier.border(2.dp, Color.White, CircleShape)
+                } else {
+                    Modifier
+                },
+            )
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        IconButton(onClick = onClick) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = Color.White,
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = Color.White,
+        )
     }
 }
 
@@ -965,8 +1032,14 @@ private fun RewindTransportBar(
     val fraction = dragFraction ?: ((current - tail).toFloat() / span.toFloat()).coerceIn(0f, 1f)
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        // On TV the timeline is a read-only position display: D-pad
+        // seeking goes through the centered skip buttons (the VOD player
+        // model), so the slider must not be a focus stop the remote can
+        // get trapped in.
+        val isTvDevice = com.aeriotv.android.feature.settings.rememberIsTvDevice()
         Slider(
             value = fraction,
+            enabled = !isTvDevice,
             onValueChange = { dragFraction = it },
             onValueChangeFinished = {
                 dragFraction?.let { f -> onSeekWall(tail + (span * f).toLong()) }
@@ -979,6 +1052,9 @@ private fun RewindTransportBar(
                 thumbColor = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary,
                 inactiveTrackColor = Color.White.copy(alpha = 0.18f),
+                disabledThumbColor = MaterialTheme.colorScheme.primary,
+                disabledActiveTrackColor = MaterialTheme.colorScheme.primary,
+                disabledInactiveTrackColor = Color.White.copy(alpha = 0.18f),
             ),
         )
         // Status line under the timeline: remaining time on the LEFT,
@@ -1051,11 +1127,19 @@ private fun RewindTransportBar(
                 )
             }
             if (state.timeshifting) {
+                var goLiveFocused by remember { mutableStateOf(false) }
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = MaterialTheme.colorScheme.primary,
                     onClick = onGoLive,
-                    modifier = Modifier.align(Alignment.CenterEnd),
+                    border = if (goLiveFocused) {
+                        androidx.compose.foundation.BorderStroke(2.dp, Color.White)
+                    } else {
+                        null
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .onFocusChanged { goLiveFocused = it.isFocused },
                 ) {
                     Text(
                         text = "Go Live",
@@ -1066,6 +1150,72 @@ private fun RewindTransportBar(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Android TV Live Rewind timeline: read-only position display above the
+ * pill row (all D-pad interaction goes through the transport pills).
+ * Remaining time left, LIVE / behind-live right, both truthful to the
+ * shifted position.
+ */
+@Composable
+private fun TvRewindTimeline(
+    state: com.aeriotv.android.core.timeshift.TimeshiftController.State,
+    positionWallMs: Long,
+    programme: EPGProgramme?,
+) {
+    val head = maxOf(state.headWallMs, state.tailWallMs + 1)
+    val tail = state.tailWallMs
+    val span = (head - tail).coerceAtLeast(1)
+    val current = if (state.timeshifting) positionWallMs.coerceIn(tail, head) else head
+    val fraction = ((current - tail).toFloat() / span.toFloat()).coerceIn(0f, 1f)
+    val behindMs = head - current
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 56.dp)) {
+        LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .clip(RoundedCornerShape(3.dp)),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = Color.White.copy(alpha = 0.18f),
+            drawStopIndicator = {},
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            programme?.let { prog ->
+                val remMin = ((prog.endMillis - current).coerceAtLeast(0) / 60_000).toInt()
+                Text(
+                    text = if (remMin >= 60) {
+                        "${remMin / 60} h ${remMin % 60} min remaining"
+                    } else {
+                        "$remMin min remaining"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.7f),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (state.timeshifting && behindMs > 5_000) {
+                    val totalSec = behindMs / 1000
+                    String.format("-%d:%02d", totalSec / 60, totalSec % 60)
+                } else {
+                    "LIVE"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (state.timeshifting && behindMs > 5_000) {
+                    Color.White.copy(alpha = 0.8f)
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+            )
         }
     }
 }

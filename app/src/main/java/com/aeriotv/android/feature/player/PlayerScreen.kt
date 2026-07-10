@@ -683,7 +683,12 @@ fun PlayerScreen(
                     // its minimum buffer against a source that grows in
                     // real time). When playback closes to within a few
                     // seconds of the head, return to the direct stream.
+                    // READY gate: a freshly-prepared buffer source reports
+                    // meaningless positions while BUFFERING, which made
+                    // the snap bounce straight back to live on entry
+                    // (Streamer field test).
                     if (!exoHolder.isPaused() &&
+                        exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_READY &&
                         tsPositionWallMs >= tsState.headWallMs - 4_000
                     ) {
                         exoHolder.goLive()
@@ -732,10 +737,16 @@ fun PlayerScreen(
                 }
             },
             onRewindSeekWall = { target ->
-                if (target >= tsState.headWallMs - 5_000) {
+                // Read the buffer window FRESH from the writer at action
+                // time: the composed state snapshot can lag (the Streamer
+                // test turned a -30s skip into -122s off a stale head).
+                val w = timeshiftController.activeWriter
+                val head = w?.headWallMs ?: tsState.headWallMs
+                val tail = w?.tailWallMs ?: tsState.tailWallMs
+                if (target >= head - 5_000) {
                     exoHolder.goLive()
                 } else {
-                    exoHolder.playTimeshift(target.coerceAtLeast(tsState.tailWallMs))
+                    exoHolder.playTimeshift(target.coerceAtLeast(tail))
                 }
             },
             onGoLive = { exoHolder.goLive() },
