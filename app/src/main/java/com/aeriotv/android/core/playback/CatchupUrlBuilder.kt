@@ -42,8 +42,6 @@ object CatchupUrlBuilder {
         val streamId: String,
         /** IANA zone the panel interprets `start` in. Dispatcharr = "UTC". */
         val panelTimeZoneId: String = "UTC",
-        /** Manual wall-clock correction for a mislabeled panel, in minutes. */
-        val correctionMinutes: Int = 0,
     )
 
     /**
@@ -54,8 +52,11 @@ object CatchupUrlBuilder {
      * be at least the programme length.
      */
     fun build(ctx: Context, startMillis: Long, endMillis: Long): String {
-        val correctedStart = startMillis + ctx.correctionMinutes * 60_000L
-        val start = formatStart(correctedStart, ctx.panelTimeZoneId)
+        // (A former correctionMinutes field was removed: never plumbed to
+        // any caller, and it was applied in build() but not in
+        // rebuildForOffset(), so wiring it up would have made the first
+        // seek silently drop the correction.)
+        val start = formatStart(startMillis, ctx.panelTimeZoneId)
         val durationMin = ceil((endMillis - startMillis).coerceAtLeast(60_000L) / 60_000.0).toInt()
         val base = ctx.baseUrl.trimEnd('/')
         return "$base/timeshift/${enc(ctx.username)}/${enc(ctx.password)}/" +
@@ -67,10 +68,21 @@ object CatchupUrlBuilder {
      * colon-dash, minute precision), rendered in the panel's timezone.
      */
     private fun formatStart(epochMillis: Long, zoneId: String): String {
-        val fmt = SimpleDateFormat("yyyy-MM-dd:HH-mm", Locale.US).apply {
-            timeZone = runCatching { TimeZone.getTimeZone(zoneId) }
-                .getOrDefault(TimeZone.getTimeZone("UTC"))
+        // TimeZone.getTimeZone never throws; it silently returns GMT for
+        // any string it doesn't recognize (panels advertise things like
+        // "UTC+3" or misspellings), which reintroduced the wrong-hour bug
+        // with no signal. Validate against the real zone table and LOG
+        // the fallback so a bad panel string is diagnosable.
+        val zone = if (TimeZone.getAvailableIDs().contains(zoneId)) {
+            TimeZone.getTimeZone(zoneId)
+        } else {
+            android.util.Log.w(
+                "CatchupUrlBuilder",
+                "unrecognized panel timezone '$zoneId'; falling back to UTC",
+            )
+            TimeZone.getTimeZone("UTC")
         }
+        val fmt = SimpleDateFormat("yyyy-MM-dd:HH-mm", Locale.US).apply { timeZone = zone }
         return fmt.format(Date(epochMillis))
     }
 

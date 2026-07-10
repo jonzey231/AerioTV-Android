@@ -641,12 +641,29 @@ fun VODPlayerScreen(
                                     error.errorCode ==
                                     PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
                                 ) {
-                                    android.widget.Toast.makeText(
-                                        ctx,
-                                        "Catch-up isn't available for this program on your provider.",
-                                        android.widget.Toast.LENGTH_LONG,
-                                    ).show()
-                                    onClose()
+                                    // Only a 4xx means "no archive": close.
+                                    // A transient 5xx on a mid-programme
+                                    // re-tune used to kick the user out of a
+                                    // replay they had been watching for an
+                                    // hour; keep the player up and let them
+                                    // scrub to retry.
+                                    val status = (error.cause as?
+                                        androidx.media3.datasource.HttpDataSource
+                                            .InvalidResponseCodeException)?.responseCode ?: 0
+                                    if (status in 400..499) {
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            "Catch-up isn't available for this program on your provider.",
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                        onClose()
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            "Catch-up stream hiccup (HTTP $status). Scrub to retry.",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
                                 }
                             }
                         })
