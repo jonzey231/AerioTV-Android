@@ -981,53 +981,20 @@ private fun RewindTransportBar(
                 inactiveTrackColor = Color.White.copy(alpha = 0.18f),
             ),
         )
-        // Remaining time rides directly under the timeline, right-aligned
-        // with its end, computed against the (possibly shifted) playback
-        // position so it stays truthful while rewound.
-        programme?.let { prog ->
-            val remMin = ((prog.endMillis - current).coerceAtLeast(0) / 60_000).toInt()
-            val remText = if (remMin >= 60) {
-                "${remMin / 60} h ${remMin % 60} min remaining"
-            } else {
-                "$remMin min remaining"
-            }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = remText,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.7f),
-                )
-            }
-        }
-        Spacer(Modifier.height(4.dp))
+        // Status line under the timeline, LEFT-aligned: the LIVE /
+        // behind-live indicator first, then the remaining time. Both are
+        // computed against the (possibly shifted) playback position so
+        // they stay truthful while rewound.
+        val behindMs = head - current
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            CircleIconButton(
-                icon = Icons.Filled.Replay30,
-                contentDescription = "Back 30 seconds",
-                onClick = { onSeekWall(current - 30_000) },
-            )
-            CircleIconButton(
-                icon = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                contentDescription = if (paused) "Play" else "Pause",
-                onClick = onTogglePause,
-            )
-            CircleIconButton(
-                icon = Icons.Filled.Forward30,
-                contentDescription = "Forward 30 seconds",
-                onClick = { onSeekWall(current + 30_000) },
-            )
-            val behindMs = head - current
             Text(
                 text = if (state.timeshifting && behindMs > 5_000) {
                     val totalSec = behindMs / 1000
-                    val m = totalSec / 60
-                    val sec = totalSec % 60
-                    String.format("-%d:%02d", m, sec)
+                    String.format("-%d:%02d", totalSec / 60, totalSec % 60)
                 } else {
                     "LIVE"
                 },
@@ -1039,12 +1006,51 @@ private fun RewindTransportBar(
                     MaterialTheme.colorScheme.primary
                 },
             )
-            Spacer(Modifier.weight(1f))
+            programme?.let { prog ->
+                val remMin = ((prog.endMillis - current).coerceAtLeast(0) / 60_000).toInt()
+                Text(
+                    text = if (remMin >= 60) {
+                        "${remMin / 60} h ${remMin % 60} min remaining"
+                    } else {
+                        "$remMin min remaining"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.7f),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // Transport buttons centered; the Go Live pill (only while
+        // rewound) anchors to the right edge without disturbing the
+        // centering.
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                CircleIconButton(
+                    icon = Icons.Filled.Replay30,
+                    contentDescription = "Back 30 seconds",
+                    onClick = { onSeekWall(current - 30_000) },
+                )
+                CircleIconButton(
+                    icon = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    contentDescription = if (paused) "Play" else "Pause",
+                    onClick = onTogglePause,
+                )
+                CircleIconButton(
+                    icon = Icons.Filled.Forward30,
+                    contentDescription = "Forward 30 seconds",
+                    onClick = { onSeekWall(current + 30_000) },
+                )
+            }
             if (state.timeshifting) {
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = MaterialTheme.colorScheme.primary,
                     onClick = onGoLive,
+                    modifier = Modifier.align(Alignment.CenterEnd),
                 ) {
                     Text(
                         text = "Go Live",
