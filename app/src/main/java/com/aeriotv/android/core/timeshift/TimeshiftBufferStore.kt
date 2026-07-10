@@ -155,6 +155,15 @@ class TimeshiftWriter(
     private var currentBytes = 0L
     /** Carry buffer so segment cuts always land on 188-byte packet boundaries. */
     private var carry = ByteArray(0)
+    /** Set whenever a NEW connection starts feeding the writer (session
+     *  start, tee reopen, independent filler splice). Dispatcharr's
+     *  /proxy/ts joins mid-packet, so the first bytes of every
+     *  connection are NOT packet-aligned; consuming them as-is
+     *  misaligns the entire buffer and the demuxer never finds stable
+     *  sync (the "constant freezing" field report). While set, incoming
+     *  bytes are scanned for a verified 0x47 sync pattern and everything
+     *  before it is dropped. */
+    @Volatile private var needResync = true
     @Volatile var closed = false
         private set
     /** Wall time of the newest byte written; the "live edge" of the buffer. */
@@ -170,6 +179,17 @@ class TimeshiftWriter(
     ) { r -> Thread(r, "timeshift-writer").apply { priority = Thread.NORM_PRIORITY - 1 } }
         .apply { setRejectedExecutionHandler { _, _ -> /* drop chunk, never block playback */ } }
 
+    /** Mark that the NEXT appended bytes come from a fresh connection:
+     *  drop the packet-fragment carry and re-scan for TS sync. */
+    fun markDiscontinuity() {
+        executor.execute {
+            synchronized(lock) {
+                carry = ByteArray(0)
+                needResync = true
+            }
+        }
+    }
+
     fun append(data: ByteArray, offset: Int, length: Int) {
         if (closed || length <= 0) return
         val copy = data.copyOfRange(offset, offset + length)
@@ -183,7 +203,18 @@ class TimeshiftWriter(
                 val now = System.currentTimeMillis()
                 // Merge the carry-over remainder with this chunk, then
                 // write only whole 188-byte packets; keep the tail.
-                val merged = if (carry.isEmpty()) chunk else carry + chunk
+                var merged = if (carry.isEmpty()) chunk else carry + chunk
+                if (needResync) {
+                    val sync = findSync(merged)
+                    if (sync < 0) {
+                        // No verified sync in this chunk; keep a tail so a
+                        // pattern spanning the boundary is still found.
+                        carry = merged.takeLast(TimeshiftBufferStore.TS_PACKET * 2 + 1).toByteArray()
+                        return
+                    }
+                    merged = merged.copyOfRange(sync, merged.size)
+                    needResync = false
+                }
                 val whole = (merged.size / TimeshiftBufferStore.TS_PACKET) * TimeshiftBufferStore.TS_PACKET
                 carry = if (whole < merged.size) merged.copyOfRange(whole, merged.size) else ByteArray(0)
                 if (whole == 0) return
@@ -199,6 +230,21 @@ class TimeshiftWriter(
                 closeLocked()
             }
         }
+    }
+
+    /** First index with 0x47 at i, i+188, and i+376 (three-packet
+     *  verification so a stray 0x47 inside a payload can't fool us). */
+    private fun findSync(buf: ByteArray): Int {
+        val p = TimeshiftBufferStore.TS_PACKET
+        var i = 0
+        val limit = buf.size - 2 * p - 1
+        while (i <= limit) {
+            if (buf[i] == 0x47.toByte() && buf[i + p] == 0x47.toByte() && buf[i + 2 * p] == 0x47.toByte()) {
+                return i
+            }
+            i++
+        }
+        return -1
     }
 
     private fun rollSegment(now: Long) {

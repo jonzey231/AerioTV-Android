@@ -37,6 +37,9 @@ class TeeDataSource(
 
     override fun open(dataSpec: DataSpec): Long {
         writer = writerProvider()
+        // Every open is a new HTTP connection that joins the proxy
+        // stream mid-packet; realign before consuming its bytes.
+        writer?.markDiscontinuity()
         return upstream.open(dataSpec)
     }
 

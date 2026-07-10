@@ -670,6 +670,7 @@ fun PlayerScreen(
         val tsState by timeshiftController.state.collectAsStateWithLifecycle()
         var tsPositionWallMs by remember { mutableStateOf(0L) }
         var tsPaused by remember { mutableStateOf(false) }
+        var livePauseWallMs by remember { mutableStateOf(0L) }
         LaunchedEffect(tsState.buffering) {
             while (tsState.buffering) {
                 timeshiftController.refreshWindow()
@@ -699,18 +700,35 @@ fun PlayerScreen(
             timeshiftPositionWallMs = tsPositionWallMs,
             isPlayerPaused = tsPaused,
             onRewindTogglePause = {
-                if (exoHolder.isTimeshifting) {
-                    exoHolder.setPaused(!exoHolder.isPaused())
-                } else if (tsState.buffering && !exoHolder.isPaused()) {
-                    // Pause on live: hop onto the buffer just behind the
-                    // edge, then pause, so resume continues from this
-                    // moment instead of jumping ahead (cable-DVR model).
-                    val entered = exoHolder.playTimeshift(
-                        (tsState.headWallMs - 3_000).coerceAtLeast(tsState.tailWallMs),
-                    )
-                    if (entered) exoHolder.setPaused(true) else exoHolder.setPaused(true)
-                } else {
-                    exoHolder.setPaused(!exoHolder.isPaused())
+                when {
+                    exoHolder.isTimeshifting -> {
+                        exoHolder.setPaused(!exoHolder.isPaused())
+                    }
+                    tsState.buffering && !exoHolder.isPaused() -> {
+                        // Cable-seamless pause: nothing switches, the frame
+                        // just freezes. The controller quietly brings up the
+                        // independent filler so the buffer keeps growing
+                        // underneath a long pause.
+                        livePauseWallMs = System.currentTimeMillis()
+                        exoHolder.setPaused(true)
+                        timeshiftController.onLivePaused()
+                    }
+                    tsState.buffering && exoHolder.isPaused() && livePauseWallMs > 0 -> {
+                        val pausedForMs = System.currentTimeMillis() - livePauseWallMs
+                        if (pausedForMs <= 6_000) {
+                            // Short pause: resume the untouched live
+                            // pipeline. Zero switch, zero glitch.
+                            exoHolder.setPaused(false)
+                            timeshiftController.onLiveResumedAtEdge()
+                        } else {
+                            // Long pause: one switch onto the buffer at the
+                            // pause point; the filler covered the gap.
+                            exoHolder.setPaused(false)
+                            exoHolder.playTimeshift(livePauseWallMs - 1_000)
+                        }
+                        livePauseWallMs = 0L
+                    }
+                    else -> exoHolder.setPaused(!exoHolder.isPaused())
                 }
             },
             onRewindSeekWall = { target ->

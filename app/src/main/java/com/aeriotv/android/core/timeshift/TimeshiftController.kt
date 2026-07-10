@@ -135,6 +135,9 @@ class TimeshiftController @Inject constructor(
         val url = liveUrl ?: return
         val writer = activeWriter ?: return
         if (fillJob?.isActive == true) return
+        // New connection joining the proxy mid-packet: realign before
+        // its bytes land in the buffer.
+        writer.markDiscontinuity()
         fillJob = scope.launch {
             try {
                 val req = Request.Builder().url(url).apply {
@@ -164,6 +167,32 @@ class TimeshiftController @Inject constructor(
     private fun stopIndependentFill() {
         fillJob?.cancel()
         fillJob = null
+        pauseFillJob?.cancel()
+        pauseFillJob = null
+    }
+
+    private var pauseFillJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Cable-seamless pause: the player just pauses (no source switch),
+     * its stalled live connection stops feeding the tee once the
+     * internal read-ahead fills, so the filler must take over. Start it
+     * DELAYED by roughly that read-ahead so the filler's join point
+     * lines up with where the tee left off instead of duplicating the
+     * last few seconds of stream.
+     */
+    fun onLivePaused() {
+        if (pauseFillJob?.isActive == true || fillJob?.isActive == true) return
+        pauseFillJob = scope.launch {
+            kotlinx.coroutines.delay(8_000)
+            startIndependentFill()
+        }
+    }
+
+    /** Short pause resumed on the untouched live pipeline: the tee is
+     *  reading again; retire the filler (it may not have started). */
+    fun onLiveResumedAtEdge() {
+        stopIndependentFill()
     }
 
     /** Playback switched onto the buffer at [atWallMs]. */

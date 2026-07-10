@@ -461,18 +461,21 @@ fun PlayerChromeOverlay(
             ) {
                 nowProgramme?.let { prog ->
                     if (timeshiftState?.buffering == true) {
+                        // The channel/programme header at the top already
+                        // names the show; the transport bar carries the
+                        // remaining time inline, so no duplicate footer row.
                         RewindTransportBar(
                             state = timeshiftState,
                             positionWallMs = timeshiftPositionWallMs,
                             paused = isPlayerPaused,
+                            programme = prog,
                             onTogglePause = onRewindTogglePause,
                             onSeekWall = onRewindSeekWall,
                             onGoLive = onGoLive,
                         )
                     } else {
                         EpgProgress(programme = prog)
-                    }
-                    Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -489,6 +492,7 @@ fun PlayerChromeOverlay(
                             style = MaterialTheme.typography.labelMedium,
                             color = Color.White.copy(alpha = 0.7f),
                         )
+                    }
                     }
                 } ?: run {
                     Text(
@@ -948,6 +952,7 @@ private fun RewindTransportBar(
     state: com.aeriotv.android.core.timeshift.TimeshiftController.State,
     positionWallMs: Long,
     paused: Boolean,
+    programme: EPGProgramme?,
     onTogglePause: () -> Unit,
     onSeekWall: (Long) -> Unit,
     onGoLive: () -> Unit,
@@ -976,6 +981,25 @@ private fun RewindTransportBar(
                 inactiveTrackColor = Color.White.copy(alpha = 0.18f),
             ),
         )
+        // Remaining time rides directly under the timeline, right-aligned
+        // with its end, computed against the (possibly shifted) playback
+        // position so it stays truthful while rewound.
+        programme?.let { prog ->
+            val remMin = ((prog.endMillis - current).coerceAtLeast(0) / 60_000).toInt()
+            val remText = if (remMin >= 60) {
+                "${remMin / 60} h ${remMin % 60} min remaining"
+            } else {
+                "$remMin min remaining"
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = remText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.7f),
+                )
+            }
+        }
         Spacer(Modifier.height(4.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
