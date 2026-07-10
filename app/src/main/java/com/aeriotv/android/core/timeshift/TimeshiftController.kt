@@ -11,6 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -39,7 +40,27 @@ class TimeshiftController @Inject constructor(
         private const val TAG = "TimeshiftController"
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Single-threaded: session start/stop/enter/exit all mutate the same
+    // fields, and callers arrive from Main (transport buttons), IO (the
+    // delayed pause filler), and the player thread. Serial confinement
+    // makes start/stop ordering deterministic (a fast open-then-back
+    // could previously stop BEFORE the start coroutine ran, orphaning a
+    // writer the mini-player's tee fed forever) and makes the filler
+    // is-active check atomic.
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+
+    init {
+        // Retention/budget reaper independent of new sessions: without
+        // this, disabling the feature (or never watching live again)
+        // stranded old buffers on disk until app data was cleared.
+        scope.launch {
+            runCatching {
+                store.pruneExpired(prefs.liveRewindRetentionHours.first() * 3_600_000L)
+                store.enforceBudget(prefs.liveRewindBudgetGB.first() * 1024L * 1024 * 1024)
+            }.onFailure { Log.w(TAG, "startup reaper failed: $it") }
+        }
+    }
 
     @Volatile
     var activeWriter: TimeshiftWriter? = null
@@ -89,25 +110,34 @@ class TimeshiftController @Inject constructor(
         liveUrl = streamUrl
         liveHeaders = headers
         scope.launch {
-            if (!prefs.liveRewindEnabled.first()) return@launch
-            val depthMin = prefs.liveRewindDepthMinutes.first()
-            val retentionHours = prefs.liveRewindRetentionHours.first()
-            val budgetGB = prefs.liveRewindBudgetGB.first()
-            stopSessionInternal()
-            val writer = store.startSession(
-                channelId = channelId,
-                channelName = channelName,
-                depthMs = depthMin * 60_000L,
-                retentionMs = retentionHours * 60L * 60 * 1000,
-                budgetBytes = budgetGB * 1024L * 1024 * 1024,
-            )
-            activeWriter = writer
-            _state.value = State(
-                buffering = true,
-                tailWallMs = writer.sessionStartMs,
-                headWallMs = writer.sessionStartMs,
-            )
-            Log.i(TAG, "buffering started for $channelName")
+            // runCatching: session setup does disk IO (mkdirs, meta
+            // write) that can throw on a full or flaky disk; an uncaught
+            // exception here killed the whole process on every tune.
+            runCatching {
+                if (!prefs.liveRewindEnabled.first()) return@launch
+                val depthMin = prefs.liveRewindDepthMinutes.first()
+                val retentionHours = prefs.liveRewindRetentionHours.first()
+                val budgetGB = prefs.liveRewindBudgetGB.first()
+                stopSessionInternal()
+                val writer = store.startSession(
+                    channelId = channelId,
+                    channelName = channelName,
+                    depthMs = depthMin * 60_000L,
+                    retentionMs = retentionHours * 60L * 60 * 1000,
+                    budgetBytes = budgetGB * 1024L * 1024 * 1024,
+                )
+                activeWriter = writer
+                _state.value = State(
+                    buffering = true,
+                    tailWallMs = writer.sessionStartMs,
+                    headWallMs = writer.sessionStartMs,
+                )
+                Log.i(TAG, "buffering started for $channelName")
+            }.onFailure {
+                Log.w(TAG, "session start failed: $it")
+                activeWriter = null
+                _state.value = State()
+            }
         }
     }
 
@@ -117,8 +147,12 @@ class TimeshiftController @Inject constructor(
      * retention reaper ages it out.
      */
     fun onFullscreenLiveStopped() {
-        stopSessionInternal()
-        _state.value = State()
+        // Through the same serial scope as start so a fast tune-then-back
+        // can never stop BEFORE the pending start runs.
+        scope.launch {
+            stopSessionInternal()
+            _state.value = State()
+        }
     }
 
     /**
@@ -143,7 +177,9 @@ class TimeshiftController @Inject constructor(
                 val req = Request.Builder().url(url).apply {
                     liveHeaders.forEach { (k, v) -> header(k, v) }
                 }.build()
-                fillClient.newCall(req).execute().use { resp ->
+                val call = fillClient.newCall(req)
+                fillCall = call
+                call.execute().use { resp ->
                     if (!resp.isSuccessful) {
                         Log.w(TAG, "fill connect failed http=${resp.code}")
                         return@use
@@ -164,7 +200,15 @@ class TimeshiftController @Inject constructor(
         Log.i(TAG, "independent fill started")
     }
 
+    /** The filler's in-flight OkHttp call. Cancelled explicitly on stop:
+     *  a coroutine cancel alone is cooperative and the blocking
+     *  `src.read` otherwise held the provider connection open (alongside
+     *  the fresh live one) until the 60s read timeout. */
+    @Volatile private var fillCall: okhttp3.Call? = null
+
     private fun stopIndependentFill() {
+        fillCall?.cancel()
+        fillCall = null
         fillJob?.cancel()
         fillJob = null
         pauseFillJob?.cancel()
@@ -185,6 +229,8 @@ class TimeshiftController @Inject constructor(
         if (pauseFillJob?.isActive == true || fillJob?.isActive == true) return
         pauseFillJob = scope.launch {
             kotlinx.coroutines.delay(8_000)
+            // Serial scope: this cannot interleave with a Main-thread
+            // rewind press starting its own filler (double-fill race).
             startIndependentFill()
         }
     }
@@ -192,31 +238,39 @@ class TimeshiftController @Inject constructor(
     /** Short pause resumed on the untouched live pipeline: the tee is
      *  reading again; retire the filler (it may not have started). */
     fun onLiveResumedAtEdge() {
-        stopIndependentFill()
+        scope.launch { stopIndependentFill() }
     }
 
     /** Playback switched onto the buffer at [atWallMs]. */
     fun onEnterTimeshift(atWallMs: Long) {
         val w = activeWriter ?: return
-        startIndependentFill()
-        _state.value = _state.value.copy(
-            timeshifting = true,
-            baseWallMs = atWallMs,
-            tailWallMs = w.tailWallMs,
-            headWallMs = w.headWallMs,
-        )
+        scope.launch { startIndependentFill() }
+        _state.update {
+            it.copy(
+                timeshifting = true,
+                baseWallMs = atWallMs,
+                tailWallMs = w.tailWallMs,
+                headWallMs = w.headWallMs,
+            )
+        }
     }
 
     /** Playback returned to the direct live stream. */
     fun onGoLive() {
-        stopIndependentFill()
-        _state.value = _state.value.copy(timeshifting = false, baseWallMs = 0)
+        scope.launch { stopIndependentFill() }
+        _state.update { it.copy(timeshifting = false, baseWallMs = 0) }
     }
 
     /** Poll tick from the chrome while visible: refresh window bounds. */
     fun refreshWindow() {
         val w = activeWriter ?: return
-        _state.value = _state.value.copy(tailWallMs = w.tailWallMs, headWallMs = w.headWallMs)
+        if (w.closed) {
+            // Disk-full (or any write failure) self-closed the writer;
+            // stop advertising a rewind window that can no longer grow.
+            _state.update { it.copy(buffering = false, timeshifting = false) }
+            return
+        }
+        _state.update { it.copy(tailWallMs = w.tailWallMs, headWallMs = w.headWallMs) }
     }
 
     private fun stopSessionInternal() {

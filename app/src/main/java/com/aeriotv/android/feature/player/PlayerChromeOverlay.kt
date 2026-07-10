@@ -511,21 +511,26 @@ fun PlayerChromeOverlay(
                     .navigationBarsPadding()
                     .padding(horizontal = 18.dp, vertical = 24.dp),
             ) {
-                nowProgramme?.let { prog ->
-                    if (timeshiftState?.buffering == true) {
-                        // The channel/programme header at the top already
-                        // names the show; the transport bar carries the
-                        // remaining time inline, so no duplicate footer row.
-                        RewindTransportBar(
-                            state = timeshiftState,
-                            positionWallMs = timeshiftPositionWallMs,
-                            paused = isPlayerPaused,
-                            programme = prog,
-                            onTogglePause = onRewindTogglePause,
-                            onSeekWall = onRewindSeekWall,
-                            onGoLive = onGoLive,
-                        )
-                    } else {
+                // The transport must render whenever the buffer rolls,
+                // INCLUDING on channels with no EPG data (bare M3U
+                // playlists): it was nested under nowProgramme?.let, so
+                // EPG-less phones got no pause/rewind/Go Live controls
+                // at all. RewindTransportBar takes a nullable programme.
+                if (timeshiftState?.buffering == true) {
+                    // The channel/programme header at the top already
+                    // names the show; the transport bar carries the
+                    // remaining time inline, so no duplicate footer row.
+                    RewindTransportBar(
+                        state = timeshiftState,
+                        positionWallMs = timeshiftPositionWallMs,
+                        paused = isPlayerPaused,
+                        programme = nowProgramme,
+                        onTogglePause = onRewindTogglePause,
+                        onSeekWall = onRewindSeekWall,
+                        onGoLive = onGoLive,
+                    )
+                } else nowProgramme?.let { prog ->
+                    run {
                         EpgProgress(programme = prog)
                         Spacer(Modifier.height(8.dp))
                     Row(

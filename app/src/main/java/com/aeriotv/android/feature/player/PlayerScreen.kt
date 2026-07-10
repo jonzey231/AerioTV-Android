@@ -233,7 +233,15 @@ fun PlayerScreen(
         // the locked v1 scope; leaving this screen stops the session
         // (DisposableEffect below), so mini-player, multiview, and PiP
         // handoffs all drop back to pure live.
-        timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders)
+        // Gate on the tee's own URL test: only raw MPEG-TS is mirrored
+        // into the buffer, so an HLS/DASH live channel must not start a
+        // session (it would show a transport over a permanently empty
+        // buffer and error-loop on the first pause/rewind).
+        if (exoHolder.canBufferLiveRewind(url)) {
+            timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders)
+        } else {
+            timeshiftController.onFullscreenLiveStopped()
+        }
     }
 
     // Live Rewind: end the buffer session when fullscreen live ends.
@@ -408,8 +416,11 @@ fun PlayerScreen(
             while (isActive) {
                 delay(backoffMs)
                 if (currentChannel?.id != ch.id) break
-                // a manual switch or any re-prime owns the player -> park, re-seed after
-                if (switchStream != null || exoHolder.isReprimeInFlight) { baseline = null; continue }
+                // a manual switch, any re-prime, or an active rewind owns the
+                // player -> park, re-seed after (a re-prime mid-rewind would
+                // silently yank playback to live)
+                if (switchStream != null || exoHolder.isReprimeInFlight ||
+                    exoHolder.isTimeshifting) { baseline = null; continue }
                 // only while steady: mutually exclusive with the cold-start no-data watchdog
                 if (!exoHolder.reachedSteadyPlayback.value) { baseline = null; continue }
                 // OFF the main thread: the GET + JSON parse + auth-retry must never run on
@@ -426,6 +437,7 @@ fun PlayerScreen(
                     val confirm = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
                     if (confirm != statusUrl) continue
                     if (switchStream != null || exoHolder.isReprimeInFlight ||
+                        exoHolder.isTimeshifting ||
                         !exoHolder.reachedSteadyPlayback.value || currentChannel?.id != ch.id) continue
                     android.util.Log.w(
                         "DispatcharrSwitch",
@@ -458,7 +470,8 @@ fun PlayerScreen(
         followLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             onVerdictFlips.collect {
                 if (currentChannel?.id != ch.id) return@collect
-                if (switchStream != null || exoHolder.isReprimeInFlight) return@collect
+                if (switchStream != null || exoHolder.isReprimeInFlight ||
+                    exoHolder.isTimeshifting) return@collect
                 val newUrl = withContext(Dispatchers.IO) {
                     runCatching { onRebuildLiveUrl(uuid) }.getOrNull()
                 } ?: return@collect
@@ -466,7 +479,7 @@ fun PlayerScreen(
                 // (same host) costs nothing (mirrors iOS "primary != current" guard).
                 if (newUrl == exoHolder.currentPlayUrl) return@collect
                 if (currentChannel?.id != ch.id || switchStream != null ||
-                    exoHolder.isReprimeInFlight) return@collect
+                    exoHolder.isReprimeInFlight || exoHolder.isTimeshifting) return@collect
                 Log.w(TAG, "[RETUNE] LAN/WAN flip -> re-priming ch=${ch.id} onto $newUrl")
                 exoHolder.reprimeWithKeepalive(
                     url = newUrl,
@@ -671,7 +684,12 @@ fun PlayerScreen(
         var tsPositionWallMs by remember { mutableStateOf(0L) }
         var tsPaused by remember { mutableStateOf(false) }
         var livePauseWallMs by remember { mutableStateOf(0L) }
+        val tickerLifecycleOwner = LocalLifecycleOwner.current
         LaunchedEffect(tsState.buffering) {
+            if (!tsState.buffering) return@LaunchedEffect
+            // STARTED-gated: without this the 500ms wakeup ran for the
+            // whole time the app sat backgrounded behind PiP.
+            tickerLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (tsState.buffering) {
                 timeshiftController.refreshWindow()
                 tsPaused = exoHolder.isPaused()
@@ -695,6 +713,7 @@ fun PlayerScreen(
                     }
                 }
                 kotlinx.coroutines.delay(500)
+            }
             }
         }
 

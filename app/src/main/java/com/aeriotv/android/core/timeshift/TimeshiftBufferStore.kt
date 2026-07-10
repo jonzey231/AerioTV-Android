@@ -77,7 +77,7 @@ class TimeshiftBufferStore @Inject constructor(
             .put("startedAtMs", startedAt)
         File(dir, META_FILE).writeText(meta.toString())
         Log.i(TAG, "session start dir=${dir.name} channel=$channelName depthMs=$depthMs")
-        return TimeshiftWriter(dir, startedAt, depthMs)
+        return TimeshiftWriter(dir, startedAt, depthMs, budgetBytes)
     }
 
     /** Delete whole sessions whose newest data is older than [retentionMs]. */
@@ -140,14 +140,20 @@ data class TimeshiftSegment(
  * Threading: [append] is called from ExoPlayer's loading thread via
  * [TeeDataSource]. Writes are handed to a single-thread executor with
  * a bounded queue so a slow disk can NEVER stall live playback; on
- * overflow the oldest pending chunk is dropped (a small hole in the
- * rewind buffer beats a stalled live picture).
+ * overflow the incoming chunk is dropped (a small hole in the rewind
+ * buffer beats a stalled live picture).
  */
 class TimeshiftWriter(
     val sessionDir: File,
     val sessionStartMs: Long,
     private val depthMs: Long,
+    private val budgetBytes: Long = Long.MAX_VALUE,
 ) {
+    /** Running byte total of on-disk segments this session; maintained
+     *  by [rollSegment]'s eviction pass so the budget can be enforced
+     *  mid-session (a 120-min depth on a UHD feed outgrows a 10 GB
+     *  budget long before the next session-start sweep runs). */
+    private var sessionBytes = 0L
     private val lock = Any()
     private var current: RandomAccessFile? = null
     private var currentFile: File? = null
@@ -254,17 +260,32 @@ class TimeshiftWriter(
         currentFile = f
         currentStartWallMs = now
         currentBytes = 0
-        // Ring: drop segments older than the rewind depth.
+        // Ring: drop segments older than the rewind depth, then keep
+        // evicting oldest-first while the session exceeds the storage
+        // budget (depth x bitrate can outgrow the budget mid-session).
         val cutoff = now - depthMs
-        sessionDir.listFiles()
+        val segs = sessionDir.listFiles()
             ?.filter { it.name.startsWith("seg_") && it.name.endsWith(".ts") }
-            ?.forEach { seg ->
-                val start = seg.name.removePrefix("seg_").removeSuffix(".ts").toLongOrNull() ?: return@forEach
-                // A segment covers [start, start+SEGMENT_MS); evict only
-                // when its END is past the cutoff so the window never
-                // shrinks below the configured depth.
-                if (start + TimeshiftBufferStore.SEGMENT_MS < cutoff) seg.delete()
+            ?.sortedBy { it.name.removePrefix("seg_").removeSuffix(".ts").toLongOrNull() ?: 0L }
+            .orEmpty()
+        var total = segs.sumOf { it.length() }
+        var dropped = 0
+        for (seg in segs) {
+            val start = seg.name.removePrefix("seg_").removeSuffix(".ts").toLongOrNull() ?: continue
+            // A segment covers [start, start+SEGMENT_MS); depth-evict only
+            // when its END is past the cutoff so the window never shrinks
+            // below the configured depth. Budget-evict regardless of age.
+            val pastDepth = start + TimeshiftBufferStore.SEGMENT_MS < cutoff
+            val overBudget = total > budgetBytes && dropped < segs.size - 1
+            if (pastDepth || overBudget) {
+                total -= seg.length()
+                dropped++
+                seg.delete()
+            } else if (!pastDepth && total <= budgetBytes) {
+                break
             }
+        }
+        sessionBytes = total
         tailWallMs = segments().firstOrNull()?.startWallMs ?: now
     }
 

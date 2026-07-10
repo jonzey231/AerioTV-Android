@@ -340,12 +340,12 @@ fun VODPlayerScreen(
         }
         val progLenMs = catchupEndMillis - catchupStartMillis
         val target = rawTarget.coerceIn(0L, (progLenMs - 5_000L).coerceAtLeast(0L))
-        val relative = target - catchupOffsetMs
-        if (relative >= 0L && relative <= player.bufferedPosition) {
-            player.seekTo(relative)
-            positionMs = target
-            return@seek
-        }
+        // NO in-buffer fast path: the catch-up stream reports LENGTH_UNSET
+        // (UnboundedLengthDataSource) so TsExtractor emits an UNSEEKABLE
+        // SeekMap and media3 collapses every seekTo into t=0 - which, with
+        // backBufferDurationMs=0, resets the load and restarted playback
+        // at the current WINDOW START (press +10s, jump minutes back).
+        // Every catch-up seek re-tunes; it already handles both directions.
         val absFlooredStart = ((catchupStartMillis + target) / 60_000L) * 60_000L
         val windowOffset = (absFlooredStart - catchupStartMillis).coerceAtLeast(0L)
         val newUrl = com.aeriotv.android.core.playback.CatchupUrlBuilder.rebuildForOffset(
@@ -356,15 +356,19 @@ fun VODPlayerScreen(
             offsetMillis = windowOffset,
         )
         if (newUrl == null) {
-            player.seekTo(rawTarget)
-            positionMs = rawTarget
+            // Unable to rebuild the window URL: do nothing. A raw seekTo
+            // would collapse to t=0 on the unseekable stream (see above).
+            Log.w(TAG, "Catch-up re-tune URL rebuild failed; ignoring seek")
             return@seek
         }
         catchupOffsetMs = windowOffset
-        positionMs = target
+        // Honest minute granularity: the residual in-stream seek also
+        // collapsed to 0 on the unseekable stream, so the scrubber showed
+        // the target then visibly snapped back. Playback starts at the
+        // floored minute; say so.
+        positionMs = windowOffset
         player.setMediaItem(MediaItem.fromUri(newUrl))
         player.prepare()
-        if (target > windowOffset) player.seekTo(target - windowOffset)
         player.playWhenReady = true
         Log.i(TAG, "Catch-up re-tune to ${target / 1000}s (window ${windowOffset / 1000}s)")
     }

@@ -345,15 +345,24 @@ class AerioExoPlayerHolder @Inject constructor(
             // re-entering at the current tail; if the session is gone,
             // fall back to the live stream.
             if (isTimeshifting) {
-                val w = timeshift.get().activeWriter
-                if (w != null && !w.closed) {
-                    Log.w(TAG, "[REWIND] buffer error ${error.errorCodeName}; bumping to tail")
+                val ts = timeshift.get()
+                val w = ts.activeWriter
+                timeshiftErrorRetries += 1
+                // Triage: "evicted behind me" (position fell off the ring)
+                // recovers at the tail; "stalled at the frozen head" (the
+                // filler died, head stopped advancing) must go LIVE, or
+                // the tail bump replays the whole buffer into the same
+                // stall. Cap tail retries so an empty/dead buffer cannot
+                // loop error->tail->error forever on a frozen frame.
+                val posWall = ts.state.value.baseWallMs + (player?.contentPosition ?: 0L)
+                val nearHead = w != null && w.headWallMs - posWall < 10_000
+                if (w != null && !w.closed && !nearHead && timeshiftErrorRetries <= 2) {
+                    Log.w(TAG, "[REWIND] buffer error ${error.errorCodeName}; re-entering at tail (retry $timeshiftErrorRetries)")
                     isTimeshifting = false
                     playTimeshift(w.tailWallMs + 2_000)
                 } else {
-                    Log.w(TAG, "[REWIND] buffer gone; returning to live")
-                    isTimeshifting = false
-                    lastPlayUrl?.let { playUrl(it, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri) }
+                    Log.w(TAG, "[REWIND] buffer error ${error.errorCodeName}; returning to live (nearHead=$nearHead retries=$timeshiftErrorRetries)")
+                    goLive()
                 }
                 return
             }
@@ -658,6 +667,15 @@ class AerioExoPlayerHolder @Inject constructor(
      * continues to grow while the user is paused or rewound, exactly like
      * a cable DVR. Returns false when no buffer session is active.
      */
+    /** Consecutive timeshift-error recoveries this rewind stint; reset on
+     *  every fresh direct tune. Caps the error->tail retry loop. */
+    private var timeshiftErrorRetries = 0
+
+    /** Live Rewind can only buffer what the tee mirrors: raw MPEG-TS.
+     *  PlayerScreen gates session start on this so HLS/DASH live channels
+     *  never show a transport over a permanently empty buffer. */
+    fun canBufferLiveRewind(url: String): Boolean = isRawTsUrl(url)
+
     fun playTimeshift(fromWallMs: Long): Boolean {
         val p = player ?: return false
         val ts = timeshift.get()
@@ -711,7 +729,15 @@ class AerioExoPlayerHolder @Inject constructor(
         }
         // Remember the args so the stall watchdog can re-prime the same stream;
         // reset its state for this fresh stream.
+        if (isTimeshifting) {
+            // A re-prime path (follow-poller, LAN/WAN flip, watchdog) can
+            // land here mid-rewind; without this the controller stayed in
+            // timeshifting=true and the independent filler streamed the
+            // full live feed for the rest of the session.
+            timeshift.get().onGoLive()
+        }
         isTimeshifting = false
+        timeshiftErrorRetries = 0
         lastPlayUrl = url
         lastPlayTitle = title
         lastPlaySubtitle = subtitle
