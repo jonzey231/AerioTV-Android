@@ -124,6 +124,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setLiveRewindDepthMinutes(value) }
     }
 
+    val liveRewindRetentionHours: Flow<Int> = prefs.liveRewindRetentionHours
+    fun setLiveRewindRetentionHours(value: Int) {
+        viewModelScope.launch { prefs.setLiveRewindRetentionHours(value) }
+    }
+
+    val liveRewindBudgetGB: Flow<Int> = prefs.liveRewindBudgetGB
+    fun setLiveRewindBudgetGB(value: Int) {
+        viewModelScope.launch { prefs.setLiveRewindBudgetGB(value) }
+    }
+
     val skipLoadingScreen: Flow<Boolean> = prefs.skipLoadingScreen
     fun setSkipLoadingScreen(value: Boolean) {
         viewModelScope.launch { prefs.setSkipLoadingScreen(value) }

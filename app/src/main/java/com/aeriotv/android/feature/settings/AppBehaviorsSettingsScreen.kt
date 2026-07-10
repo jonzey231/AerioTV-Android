@@ -136,11 +136,12 @@ fun AppBehaviorsSettingsScreen(
                 }
             }
 
-            // Live Rewind (task #143 P1): interim surface until the P2
-            // dedicated page (onboarding prompt, storage budget, retention,
-            // external targets) lands.
+            // Live Rewind (task #145 P2): full surface. Storage location
+            // (USB / network targets) arrives in P3.
             val liveRewindEnabled by viewModel.liveRewindEnabled.collectAsStateWithLifecycle(initialValue = false)
             val liveRewindDepth by viewModel.liveRewindDepthMinutes.collectAsStateWithLifecycle(initialValue = 30)
+            val liveRewindRetention by viewModel.liveRewindRetentionHours.collectAsStateWithLifecycle(initialValue = 24)
+            val liveRewindBudget by viewModel.liveRewindBudgetGB.collectAsStateWithLifecycle(initialValue = 10)
             SettingsSection(
                 header = "Live Rewind",
                 footer = "Buffers the channel you are watching so you can pause and " +
@@ -153,13 +154,70 @@ fun AppBehaviorsSettingsScreen(
                     checked = liveRewindEnabled,
                     onCheckedChange = viewModel::setLiveRewindEnabled,
                 )
-                if (liveRewindEnabled) {
+            }
+            if (liveRewindEnabled) {
+                SettingsSection(
+                    header = "Rewind Depth",
+                    footer = "How far back you can rewind while watching. Deeper " +
+                        "buffers use more storage while you watch.",
+                ) {
                     listOf(15, 30, 60, 120).forEach { mins ->
                         SettingsSelectionRow(
                             label = if (mins < 60) "$mins minutes" else "${mins / 60} hour" + if (mins > 60) "s" else "",
                             subtitle = if (mins == 30) "Default" else null,
                             selected = liveRewindDepth == mins,
                             onClick = { viewModel.setLiveRewindDepthMinutes(mins) },
+                        )
+                    }
+                }
+                var showCustomRetention by remember { mutableStateOf(false) }
+                val retentionPresets = listOf(
+                    1 to "1 hour", 6 to "6 hours", 12 to "12 hours",
+                    24 to "24 hours", 72 to "3 days", 168 to "1 week",
+                )
+                SettingsSection(
+                    header = "Keep Buffered Video",
+                    footer = "Buffered video stays on this device after you stop " +
+                        "watching and is deleted once it reaches this age.",
+                ) {
+                    retentionPresets.forEach { (hours, label) ->
+                        SettingsSelectionRow(
+                            label = label,
+                            subtitle = if (hours == 24) "Default" else null,
+                            selected = liveRewindRetention == hours,
+                            onClick = { viewModel.setLiveRewindRetentionHours(hours) },
+                        )
+                    }
+                    val isCustom = retentionPresets.none { it.first == liveRewindRetention }
+                    SettingsSelectionRow(
+                        label = "Custom",
+                        subtitle = if (isCustom) formatRetentionHours(liveRewindRetention) else null,
+                        selected = isCustom,
+                        onClick = { showCustomRetention = true },
+                    )
+                }
+                if (showCustomRetention) {
+                    CustomRetentionDialog(
+                        currentHours = liveRewindRetention,
+                        onConfirm = { hours ->
+                            viewModel.setLiveRewindRetentionHours(hours)
+                            showCustomRetention = false
+                        },
+                        onDismiss = { showCustomRetention = false },
+                    )
+                }
+                SettingsSection(
+                    header = "Storage Limit",
+                    footer = "Total space buffered video may use across all " +
+                        "sessions. The oldest video is removed first when the " +
+                        "limit is reached.",
+                ) {
+                    listOf(2, 5, 10, 20, 50).forEach { gb ->
+                        SettingsSelectionRow(
+                            label = "$gb GB",
+                            subtitle = if (gb == 10) "Default" else null,
+                            selected = liveRewindBudget == gb,
+                            onClick = { viewModel.setLiveRewindBudgetGB(gb) },
                         )
                     }
                 }
@@ -294,4 +352,59 @@ fun AppBehaviorsSettingsScreen(
         }
     }
     }
+}
+
+/** "36 hours" / "2 days" style label for a non-preset retention value. */
+private fun formatRetentionHours(hours: Int): String = when {
+    hours % 24 == 0 && hours >= 48 -> "${hours / 24} days"
+    hours == 24 -> "1 day"
+    hours == 1 -> "1 hour"
+    else -> "$hours hours"
+}
+
+/**
+ * Live Rewind custom retention entry (task #145). Hours-based numeric
+ * field; [tvFormFieldInput] gives the TV remote a usable keyboard path.
+ */
+@Composable
+private fun CustomRetentionDialog(
+    currentHours: Int,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(currentHours.toString()) }
+    val parsed = text.trim().toIntOrNull()?.takeIf { it in 1..(24 * 30) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom retention") },
+        text = {
+            Column {
+                Text(
+                    "How long buffered video is kept, in hours (1 to 720).",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it.filter(Char::isDigit).take(3) },
+                    singleLine = true,
+                    label = { Text("Hours") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                    ),
+                    modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { parsed?.let(onConfirm) },
+                enabled = parsed != null,
+            ) { Text("Set") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

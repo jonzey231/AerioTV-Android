@@ -37,8 +37,6 @@ class TimeshiftController @Inject constructor(
 ) {
     companion object {
         private const val TAG = "TimeshiftController"
-        private const val DEFAULT_RETENTION_MS = 24L * 60 * 60 * 1000
-        private const val DEFAULT_BUDGET_BYTES = 10L * 1024 * 1024 * 1024
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -93,13 +91,15 @@ class TimeshiftController @Inject constructor(
         scope.launch {
             if (!prefs.liveRewindEnabled.first()) return@launch
             val depthMin = prefs.liveRewindDepthMinutes.first()
+            val retentionHours = prefs.liveRewindRetentionHours.first()
+            val budgetGB = prefs.liveRewindBudgetGB.first()
             stopSessionInternal()
             val writer = store.startSession(
                 channelId = channelId,
                 channelName = channelName,
                 depthMs = depthMin * 60_000L,
-                retentionMs = DEFAULT_RETENTION_MS,
-                budgetBytes = DEFAULT_BUDGET_BYTES,
+                retentionMs = retentionHours * 60L * 60 * 1000,
+                budgetBytes = budgetGB * 1024L * 1024 * 1024,
             )
             activeWriter = writer
             _state.value = State(

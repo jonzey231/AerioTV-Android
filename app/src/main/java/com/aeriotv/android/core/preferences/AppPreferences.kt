@@ -912,6 +912,30 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_LIVE_REWIND_DEPTH_MIN] = value }
     }
 
+    /** Live Rewind P2: the one-time feature prompt has been answered
+     *  (either way). Never shown again once set. */
+    val liveRewindPromptSeen: kotlinx.coroutines.flow.Flow<Boolean> =
+        store.data.map { it[KEY_LIVE_REWIND_PROMPT_SEEN] ?: false }
+    suspend fun setLiveRewindPromptSeen(value: Boolean) {
+        store.edit { it[KEY_LIVE_REWIND_PROMPT_SEEN] = value }
+    }
+
+    /** Live Rewind P2: retention for buffered video from past sessions,
+     *  in hours (1/6/12/24/72/168 presets or custom, default 24). */
+    val liveRewindRetentionHours: kotlinx.coroutines.flow.Flow<Int> =
+        store.data.map { it[KEY_LIVE_REWIND_RETENTION_HOURS] ?: 24 }
+    suspend fun setLiveRewindRetentionHours(value: Int) {
+        store.edit { it[KEY_LIVE_REWIND_RETENTION_HOURS] = value.coerceIn(1, 24 * 30) }
+    }
+
+    /** Live Rewind P2: total on-disk budget across sessions, in GB
+     *  (default 10). Oldest segments are evicted first when exceeded. */
+    val liveRewindBudgetGB: kotlinx.coroutines.flow.Flow<Int> =
+        store.data.map { it[KEY_LIVE_REWIND_BUDGET_GB] ?: 10 }
+    suspend fun setLiveRewindBudgetGB(value: Int) {
+        store.edit { it[KEY_LIVE_REWIND_BUDGET_GB] = value.coerceIn(1, 500) }
+    }
+
     /** iOS `dvrMaxLocalStorageMB` parity. Default 10 GB. */
     val dvrMaxLocalStorageMB: Flow<Int> = store.data.map { it[KEY_DVR_MAX_LOCAL_STORAGE_MB] ?: 10_240 }
     suspend fun setDvrMaxLocalStorageMB(value: Int) {
@@ -1072,6 +1096,9 @@ class AppPreferences @Inject constructor(
         val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")
         val KEY_LIVE_REWIND_ENABLED = booleanPreferencesKey("live_rewind_enabled")
         val KEY_LIVE_REWIND_DEPTH_MIN = intPreferencesKey("live_rewind_depth_minutes")
+        val KEY_LIVE_REWIND_PROMPT_SEEN = booleanPreferencesKey("live_rewind_prompt_seen")
+        val KEY_LIVE_REWIND_RETENTION_HOURS = intPreferencesKey("live_rewind_retention_hours")
+        val KEY_LIVE_REWIND_BUDGET_GB = intPreferencesKey("live_rewind_budget_gb")
         val KEY_DVR_CUSTOM_FOLDER_URI = stringPreferencesKey("dvr_custom_folder_uri")
         val KEY_DVR_KEEP_AWAKE = booleanPreferencesKey("dvr_keep_awake_during_recording")
         // JSON object {recordingId: category}. Device-local cache so completed
