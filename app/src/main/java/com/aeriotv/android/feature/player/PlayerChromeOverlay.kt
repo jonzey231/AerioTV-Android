@@ -8,6 +8,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -154,6 +158,14 @@ fun PlayerChromeOverlay(
     onRewindTogglePause: () -> Unit = {},
     onRewindSeekWall: (Long) -> Unit = {},
     onGoLive: () -> Unit = {},
+    // Shared D-pad scrub (task #148, tvOS parity). Preview position while
+    // a scrub is in flight (host commits the single seek after the
+    // presses stop); HUD flag renders the timeline alone while the
+    // chrome is hidden.
+    scrubPreviewWallMs: Long? = null,
+    scrubHudVisible: Boolean = false,
+    onScrubStep: (Int, Boolean) -> Unit = { _, _ -> },
+    onScrubCommit: () -> Unit = {},
 ) {
     var moreOpen by remember { mutableStateOf(false) }
     var sleepOpen by remember { mutableStateOf(false) }
@@ -300,6 +312,10 @@ fun PlayerChromeOverlay(
                         state = ts,
                         positionWallMs = timeshiftPositionWallMs,
                         programme = nowProgramme,
+                        previewWallMs = scrubPreviewWallMs,
+                        focusable = true,
+                        onScrubStep = onScrubStep,
+                        onScrubCommit = onScrubCommit,
                     )
                 }
                 Spacer(Modifier.height(16.dp))
@@ -597,6 +613,38 @@ fun PlayerChromeOverlay(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Scrub HUD (tvOS DpadScrubHUD parity): the timeline alone over the
+    // bottom scrim while a chrome-hidden D-pad scrub is in flight, so
+    // the user watches the preview sweep without the pill row sliding
+    // in. Mutually exclusive with the full chrome above.
+    AnimatedVisibility(
+        visible = isTv && scrubHudVisible && !chromeVisible && !inPip &&
+            timeshiftState?.buffering == true,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.align(Alignment.BottomCenter),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f)),
+                    ),
+                )
+                .padding(top = 28.dp, bottom = 32.dp),
+        ) {
+            timeshiftState?.let { ts ->
+                TvRewindTimeline(
+                    state = ts,
+                    positionWallMs = timeshiftPositionWallMs,
+                    programme = nowProgramme,
+                    previewWallMs = scrubPreviewWallMs,
+                )
             }
         }
     }
@@ -1160,34 +1208,108 @@ private fun RewindTransportBar(
 }
 
 /**
- * Android TV Live Rewind timeline: read-only position display above the
- * pill row (all D-pad interaction goes through the transport pills).
- * Remaining time left, LIVE / behind-live right, both truthful to the
- * shifted position.
+ * Android TV Live Rewind timeline. Read-only display by default; when
+ * `focusable` (chrome visible) it is a D-pad focus target: UP from the
+ * pill row lands here, LEFT/RIGHT step the shared scrub preview
+ * (`onScrubStep`; a held edge accelerates via native key repeats), OK
+ * commits the pending scrub immediately, DOWN falls back to the pill
+ * row through normal traversal, UP is swallowed (channel-zap declines
+ * while the bottom chrome is up anyway). While a preview is in flight
+ * `previewWallMs` replaces the playhead so the user watches the thumb
+ * sweep BEFORE the single seek commits - every seek is a whole buffer
+ * re-open, so previewing per press and committing once is the only
+ * smooth model (tvOS `.timeline` focus-target parity).
  */
 @Composable
 private fun TvRewindTimeline(
     state: com.aeriotv.android.core.timeshift.TimeshiftController.State,
     positionWallMs: Long,
     programme: EPGProgramme?,
+    previewWallMs: Long? = null,
+    focusable: Boolean = false,
+    onScrubStep: (Int, Boolean) -> Unit = { _, _ -> },
+    onScrubCommit: () -> Unit = {},
 ) {
     val head = maxOf(state.headWallMs, state.tailWallMs + 1)
     val tail = state.tailWallMs
     val span = (head - tail).coerceAtLeast(1)
-    val current = if (state.timeshifting) positionWallMs.coerceIn(tail, head) else head
+    val current = (previewWallMs ?: if (state.timeshifting) positionWallMs else head)
+        .coerceIn(tail, head)
     val fraction = ((current - tail).toFloat() / span.toFloat()).coerceIn(0f, 1f)
     val behindMs = head - current
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 56.dp)) {
-        LinearProgressIndicator(
-            progress = { fraction },
+    // The behind-live label must track the PREVIEW during a scrub, even
+    // before the first commit flips `timeshifting`.
+    val showBehind = (previewWallMs != null || state.timeshifting) && behindMs > 5_000
+    var focused by remember { mutableStateOf(false) }
+    var trackWidthPx by remember { mutableStateOf(0f) }
+    val focusModifier = if (focusable) {
+        Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (!focused) return@onPreviewKeyEvent false
+                val native = event.nativeKeyEvent
+                when (native.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                    -> {
+                        if (native.action == android.view.KeyEvent.ACTION_DOWN) {
+                            val dir = if (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) -1 else +1
+                            onScrubStep(dir, native.repeatCount > 0)
+                        }
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                    android.view.KeyEvent.KEYCODE_ENTER,
+                    -> {
+                        if (native.action == android.view.KeyEvent.ACTION_DOWN) onScrubCommit()
+                        true
+                    }
+                    // Dead-end above the timeline; also keeps the press
+                    // from leaking anywhere surprising.
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> true
+                    // DOWN falls through -> focus traversal to the pills.
+                    else -> false
+                }
+            }
+            .focusable()
+    } else {
+        Modifier
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 56.dp)
+            .then(focusModifier),
+    ) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(5.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = MaterialTheme.colorScheme.primary,
-            trackColor = Color.White.copy(alpha = 0.18f),
-            drawStopIndicator = {},
-        )
+                .onSizeChanged { trackWidthPx = it.width.toFloat() },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (focused) 7.dp else 5.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.White.copy(alpha = if (focused) 0.3f else 0.18f),
+                drawStopIndicator = {},
+            )
+            if (focused) {
+                val thumbX = with(LocalDensity.current) {
+                    (trackWidthPx * fraction).toDp() - 8.dp
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(start = thumbX.coerceAtLeast(0.dp))
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(Color.White),
+                )
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1207,7 +1329,7 @@ private fun TvRewindTimeline(
             }
             Spacer(Modifier.weight(1f))
             Text(
-                text = if (state.timeshifting && behindMs > 5_000) {
+                text = if (showBehind) {
                     val totalSec = behindMs / 1000
                     String.format("-%d:%02d", totalSec / 60, totalSec % 60)
                 } else {
@@ -1215,7 +1337,7 @@ private fun TvRewindTimeline(
                 },
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = if (state.timeshifting && behindMs > 5_000) {
+                color = if (showBehind) {
                     Color.White.copy(alpha = 0.8f)
                 } else {
                     MaterialTheme.colorScheme.primary

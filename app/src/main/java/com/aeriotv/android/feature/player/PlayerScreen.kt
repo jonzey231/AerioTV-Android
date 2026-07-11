@@ -338,11 +338,9 @@ fun PlayerScreen(
     // Declared HERE (above BackHandler) so the BackHandler closure
     // can read + mutate it.
     var chromeVisible by remember { mutableStateOf(!isTvForm) }
-    // True while the visible chrome is the transient banner a D-pad channel
-    // flip raised (not chrome the user opened to interact with). Lets rapid
-    // up/down keep flipping instead of stalling until the banner auto-hides;
-    // cleared the instant the user presses a non-flip key or the chrome hides.
-    var chromeFromFlip by remember { mutableStateOf(false) }
+    // (chromeFromFlip removed in task #148: flips no longer raise the
+    // bottom chrome at all - only the top program card via the
+    // launch-hint window - so the latch had nothing left to track.)
     // Last user interaction timestamp. Bumped on D-pad presses while
     // chrome is visible so the auto-hide timer re-arms instead of firing
     // mid-traversal. Phase 172.
@@ -604,6 +602,77 @@ fun PlayerScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // Live Rewind transport state (declared before the chrome canvas so
+    // the root key handler below can reach it).
+    val tsState by timeshiftController.state.collectAsStateWithLifecycle()
+    var tsPositionWallMs by remember { mutableStateOf(0L) }
+    var tsPaused by remember { mutableStateOf(false) }
+    var livePauseWallMs by remember { mutableStateOf(0L) }
+
+    // Shared D-pad LEFT/RIGHT scrub for the live rewind buffer (task
+    // #148, tvOS parity; catch-up joins when it unifies into this
+    // player). Each press/repeat steps a PREVIEW position - no seek per
+    // press, because a seek is a whole buffer re-open - and the single
+    // seek commits 650ms after the presses stop. Holding accelerates
+    // 1x..12x on native key repeats (10s base step). Active with the
+    // chrome hidden (band-only HUD renders) or with the timeline band
+    // focused (UP from the pill row).
+    var scrubTargetWallMs by remember { mutableStateOf<Long?>(null) }
+    var scrubHudVisible by remember { mutableStateOf(false) }
+    var scrubAccelCount by remember { mutableStateOf(0) }
+    var scrubLastDirection by remember { mutableStateOf(0) }
+    var scrubLastStepAt by remember { mutableStateOf(0L) }
+    // Commit through the SAME fresh-window logic the transport pills
+    // use (the composed state snapshot can lag; Streamer field lesson).
+    val commitScrubWall: (Long) -> Unit = { target ->
+        val w = timeshiftController.activeWriter
+        val head = w?.headWallMs ?: tsState.headWallMs
+        val tail = w?.tailWallMs ?: tsState.tailWallMs
+        if (target >= head - 5_000) {
+            exoHolder.goLive()
+        } else {
+            exoHolder.playTimeshift(target.coerceAtLeast(tail))
+        }
+    }
+    val scrubStep: (Int, Boolean) -> Unit = step@{ dir, isRepeat ->
+        if (!tsState.buffering) return@step
+        val now = android.os.SystemClock.uptimeMillis()
+        // Native autorepeat arrives ~every 50ms on some remotes; 250ms
+        // throttle keeps held-scrub speed device-independent (VOD
+        // scrubStep parity).
+        if (isRepeat && now - scrubLastStepAt < 250L) return@step
+        if (dir == scrubLastDirection && now - scrubLastStepAt < 1_000L) {
+            scrubAccelCount += 1
+        } else {
+            scrubAccelCount = 0
+        }
+        scrubLastDirection = dir
+        scrubLastStepAt = now
+        val mult = minOf(12, 1 + scrubAccelCount / 2)
+        val w = timeshiftController.activeWriter
+        val head = w?.headWallMs ?: tsState.headWallMs
+        val tail = w?.tailWallMs ?: tsState.tailWallMs
+        val base = scrubTargetWallMs
+            ?: if (tsState.timeshifting) tsPositionWallMs else head
+        scrubTargetWallMs = (base + dir * 10_000L * mult).coerceIn(tail, head)
+        scrubHudVisible = true
+        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+    }
+    // Deferred single commit; the null branch runs after a commit (or
+    // cancel) and lets the HUD linger briefly so the user sees where
+    // playback landed.
+    LaunchedEffect(scrubTargetWallMs) {
+        val target = scrubTargetWallMs
+        if (target == null) {
+            delay(1_500)
+            scrubHudVisible = false
+        } else {
+            delay(650)
+            commitScrubWall(target)
+            scrubTargetWallMs = null
+        }
+    }
+
     // The video PlayerView is mounted at MainActivity root via
     // PersistentExoWindow (state-driven Fullscreen / Mini / Hidden).
     // Our chrome (controls, tap-target, dim, sheets) renders ABOVE
@@ -621,6 +690,23 @@ fun PlayerScreen(
             .onPreviewKeyEvent { event ->
                 if (chromeVisible) {
                     lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                }
+                // Chrome hidden + rewind buffering: LEFT/RIGHT scrubs the
+                // timeline directly (band-only HUD renders; the single
+                // seek commits after the presses stop). Consume both
+                // actions so the release can't click anything behind.
+                val native = event.nativeKeyEvent
+                if (isTvForm && !chromeVisible && tsState.buffering &&
+                    (
+                        native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
+                            native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+                        )
+                ) {
+                    if (native.action == android.view.KeyEvent.ACTION_DOWN) {
+                        val dir = if (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) -1 else +1
+                        scrubStep(dir, native.repeatCount > 0)
+                    }
+                    return@onPreviewKeyEvent true
                 }
                 // TV D-pad UP/DOWN channel-flip is handled by MainActivity
                 // .dispatchKeyEvent via exoWindowState.onLiveChannelFlip (see the
@@ -695,16 +781,13 @@ fun PlayerScreen(
             }
         }
 
-        // Live Rewind: transport state + a light ticker that keeps the
-        // buffer window and playback wall-position fresh while a session
-        // is rolling. Wall position = the wall time playback entered the
-        // buffer + the player's position within that open (each re-open
-        // resets contentPosition to 0, so the sum stays correct across
-        // scrub re-opens).
-        val tsState by timeshiftController.state.collectAsStateWithLifecycle()
-        var tsPositionWallMs by remember { mutableStateOf(0L) }
-        var tsPaused by remember { mutableStateOf(false) }
-        var livePauseWallMs by remember { mutableStateOf(0L) }
+        // Live Rewind: the ticker that keeps the buffer window and
+        // playback wall-position fresh while a session is rolling. Wall
+        // position = the wall time playback entered the buffer + the
+        // player's position within that open (each re-open resets
+        // contentPosition to 0, so the sum stays correct across scrub
+        // re-opens). State declarations moved above the chrome-canvas
+        // Box so the root key handler can drive the D-pad scrub.
         val tickerLifecycleOwner = LocalLifecycleOwner.current
         LaunchedEffect(tsState.buffering) {
             if (!tsState.buffering) return@LaunchedEffect
@@ -790,6 +873,17 @@ fun PlayerScreen(
                 }
             },
             onGoLive = { exoHolder.goLive() },
+            scrubPreviewWallMs = scrubTargetWallMs,
+            scrubHudVisible = scrubHudVisible,
+            onScrubStep = scrubStep,
+            onScrubCommit = {
+                // OK on the focused timeline: commit the pending scrub
+                // immediately instead of waiting out the debounce.
+                scrubTargetWallMs?.let { target ->
+                    commitScrubWall(target)
+                    scrubTargetWallMs = null
+                }
+            },
             chromeVisible = chromeVisible,
             pillVisible = pillVisible,
             isTv = isTvForm,
@@ -913,11 +1007,6 @@ fun PlayerScreen(
         }
     }
 
-    // Any time the chrome hides (auto-hide, tap, Back), drop the flip-banner
-    // latch so the next explicitly-opened chrome starts in navigation mode.
-    LaunchedEffect(chromeVisible) {
-        if (!chromeVisible) chromeFromFlip = false
-    }
 
     // TV live channel surf via the hardware-key path. MainActivity.dispatchKeyEvent
     // invokes exoWindowState.onLiveChannelFlip on D-pad UP/DOWN while THIS player
@@ -932,10 +1021,20 @@ fun PlayerScreen(
     val flipLocked by rememberUpdatedState(interactionLocked)
     val flipIndex by rememberUpdatedState(currentIndex)
     val flipChannels by rememberUpdatedState(channels)
+    // Task #148 (tvOS parity): UP/DOWN zap only rides fullscreen video
+    // (or the flip's own top-card window). With the bottom chrome
+    // summoned, declining hands the press back to Compose so UP reaches
+    // the focusable timeline and DOWN walks the pills; mid-scrub the
+    // HUD reads as player controls, so zapping would yank the channel
+    // out from under the user.
+    val flipBlockedByChrome by rememberUpdatedState(
+        chromeVisible || scrubHudVisible || scrubTargetWallMs != null,
+    )
     var lastFlipAt by remember { mutableStateOf(0L) }
     DisposableEffect(exoWindowState) {
         exoWindowState.onLiveChannelFlip = flip@{ delta ->
             if (!flipEnabled || flipLocked) return@flip false
+            if (flipBlockedByChrome) return@flip false
             val list = flipChannels
             val cur = flipIndex
             if (cur < 0 || list.isEmpty()) return@flip false
@@ -945,8 +1044,12 @@ fun PlayerScreen(
             if (next != cur) {
                 lastFlipAt = now
                 currentIndex = next
-                chromeVisible = true
-                chromeFromFlip = true
+                // NO chromeVisible = true here (task #148, user
+                // directive): a flip surfaces only the top program card
+                // (the launch-hint window re-arms on the channel-id
+                // change), never the bottom player controls - and the
+                // hidden chrome is what keeps follow-up UP/DOWN presses
+                // flipping.
             }
             true
         }
