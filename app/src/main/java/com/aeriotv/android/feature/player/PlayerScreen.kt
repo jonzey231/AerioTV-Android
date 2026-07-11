@@ -253,26 +253,13 @@ fun PlayerScreen(
         }
     }
 
-    // Live Rewind: PiP is pure live (locked v1 scope) but auto-PiP does
-    // not unmount this screen, so without this the tee kept writing the
-    // ring to flash for the whole PiP session for a buffer PiP can never
-    // use. Stop on PiP enter; restart on return to fullscreen.
-    val inPip by com.aeriotv.android.core.pip.PipState.inPictureInPicture
-    var wasInPip by remember { mutableStateOf(false) }
-    LaunchedEffect(inPip) {
-        val ch = currentChannel ?: return@LaunchedEffect
-        if (inPip) {
-            wasInPip = true
-            if (exoHolder.isTimeshifting) exoHolder.goLive()
-            timeshiftController.onFullscreenLiveStopped()
-        } else if (wasInPip && exoHolder.canBufferLiveRewind(ch.url)) {
-            // Only on a genuine PiP RETURN: the first composition also
-            // lands here with inPip=false, and the main tune effect
-            // already started the session.
-            wasInPip = false
-            timeshiftController.onFullscreenLiveStarted(ch.id, ch.name, ch.url, httpHeaders)
-        }
-    }
+    // Live Rewind keeps buffering THROUGH PiP (user directive 2026-07-11,
+    // Z Fold field test: "I'd rather keep the buffer going in PiP" -
+    // reversing the earlier stop-on-PiP-enter). PiP itself has no rewind
+    // transport, but the buffer keeps growing so returning to fullscreen
+    // can rewind across the PiP stretch like a cable box. The session
+    // still ends when this screen unmounts (DisposableEffect above);
+    // rewind PLAYBACK from PiP stays out of scope (v1: fullscreen only).
 
     // System back intercept. Two flavours:
     //   - Phone: promote to the bottom MiniPlayerRow above the nav, kill

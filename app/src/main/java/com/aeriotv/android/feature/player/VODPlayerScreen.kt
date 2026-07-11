@@ -1378,20 +1378,30 @@ private fun ScrubberBar(
                 .pointerInput(durationMs) {
                     if (durationMs <= 0L) return@pointerInput
                     widthPx = size.width.toFloat()
+                    // Track the fraction INSIDE the gesture scope. The
+                    // `dragFraction` parameter is frozen at whatever value
+                    // it had when this pointerInput coroutine (re)started -
+                    // recompositions hand the modifier a NEW lambda but the
+                    // OLD one keeps running - so committing it on drag-end
+                    // seeks to a stale position (Z Fold field bug
+                    // 2026-07-11: first catch-up drag re-tuned to 0s).
+                    var lastGestureFraction = 0f
                     detectDragGestures(
                         onDragStart = { offset: Offset ->
                             onDragStart()
-                            onDragChanged((offset.x / widthPx).coerceIn(0f, 1f))
+                            lastGestureFraction = (offset.x / widthPx).coerceIn(0f, 1f)
+                            onDragChanged(lastGestureFraction)
                         },
                         onDrag = { change, _ ->
                             change.consume()
-                            onDragChanged((change.position.x / widthPx).coerceIn(0f, 1f))
+                            lastGestureFraction = (change.position.x / widthPx).coerceIn(0f, 1f)
+                            onDragChanged(lastGestureFraction)
                         },
                         onDragEnd = {
-                            onDragEnd(dragFraction.coerceIn(0f, 1f))
+                            onDragEnd(lastGestureFraction)
                         },
                         onDragCancel = {
-                            onDragEnd(dragFraction.coerceIn(0f, 1f))
+                            onDragEnd(lastGestureFraction)
                         },
                     )
                 }
