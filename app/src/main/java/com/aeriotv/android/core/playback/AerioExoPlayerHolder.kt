@@ -366,6 +366,14 @@ class AerioExoPlayerHolder @Inject constructor(
                 }
                 return
             }
+            // Catch-up (task #148): a terminal error on an archive replay
+            // must NOT re-prime lastPlayUrl - that would yank playback to
+            // the LIVE channel mid-replay. Leave the player in its error
+            // state; the unified player surface owns recovery/exit.
+            if (isCatchup) {
+                Log.w(TAG, "[CATCHUP] terminal error ${error.errorCodeName}; staying (no live re-prime)")
+                return
+            }
             if (lastPlayUrl != null) {
                 val hook = onTerminalErrorRebuildUrl
                 if (hook != null) {
@@ -706,6 +714,62 @@ class AerioExoPlayerHolder @Inject constructor(
         playUrl(url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
     }
 
+    /** True while the shared player runs a catch-up (server archive)
+     *  replay inside the unified live player (task #148). Gates the same
+     *  live-only machinery [isTimeshifting] gates - the stall watchdog,
+     *  forceReload, and the terminal-error live re-prime would all yank
+     *  playback back to the LIVE channel mid-replay. */
+    @Volatile
+    var isCatchup = false
+        private set
+
+    /**
+     * Tune the shared player onto a catch-up timeshift URL. Raw MPEG-TS,
+     * unseekable by design (Dispatcharr serves an estimated-length
+     * stream) - seeks are URL re-tunes handled by the caller via
+     * CatchupUrlBuilder.rebuildForOffset, mirroring VODPlayerScreen's
+     * model. Deliberately NO tee (an archive replay must never fill the
+     * Live Rewind buffer) and NO watchdog/failover. `lastPlayUrl` is left
+     * pointing at the live channel so exiting catch-up can re-tune it.
+     */
+    fun playCatchup(
+        url: String,
+        title: String? = null,
+        subtitle: String? = null,
+        artworkUri: android.net.Uri? = null,
+    ): Boolean {
+        val p = player ?: appContext?.let { acquireOrCreate(it) } ?: return false
+        if (isTimeshifting) {
+            isTimeshifting = false
+            timeshift.get().onGoLive()
+        }
+        isCatchup = true
+        timeshiftErrorRetries = 0
+        resetWatchdogStateForNewStream()
+        setVideoTrackEnabled(true)
+        val mediaMetadata = MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(subtitle)
+            .setDisplayTitle(title)
+            .setSubtitle(subtitle)
+            .setArtworkUri(artworkUri)
+            .build()
+        val mediaItem = MediaItem.Builder()
+            .setUri(url)
+            .setMediaId("catchup")
+            .setMediaMetadata(mediaMetadata)
+            .build()
+        val source = ProgressiveMediaSource.Factory(
+            httpDataSourceFactory(isLive = true),
+            tsOnlyExtractorsFactory(),
+        ).createMediaSource(mediaItem)
+        p.setMediaSource(source)
+        p.prepare()
+        p.playWhenReady = true
+        Log.i(TAG, "[CATCHUP] tuned archive replay")
+        return true
+    }
+
     /**
      * Set the media item + start loading. Equivalent of MPV's
      * mpv.command("loadfile", url). Pass [title] / [subtitle] /
@@ -737,6 +801,7 @@ class AerioExoPlayerHolder @Inject constructor(
             timeshift.get().onGoLive()
         }
         isTimeshifting = false
+        isCatchup = false
         timeshiftErrorRetries = 0
         lastPlayUrl = url
         lastPlayTitle = title
@@ -813,6 +878,7 @@ class AerioExoPlayerHolder @Inject constructor(
         // Disarm the stall watchdog so a deliberate stop isn't seen as a wedge.
         hasReachedPlaybackRestart = false
         lastPlayUrl = null
+        isCatchup = false
         p.stop()
         p.clearMediaItems()
     }
@@ -922,7 +988,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 // Only when we intend to play, have a url to reload, have reached
                 // steady playback at least once (skip cold-start probes + user
                 // pauses), and aren't at end-of-stream.
-                if (lastPlayUrl == null || isTimeshifting || !p.playWhenReady ||
+                if (lastPlayUrl == null || isTimeshifting || isCatchup || !p.playWhenReady ||
                     !hasReachedPlaybackRestart || p.playbackState == Player.STATE_ENDED
                 ) {
                     continue
@@ -967,7 +1033,7 @@ class AerioExoPlayerHolder @Inject constructor(
      *  replace). Returns true when a reload actually ran (false while inside
      *  the cooldown or past the attempt cap). */
     private fun forceReload(reason: String): Boolean {
-        if (isTimeshifting) return false
+        if (isTimeshifting || isCatchup) return false
         val p = player ?: return false
         val url = lastPlayUrl ?: return false
         val now = SystemClock.elapsedRealtime()
