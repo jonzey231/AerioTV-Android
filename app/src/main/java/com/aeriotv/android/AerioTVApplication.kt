@@ -64,6 +64,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var playlistRepository: PlaylistRepository
     @Inject lateinit var playlistDao: PlaylistDao
     @Inject lateinit var aerioDatabase: AerioDatabase
+    @Inject lateinit var timeshiftStore: com.aeriotv.android.core.timeshift.TimeshiftBufferStore
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -131,6 +132,20 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // Track foreground state so reminders that fire while the app is open
         // surface as an in-app banner instead of a system notification.
         reminderBannerBus.bind()
+        // Live Rewind launch sweep (user clarification 2026-07-11: buffers
+        // die an hour after the SESSION ends, "which may end up meaning it
+        // should be deleted the NEXT time the app is launched").
+        // TimeshiftController's own reaper only runs when playback first
+        // touches it, so a launch where the user never tunes a channel
+        // would otherwise leave yesterday's buffers on disk.
+        appScope.launch {
+            runCatching {
+                timeshiftStore.pruneExpired(
+                    com.aeriotv.android.core.timeshift.TimeshiftController.FIXED_RETENTION_MS,
+                )
+                timeshiftStore.enforceBudget(timeshiftStore.freeSpaceBudgetBytes())
+            }
+        }
         // libmpv is gone (task #67). Media3's ExoPlayer + MediaCodec
         // path doesn't need a process-wide warmup pre-pay -- the first
         // ExoPlayer.Builder allocation handles the framework warm-up
