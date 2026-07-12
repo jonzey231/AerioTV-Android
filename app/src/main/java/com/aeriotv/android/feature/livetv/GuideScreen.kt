@@ -1,6 +1,7 @@
 package com.aeriotv.android.feature.livetv
 
 import android.widget.Toast
+import kotlin.math.abs
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
@@ -262,6 +263,17 @@ fun GuideScreen(
     // group pill. This requester is attached to that pill (the first item in
     // the group row) and fired from the grid's key handler.
     val allPillFocus = remember { FocusRequester() }
+    // Streamer field report 2026-07-12: D-pad DOWN from the top nav landed on
+    // whichever group pill sat geometrically under the Live TV tab ("General"),
+    // not the SELECTED pill. This requester rides the currently selected group
+    // pill; the pill row's focusProperties.enter redirects a DOWN entry to it.
+    // The attach counter guards the redirect: a LazyRow item that is scrolled
+    // out of composition has no bound requester, and returning an unbound
+    // requester from enter would throw - count > 0 means the selected pill is
+    // actually composed. Counter (not Bool) because on a selection change the
+    // new pill's DisposableEffect can run before the old one's onDispose.
+    val selectedPillFocus = remember { FocusRequester() }
+    val selectedPillAttachCount = remember { androidx.compose.runtime.mutableIntStateOf(0) }
     // #10/#14 overshoot fix: once a HOLD Left lands focus on the "All" pill, the
     // still-held Left keeps auto-repeating and Compose focus traversal walks
     // straight PAST All onto the leading Guide/Search/List circles. Pin focus to
@@ -681,6 +693,19 @@ fun GuideScreen(
         didScrollToNow = true
         autoAnchorPx = wanted.coerceIn(0, maxScroll)
         horizontalScrollState.scrollTo(autoAnchorPx)
+        // Slow first launch: the timeout above can fire while the multi-day
+        // strip is still measuring, clamping the anchor short of "now". Keep
+        // following maxValue growth and re-anchoring, but ONLY while the strip
+        // still sits exactly where we put it - the first user scroll (or a
+        // vertical-nav alignment) breaks the loop and the position is theirs.
+        while (autoAnchorPx < wanted) {
+            val grown = withTimeoutOrNull(2500L) {
+                snapshotFlow { horizontalScrollState.maxValue }.first { it > autoAnchorPx }
+            } ?: break
+            if (horizontalScrollState.value != autoAnchorPx) break
+            autoAnchorPx = wanted.coerceIn(0, grown)
+            horizontalScrollState.scrollTo(autoAnchorPx)
+        }
     }
 
     // The host Scaffold sets contentWindowInsets = WindowInsets(0,0,0,0), so each
@@ -1191,7 +1216,22 @@ fun GuideScreen(
                         // The HOLD-Left-to-"All" gesture (and its overshoot pin)
                         // now lives on the parent control Row's onPreviewKeyEvent
                         // so it keeps working after focus lands on the All pill.
-                        .fillMaxHeight(),
+                        .fillMaxHeight()
+                        // Streamer field report 2026-07-12: DOWN from the top nav
+                        // used to land on whichever pill sat geometrically under
+                        // the Live TV tab ("General"). Route a DOWN entry to the
+                        // SELECTED pill instead (tvOS model). Guarded by the
+                        // attach counter: if the selected pill is scrolled out of
+                        // the LazyRow's composition its requester is unbound, and
+                        // the default geometric landing is better than a throw.
+                        .focusProperties {
+                            enter = { direction ->
+                                if (direction == FocusDirection.Down &&
+                                    selectedPillAttachCount.intValue > 0
+                                ) selectedPillFocus
+                                else FocusRequester.Default
+                            }
+                        },
                     contentPadding = PaddingValues(end = if (isTv) 20.dp else 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(if (isTv) 5.dp else 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1204,6 +1244,15 @@ fun GuideScreen(
                         val pillSelected = state.selectedGroup == group
                         val pillInteraction = remember { MutableInteractionSource() }
                         val pillFocused by pillInteraction.collectIsFocusedAsState()
+                        if (isTv && pillSelected) {
+                            // Marks the selected pill as composed so the row's
+                            // focusProperties.enter DOWN-redirect knows the
+                            // requester below is safely bound.
+                            androidx.compose.runtime.DisposableEffect(Unit) {
+                                selectedPillAttachCount.intValue++
+                                onDispose { selectedPillAttachCount.intValue-- }
+                            }
+                        }
                         if (isTv) {
                             // Custom TV pill at tvOS-pt x 0.5 metrics: 11sp label
                             // (labelMedium), 12dp h-padding, 30dp tall. Material's
@@ -1220,6 +1269,13 @@ fun GuideScreen(
                                     .then(
                                         if (group == PlaylistViewModel.ALL_GROUPS)
                                             Modifier.focusRequester(allPillFocus)
+                                        else Modifier,
+                                    )
+                                    // Selected pill carries the DOWN-entry target
+                                    // (see focusProperties.enter on the row).
+                                    .then(
+                                        if (pillSelected)
+                                            Modifier.focusRequester(selectedPillFocus)
                                         else Modifier,
                                     )
                                     .height(30.dp)
@@ -2359,6 +2415,16 @@ private fun ChannelGuideRow(
                     // clipped start (the column it occupies on screen).
                     val cellRequester = cellRequesters.getOrPut(programme.startMillis) { FocusRequester() }
                     visibleCellSpans.add(CellSpan(clippedStart, clippedEnd, cellRequester))
+                    // key() gives each cell COMPOSITION IDENTITY (2026-07-12
+                    // Streamer field trace): without it, the rowIsFocused flip
+                    // to all-cells emission (or an EPG history merge) rebinds
+                    // the k-th slot POSITIONALLY, silently moving the FOCUSED
+                    // LayoutNode onto a different programme (day-old history
+                    // cells). Compose's in-flight bring-into-view then retargets
+                    // to the rebound node every frame and drags the shared
+                    // timeline days into the past. Unique per row after
+                    // dedupSameAiring.
+                    androidx.compose.runtime.key(programme.startMillis) {
                     ProgrammeCell(
                         programme = programme,
                         channelName = channel.name,
@@ -2403,6 +2469,7 @@ private fun ChannelGuideRow(
                             null
                         },
                     )
+                    }
                 }
                 // "Now" indicator vertical line, only drawn when "now" falls
                 // inside the window. tvOS draws it in red (statusLive); phone
@@ -2445,6 +2512,17 @@ private fun ChannelGuideRow(
                 }
             }
             if (target == null) return@registerRow false
+            // Low-rate diagnostics (one line per user-paced vertical landing):
+            // which cell the anchor resolved to and how many spans were
+            // composed. Field evidence for wrong-column landings (2026-07-12
+            // Streamer: a row-down snapped to the far-right cell).
+            android.util.Log.i(
+                "GuideNav",
+                "land row=$channelIndex anchor=$anchorTimeMs " +
+                    "cell=${target.startMs}..${target.endMs} " +
+                    "contained=${containing != null} spans=${spans.size} " +
+                    "spanRange=${spans.minOf { it.startMs }}..${spans.maxOf { it.endMs }}",
+            )
             // requestFocus() throws if the node isn't attached yet (row composed
             // but not laid out). The caller retries for a few frames, so swallow
             // and report failure rather than crash.
@@ -2564,14 +2642,18 @@ private fun ProgrammeCell(
     } else {
         if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.32f) else phoneBaseBg
     }
-    // tvOS focus ring is a 4pt WHITE inset border (Emby style, line 3339); the
-    // Android-TV proportional is 2dp white. Phone keeps the cyan accent border
-    // when focused; at rest there is NO border on either platform (iOS cells
-    // are borderless fills, live conveyed by the brighter fill alone).
+    // tvOS focus ring is a 4pt WHITE inset border (Emby style, line 3339);
+    // match it 1:1 at 4dp. The old "proportional" 2dp ring was too thin to
+    // find at 10 feet when focus sat on a NOW-AIRING cell: the airing fill is
+    // already light, so a hairline white ring on a light 2-hour-wide cell
+    // read as "focus disappeared" (Streamer field report 2026-07-12). Phone
+    // keeps the cyan accent border when focused; at rest there is NO border
+    // on either platform (iOS cells are borderless fills, live conveyed by
+    // the brighter fill alone).
     val cellBorderColor = if (isTv) Color.White else MaterialTheme.colorScheme.primary
     val cellBorderWidth = when {
         !focused -> 0.dp
-        isTv -> 2.dp
+        isTv -> 4.dp
         else -> 3.dp
     }
     // Phone title keeps the cyan live tint; the tvOS title stays neutral (turning
@@ -3177,6 +3259,11 @@ private class GuideVerticalNavState {
                 cellStartMs
             }
         }
+        android.util.Log.i(
+            "GuideNav",
+            "focused row=$channelIndex cellStart=$cellStartMs " +
+                "anchor=$anchorTimeMs viewportStart=$viewportStartMs",
+        )
     }
 
     /** Called by a cell when it loses focus; clears the focused index only if it
@@ -3383,15 +3470,24 @@ private class GuideLeadingEdgeBringIntoViewSpec(
         // edge to the viewport start -- the "Right rapidly scrolls right / Left
         // jumps to the beginning of the EPG" report). Only an oversized cell that
         // is ENTIRELY off one side gets a minimal nudge onto screen.
-        if (size > containerSize) {
-            return when {
+        val distance = if (size > containerSize) {
+            when {
                 offset < containerSize && offset + size > 0f -> 0f   // overlaps viewport: stay put
                 offset >= containerSize -> offset                     // entirely off the right: leading edge -> start
                 else -> offset + size - containerSize                 // entirely off the left: trailing edge -> end
             }
+        } else {
+            // Normal cell: minimal nudge to bring it just into view (leading if
+            // off the start, trailing if off the end).
+            if (offset < 0f) offset else offset + size - containerSize
         }
-        // Normal cell: minimal nudge to bring it just into view (leading if off
-        // the start, trailing if off the end).
-        return if (offset < 0f) offset else offset + size - containerSize
+        // Invariant (2026-07-12 Streamer field trace): a focus change may never
+        // move the shared timeline more than ~one viewport. Every legitimate
+        // focus target is a composed cell within the +-90min compose pad, so a
+        // larger request means the focused node was positionally REBOUND to a
+        // far-away programme (see the key() note at the cell emission) and an
+        // in-flight bring-into-view is retargeting to it - following it drags
+        // the timeline days into catch-up history. Refuse instead.
+        return if (abs(distance) > containerSize) 0f else distance
     }
 }

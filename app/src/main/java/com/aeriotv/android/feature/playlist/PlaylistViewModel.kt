@@ -730,7 +730,29 @@ class PlaylistViewModel @Inject constructor(
                         val groupedEnriched = withChannelNamePlaceholders(
                             groupByChannel(enriched), _state.value.channels,
                         )
-                        _state.update { it.copy(epgByChannel = groupedEnriched) }
+                        // MERGE into the current map, never wholesale-replace:
+                        // this coroutine races mergeEpgHistory, and a replace
+                        // that lands second silently wiped every 7-day history
+                        // row (and with epgWindowHours=0 shrank the guide's
+                        // content width, clamping the shared scroll - a second
+                        // timeline-jump class). Enriched rows win their own
+                        // (channel, start) slots; everything else survives.
+                        _state.update { st ->
+                            val merged = HashMap(st.epgByChannel)
+                            for ((channelId, rows) in groupedEnriched) {
+                                val existing = merged[channelId]
+                                merged[channelId] = if (existing.isNullOrEmpty()) {
+                                    rows
+                                } else {
+                                    val enrichedStarts =
+                                        rows.asSequence().map { it.startMillis }.toHashSet()
+                                    val keep = existing.filter { it.startMillis !in enrichedStarts }
+                                    if (keep.isEmpty()) rows
+                                    else (keep + rows).sortedBy { it.startMillis }
+                                }
+                            }
+                            st.copy(epgByChannel = merged)
+                        }
                         // Keep the cache enriched too so tints survive a relaunch.
                         runCatching { repository.saveEpgToCache(playlist.id, enriched) }
                         Log.i(TAG, "EPG enriched: categories backfilled for now-playing programmes")
