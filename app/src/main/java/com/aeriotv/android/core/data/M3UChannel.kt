@@ -24,6 +24,15 @@ data class M3UChannel(
     val channelNumber: String? = null,
     val rawAttributes: Map<String, String> = emptyMap(),
     /**
+     * GH #27: DRM signalling from `#KODIPROP:inputstream.adaptive.*` lines
+     * preceding this channel's URL (the Kodi/TiviMate convention for
+     * encrypted DASH). `drmLicenseType` is "clearkey" / "com.widevine.alpha"
+     * etc.; `drmLicenseKey` is either a license-server URL or a ClearKey
+     * "kid:key" hex pair. Null for the (vast) majority of channels.
+     */
+    val drmLicenseType: String? = null,
+    val drmLicenseKey: String? = null,
+    /**
      * Dispatcharr's primary-key integer for this channel, used when scheduling
      * server-side recordings (`/api/channels/recordings/` requires the int id).
      * Null for M3U / Xtream sources that don't carry it.

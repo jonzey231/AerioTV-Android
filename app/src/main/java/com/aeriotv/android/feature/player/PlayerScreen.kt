@@ -304,6 +304,9 @@ fun PlayerScreen(
                 title = ch.name,
                 subtitle = nowProgramme?.title.orEmpty(),
                 artworkUri = artworkUri,
+                // GH #27: #KODIPROP DRM signalling for encrypted DASH.
+                drmLicenseType = ch.drmLicenseType,
+                drmLicenseKey = ch.drmLicenseKey,
             )
             exoHolder.currentChannelId = channelId
         } else {

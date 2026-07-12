@@ -67,23 +67,47 @@ object M3UParser {
     private fun parseLines(lines: Sequence<String>): List<M3UChannel> {
         val channels = mutableListOf<M3UChannel>()
         var pendingExtInf: String? = null
+        var pendingKodiProps: MutableMap<String, String>? = null
         for (raw in lines) {
             val line = raw.trim()
             when {
                 line.startsWith("#EXTINF:") -> {
-                    if (pendingExtInf == null) pendingExtInf = line
+                    if (pendingExtInf == null) {
+                        pendingExtInf = line
+                        pendingKodiProps = null
+                    }
+                }
+                // GH #27: capture Kodi inputstream properties between the
+                // #EXTINF and its URL -- the convention playlists use to
+                // carry DASH DRM license info (license_type / license_key).
+                line.startsWith("#KODIPROP:") -> {
+                    val body = line.removePrefix("#KODIPROP:")
+                    val eq = body.indexOf('=')
+                    if (pendingExtInf != null && eq > 0) {
+                        val props = pendingKodiProps
+                            ?: mutableMapOf<String, String>().also { pendingKodiProps = it }
+                        props[body.substring(0, eq).trim().lowercase()] =
+                            body.substring(eq + 1).trim()
+                    }
                 }
                 line.isEmpty() || line.startsWith("#") -> Unit
                 else -> {
-                    pendingExtInf?.let { ext -> channels += buildChannel(ext, line) }
+                    pendingExtInf?.let { ext ->
+                        channels += buildChannel(ext, line, pendingKodiProps)
+                    }
                     pendingExtInf = null
+                    pendingKodiProps = null
                 }
             }
         }
         return channels
     }
 
-    private fun buildChannel(extInfLine: String, url: String): M3UChannel {
+    private fun buildChannel(
+        extInfLine: String,
+        url: String,
+        kodiProps: Map<String, String>? = null,
+    ): M3UChannel {
         val attrs = parseExtInf(extInfLine)
         val tvgId = attrs["tvg-id"]?.takeIf { it.isNotBlank() }
         // Stable ID — prefer tvg-id (the broadcaster's canonical
@@ -103,6 +127,10 @@ object M3UParser {
             tvgLogo = attrs["tvg-logo"].orEmpty(),
             channelNumber = attrs["tvg-chno"]?.trim()?.takeIf { it.isNotBlank() },
             rawAttributes = attrs.filterKeys { it != "name" },
+            drmLicenseType = kodiProps?.get("inputstream.adaptive.license_type")
+                ?.takeIf { it.isNotBlank() },
+            drmLicenseKey = kodiProps?.get("inputstream.adaptive.license_key")
+                ?.takeIf { it.isNotBlank() },
         )
     }
 

@@ -1146,6 +1146,8 @@ private fun ChannelSnapshotEntity.toChannel(): M3UChannel = M3UChannel(
     tvgName = tvgName,
     tvgLogo = tvgLogo,
     channelNumber = channelNumber,
+    drmLicenseType = drmLicenseType,
+    drmLicenseKey = drmLicenseKey,
     dispatcharrChannelId = dispatcharrChannelId,
     catchupDays = catchupDays,
     catchupStreamId = catchupStreamId,
@@ -1169,8 +1171,11 @@ private fun M3UChannel.toCacheEntity(
     dispatcharrChannelId = dispatcharrChannelId,
     catchupDays = catchupDays,
     catchupStreamId = catchupStreamId,
+    drmLicenseType = drmLicenseType,
+    drmLicenseKey = drmLicenseKey,
     fetchedAt = fetchedAt,
 )
+
 
 /**
  * Format a Dispatcharr-API channel-number Double back to a display string,

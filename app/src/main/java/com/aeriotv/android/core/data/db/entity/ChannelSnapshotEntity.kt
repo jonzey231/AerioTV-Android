@@ -48,6 +48,10 @@ data class ChannelSnapshotEntity(
     val catchupDays: Int = 0,
     /** Timeshift stream id (Dispatcharr Channel.id / XC stream_id), or null. */
     val catchupStreamId: String? = null,
+    /** GH #27: #KODIPROP DRM signalling, persisted so encrypted-DASH
+     *  channels stay playable from a cache-restored cold launch. */
+    val drmLicenseType: String? = null,
+    val drmLicenseKey: String? = null,
     /** Wall-clock millis when this snapshot was fetched (freshness check). */
     val fetchedAt: Long,
 )

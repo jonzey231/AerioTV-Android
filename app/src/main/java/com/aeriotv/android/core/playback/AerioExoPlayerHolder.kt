@@ -186,6 +186,9 @@ class AerioExoPlayerHolder @Inject constructor(
     private var lastPlayTitle: String? = null
     private var lastPlaySubtitle: String? = null
     private var lastPlayArtworkUri: android.net.Uri? = null
+    // GH #27: DRM args ride along so watchdog re-primes keep the keys.
+    private var lastPlayDrmType: String? = null
+    private var lastPlayDrmKey: String? = null
     // Thresholds carried over from the iOS watchdog (6s stale / 5s cooldown).
     private val staleReloadThresholdMs = 6_000L
     private val reloadCooldownMs = 5_000L
@@ -610,6 +613,8 @@ class AerioExoPlayerHolder @Inject constructor(
         title: String? = null,
         subtitle: String? = null,
         artworkUri: android.net.Uri? = null,
+        drmLicenseType: String? = null,
+        drmLicenseKey: String? = null,
     ): MediaSource {
         // Live Rewind: mirror the player's own bytes into the active
         // timeshift buffer (nil-safe; inert when no session is rolling).
@@ -643,11 +648,37 @@ class AerioExoPlayerHolder @Inject constructor(
             .setSubtitle(subtitle)
             .setArtworkUri(artworkUri)
             .build()
-        val mediaItem = MediaItem.Builder()
+        // GH #27: encrypted-DASH channels signal keys via #KODIPROP. A
+        // license-SERVER URL rides the MediaItem's DrmConfiguration (every
+        // media source factory's default DrmSessionManagerProvider honors
+        // it); a local ClearKey "kid:key" hex pair instead needs an explicit
+        // session manager fed the JWK JSON via LocalMediaDrmCallback.
+        val drmUuid: java.util.UUID? = drmLicenseType?.lowercase()?.let { t ->
+            when {
+                "clearkey" in t -> C.CLEARKEY_UUID
+                "widevine" in t -> C.WIDEVINE_UUID
+                "playready" in t -> C.PLAYREADY_UUID
+                else -> null
+            }
+        }
+        val licenseIsUrl = drmLicenseKey?.startsWith("http", ignoreCase = true) == true
+        val drmConfiguration: MediaItem.DrmConfiguration? =
+            if (drmUuid != null && drmLicenseKey != null && licenseIsUrl) {
+                MediaItem.DrmConfiguration.Builder(drmUuid)
+                    .setLicenseUri(drmLicenseKey)
+                    .setMultiSession(true)
+                    .build()
+            } else null
+        val localClearKeyJwk: String? =
+            if (drmUuid == C.CLEARKEY_UUID && drmLicenseKey != null && !licenseIsUrl) {
+                clearKeyJwk(drmLicenseKey)
+            } else null
+        val mediaItemBuilder = MediaItem.Builder()
             .setUri(url)
             .setMediaId(title.orEmpty().ifBlank { url })
             .setMediaMetadata(mediaMetadata)
-            .build()
+        if (drmConfiguration != null) mediaItemBuilder.setDrmConfiguration(drmConfiguration)
+        val mediaItem = mediaItemBuilder.build()
         return when {
             isRawTsUrl(url) -> {
                 // SINGLE_PMT is what HlsMediaSource uses internally and
@@ -679,10 +710,51 @@ class AerioExoPlayerHolder @Inject constructor(
                     .createMediaSource(mediaItem)
             }
             else -> {
-                DefaultMediaSourceFactory(dataSourceFactory)
-                    .createMediaSource(mediaItem)
+                val factory = DefaultMediaSourceFactory(dataSourceFactory)
+                if (localClearKeyJwk != null) {
+                    val manager = androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
+                        .setUuidAndExoMediaDrmProvider(
+                            C.CLEARKEY_UUID,
+                            androidx.media3.exoplayer.drm.FrameworkMediaDrm.DEFAULT_PROVIDER,
+                        )
+                        .setMultiSession(true)
+                        .build(
+                            androidx.media3.exoplayer.drm.LocalMediaDrmCallback(
+                                localClearKeyJwk.toByteArray(Charsets.UTF_8),
+                            ),
+                        )
+                    factory.setDrmSessionManagerProvider { manager }
+                }
+                factory.createMediaSource(mediaItem)
             }
         }
+    }
+
+    /** GH #27: ClearKey "kid:key" hex pair -> the JSON Web Key response the
+     *  framework ClearKey CDM accepts (base64url, no padding). Null when the
+     *  value doesn't parse as a hex pair (the caller then plays without DRM
+     *  and the decoder surfaces the real error). */
+    private fun clearKeyJwk(pair: String): String? {
+        val parts = pair.split(":", limit = 2)
+        if (parts.size != 2) return null
+        fun hexToB64Url(hex: String): String? {
+            val clean = hex.trim()
+            if (clean.isEmpty() || clean.length % 2 != 0) return null
+            val out = ByteArray(clean.length / 2)
+            for (i in out.indices) {
+                val hi = Character.digit(clean[i * 2], 16)
+                val lo = Character.digit(clean[i * 2 + 1], 16)
+                if (hi < 0 || lo < 0) return null
+                out[i] = ((hi shl 4) or lo).toByte()
+            }
+            return android.util.Base64.encodeToString(
+                out,
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+            )
+        }
+        val kid = hexToB64Url(parts[0]) ?: return null
+        val k = hexToB64Url(parts[1]) ?: return null
+        return """{"keys":[{"kty":"oct","kid":"$kid","k":"$k"}],"type":"temporary"}"""
     }
 
     /** TS-only extractor factory shared by the live raw-TS path and the
@@ -817,6 +889,10 @@ class AerioExoPlayerHolder @Inject constructor(
         title: String? = null,
         subtitle: String? = null,
         artworkUri: android.net.Uri? = null,
+        // GH #27: #KODIPROP DRM signalling for encrypted DASH channels
+        // (license_type + license_key). Null for everything else.
+        drmLicenseType: String? = null,
+        drmLicenseKey: String? = null,
     ) {
         // Self-heal: a channel tap can land before the persistent window's
         // factory ran, or after destroy() released the instance. Swallowing
@@ -843,13 +919,15 @@ class AerioExoPlayerHolder @Inject constructor(
         lastPlayTitle = title
         lastPlaySubtitle = subtitle
         lastPlayArtworkUri = artworkUri
+        lastPlayDrmType = drmLicenseType
+        lastPlayDrmKey = drmLicenseKey
         resetWatchdogStateForNewStream()
         // watchdogReloadEnabled is kept current by the collector in init{}; the
         // cached value reflects the latest pref without blocking the main thread.
         // Foreground playback wants video; re-enable it in case an Android Auto
         // session previously dropped the video track on this shared player.
         setVideoTrackEnabled(true)
-        val source = buildMediaSource(url, title, subtitle, artworkUri)
+        val source = buildMediaSource(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey)
         p.setMediaSource(source)
         p.prepare()
         p.playWhenReady = true
@@ -1097,7 +1175,10 @@ class AerioExoPlayerHolder @Inject constructor(
         lastPositionAdvanceAtMs = now
         videoFrameRendered = false
         streamPrimedAtMs = now
-        val source = buildMediaSource(url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
+        val source = buildMediaSource(
+            url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri,
+            lastPlayDrmType, lastPlayDrmKey,
+        )
         p.setMediaSource(source)
         p.prepare()
         p.playWhenReady = true
