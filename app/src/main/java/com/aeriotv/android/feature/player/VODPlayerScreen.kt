@@ -231,6 +231,12 @@ fun VODPlayerScreen(
     // re-mint's base-host derivation both read this, never the original
     // streamUrl param.
     var currentPlaybackUrl by remember { mutableStateOf(streamUrl) }
+    // Task #149: native re-mints are serialized. While one mint is in
+    // flight, later seek targets coalesce here and only the LATEST runs
+    // when it lands (rapid +/-30s presses used to race out of order and
+    // 503 the server's provider slot).
+    var nativeRemintInFlight by remember { mutableStateOf(false) }
+    var nativeRemintPendingMs by remember { mutableStateOf<Long?>(null) }
     // Programme-relative start of the currently tuned timeshift window (0 on
     // first tune; the seek target after each re-tune).
     var catchupOffsetMs by remember { mutableLongStateOf(0L) }
@@ -386,25 +392,52 @@ fun VODPlayerScreen(
             // API takes full-second timestamps, and flooring broke the
             // +/-30s skips (a +30 press from mid-minute floored BACKWARD
             // and then pinned every following press to the same window).
-            // The mint is a network call, so the re-tune applies when it
-            // lands; failures keep the current window playing.
-            seekScope.launch {
-                val minted = onRemintCatchup(
-                    catchupChannelUuid,
-                    currentPlaybackUrl,
-                    catchupStartMillis + target,
-                )
-                if (minted == null) {
-                    Log.w(TAG, "Native catch-up re-mint failed; keeping current window")
-                    return@launch
-                }
-                currentPlaybackUrl = minted
-                catchupOffsetMs = target
+            // Mints are SERIALIZED: rapid presses used to fire overlapping
+            // mint/prepare cycles that raced out of order and 503'd the
+            // server's provider slot (tvOS log 2026-07-11); while one is
+            // in flight, later targets coalesce and only the LATEST runs.
+            // The outgoing session is revoked once the new one is playing
+            // so its provider slot frees ahead of the 10-minute idle TTL.
+            if (nativeRemintInFlight) {
+                nativeRemintPendingMs = target
                 positionMs = target
-                player.setMediaItem(MediaItem.fromUri(minted))
-                player.prepare()
-                player.playWhenReady = true
-                Log.i(TAG, "Native catch-up re-mint to ${target / 1000}s")
+                return@seek
+            }
+            seekScope.launch {
+                nativeRemintInFlight = true
+                var t = target
+                while (true) {
+                    val outgoing = currentPlaybackUrl
+                    val minted = onRemintCatchup(
+                        catchupChannelUuid,
+                        outgoing,
+                        catchupStartMillis + t,
+                    )
+                    val pending = nativeRemintPendingMs
+                    if (pending != null) {
+                        // A newer target arrived while minting: the session
+                        // just minted was never played, so free its slot and
+                        // chase the newest target instead of a stale window.
+                        nativeRemintPendingMs = null
+                        if (minted != null) onRevokeCatchup(minted)
+                        t = pending
+                        continue
+                    }
+                    if (minted == null) {
+                        Log.w(TAG, "Native catch-up re-mint failed; keeping current window")
+                        break
+                    }
+                    onRevokeCatchup(outgoing)
+                    currentPlaybackUrl = minted
+                    catchupOffsetMs = t
+                    positionMs = t
+                    player.setMediaItem(MediaItem.fromUri(minted))
+                    player.prepare()
+                    player.playWhenReady = true
+                    Log.i(TAG, "Native catch-up re-mint to ${t / 1000}s")
+                    break
+                }
+                nativeRemintInFlight = false
             }
             return@seek
         }
