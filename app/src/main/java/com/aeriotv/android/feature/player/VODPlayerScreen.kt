@@ -382,27 +382,29 @@ fun VODPlayerScreen(
         val windowOffset = (absFlooredStart - catchupStartMillis).coerceAtLeast(0L)
         if (isNativeCatchup) {
             // Task #149: native session seek = mint a NEW session at the
-            // floored programme offset (same honest floored-minute model as
-            // the XC path below; only the URL construction changed). The
-            // mint is a network call, so the re-tune applies when it lands;
-            // failures keep the current window playing.
+            // exact programme offset. NO minute flooring here: the sessions
+            // API takes full-second timestamps, and flooring broke the
+            // +/-30s skips (a +30 press from mid-minute floored BACKWARD
+            // and then pinned every following press to the same window).
+            // The mint is a network call, so the re-tune applies when it
+            // lands; failures keep the current window playing.
             seekScope.launch {
                 val minted = onRemintCatchup(
                     catchupChannelUuid,
                     currentPlaybackUrl,
-                    absFlooredStart,
+                    catchupStartMillis + target,
                 )
                 if (minted == null) {
                     Log.w(TAG, "Native catch-up re-mint failed; keeping current window")
                     return@launch
                 }
                 currentPlaybackUrl = minted
-                catchupOffsetMs = windowOffset
-                positionMs = windowOffset
+                catchupOffsetMs = target
+                positionMs = target
                 player.setMediaItem(MediaItem.fromUri(minted))
                 player.prepare()
                 player.playWhenReady = true
-                Log.i(TAG, "Native catch-up re-mint to ${target / 1000}s (window ${windowOffset / 1000}s)")
+                Log.i(TAG, "Native catch-up re-mint to ${target / 1000}s")
             }
             return@seek
         }
@@ -717,19 +719,17 @@ fun VODPlayerScreen(
                                         // kicking the user out.
                                         nativeRemintRecoveryUsed = true
                                         seekScope.launch {
-                                            val floored =
-                                                ((catchupStartMillis + positionMs) / 60_000L) * 60_000L
+                                            val resumeAt = positionMs.coerceAtLeast(0L)
                                             val minted = onRemintCatchup(
                                                 catchupChannelUuid,
                                                 currentPlaybackUrl,
-                                                floored,
+                                                catchupStartMillis + resumeAt,
                                             )
                                             val p = exoPlayer
                                             if (minted != null && p != null) {
                                                 currentPlaybackUrl = minted
-                                                catchupOffsetMs =
-                                                    (floored - catchupStartMillis).coerceAtLeast(0L)
-                                                positionMs = catchupOffsetMs
+                                                catchupOffsetMs = resumeAt
+                                                positionMs = resumeAt
                                                 p.setMediaItem(MediaItem.fromUri(minted))
                                                 p.prepare()
                                                 p.playWhenReady = true
