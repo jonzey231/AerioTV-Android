@@ -453,11 +453,20 @@ class AerioExoPlayerHolder @Inject constructor(
                                 playUrl(fresh, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
                             }
                         } else {
-                            withContext(Dispatchers.Main) { forceReload("error:${error.errorCodeName}") }
+                            // Task #150: a terminal error with no reload slot
+                            // (cooldown / attempt cap) used to strand the
+                            // player IDLE on a silent black screen (repro:
+                            // drop the network mid-stream - the second error
+                            // lands inside the 5s cooldown and nothing ever
+                            // fires again). Surface the unavailable card so
+                            // its escalating auto-retry owns recovery.
+                            withContext(Dispatchers.Main) {
+                                if (!forceReload("error:${error.errorCodeName}")) markStreamUnavailable()
+                            }
                         }
                     }
                 } else {
-                    forceReload("error:${error.errorCodeName}")
+                    if (!forceReload("error:${error.errorCodeName}")) markStreamUnavailable()
                 }
             }
         }
