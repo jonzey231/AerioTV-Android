@@ -44,7 +44,6 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Star
@@ -1109,21 +1108,11 @@ internal fun ChannelRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    // 2026-07-12 (user): the per-row "More" (…) button was
+                    // removed as redundant - long-pressing the row opens the
+                    // same menu (the DropdownMenu anchors to the row Box, so
+                    // no anchor was lost).
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            // No menuGuard.arm(): this is a plain click, so
-                            // there is no held OK key whose release could
-                            // auto-pick the first menu item.
-                            onClick = { menuOpen = true },
-                            modifier = Modifier.size(28.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.MoreHoriz,
-                                contentDescription = "More",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
                         IconButton(
                             onClick = { isExpanded = !isExpanded },
                             modifier = Modifier.size(28.dp),
