@@ -1,6 +1,7 @@
 package com.aeriotv.android.feature.livetv
 
 import android.widget.Toast
+import androidx.compose.ui.draw.clipToBounds
 import kotlin.math.abs
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -1625,6 +1626,7 @@ fun GuideScreen(
         CompositionLocalProvider(
             LocalBringIntoViewSpec provides GuideVerticalMinimalBringIntoViewSpec,
         ) {
+        Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -1881,6 +1883,41 @@ fun GuideScreen(
                 )
                 HorizontalDivider(color = guideRowDivider, thickness = guideRowDividerThickness)
             }
+        }
+        // Single continuous now-line across the whole grid (2026-07-12,
+        // Apple-parity request): the old per-row copy restarted inside every
+        // row, so the row dividers sliced it into dashes. Drawn ONCE over the
+        // LazyColumn in screen space, tracking the shared timeline scroll in
+        // the placement phase (no recomposition while panning); clipped to
+        // the programme-strip area so it never paints over the channel rail.
+        // A plain Box with no pointer/focus modifiers: touch passes through
+        // and D-pad focus never sees it.
+        if (nowMillis in (windowStart + 1)..(windowStart + windowDurationMs - 1)) {
+            Box(
+                modifier = Modifier
+                    .padding(start = railWidth)
+                    .fillMaxSize()
+                    .clipToBounds(),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            val nowPx =
+                                ((nowMillis - windowStart).toFloat() / 3_600_000f) * hourWidthPx
+                            androidx.compose.ui.unit.IntOffset(
+                                (nowPx - horizontalScrollState.value).toInt(),
+                                0,
+                            )
+                        }
+                        .width(2.dp)
+                        .fillMaxHeight()
+                        .background(
+                            if (isTv) Color(0xFFFF4757)
+                            else MaterialTheme.colorScheme.primary,
+                        ),
+                )
+            }
+        }
         }
         }
         }
@@ -2471,21 +2508,9 @@ private fun ChannelGuideRow(
                     )
                     }
                 }
-                // "Now" indicator vertical line, only drawn when "now" falls
-                // inside the window. tvOS draws it in red (statusLive); phone
-                // keeps the cyan accent.
-                if (nowMillis in (windowStart + 1)..(windowStart + windowDurationMs - 1)) {
-                    val nowX = msToDp(nowMillis - windowStart, hourWidth)
-                    Box(
-                        modifier = Modifier
-                            .offset(x = nowX)
-                            .width(2.dp)
-                            .fillMaxHeight()
-                            .background(
-                                if (isTv) Color(0xFFFF4757) else MaterialTheme.colorScheme.primary,
-                            ),
-                    )
-                }
+                // The now-line is no longer drawn per row: the row dividers
+                // sliced it into dashes. A single continuous line lives as a
+                // grid-level overlay in guideGrid (Apple-parity, 2026-07-12).
             }
         }
         }
