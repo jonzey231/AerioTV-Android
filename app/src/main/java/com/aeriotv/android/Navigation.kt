@@ -85,7 +85,7 @@ object Routes {
     const val VOD_EPISODE_PLAYER = "vod_episode_player/{episodeUuid}"
     const val MULTIVIEW = "multiview"
     const val SEARCH = "search"
-    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}"
+    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
     fun player(channelId: String) = "player/${Uri.encode(channelId)}"
@@ -103,9 +103,13 @@ object Routes {
         csStart: Long = 0L,
         csEnd: Long = 0L,
         csTz: String = "",
+        // Task #149: Dispatcharr channel uuid, non-blank only for NATIVE
+        // catch-up sessions - seeks re-mint a session instead of
+        // rebuilding an XC wall-clock URL, and close revokes the session.
+        csUuid: String = "",
     ) =
         "recording_player/${Uri.encode(playbackUrl)}/${Uri.encode(title)}" +
-            "?isDvr=$isDvr&fromStart=$fromStart&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}"
+            "?isDvr=$isDvr&fromStart=$fromStart&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
 }
 
 @Composable
@@ -537,11 +541,12 @@ fun AerioTVNavHost(
                     onPlayRecording = { playbackUrl, title ->
                         navController.navigate(Routes.recordingPlayer(playbackUrl, title))
                     },
-                    onPlayCatchup = { playbackUrl, title, progStart, progEnd, panelTz ->
+                    onPlayCatchup = { playbackUrl, title, progStart, progEnd, panelTz, channelUuid ->
                         navController.navigate(
                             Routes.recordingPlayer(
                                 playbackUrl, title,
                                 csStart = progStart, csEnd = progEnd, csTz = panelTz,
+                                csUuid = channelUuid,
                             ),
                         )
                     },
@@ -921,6 +926,7 @@ fun AerioTVNavHost(
                     navArgument("csStart") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csEnd") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csTz") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("csUuid") { type = NavType.StringType; defaultValue = "" },
                 ),
             ) { entry ->
                 val playbackUrl = Uri.decode(entry.arguments?.getString("playbackUrl").orEmpty())
@@ -949,6 +955,7 @@ fun AerioTVNavHost(
                 val csStart = entry.arguments?.getLong("csStart") ?: 0L
                 val csEnd = entry.arguments?.getLong("csEnd") ?: 0L
                 val csTz = Uri.decode(entry.arguments?.getString("csTz").orEmpty())
+                val csUuid = Uri.decode(entry.arguments?.getString("csUuid").orEmpty())
                 // A recording is either a local file:// capture (no auth) or a
                 // Dispatcharr server URL that needs the active source's
                 // X-API-Key. Resolve the playlist's auth headers like the VOD
@@ -984,6 +991,11 @@ fun AerioTVNavHost(
                     catchupStartMillis = csStart,
                     catchupEndMillis = csEnd,
                     catchupTz = csTz,
+                    catchupChannelUuid = csUuid,
+                    onRemintCatchup = { uuid, currentUrl, absStartMillis ->
+                        playlistVm.remintCatchupSession(uuid, currentUrl, absStartMillis)
+                    },
+                    onRevokeCatchup = { url -> playlistVm.revokeCatchupSession(url) },
                     onClose = { navController.popBackStack() },
                     loadingMessage = null,
                     videoId = playbackUrl,

@@ -133,7 +133,8 @@ fun ChannelListScreen(
         progStartMillis: Long,
         progEndMillis: Long,
         panelTz: String,
-    ) -> Unit = { _, _, _, _, _ -> },
+        channelUuid: String,
+    ) -> Unit = { _, _, _, _, _, _ -> },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val favoritesVm: FavoritesViewModel = hiltViewModel()
@@ -158,6 +159,7 @@ fun ChannelListScreen(
                     onPlayCatchup(
                         pb.url, prog.title,
                         prog.startMillis, prog.endMillis, pb.panelTimeZoneId,
+                        pb.channelUuid.orEmpty(),
                     )
                 }
                 .onFailure { t ->

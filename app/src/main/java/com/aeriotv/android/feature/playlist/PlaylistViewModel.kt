@@ -899,6 +899,36 @@ class PlaylistViewModel @Inject constructor(
     }
 
     /**
+     * Task #149: mint a fresh native catch-up session for a seek re-tune
+     * (programmeStart + floored offset). Suspends; returns the new
+     * absolute playback URL or null (the player keeps its current
+     * window). Only meaningful when the playing URL is a native
+     * /proxy/catchup/ session URL.
+     */
+    suspend fun remintCatchupSession(
+        channelUuid: String,
+        currentPlaybackUrl: String,
+        absStartMillis: Long,
+    ): String? {
+        val active = repository.activePlaylist() ?: return null
+        return catchupResolver.remintNative(
+            playlist = active,
+            channelUuid = channelUuid,
+            currentPlaybackUrl = currentPlaybackUrl,
+            absStartMillis = absStartMillis,
+        )
+    }
+
+    /** Task #149: best-effort revoke of a native catch-up session when
+     *  the player closes (frees the server's provider slot early). */
+    fun revokeCatchupSession(playbackUrl: String) {
+        viewModelScope.launch {
+            val active = repository.activePlaylist() ?: return@launch
+            catchupResolver.revokeNative(active, playbackUrl)
+        }
+    }
+
+    /**
      * Re-fetch the active playlist (channels) and follow with EPG. Used by
      * Playlist Detail's "Refresh Playlist" action.
      */

@@ -688,6 +688,81 @@ class DispatcharrClient @Inject constructor() {
             me.username to xcPassword
         }.getOrNull()
 
+    /** POST /api/catchup/sessions/ response (task #149 native catch-up,
+     *  Dispatcharr dev PR #1432). `playbackUrl` is server-relative
+     *  ("/proxy/catchup/<uuid>?session_id=...") and header-free by
+     *  design; open it within the 60s handshake window, after which the
+     *  session lives on a 10-minute sliding idle TTL refreshed by each
+     *  range/seek request. */
+    @Serializable
+    data class CatchupSessionResponse(
+        @SerialName("session_id") val sessionId: String,
+        @SerialName("playback_url") val playbackUrl: String,
+        @SerialName("expires_at") val expiresAt: Long = 0,
+    )
+
+    /** Outcome of a native catch-up session mint. `Unsupported` means the
+     *  endpoint 404ed (stable-tag server without PR #1432, or an unknown
+     *  channel uuid - both fall back to the XC /timeshift/ path). */
+    sealed class CatchupSessionResult {
+        data class Created(val session: CatchupSessionResponse) : CatchupSessionResult()
+        data object Unsupported : CatchupSessionResult()
+        data class Error(val message: String) : CatchupSessionResult()
+    }
+
+    /**
+     * Mint a native catch-up playback session (task #149). Normal
+     * ApiKey/JWT auth on the mint; the returned playback URL carries the
+     * session in its query string so the player itself sends no headers.
+     * `startMillis` is the programme's UTC broadcast start (which
+     * archived show to play - or programmeStart+offset for the
+     * floored-minute seek model); rendered as ISO-8601 UTC, one of the
+     * server's accepted shapes.
+     */
+    suspend fun createCatchupSession(
+        baseUrl: String,
+        apiKey: String,
+        channelUuid: String,
+        startMillis: Long,
+    ): CatchupSessionResult = runCatching {
+        val url = "${baseUrl.trimEnd('/')}/api/catchup/sessions/"
+        val startIso = java.time.Instant.ofEpochMilli(startMillis)
+            .truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+            .toString()
+        val response = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(mapOf("channel_uuid" to channelUuid, "start" to startIso))
+        }
+        when {
+            response.status.isSuccess() -> {
+                val session: CatchupSessionResponse = response.body()
+                android.util.Log.i("DispatcharrCatchup", "native session minted id=${session.sessionId.take(8)} start=$startIso")
+                CatchupSessionResult.Created(session)
+            }
+            response.status.value == 404 ->
+                // Endpoint absent (pre-PR-#1432 server) or channel unknown;
+                // either way the caller falls back to the XC path.
+                CatchupSessionResult.Unsupported
+            else ->
+                CatchupSessionResult.Error("HTTP ${response.status.value} on catch-up session mint")
+        }
+    }.getOrElse { CatchupSessionResult.Error(it.message ?: "catch-up session mint failed") }
+
+    /**
+     * Best-effort revoke of a native catch-up session when the player
+     * closes (frees the server's per-session provider slot ahead of the
+     * idle TTL). The route requires the TRAILING SLASH - Django
+     * redirects/404s without it. Failures are swallowed; the sliding TTL
+     * reaps abandoned sessions anyway.
+     */
+    suspend fun deleteCatchupSession(baseUrl: String, apiKey: String, sessionId: String) {
+        runCatching {
+            val url = "${baseUrl.trimEnd('/')}/api/catchup/sessions/$sessionId/"
+            client.delete(url) { applyAuth(apiKey) }
+        }
+    }
+
     // NOTE: an earlier revision pre-resolved the timeshift 301 here to pin the
     // ?session_id=. That is WRONG for Dispatcharr: the server binds a session's
     // serving generator to the request that created it, so a throwaway probe

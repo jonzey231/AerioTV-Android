@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -106,6 +107,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val TAG = "VODPlayerScreen"
 private const val AUTO_HIDE_MS = 4_000L
@@ -154,6 +156,19 @@ fun VODPlayerScreen(
     catchupStartMillis: Long = 0L,
     catchupEndMillis: Long = 0L,
     catchupTz: String = "",
+    /** Task #149: Dispatcharr channel uuid, non-blank only for NATIVE
+     *  catch-up sessions (/proxy/catchup/ playback URL). Seeks then
+     *  re-mint a session at programmeStart+offset instead of rebuilding
+     *  an XC wall-clock URL, and closing the player revokes the
+     *  session (frees the server's per-session provider slot). */
+    catchupChannelUuid: String = "",
+    /** Task #149: mint a fresh native session for a seek re-tune at the
+     *  given absolute UTC start. Returns the new absolute playback URL
+     *  or null (the player keeps its current window). */
+    onRemintCatchup: suspend (channelUuid: String, currentUrl: String, absStartMillis: Long) -> String? = { _, _, _ -> null },
+    /** Task #149: best-effort revoke of the native session on close
+     *  (frees the server's per-session provider slot early). */
+    onRevokeCatchup: (playbackUrl: String) -> Unit = {},
 ) {
     // Keep the screen on during VOD playback. Matches PlayerScreen for the
     // same reason: system screen-timeout would otherwise dim/sleep the panel
@@ -191,6 +206,15 @@ fun VODPlayerScreen(
     var isPaused by remember { mutableStateOf(false) }
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
+    // Task #149: native catch-up seeks mint a session over the network,
+    // so the re-tune lands via this scope rather than synchronously.
+    val seekScope = rememberCoroutineScope()
+    // Task #149: one-shot 4xx recovery for native sessions. A session's
+    // 10-minute idle TTL lapses during a long pause; the next range
+    // request then 404s, which the shared 4xx branch would treat as
+    // "no archive" and close the player mid-replay. One silent re-mint
+    // at the current position absorbs that; a second 4xx closes.
+    var nativeRemintRecoveryUsed by remember { mutableStateOf(false) }
 
     // ── Catch-up mode (task #136) ────────────────────────────────────────
     // durationMs is pinned to the programme length and positionMs is
@@ -198,7 +222,15 @@ fun VODPlayerScreen(
     // to the programme end, so displayed position = window offset + player
     // position. Seeks outside the buffered window re-tune (see seekPlayer).
     val isCatchup = catchupEndMillis > catchupStartMillis &&
-        streamUrl.contains("/timeshift/")
+        (streamUrl.contains("/timeshift/") || streamUrl.contains("/proxy/catchup/"))
+    // Task #149: native Dispatcharr catch-up session (vs XC wall-clock URL).
+    val isNativeCatchup = isCatchup && catchupChannelUuid.isNotBlank() &&
+        streamUrl.contains("/proxy/catchup/")
+    // The URL the player is CURRENTLY tuned to. For native catch-up every
+    // seek re-mint replaces it (new session_id); revoke-on-close and the
+    // re-mint's base-host derivation both read this, never the original
+    // streamUrl param.
+    var currentPlaybackUrl by remember { mutableStateOf(streamUrl) }
     // Programme-relative start of the currently tuned timeshift window (0 on
     // first tune; the seek target after each re-tune).
     var catchupOffsetMs by remember { mutableLongStateOf(0L) }
@@ -348,6 +380,32 @@ fun VODPlayerScreen(
         // Every catch-up seek re-tunes; it already handles both directions.
         val absFlooredStart = ((catchupStartMillis + target) / 60_000L) * 60_000L
         val windowOffset = (absFlooredStart - catchupStartMillis).coerceAtLeast(0L)
+        if (isNativeCatchup) {
+            // Task #149: native session seek = mint a NEW session at the
+            // floored programme offset (same honest floored-minute model as
+            // the XC path below; only the URL construction changed). The
+            // mint is a network call, so the re-tune applies when it lands;
+            // failures keep the current window playing.
+            seekScope.launch {
+                val minted = onRemintCatchup(
+                    catchupChannelUuid,
+                    currentPlaybackUrl,
+                    absFlooredStart,
+                )
+                if (minted == null) {
+                    Log.w(TAG, "Native catch-up re-mint failed; keeping current window")
+                    return@launch
+                }
+                currentPlaybackUrl = minted
+                catchupOffsetMs = windowOffset
+                positionMs = windowOffset
+                player.setMediaItem(MediaItem.fromUri(minted))
+                player.prepare()
+                player.playWhenReady = true
+                Log.i(TAG, "Native catch-up re-mint to ${target / 1000}s (window ${windowOffset / 1000}s)")
+            }
+            return@seek
+        }
         val newUrl = com.aeriotv.android.core.playback.CatchupUrlBuilder.rebuildForOffset(
             url = streamUrl,
             panelTimeZoneId = catchupTz.ifBlank { "UTC" },
@@ -650,7 +708,42 @@ fun VODPlayerScreen(
                                     val status = (error.cause as?
                                         androidx.media3.datasource.HttpDataSource
                                             .InvalidResponseCodeException)?.responseCode ?: 0
-                                    if (status in 400..499) {
+                                    if (status in 400..499 &&
+                                        isNativeCatchup && !nativeRemintRecoveryUsed
+                                    ) {
+                                        // Native session TTL lapsed (long
+                                        // pause / missed handshake): re-mint
+                                        // at the current position instead of
+                                        // kicking the user out.
+                                        nativeRemintRecoveryUsed = true
+                                        seekScope.launch {
+                                            val floored =
+                                                ((catchupStartMillis + positionMs) / 60_000L) * 60_000L
+                                            val minted = onRemintCatchup(
+                                                catchupChannelUuid,
+                                                currentPlaybackUrl,
+                                                floored,
+                                            )
+                                            val p = exoPlayer
+                                            if (minted != null && p != null) {
+                                                currentPlaybackUrl = minted
+                                                catchupOffsetMs =
+                                                    (floored - catchupStartMillis).coerceAtLeast(0L)
+                                                positionMs = catchupOffsetMs
+                                                p.setMediaItem(MediaItem.fromUri(minted))
+                                                p.prepare()
+                                                p.playWhenReady = true
+                                                Log.i(TAG, "Native catch-up session recovered after 4xx")
+                                            } else {
+                                                android.widget.Toast.makeText(
+                                                    ctx,
+                                                    "Catch-up session expired.",
+                                                    android.widget.Toast.LENGTH_LONG,
+                                                ).show()
+                                                onClose()
+                                            }
+                                        }
+                                    } else if (status in 400..499) {
                                         android.widget.Toast.makeText(
                                             ctx,
                                             "Catch-up isn't available for this program on your provider.",
@@ -696,6 +789,9 @@ fun VODPlayerScreen(
             },
             onRelease = { view ->
                 Log.i(TAG, "Releasing VOD ExoPlayer")
+                // Task #149: free the native catch-up session's provider
+                // slot ahead of its idle TTL. Best-effort, fire-and-forget.
+                if (isNativeCatchup) onRevokeCatchup(currentPlaybackUrl)
                 exoPlayer?.release()
                 exoPlayer = null
                 view.player = null

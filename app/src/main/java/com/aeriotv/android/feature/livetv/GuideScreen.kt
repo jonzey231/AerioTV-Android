@@ -200,7 +200,8 @@ fun GuideScreen(
         progStartMillis: Long,
         progEndMillis: Long,
         panelTz: String,
-    ) -> Unit = { _, _, _, _, _ -> },
+        channelUuid: String,
+    ) -> Unit = { _, _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
@@ -216,6 +217,7 @@ fun GuideScreen(
                     onPlayCatchup(
                         pb.url, prog.title,
                         prog.startMillis, prog.endMillis, pb.panelTimeZoneId,
+                        pb.channelUuid.orEmpty(),
                     )
                 }
                 .onFailure { t ->

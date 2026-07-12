@@ -30,7 +30,7 @@ fun LiveTVTabContent(
      *  recording player, carrying programme window + panel timezone for
      *  scrub-seek URL rebuilds. Guide-only (the List view surfaces no past
      *  programmes). */
-    onPlayCatchup: (String, String, Long, Long, String) -> Unit = { _, _, _, _, _ -> },
+    onPlayCatchup: (String, String, Long, Long, String, String) -> Unit = { _, _, _, _, _, _ -> },
     viewModel: PlaylistViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {

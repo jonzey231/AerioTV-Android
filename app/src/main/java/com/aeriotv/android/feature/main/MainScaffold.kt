@@ -138,7 +138,7 @@ fun MainScaffold(
     onResumeMovie: (String) -> Unit = {},
     onPlayRecording: (String, String) -> Unit = { _, _ -> },
     /** Catch-up (task #136): url, title, progStartMillis, progEndMillis, panelTz. */
-    onPlayCatchup: (String, String, Long, Long, String) -> Unit = { _, _, _, _, _ -> },
+    onPlayCatchup: (String, String, Long, Long, String, String) -> Unit = { _, _, _, _, _, _ -> },
     onLaunchMultiview: () -> Unit = {},
     onWatchLive: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onWatchFromBeginning: (String, String, Boolean) -> Unit = { _, _, _ -> },
@@ -728,7 +728,7 @@ private fun MainTabContent(
     onEpisodeResume: (String) -> Unit,
     onResumeMovie: (String) -> Unit,
     onPlayRecording: (String, String) -> Unit,
-    onPlayCatchup: (String, String, Long, Long, String) -> Unit,
+    onPlayCatchup: (String, String, Long, Long, String, String) -> Unit,
     onLaunchMultiview: () -> Unit,
     onWatchLive: (String, String, Boolean) -> Unit,
     onWatchFromBeginning: (String, String, Boolean) -> Unit,
