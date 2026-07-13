@@ -20,6 +20,20 @@ object M3UParser {
     private val ATTRIBUTE_REGEX = Regex("""([\w-]+)="([^"]*)"""")
 
     /**
+     * GH #31: the ONLY attribute keys anything reads back off
+     * [M3UChannel.rawAttributes] after parsing — the EPG bridge
+     * ([com.aeriotv.android.core.data.ChannelEpgKey]) uses these for
+     * Dispatcharr channel-uuid matching. Everything else the #EXTINF carries
+     * (tvg-id / tvg-name / tvg-logo / group-title / tvg-chno) is already a
+     * first-class [M3UChannel] field and was never read from the map, yet
+     * retaining a full per-channel Map cost ~250MB across a ~340k-entry XC
+     * m3u_plus (the second half of the large-catalog OOM). Keeping only these
+     * keys collapses rawAttributes to the shared empty map for XC channels
+     * (which carry none of them) and to a 1-entry map for Dispatcharr.
+     */
+    private val EPG_ID_ATTR_KEYS = setOf("channel-id", "channel-uuid", "uuid")
+
+    /**
      * Try UTF-8, fall back to ISO-8859-1. Mirrors iOS String(data:encoding:) fallback.
      * BOM is consumed automatically by both decoders.
      */
@@ -55,17 +69,63 @@ object M3UParser {
     }
 
     /**
-     * The ONE parse implementation, consuming lines as a sequence so file
-     * and string inputs share it. Semantics preserved from the original
-     * index/lookahead loop:
+     * GH #31: streaming variant of [parseFile] that EMITS each channel to
+     * [onChannel] as it is parsed, in constant memory, so a very large
+     * m3u_plus (100-200MB, ~100k+ channels) can be inserted into the DB in
+     * chunks without ever holding the whole `List<M3UChannel>` (the previous
+     * parse-to-list materialized the entire catalog and, together with the
+     * downstream copies, wedged a 512MB heap — see the batch-insert fix).
+     *
+     * The charset is DETECTED up front in a throwaway constant-memory pass
+     * instead of via the parse-and-retry [parseFile] uses: a streaming callback
+     * cannot un-emit the channels it already produced if a malformed UTF-8 byte
+     * mid-file forced an ISO-8859-1 re-parse, which would DOUBLE-emit (and so
+     * double-insert) every channel before the bad byte. Detect-then-stream
+     * guarantees exactly one emit per channel.
+     */
+    fun parseFile(file: java.io.File, onChannel: (M3UChannel) -> Unit) {
+        file.bufferedReader(detectCharset(file))
+            .use { r -> parseLinesStreaming(r.lineSequence(), onChannel) }
+    }
+
+    /** Strict-UTF-8 validate the whole file in a constant-memory read-through
+     *  (a malformed byte throws); fall back to ISO-8859-1 exactly as
+     *  [parseFile]/[parseBytes] do. Read once here so the subsequent stream is
+     *  a single clean pass. */
+    private fun detectCharset(file: java.io.File): java.nio.charset.Charset {
+        val strictUtf8 = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        return try {
+            java.io.BufferedReader(java.io.InputStreamReader(file.inputStream(), strictUtf8)).use { r ->
+                val buf = CharArray(16384)
+                while (r.read(buf) >= 0) { /* validate only; discard */ }
+            }
+            Charsets.UTF_8
+        } catch (_: java.nio.charset.CharacterCodingException) {
+            Charsets.ISO_8859_1
+        }
+    }
+
+    /** List-collecting wrapper over [parseLinesStreaming] for the small-input
+     *  callers ([parse], [parseBytes], [parseFile]-to-List). */
+    private fun parseLines(lines: Sequence<String>): List<M3UChannel> =
+        buildList { parseLinesStreaming(lines) { add(it) } }
+
+    /**
+     * The ONE parse loop, consuming lines as a sequence so file and string
+     * inputs share it. EMITS each fully-formed channel to [onChannel] the moment
+     * its URL line binds — ONLY on a completed channel boundary, never mid-record
+     * (the cross-line `pendingExtInf`/`pendingKodiProps` lookahead is reset right
+     * after each emit), so a streaming caller can flush to the DB per chunk
+     * safely. Semantics preserved from the original index/lookahead loop:
      *  - blank lines and #-comments between #EXTINF and its URL are skipped
      *  - a second #EXTINF before the first found its URL is skipped like a
      *    comment (the URL that follows still binds to the FIRST #EXTINF)
      *  - #EXTINF without a URL line is silently dropped
      *  - a bare URL with no preceding #EXTINF is ignored
      */
-    private fun parseLines(lines: Sequence<String>): List<M3UChannel> {
-        val channels = mutableListOf<M3UChannel>()
+    private fun parseLinesStreaming(lines: Sequence<String>, onChannel: (M3UChannel) -> Unit) {
         var pendingExtInf: String? = null
         var pendingKodiProps: MutableMap<String, String>? = null
         for (raw in lines) {
@@ -93,14 +153,13 @@ object M3UParser {
                 line.isEmpty() || line.startsWith("#") -> Unit
                 else -> {
                     pendingExtInf?.let { ext ->
-                        channels += buildChannel(ext, line, pendingKodiProps)
+                        onChannel(buildChannel(ext, line, pendingKodiProps))
                     }
                     pendingExtInf = null
                     pendingKodiProps = null
                 }
             }
         }
-        return channels
     }
 
     private fun buildChannel(
@@ -126,7 +185,7 @@ object M3UParser {
             tvgName = attrs["tvg-name"].orEmpty(),
             tvgLogo = attrs["tvg-logo"].orEmpty(),
             channelNumber = attrs["tvg-chno"]?.trim()?.takeIf { it.isNotBlank() },
-            rawAttributes = attrs.filterKeys { it != "name" },
+            rawAttributes = attrs.filterKeys { it in EPG_ID_ATTR_KEYS }.ifEmpty { emptyMap() },
             drmLicenseType = kodiProps?.get("inputstream.adaptive.license_type")
                 ?.takeIf { it.isNotBlank() },
             drmLicenseKey = kodiProps?.get("inputstream.adaptive.license_key")

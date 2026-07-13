@@ -3,6 +3,7 @@ package com.aeriotv.android.core.data.repository
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
+import androidx.room.withTransaction
 import com.aeriotv.android.core.data.db.dao.ChannelSnapshotDao
 import com.aeriotv.android.core.data.db.dao.EpgProgrammeDao
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
@@ -54,6 +55,11 @@ import java.util.concurrent.ConcurrentHashMap
  *    silent-rebootstrap pattern.
  *  - XtreamCodes: TODO Phase 4c (player_api.php enumeration -> get.php m3u_plus).
  */
+/** GH #31: channel-snapshot insert batch size. Small enough that one chunk's
+ *  entities are trivially cheap against the heap, large enough that per-chunk
+ *  SQLite bind overhead stays negligible across a ~100k-row XC catalog. */
+private const val CHANNEL_CACHE_CHUNK = 2_000
+
 @Singleton
 class PlaylistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -65,6 +71,10 @@ class PlaylistRepository @Inject constructor(
     private val appPreferences: AppPreferences,
     private val epgProgrammeDao: EpgProgrammeDao,
     private val channelSnapshotDao: ChannelSnapshotDao,
+    // GH #31: injected so the channel-snapshot persist can delete-then-insert in
+    // CHUNKS inside one transaction (see saveChannelsToCache) instead of binding
+    // the whole ~100k-row catalog at once. Same pattern DriveSyncManager uses.
+    private val database: com.aeriotv.android.core.data.db.AerioDatabase,
     private val activeCredentials: com.aeriotv.android.core.network.ActivePlaylistCredentials,
     private val lanReachability: LanReachability,
     private val xtreamApi: com.aeriotv.android.core.network.XtreamCodesApi,
@@ -709,10 +719,25 @@ class PlaylistRepository @Inject constructor(
 
     suspend fun saveChannelsToCache(playlistId: String, channels: List<M3UChannel>) {
         val now = System.currentTimeMillis()
-        channelSnapshotDao.replaceForPlaylist(
-            playlistId,
-            channels.mapIndexed { idx, ch -> ch.toCacheEntity(playlistId, idx, now) },
-        )
+        // GH #31: persist in CHUNKS inside ONE transaction instead of mapping the
+        // whole ~100k-row entity list + one giant insertAll. That overlap (the
+        // channel list + the full entity list + the transaction bind) was the
+        // bulk of the 505MB heap peak that wedged a large XC import. delete-then-
+        // insert stays atomic (a reader never sees a half-written playlist, and a
+        // crash rolls back to the previous snapshot), while SQLite buffers pending
+        // rows on disk (WAL), so only ONE chunk of entities is ever resident.
+        // The delete-first is MANDATORY: ChannelSnapshotEntity's PK is
+        // autoGenerate with only a NON-unique index on playlistId, so REPLACE
+        // never dedups — chunked inserts without it would duplicate every row.
+        database.withTransaction {
+            channelSnapshotDao.deleteForPlaylist(playlistId)
+            var position = 0
+            for (chunk in channels.asSequence().chunked(CHANNEL_CACHE_CHUNK)) {
+                channelSnapshotDao.insertAll(
+                    chunk.map { ch -> ch.toCacheEntity(playlistId, position++, now) },
+                )
+            }
+        }
     }
 
     /**
@@ -1031,27 +1056,35 @@ class PlaylistRepository @Inject constructor(
             // GH #26 fix streamed the generic M3U + XMLTV paths but missed this
             // XC-specific live-channel fetch. Stream it to a temp file and parse
             // from disk in constant memory, exactly like the plain-M3U path.
-            val channels = fetchViaTempFile(m3uUrl, ".m3u") { M3UParser.parseFile(it) }
-            // Catch-up (task #133): the M3U carries no archive flags; the
-            // panel's get_live_streams does (tv_archive + tv_archive_duration,
-            // loose types). Best-effort enrichment keyed by the XC stream id
-            // embedded in each live URL's last path segment -- a failed or
-            // empty fetch simply leaves catch-up off for this refresh.
+            // Catch-up (task #133): the M3U carries no archive flags; the panel's
+            // get_live_streams does (tv_archive + tv_archive_duration, loose types).
+            // Fetched BEFORE the parse so enrichment is applied PER CHANNEL during
+            // the streaming parse below (a failed/empty fetch just leaves catch-up
+            // off for this refresh). GH #31: the old code parsed the whole
+            // m3u_plus into one List then `channels.map { ch.copy() }` allocated a
+            // SECOND full copy of the ~100k-channel catalog — the streaming
+            // parseFile applies the copy inline instead, so only one list forms.
             val catchupByStreamId = runCatching {
                 xtreamApi.getLiveCatchupInfo(b, user, password.orEmpty())
             }.getOrDefault(emptyMap())
-            if (catchupByStreamId.isEmpty()) {
-                channels
-            } else {
-                channels.map { ch ->
-                    val sid = xcStreamIdFromUrl(ch.url)
-                    val days = sid?.let { catchupByStreamId[it] } ?: 0
-                    if (days > 0) {
-                        ch.copy(catchupDays = days, catchupStreamId = sid.toString())
-                    } else {
-                        ch
-                    }
+            fetchViaTempFile(m3uUrl, ".m3u") { file ->
+                val out = ArrayList<M3UChannel>()
+                M3UParser.parseFile(file) { ch ->
+                    out.add(
+                        if (catchupByStreamId.isEmpty()) {
+                            ch
+                        } else {
+                            val sid = xcStreamIdFromUrl(ch.url)
+                            val days = sid?.let { catchupByStreamId[it] } ?: 0
+                            if (days > 0) {
+                                ch.copy(catchupDays = days, catchupStreamId = sid.toString())
+                            } else {
+                                ch
+                            }
+                        },
+                    )
                 }
+                out
             }
         }
     }
