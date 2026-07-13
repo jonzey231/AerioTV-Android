@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
 import com.aeriotv.android.core.data.db.entity.LocalRecordingEntity
+import com.aeriotv.android.core.data.db.entity.canRecordToServer
+import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
 import com.aeriotv.android.core.network.DispatcharrClient
@@ -160,6 +162,15 @@ class DvrViewModel @Inject constructor(
         val filter: Filter = Filter.Scheduled,
         /** True when the active playlist is NOT Dispatcharr-backed (no DVR available). */
         val unsupportedSource: Boolean = false,
+        /** True when the active playlist is a Dispatcharr Direct Connect source
+         *  (regardless of admin level). Drives RecordProgramSheet's non-admin
+         *  "records to this device only" hint. Resolved off activePlaylist() in
+         *  [refresh] so the sheet no longer reads a possibly-unloaded VM. */
+        val isDispatcharrDirect: Boolean = false,
+        /** True when the active playlist is Dispatcharr Direct Connect AND the
+         *  stored user level is admin (>=10), so recordings can be scheduled on
+         *  the server. Gates RecordProgramSheet's destination toggle. */
+        val canRecordToServer: Boolean = false,
     ) {
         val scheduledCount: Int get() = recordings.count { it.effectiveStatus() == Recording.Status.Scheduled }
         val recordingCount: Int get() = recordings.count { it.effectiveStatus() == Recording.Status.Recording }
@@ -226,11 +237,28 @@ class DvrViewModel @Inject constructor(
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
                     sourceType == SourceType.DispatcharrUserPass
+            // Record-destination capability for RecordProgramSheet, resolved off
+            // the SAME activePlaylist() the recordings list uses so the sheet no
+            // longer depends on a possibly-unloaded PlaylistViewModel. isDispatcharrDirect
+            // gates the non-admin hint; canRecordToServer (direct-connect AND
+            // userLevel>=10) gates the server destination toggle.
+            val isDispatcharrDirect = playlist?.isDispatcharrDirectConnect() == true
+            val canRecordToServer = playlist?.canRecordToServer() == true
             if (playlist == null || !isDispatcharr || playlist.apiKey.isNullOrBlank()) {
-                _state.update { it.copy(unsupportedSource = true, recordings = emptyList(), isLoading = false, error = null) }
+                _state.update {
+                    it.copy(
+                        unsupportedSource = true, recordings = emptyList(), isLoading = false, error = null,
+                        isDispatcharrDirect = isDispatcharrDirect, canRecordToServer = canRecordToServer,
+                    )
+                }
                 return@launch
             }
-            _state.update { it.copy(isLoading = true, error = null, unsupportedSource = false) }
+            _state.update {
+                it.copy(
+                    isLoading = true, error = null, unsupportedSource = false,
+                    isDispatcharrDirect = isDispatcharrDirect, canRecordToServer = canRecordToServer,
+                )
+            }
             // Effective base (LAN when on a saved home SSID, else WAN), the
             // same base the stream URLs use. Server recordings whose file_url
             // is a relative path are anchored to this so a phone off the home

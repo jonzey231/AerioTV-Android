@@ -47,8 +47,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.aeriotv.android.core.data.ProgramInfoTarget
-import com.aeriotv.android.core.data.db.entity.canRecordToServer
-import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.feature.dvr.DvrViewModel
 import com.aeriotv.android.feature.dvr.LocalRecordingService
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -94,9 +92,19 @@ fun RecordProgramSheet(
     // non-admin Dispatcharr account (or any non-Dispatcharr source) can only
     // record to this device, so the destination toggle is hidden and the
     // record defaults to local. Mirrors iOS RecordProgramSheet.swift.
-    val activePlaylist = playlistViewModel.state.value.playlist
-    val canRecordToServer = activePlaylist?.canRecordToServer() == true
-    val isDispatcharr = activePlaylist?.isDispatcharrDirectConnect() == true
+    //
+    // Sourced through DvrViewModel (which resolves playlistRepository
+    // .activePlaylist() in its init) and read REACTIVELY off dvrState. The prior
+    // code read playlistViewModel.state.value.playlist NON-reactively at
+    // composition: on a freshly-created PlaylistViewModel whose active-playlist
+    // load had not finished, .playlist was null, so canRecordToServer computed
+    // false ONCE and the server destination toggle stayed hidden for admins for
+    // the whole life of the sheet (a .value read never triggers recomposition).
+    // A fresh DvrViewModel always reloads activePlaylist() in init, and dvrState
+    // is collected reactively, so the toggle now appears when refresh() lands and
+    // destinationServer re-seeds via remember(canRecordToServer) below.
+    val canRecordToServer = dvrState.canRecordToServer
+    val isDispatcharr = dvrState.isDispatcharrDirect
 
     var preRoll by remember(defaultPreRoll) { mutableStateOf(defaultPreRoll) }
     var postRoll by remember(defaultPostRoll) { mutableStateOf(defaultPostRoll) }
