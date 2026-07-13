@@ -2,6 +2,9 @@ package com.aeriotv.android.feature.livetv
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -16,9 +19,11 @@ import com.aeriotv.android.ui.scale.WithDisplayScale
  * (List vs Guide) based on form factor + the user's runtime toggle.
  * Mirrors iOS ChannelListView dispatcher logic (`ChannelListView.swift:348`).
  *
- * Phase 8b: view-mode preference moved from `rememberSaveable` to DataStore
- * via [SettingsViewModel] so the user's List/Guide choice survives cold start.
- * An empty stored value falls back to the form-factor default.
+ * The launch view is the persisted "Default Live TV View" choice (Settings ->
+ * App Behaviors): an explicit List/Guide wins, "Automatic" (empty) falls back to
+ * the form-factor default. The in-screen List/Guide button is a SESSION-only
+ * override that does NOT persist, so it can't clobber the Drive-synced default
+ * across devices.
  */
 @Composable
 fun LiveTVTabContent(
@@ -46,19 +51,25 @@ fun LiveTVTabContent(
     val stored by settingsVm.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
 
-    // The List / Guide switch is offered on every form factor, including Android
-    // TV (parity with tvOS, which puts a List / Guide button at the left of the
-    // Live TV control row). TV defaults to Guide but honors a saved "list" choice
-    // so the preference survives cold start, same as phone / tablet.
-    val mode = when (stored.lowercase()) {
+    // Resolved DEFAULT view. An explicit Settings choice (Settings -> App
+    // Behaviors -> Default Live TV View) wins; "Automatic" (blank) falls back to
+    // the form-factor default (compact phone -> List, tablet / TV -> Guide).
+    val resolvedDefault = when (stored.lowercase()) {
         "list" -> LiveTVViewMode.List
         "guide" -> LiveTVViewMode.Guide
-        else -> if (formFactor.isTv) LiveTVViewMode.Guide else formFactor.defaultMode
+        else -> formFactor.defaultMode
     }
+    // The List / Guide switch is offered on every form factor (parity with tvOS,
+    // which puts a List / Guide button at the left of the Live TV control row).
+    // It is a SESSION-only override: it flips the current view WITHOUT persisting,
+    // so casual toggling never rewrites the Drive-synced default (a List toggle on
+    // a phone used to clobber the Guide default on a TV). The persisted default
+    // lives solely in the Settings choice. Re-seeds whenever the resolved default
+    // changes -- a Settings edit, or the pref syncing in after cold start.
+    var mode by rememberSaveable(resolvedDefault) { mutableStateOf(resolvedDefault) }
     val canToggle = formFactor.supportsToggle
     val toggleMode: () -> Unit = {
-        val next = if (mode == LiveTVViewMode.List) LiveTVViewMode.Guide else LiveTVViewMode.List
-        settingsVm.setDefaultLiveTVView(next.storageKey())
+        mode = if (mode == LiveTVViewMode.List) LiveTVViewMode.Guide else LiveTVViewMode.List
     }
 
     // iOS canon scopes the "Live TV List" Display Scale slider to List mode
@@ -89,9 +100,4 @@ fun LiveTVTabContent(
             onPlayCatchup = onPlayCatchup,
         )
     }
-}
-
-private fun LiveTVViewMode.storageKey(): String = when (this) {
-    LiveTVViewMode.List -> "list"
-    LiveTVViewMode.Guide -> "guide"
 }

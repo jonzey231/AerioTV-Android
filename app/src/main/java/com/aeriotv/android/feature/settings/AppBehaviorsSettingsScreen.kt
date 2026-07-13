@@ -78,6 +78,7 @@ fun AppBehaviorsSettingsScreen(
     val autoRecoverFrozenStreams by viewModel.autoRecoverFrozenStreams.collectAsStateWithLifecycle(initialValue = true)
     val autoResumeLastChannel by viewModel.autoResumeLastChannel.collectAsStateWithLifecycle(initialValue = false)
     val defaultTab by viewModel.defaultTab.collectAsStateWithLifecycle(initialValue = "")
+    val defaultLiveTVView by viewModel.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
     val programPostersTmdb by viewModel.programPostersTmdbEnabled.collectAsStateWithLifecycle(initialValue = false)
     val audioPassthrough by viewModel.audioPassthroughEnabled.collectAsStateWithLifecycle(initialValue = false)
     val savedTmdbKey by viewModel.tmdbApiKey.collectAsStateWithLifecycle(initialValue = "")
@@ -136,6 +137,23 @@ fun AppBehaviorsSettingsScreen(
                         label = tab.label,
                         selected = selected,
                         onClick = { viewModel.setDefaultTab(tab.name) },
+                    )
+                }
+            }
+
+            SettingsSection(
+                header = "Default Live TV View",
+                footer = "Which layout Live TV opens in. Automatic uses the List on " +
+                    "phones and the Guide on tablets and TV. You can still switch " +
+                    "anytime with the List / Guide button; that switch lasts for the " +
+                    "current session and does not change this default.",
+            ) {
+                val current = defaultLiveTVView.lowercase()
+                DEFAULT_LIVE_TV_VIEW_OPTIONS.forEach { (value, label) ->
+                    SettingsSelectionRow(
+                        label = label,
+                        selected = current == value,
+                        onClick = { viewModel.setDefaultLiveTVView(value) },
                     )
                 }
             }
@@ -313,6 +331,17 @@ fun AppBehaviorsSettingsScreen(
     }
     }
 }
+
+/** Default Live TV View choices. Empty string = "Automatic" (form-factor
+ *  default: List on compact phones, Guide on tablets / TV). "list" / "guide"
+ *  are explicit overrides. Written to the same [defaultLiveTVView] pref the
+ *  Live TV screen reads; the in-screen List / Guide button is session-only and
+ *  never writes here. */
+private val DEFAULT_LIVE_TV_VIEW_OPTIONS = listOf(
+    "" to "Automatic",
+    "list" to "List",
+    "guide" to "Guide",
+)
 
 /** Keep Available ladder (2026-07-11 rework, user directive round 2:
  *  the user-meaningful knob is HOW FAR BACK you can rewind, not how
