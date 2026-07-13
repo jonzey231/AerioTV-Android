@@ -1056,8 +1056,8 @@ fun PlayerScreen(
             var reconnecting by remember { mutableStateOf(false) }
             LaunchedEffect(unavailableRetrySerial) {
                 reconnecting = false
-                // 5s, 10s, 20s, then 30s forever.
-                var remaining = minOf(30, 5 shl minOf(unavailableRetrySerial, 3))
+                // Flat 5s between every auto-retry (Archie, 2026-07-12).
+                var remaining = 5
                 while (remaining > 0) {
                     retryCountdown = remaining
                     kotlinx.coroutines.delay(1_000)
@@ -1355,7 +1355,12 @@ fun PlayerScreen(
     val interactionLocked = chromeMenuOpen || recordTarget != null || streamInfo != null ||
         subtitles != null || audioTracks != null || playbackSpeedSheet != null ||
         switchStream != null || multiviewPickerOpen
-    LaunchedEffect(chromeVisible, lastInteractionAt, interactionLocked) {
+    // streamUnavailable is a KEY (not just a guard): when it clears on
+    // recovery, this effect must re-fire so the chrome that was pinned open
+    // during the outage auto-hides again. Without it in the keys, the
+    // controls stayed stuck up after the stream came back (Streamer test
+    // 2026-07-12).
+    LaunchedEffect(chromeVisible, lastInteractionAt, interactionLocked, streamUnavailable) {
         // Never auto-hide while the stream is unavailable: the chrome hosts the
         // Retry control the user needs, so it must stay put during an outage.
         if (chromeVisible && !interactionLocked && !streamUnavailable) {
