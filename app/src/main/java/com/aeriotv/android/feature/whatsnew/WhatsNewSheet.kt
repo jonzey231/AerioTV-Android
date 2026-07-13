@@ -202,35 +202,15 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Live Rewind",
-            body = "Pause and rewind live TV. A new Keep Available setting " +
-                "controls how far back you can go, and the storage estimate " +
-                "updates as you change it.",
+            title = "Big Xtream Codes playlists",
+            body = "Very large Xtream Codes playlists now load quickly without " +
+                "freezing, and your movies and series stay in On Demand instead " +
+                "of crowding the live channel list.",
         ),
         WhatsNewItem(
-            title = "Catch-up TV",
-            body = "Replay already-aired programmes straight from the guide on " +
-                "supported servers (Dispatcharr and Xtream Codes with archive), " +
-                "with a scrubbable timeline and native Dispatcharr catch-up " +
-                "sessions.",
-        ),
-        WhatsNewItem(
-            title = "One player for everything",
-            body = "Live, rewind, and catch-up now share a single player. On " +
-                "Android TV, hold left or right on the remote to scrub with " +
-                "smooth acceleration.",
-        ),
-        WhatsNewItem(
-            title = "When a stream drops",
-            body = "The controls now appear with a Retry button, auto-reconnect " +
-                "runs every 5 seconds, and the message tells you what actually " +
-                "went wrong instead of leaving a frozen picture.",
-        ),
-        WhatsNewItem(
-            title = "Under the hood",
-            body = "Adding very large Xtream Codes playlists no longer runs out " +
-                "of memory, plus faster recovery after a server outage, steadier " +
-                "catch-up playback, and Live Rewind and multiview fixes.",
+            title = "Recording to your Dispatcharr server",
+            body = "Fixed the option to save recordings to your Dispatcharr " +
+                "server not appearing on admin accounts.",
         ),
     )
 }
