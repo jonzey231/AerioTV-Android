@@ -59,6 +59,8 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -105,6 +107,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -384,12 +387,13 @@ fun GuideScreen(
     // column on every iPhone AND iPad (EPGGuideView.swift channelColumnWidth,
     // no size-class branching) and fits it by stacking the rail cell vertically
     // (logo over a one-line name over the number); the phone cell below mirrors
-    // that stack, so the phone/tablet rail can match the iOS width. 104dp
-    // (vs 100pt) offsets the cell's 8dp side padding. The old side-by-side
-    // number+logo+name cell needed 168dp, a quarter of an unfolded-Fold guide
+    // that stack, so the phone/tablet rail can match the iOS width. 78dp matches
+    // iOS EPGGuideView's compact-width channelColumnWidth (78pt) so the phone
+    // guide reads as dense as iPhone (104dp ate ~30% of a Fold's outer screen
+    // vs iPhone's ~18%). The old side-by-side number+logo+name cell needed 168dp
     // (user report). Unlike iOS the width deliberately ignores the guide zoom
     // [scale], which on Android scales the time axis only.
-    val railWidth = if (isTv) 120.dp * tvComfortScale else 104.dp
+    val railWidth = if (isTv) 120.dp * tvComfortScale else 78.dp
     // Row + time-header sized to tvOS PROPORTIONS on the 960x540dp Android-TV
     // canvas (NOT copied from tvOS point values, which would be ~2x too big).
     // tvOS rowHeight 110pt / 1080 = 10.19% -> 540dp * 0.1019 = 55dp;
@@ -611,6 +615,38 @@ fun GuideScreen(
     // just off-screen so scrolling never reveals a gap before the next refilter.
     val density = LocalDensity.current
     val hourWidthPx = with(density) { scaledHourWidth.toPx() }.coerceAtLeast(1f)
+
+    // iOS-parity guide fling. On iPhone a horizontal flick settles to a bounded,
+    // velocity-projected offset over a short fixed duration (predictedEndTranslation
+    // + easeOut ~0.25s), so it moves a deliberate chunk and STOPS instead of
+    // coasting. Compose's default fling is an uncapped decay that keeps sliding
+    // until friction stops it, which read as uncontrolled next to iOS. Touch-only:
+    // the TV timeline moves by D-pad, which never triggers a fling.
+    val guideFling = remember(hourWidthPx) {
+        object : FlingBehavior {
+            override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+                if (kotlin.math.abs(initialVelocity) < 1f) return initialVelocity
+                // Project the flick roughly proportional to velocity (UIKit-style),
+                // capped so one flick never travels more than ~3 hours, then settle
+                // over 260ms with a decelerate curve. The 0.15 factor + cap are the
+                // knobs to tune the "feel" on-device.
+                val projected = (initialVelocity * 0.15f)
+                    .coerceIn(-hourWidthPx * 3f, hourWidthPx * 3f)
+                var last = 0f
+                androidx.compose.animation.core.animate(
+                    initialValue = 0f,
+                    targetValue = projected,
+                    animationSpec = androidx.compose.animation.core.tween(
+                        durationMillis = 260,
+                        easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                    ),
+                ) { value, _ ->
+                    last += scrollBy(value - last)
+                }
+                return 0f
+            }
+        }
+    }
     val stripViewportPx = with(density) {
         (screenWidthDp.dp - railWidth).coerceAtLeast(1.dp).toPx()
     }
@@ -1348,7 +1384,7 @@ fun GuideScreen(
             }
             Box(
                 modifier = Modifier
-                    .horizontalScroll(horizontalScrollState)
+                    .horizontalScroll(horizontalScrollState, flingBehavior = guideFling)
                     .background(MaterialTheme.colorScheme.background),
             ) {
                 val hourCount = (windowDurationMs / 3_600_000L).toInt()
@@ -1854,6 +1890,7 @@ fun GuideScreen(
                     rowHeight = rowHeight,
                     textScale = tvComfortScale,
                     horizontalScrollState = horizontalScrollState,
+                    guideFling = guideFling,
                     activeReminderKeys = activeReminderKeys,
                     remindersVm = remindersVm,
                     onChannelClick = { onChannelClick(channel) },
@@ -2007,6 +2044,7 @@ private fun ChannelGuideRow(
      *  metrics. 1f on phone. */
     textScale: Float = 1f,
     horizontalScrollState: androidx.compose.foundation.ScrollState,
+    guideFling: FlingBehavior,
     activeReminderKeys: Set<String>,
     remindersVm: RemindersViewModel,
     onChannelClick: () -> Unit,
@@ -2396,7 +2434,7 @@ private fun ChannelGuideRow(
         // Programme strip - horizontally scrolled with the header.
         Box(
             modifier = Modifier
-                .horizontalScroll(horizontalScrollState)
+                .horizontalScroll(horizontalScrollState, flingBehavior = guideFling)
                 .fillMaxHeight(),
         ) {
             val totalWidth = hourWidth * (windowDurationMs / 3_600_000L).toInt()
@@ -2709,11 +2747,25 @@ private fun ProgrammeCell(
     // until the cell (the program) fully scrolls off the left. offset {} runs in
     // the placement phase, so panning re-places without recomposing.
     val contentSticky = if (horizontalScrollState != null) {
-        Modifier.offset {
+        // iOS parity (EPGGuideView leadingClip): as a program scrolls off the
+        // left, keep its text pinned to the visible left edge AND re-truncate it
+        // to the shrinking visible width so it always ends in a clean ellipsis,
+        // instead of the old Modifier.offset which slid a fixed-width block and
+        // hard-clipped it at the cell edge. iOS does this by growing the title's
+        // leading padding; here a layout-phase re-measure shrinks maxWidth by the
+        // scrolled-off amount and re-places the (now-narrower) text at that inset.
+        // Reads the scroll in the LAYOUT phase, so panning re-measures only the
+        // ~visible cells (single-line text = cheap) without recomposing.
+        Modifier.layout { measurable, constraints ->
             val cellLeftPx = cellStartDp.roundToPx()
             val cellWidthPx = widthDp.roundToPx()
             val shift = (horizontalScrollState.value - cellLeftPx).coerceIn(0, cellWidthPx)
-            androidx.compose.ui.unit.IntOffset(shift, 0)
+            val maxW = if (constraints.hasBoundedWidth) constraints.maxWidth else cellWidthPx
+            val avail = (maxW - shift).coerceAtLeast(0)
+            val placeable = measurable.measure(constraints.copy(minWidth = 0, maxWidth = avail))
+            layout((placeable.width + shift).coerceAtMost(maxW), placeable.height) {
+                placeable.place(shift, 0)
+            }
         }
     } else {
         Modifier
@@ -3046,8 +3098,10 @@ private fun ProgrammeCell(
  * guide zoom (iOS guideScale) multiplies it and everything time-axis derives
  * from the scaled value via [msToDp]. */
 private object GuideMetrics {
-    val HEADER_HEIGHT = 36.dp
-    val ROW_HEIGHT = 80.dp
+    // Matched to iOS EPGGuideView phone metrics for density parity: timeHeader
+    // 32pt, row 72pt.
+    val HEADER_HEIGHT = 32.dp
+    val ROW_HEIGHT = 72.dp
     /** Base (1.0x) width of one hour column. Scaled by guideScale at render. */
     val HOUR_WIDTH = 320.dp
 }
