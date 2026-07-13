@@ -202,15 +202,14 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Crash fix",
-            body = "Fixed a crash that could happen while scrolling or searching " +
-                "very large channel lists.",
+            title = "Smoother Live TV guide",
+            body = "The guide now scrolls in controlled steps that settle on " +
+                "their own instead of coasting, matching the feel on iPhone.",
         ),
         WhatsNewItem(
-            title = "Big Xtream Codes playlists",
-            body = "Very large Xtream Codes playlists now load quickly without " +
-                "freezing, and your movies and series stay in On Demand instead " +
-                "of crowding the live channel list.",
+            title = "Cleaner guide layout",
+            body = "A denser grid fits more on screen, and program titles stay " +
+                "readable as you scroll across the timeline.",
         ),
     )
 }
