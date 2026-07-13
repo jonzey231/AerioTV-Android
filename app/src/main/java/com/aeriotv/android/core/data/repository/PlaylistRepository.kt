@@ -1025,7 +1025,13 @@ class PlaylistRepository @Inject constructor(
             val b = base.trimEnd('/')
             val m3uUrl = "$b/get.php?username=${xtreamEncode(user)}" +
                 "&password=${xtreamEncode(password.orEmpty())}&type=m3u_plus"
-            val channels = M3UParser.parseBytes(fetcher.fetchBytes(m3uUrl))
+            // GH #31: a full XC-panel m3u_plus runs 100-200MB; fetchBytes
+            // materialized the whole thing as ONE ByteArray and OOM'd a 256MB
+            // heap on add (the exact 155MB allocation Skryzie reported). The
+            // GH #26 fix streamed the generic M3U + XMLTV paths but missed this
+            // XC-specific live-channel fetch. Stream it to a temp file and parse
+            // from disk in constant memory, exactly like the plain-M3U path.
+            val channels = fetchViaTempFile(m3uUrl, ".m3u") { M3UParser.parseFile(it) }
             // Catch-up (task #133): the M3U carries no archive flags; the
             // panel's get_live_streams does (tv_archive + tv_archive_duration,
             // loose types). Best-effort enrichment keyed by the XC stream id

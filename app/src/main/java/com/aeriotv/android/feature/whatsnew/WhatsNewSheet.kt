@@ -228,8 +228,9 @@ private object WhatsNewContent {
         ),
         WhatsNewItem(
             title = "Under the hood",
-            body = "Faster recovery after a server outage, steadier catch-up " +
-                "playback, and a range of Live Rewind and multiview fixes.",
+            body = "Adding very large Xtream Codes playlists no longer runs out " +
+                "of memory, plus faster recovery after a server outage, steadier " +
+                "catch-up playback, and Live Rewind and multiview fixes.",
         ),
     )
 }
