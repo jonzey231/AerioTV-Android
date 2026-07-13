@@ -1069,7 +1069,22 @@ class PlaylistRepository @Inject constructor(
             }.getOrDefault(emptyMap())
             fetchViaTempFile(m3uUrl, ".m3u") { file ->
                 val out = ArrayList<M3UChannel>()
+                var droppedVodSeries = 0
                 M3UParser.parseFile(file) { ch ->
+                    // GH #31: some panels dump their ENTIRE VOD + series catalog into
+                    // the get.php?type=m3u_plus "live" fetch (one reporter's ran ~340k
+                    // entries). Those movie/episode rows are exact duplicates of what
+                    // On Demand already loads via player_api.php JSON (get_vod_streams /
+                    // get_series), just flattened into the live list with no poster or
+                    // season structure. Dropping them by the XC URL convention collapses
+                    // the live list to real channels, which is what clears the main-
+                    // thread ANR the memory work exposed. A clean live-only m3u_plus is
+                    // unaffected (live URLs carry no such segment), and this is scoped to
+                    // the XC fetch -- the plain-M3U path never runs this callback.
+                    if (isXtreamVodOrSeriesUrl(ch.url)) {
+                        droppedVodSeries++
+                        return@parseFile
+                    }
                     out.add(
                         if (catchupByStreamId.isEmpty()) {
                             ch
@@ -1082,6 +1097,13 @@ class PlaylistRepository @Inject constructor(
                                 ch
                             }
                         },
+                    )
+                }
+                if (droppedVodSeries > 0) {
+                    android.util.Log.i(
+                        "PlaylistRepository",
+                        "XC m3u_plus: dropped $droppedVodSeries VOD/series entries from the live " +
+                            "list (already served by On Demand); kept ${out.size} live channels",
                     )
                 }
                 out
@@ -1098,6 +1120,37 @@ class PlaylistRepository @Inject constructor(
 private fun xcStreamIdFromUrl(url: String): Int? =
     Regex("/(\\d+)(?:\\.[A-Za-z0-9]+)?(?:\\?.*)?$")
         .find(url)?.groupValues?.get(1)?.toIntOrNull()
+
+/** Matches the reserved Xtream VOD/series path segment as a DELIMITED segment
+ *  (leading + trailing slash), so a live channel merely NAMED "...movie..." in
+ *  its display text can't trip it -- only the URL path is inspected. */
+private val XC_VOD_SERIES_SEGMENT = Regex("/(?:movie|series)/", RegexOption.IGNORE_CASE)
+
+/**
+ * True when an XC-delivered stream URL points at a VOD movie or a series
+ * episode rather than a live channel. Xtream Codes serves VOD under
+ * "…/movie/<user>/<pass>/<id>.<ext>" and episodes under
+ * "…/series/<user>/<pass>/<id>.<ext>" (see XtreamCodesApi.buildVodUrl /
+ * buildEpisodeUrl), while live channels use "…/live/<user>/<pass>/<id>" (or the
+ * bare "…/<user>/<pass>/<id>" form) and carry no such segment.
+ *
+ * Host-independent on purpose: load-balanced panels rewrite the host in the URLs
+ * they return, so anchoring to the entered base would miss them.
+ *
+ * The explicit "/live/" guard covers the COMMON pathological case -- a panel
+ * whose username or password is literally "movie"/"series" still keeps its
+ * "…/live/…"-form channels. One residual edge is knowingly left UNHANDLED as
+ * negligible: a channel delivered in the BARE "…/<user>/<pass>/<id>" live form
+ * (no "/live/" segment) whose credential is EXACTLY "movie"/"series" would match
+ * and be dropped. That needs a reserved-word credential AND a panel that emits
+ * bare-form live URLs in its m3u_plus -- vanishingly unlikely. Deliberately NOT
+ * tightened to a fixed "<kind>/<user>/<pass>/<id>" segment position: that would
+ * instead risk MISSING real VOD on panels whose paths deviate from that shape,
+ * which defeats the point (the goal is to shed the VOD/series bloat, so a false
+ * negative that keeps the bloat is worse than this impossible-in-practice drop).
+ */
+private fun isXtreamVodOrSeriesUrl(url: String): Boolean =
+    !url.contains("/live/", ignoreCase = true) && XC_VOD_SERIES_SEGMENT.containsMatchIn(url)
 
 /** URL-encode an Xtream credential for use in a query string. */
 private fun xtreamEncode(value: String): String =
