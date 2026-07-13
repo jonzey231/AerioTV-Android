@@ -144,9 +144,9 @@ fun AppBehaviorsSettingsScreen(
             SettingsSection(
                 header = "Default Live TV View",
                 footer = "Which layout Live TV opens in. Automatic uses the List on " +
-                    "phones and the Guide on tablets and TV. You can still switch " +
-                    "anytime with the List / Guide button; that switch lasts for the " +
-                    "current session and does not change this default.",
+                    "phones and the Guide on TV and larger tablets. You can still " +
+                    "switch anytime with the List / Guide button; that switch lasts " +
+                    "for the current session and does not change this default.",
             ) {
                 val current = defaultLiveTVView.lowercase()
                 DEFAULT_LIVE_TV_VIEW_OPTIONS.forEach { (value, label) ->

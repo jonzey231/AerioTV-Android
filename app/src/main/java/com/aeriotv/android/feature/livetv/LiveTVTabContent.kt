@@ -1,6 +1,7 @@
 package com.aeriotv.android.feature.livetv
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -70,6 +71,25 @@ fun LiveTVTabContent(
     val canToggle = formFactor.supportsToggle
     val toggleMode: () -> Unit = {
         mode = if (mode == LiveTVViewMode.List) LiveTVViewMode.Guide else LiveTVViewMode.List
+    }
+
+    // EPG-search / aeriotv://guide deep-link jump: force the SESSION view to Guide
+    // so the target programme's cell exists for GuideScreen to scroll/focus (it
+    // collects the same flow). This is the session-scoped replacement for the old
+    // setDefaultLiveTVView("guide") in MainScaffold, which persisted + synced.
+    // Deduped by request key -- guideJumpRequests is replay=1, so without this the
+    // last jump would re-force Guide on every Live TV re-entry and stomp a session
+    // List toggle. rememberSaveable survives tab switches but resets on cold start,
+    // so a cold-start deep link still forces Guide as intended.
+    var consumedJumpKey by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        viewModel.guideJumpRequests.collect { jump ->
+            val key = "${jump.channelId}@${jump.startMillis}"
+            if (key != consumedJumpKey) {
+                consumedJumpKey = key
+                mode = LiveTVViewMode.Guide
+            }
+        }
     }
 
     // iOS canon scopes the "Live TV List" Display Scale slider to List mode

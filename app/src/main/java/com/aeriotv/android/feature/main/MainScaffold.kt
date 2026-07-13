@@ -256,12 +256,15 @@ fun MainScaffold(
     // EPG-search guide jump (iOS: MainTabView switches to .liveTV +
     // ChannelListView sets showGuideView=true). When a Search EPG result is
     // tapped (warm path) or an aeriotv://guide deep link is consumed (cold
-    // path re-emits through requestGuideJump), force guide mode so EPG cells
-    // exist to scroll/focus to, then select the Live TV tab. GuideScreen
-    // collects the same SharedFlow (replay=1) to do the scroll + focus.
+    // path re-emits through requestGuideJump), select the Live TV tab.
+    // LiveTVTabContent collects the same SharedFlow to force its SESSION view to
+    // Guide (so the target cell exists to scroll/focus), and GuideScreen collects
+    // it too (replay=1) to do the scroll + focus. This used to write the persisted
+    // defaultLiveTVView("guide") here, which both failed to switch when the view
+    // was already resolving to Guide and clobbered the Drive-synced default across
+    // devices; forcing the session view instead avoids both.
     LaunchedEffect(Unit) {
         viewModel.guideJumpRequests.collect {
-            settingsVm.setDefaultLiveTVView("guide")
             selectedTab = AppTab.LiveTV
             initialTabApplied = true
         }
