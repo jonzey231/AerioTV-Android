@@ -202,47 +202,34 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "A cleaner, calmer look",
-            body = "Text now steps back in layers the way it should: quieter " +
-                "numbers and times, dimmer section headers, flatter guide " +
-                "cells, rating badges on posters, and a denser On Demand grid " +
-                "on TV.",
+            title = "Live Rewind",
+            body = "Pause and rewind live TV. A new Keep Available setting " +
+                "controls how far back you can go, and the storage estimate " +
+                "updates as you change it.",
         ),
         WhatsNewItem(
-            title = "Floating tab bar",
-            body = "On phones the bottom bar is now a compact floating pill " +
-                "that slides away while you scroll, so your content gets the " +
-                "whole screen.",
+            title = "Catch-up TV",
+            body = "Replay already-aired programmes straight from the guide on " +
+                "supported servers (Dispatcharr and Xtream Codes with archive), " +
+                "with a scrubbable timeline and native Dispatcharr catch-up " +
+                "sessions.",
         ),
         WhatsNewItem(
-            title = "Channel numbers, your call",
-            body = "A new Show Channel Numbers toggle sits next to Show " +
-                "Channel Logos in Settings > Appearance. Both apply to the " +
-                "Live TV list and the guide.",
+            title = "One player for everything",
+            body = "Live, rewind, and catch-up now share a single player. On " +
+                "Android TV, hold left or right on the remote to scrub with " +
+                "smooth acceleration.",
         ),
         WhatsNewItem(
-            title = "A slimmer guide",
-            body = "The guide's channel column is narrower, with the logo, " +
-                "name, and number stacked, so the programme grid gets far " +
-                "more room, especially on tablets and unfolded foldables.",
-        ),
-        WhatsNewItem(
-            title = "Search from On Demand",
-            body = "The global search button now lives on the On Demand tab " +
-                "too, right beside the filter.",
-        ),
-        WhatsNewItem(
-            title = "Android TV, steadier",
-            body = "Holding left on the remote works reliably again after " +
-                "leaving with Home and coming back, long-press Back asks " +
-                "before exiting the app, holding right closes the corner " +
-                "mini-player, and the Appearance toggles take focus again.",
+            title = "When a stream drops",
+            body = "The controls now appear with a Retry button, auto-reconnect " +
+                "runs every 5 seconds, and the message tells you what actually " +
+                "went wrong instead of leaving a frozen picture.",
         ),
         WhatsNewItem(
             title = "Under the hood",
-            body = "Dead streams hand off to a working one faster, the splash " +
-                "screen fills every screen shape edge to edge, and the app is " +
-                "ready for Android's 16 KB memory page devices.",
+            body = "Faster recovery after a server outage, steadier catch-up " +
+                "playback, and a range of Live Rewind and multiview fixes.",
         ),
     )
 }
