@@ -673,7 +673,11 @@ fun ChannelListScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(items = filtered, key = { it.id }) { channel ->
+                // Key by url, NOT id: id is "m3u:<tvg-id>", and providers assign
+                // the same tvg-id to multiple distinct channels, so id is not
+                // unique. Compose LazyColumn hard-crashes on a duplicate key. url
+                // is unique per stream (GH #31 follow-up crash fix).
+                items(items = filtered, key = { it.url }) { channel ->
                     val programmes = state.epgByChannel[channel.guideMatchKey].orEmpty()
                     val nowProgramme = programmes.nowPlaying()
                     ChannelRow(

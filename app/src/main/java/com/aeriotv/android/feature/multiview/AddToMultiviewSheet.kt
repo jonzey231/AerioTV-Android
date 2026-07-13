@@ -406,7 +406,7 @@ fun AddToMultiviewSheet(
                         }
                         if (showRecent) {
                             item(key = "hdr_recent") { SectionHeader("Recent") }
-                            items(items = recentChannels, key = { "recent_${it.id}" }) { channel ->
+                            items(items = recentChannels, key = { "recent_${it.url}" }) { channel ->
                                 val isSel = channel.id in selectedIds
                                 val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
                                 ChannelPickerRow(
@@ -419,7 +419,7 @@ fun AddToMultiviewSheet(
                             }
                             item(key = "hdr_all") { SectionHeader("All Channels") }
                         }
-                        items(items = filtered, key = { "all_${it.id}" }) { channel ->
+                        items(items = filtered, key = { "all_${it.url}" }) { channel ->
                             val isSel = channel.id in selectedIds
                             val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
                             ChannelPickerRow(

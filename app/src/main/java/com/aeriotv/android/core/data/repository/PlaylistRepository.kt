@@ -712,13 +712,21 @@ class PlaylistRepository @Inject constructor(
      * sort by).
      */
     suspend fun loadCachedChannels(playlistId: String): List<M3UChannel> =
-        channelSnapshotDao.forPlaylist(playlistId).map { it.toChannel() }
+        // distinctBy url: an exact-duplicate stream (identical URL) is dropped so
+        // the Live TV lists (keyed by url) can never see a duplicate key. Channels
+        // that merely SHARE a tvg-id but have different URLs are kept (they are
+        // distinct streams) -- the list key is url precisely so those don't collide.
+        channelSnapshotDao.forPlaylist(playlistId).map { it.toChannel() }.distinctBy { it.url }
 
     suspend fun newestChannelFetch(playlistId: String): Long? =
         channelSnapshotDao.newestFetchedAt(playlistId)
 
-    suspend fun saveChannelsToCache(playlistId: String, channels: List<M3UChannel>) {
+    suspend fun saveChannelsToCache(playlistId: String, rawChannels: List<M3UChannel>) {
         val now = System.currentTimeMillis()
+        // Drop exact-duplicate streams (same URL) before persisting so the cache
+        // stays clean and reloads never feed a duplicate key to the url-keyed
+        // Live TV lists. Distinct streams that share a tvg-id are kept.
+        val channels = rawChannels.distinctBy { it.url }
         // GH #31: persist in CHUNKS inside ONE transaction instead of mapping the
         // whole ~100k-row entity list + one giant insertAll. That overlap (the
         // channel list + the full entity list + the transaction bind) was the

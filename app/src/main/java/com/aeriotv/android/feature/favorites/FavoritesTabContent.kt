@@ -180,8 +180,10 @@ fun FavoritesTabContent(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(items = workingOrder, key = { it.id }) { channel ->
-                ReorderableItem(reorderState, key = channel.id) { _ ->
+            // Key by url, not the non-unique "m3u:<tvg-id>" id (GH #31 crash fix);
+            // the reorderable key must match the items key.
+            items(items = workingOrder, key = { it.url }) { channel ->
+                ReorderableItem(reorderState, key = channel.url) { _ ->
                     val programmes = playlistState.epgByChannel[channel.guideMatchKey].orEmpty()
                     val nowProgramme = programmes.nowPlaying()
                     ChannelRow(

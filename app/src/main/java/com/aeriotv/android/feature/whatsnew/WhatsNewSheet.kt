@@ -202,15 +202,15 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "Crash fix",
+            body = "Fixed a crash that could happen while scrolling or searching " +
+                "very large channel lists.",
+        ),
+        WhatsNewItem(
             title = "Big Xtream Codes playlists",
             body = "Very large Xtream Codes playlists now load quickly without " +
                 "freezing, and your movies and series stay in On Demand instead " +
                 "of crowding the live channel list.",
-        ),
-        WhatsNewItem(
-            title = "Recording to your Dispatcharr server",
-            body = "Fixed the option to save recordings to your Dispatcharr " +
-                "server not appearing on admin accounts.",
         ),
     )
 }

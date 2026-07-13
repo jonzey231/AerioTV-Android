@@ -1835,7 +1835,8 @@ fun GuideScreen(
                     }
                 },
         ) {
-            itemsIndexed(items = filteredChannels, key = { _, ch -> ch.id }) { channelIndex, channel ->
+            // Key by url, not the non-unique "m3u:<tvg-id>" id (GH #31 crash fix).
+            itemsIndexed(items = filteredChannels, key = { _, ch -> ch.url }) { channelIndex, channel ->
                 val programmes = state.epgByChannel[channel.guideMatchKey].orEmpty()
                 ChannelGuideRow(
                     channel = channel,
