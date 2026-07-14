@@ -223,7 +223,13 @@ class SettingsViewModel @Inject constructor(
     // rememberSaveable in LiveTVViewMode.kt to DataStore in Phase 8b).
     val defaultLiveTVView: Flow<String> = prefs.defaultLiveTVView
     fun setDefaultLiveTVView(value: String) {
-        viewModelScope.launch { prefs.setDefaultLiveTVView(value) }
+        viewModelScope.launch {
+            // Per-device preference (NOT Drive-synced): the correct default is
+            // form-factor specific, so a synced value would let one device clobber
+            // another (a phone's List overriding a TV's Guide). Matches iOS
+            // @AppStorage. Persists locally only; no Drive push.
+            prefs.setDefaultLiveTVView(value)
+        }
     }
 
     // Network (Phase 8c)

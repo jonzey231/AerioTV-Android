@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.preferences
 
 import android.content.Context
+import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -25,7 +26,33 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 
-private val Context.appDataStore: DataStore<Preferences> by preferencesDataStore(name = "aerio_prefs")
+private val Context.appDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "aerio_prefs",
+    produceMigrations = { _ ->
+        // One-time cleanup. "Default Live TV View" used to be a Drive-synced pref,
+        // so a phone's "list" default could clobber a TV's "guide" (and vice versa)
+        // whenever devices synced -- the guide would silently open in List after a
+        // sync. It is now a PER-DEVICE preference (iOS @AppStorage parity), so clear
+        // the possibly-clobbered value exactly once. Each device then falls back to
+        // its form-factor default (TV -> Guide, phone -> List) until the user picks
+        // one locally, and that local choice never leaves the device.
+        listOf(
+            object : DataMigration<Preferences> {
+                private val clearedFlag =
+                    booleanPreferencesKey("default_live_tv_view_unsynced_cleared_v1")
+                private val viewKey = stringPreferencesKey("default_live_tv_view")
+                override suspend fun shouldMigrate(currentData: Preferences): Boolean =
+                    currentData[clearedFlag] != true
+                override suspend fun migrate(currentData: Preferences): Preferences =
+                    currentData.toMutablePreferences().apply {
+                        remove(viewKey)
+                        set(clearedFlag, true)
+                    }
+                override suspend fun cleanUp() {}
+            },
+        )
+    },
+)
 
 /** Guide timeline zoom bounds. 0.5x = twice the hours on screen, 2x = half. */
 const val GUIDE_SCALE_MIN = 0.5f
@@ -787,7 +814,10 @@ class AppPreferences @Inject constructor(
         val out = mutableMapOf<String, String>()
         data[KEY_SELECTED_THEME]?.let { out["selectedTheme"] = it }
         data[KEY_DEFAULT_TAB]?.let { out["defaultTab"] = it }
-        data[KEY_DEFAULT_LIVE_TV_VIEW]?.let { out["defaultLiveTVView"] = it }
+        // NOTE: defaultLiveTVView is intentionally NOT synced -- it is a per-device
+        // preference (the right default is form-factor specific: TV -> Guide,
+        // phone -> List). Syncing one global value made a phone's "list" clobber a
+        // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
         data[KEY_SKIP_LOADING_SCREEN]?.let { out["skipLoadingScreen"] = it.toString() }
         data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
         data[KEY_AUTO_RESUME_LAST_CHANNEL]?.let { out["autoResumeLastChannel"] = it.toString() }
@@ -824,7 +854,9 @@ class AppPreferences @Inject constructor(
         store.edit { prefs ->
             keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME] = it }
             keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB] = it }
-            keys["defaultLiveTVView"]?.let { prefs[KEY_DEFAULT_LIVE_TV_VIEW] = it }
+            // defaultLiveTVView is per-device now (see snapshotSyncablePreferences);
+            // ignore any legacy value carried in an older Drive snapshot so it can
+            // never re-clobber this device's form-factor default.
             keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN] = it }
             keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
             keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
