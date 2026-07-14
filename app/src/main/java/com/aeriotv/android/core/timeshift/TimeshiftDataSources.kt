@@ -1,6 +1,8 @@
 package com.aeriotv.android.core.timeshift
 
 import android.net.Uri
+import android.os.SystemClock
+import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -29,6 +31,17 @@ class TeeDataSource(
      *  a session swap so the replacement realigns. */
     private var lastWriter: TimeshiftWriter? = null
 
+    // GH #32 diagnostics: every live raw-TS connection is teed here, so this is
+    // the one choke point that sees live byte flow. A connection that OPENS but
+    // never delivers bytes (the Android-16 HttpURLConnection stall) is otherwise
+    // silent -- ExoPlayer just sits in BUFFERING and the screen stays black.
+    // Logging first-byte timing and a "closed with 0 bytes" warning makes that
+    // failure self-evident in the shareable log.
+    private var openAtMs = 0L
+    private var totalRead = 0L
+    private var firstByteLogged = false
+    private var openHost: String? = null
+
     class Factory(
         private val upstreamFactory: DataSource.Factory,
         private val writerProvider: () -> TimeshiftWriter?,
@@ -42,12 +55,22 @@ class TeeDataSource(
         // stream mid-packet; realign before consuming its bytes.
         lastWriter = writerProvider()
         lastWriter?.markDiscontinuity()
+        openAtMs = SystemClock.elapsedRealtime()
+        totalRead = 0L
+        firstByteLogged = false
+        openHost = dataSpec.uri.host
+        Log.i(TAG, "live source open host=$openHost")
         return upstream.open(dataSpec)
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         val n = upstream.read(buffer, offset, length)
         if (n > 0) {
+            if (!firstByteLogged) {
+                firstByteLogged = true
+                Log.i(TAG, "live source first bytes +${SystemClock.elapsedRealtime() - openAtMs}ms")
+            }
+            totalRead += n
             // Resolve the writer PER READ, not per open: on a channel
             // change the player opens this connection BEFORE the
             // controller's coroutine has created the new session (and
@@ -73,8 +96,20 @@ class TeeDataSource(
     override fun getUri(): Uri? = upstream.uri
     override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
     override fun close() {
+        if (openAtMs != 0L && totalRead == 0L) {
+            Log.w(
+                TAG,
+                "live source closed after ${SystemClock.elapsedRealtime() - openAtMs}ms " +
+                    "with 0 bytes received (host=$openHost) - connection opened but never " +
+                    "delivered data (see GH #32)",
+            )
+        }
         lastWriter = null
         upstream.close()
+    }
+
+    companion object {
+        private const val TAG = "AerioLiveSource"
     }
 }
 

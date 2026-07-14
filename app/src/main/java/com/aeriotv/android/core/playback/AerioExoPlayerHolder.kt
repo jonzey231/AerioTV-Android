@@ -29,6 +29,11 @@ import androidx.media3.common.Format
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import com.aeriotv.android.BuildConfig
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -627,6 +632,8 @@ class AerioExoPlayerHolder @Inject constructor(
             .apply {
                 addListener(LoggingPlayerListener)
                 addListener(watchdogListener)
+                // Always-on: network LOAD errors into the shareable log (GH #32).
+                addAnalyticsListener(LoadErrorDiagnosticsListener)
                 // Debug-only rich diagnostics firehose (codec / hwdec path,
                 // input format changes, dropped frames, audio underruns) -- the
                 // Android analog of iOS's libmpv log bridge. Read with
@@ -997,13 +1004,20 @@ class AerioExoPlayerHolder @Inject constructor(
     }
 
     private fun httpDataSourceFactory(isLive: Boolean = false): DataSource.Factory {
+        // GH #32: live (raw-TS Dispatcharr proxy) playback goes through OkHttp,
+        // not Media3's DefaultHttpDataSource. On Android 16 the HttpURLConnection
+        // that DefaultHttpDataSource wraps can open the connection to the chunked
+        // TS proxy but never deliver any bytes -- ExoPlayer sits in BUFFERING with
+        // no error and the picture stays black. A working Android 14 device runs
+        // the identical code and renders frames in ~2s, so it's an OS-level
+        // HttpURLConnection quirk. OkHttp is consistent across OS versions and is
+        // already the app's HTTP client everywhere else. VOD / Auto keep the
+        // battle-tested DefaultHttpDataSource path unchanged.
+        if (isLive) return liveHttpDataSourceFactory()
         val factory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(30_000)
-            // Issue #17: live (raw-TS Dispatcharr proxy) gets a long read timeout
-            // so a silent connection survives the server-side dead-source failover
-            // instead of erroring out mid-waterfall. VOD/Auto keep the tight 30s.
-            .setReadTimeoutMs(if (isLive) liveReadTimeoutMs else 30_000)
+            .setReadTimeoutMs(30_000)
             // Always send a real player User-Agent. Without it Media3 falls back
             // to the platform default ("Dalvik/2.1.0 ..."), which Xtream reseller
             // panels' anti-restream WAFs drop on LIVE ("connection closed before
@@ -1021,6 +1035,36 @@ class AerioExoPlayerHolder @Inject constructor(
                 ?.let(factory::setUserAgent)
         }
         return factory
+    }
+
+    /** OkHttp-backed [DataSource.Factory] for live raw-TS playback (GH #32).
+     *  Mirrors the DefaultHttpDataSource header/User-Agent handling: a custom
+     *  UA header (if the active source supplies one) wins, otherwise the real
+     *  player UA; remaining headers (Dispatcharr X-API-Key etc.) ride as default
+     *  request properties. The UA is set via [OkHttpDataSource.Factory.setUserAgent]
+     *  so it is never duplicated as a second header. */
+    private fun liveHttpDataSourceFactory(): DataSource.Factory {
+        val headerUa = httpHeaders.entries
+            .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
+            ?.value
+        val factory = OkHttpDataSource.Factory(liveHttpClient)
+            .setUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT)
+        val nonUaHeaders = httpHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+        if (nonUaHeaders.isNotEmpty()) factory.setDefaultRequestProperties(nonUaHeaders)
+        return factory
+    }
+
+    /** OkHttp client for live playback. The long read timeout keeps a silent
+     *  connection alive across Dispatcharr's server-side dead-source failover
+     *  (Issue #17), matching the value the old DefaultHttpDataSource live path
+     *  used. followSslRedirects mirrors setAllowCrossProtocolRedirects. */
+    private val liveHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(liveReadTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
     }
 
     private fun isRawTsUrl(url: String): Boolean {
@@ -1389,6 +1433,31 @@ class AerioExoPlayerHolder @Inject constructor(
      * underruns, and video size. Registered only under BuildConfig.DEBUG
      * (mirrors iOS's `#if DEBUG` gate); tagged for `adb logcat -s AerioPlayerDiag`.
      */
+    /** Release-safe network diagnostics: logs every media LOAD error (HTTP
+     *  connect/read failures, source errors) into the shareable log. Player
+     *  errors are already logged, but those are only the TERMINAL failure after
+     *  ExoPlayer's internal retries; a load that fails and gets retried (or a
+     *  connection that opens then dies) left no trace before this. Kept minimal
+     *  and always attached so black-screen reports (GH #32) carry the real
+     *  network cause. URIs are redacted for embedded credentials by
+     *  LogSanitizer before the log is shared. */
+    private object LoadErrorDiagnosticsListener : AnalyticsListener {
+        override fun onLoadError(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData,
+            error: java.io.IOException,
+            wasCanceled: Boolean,
+        ) {
+            if (wasCanceled) return
+            Log.w(
+                TAG,
+                "load error uri=${loadEventInfo.uri} " +
+                    "${error.javaClass.simpleName}: ${error.message}",
+            )
+        }
+    }
+
     private object DiagnosticAnalyticsListener : AnalyticsListener {
         override fun onVideoDecoderInitialized(
             eventTime: AnalyticsListener.EventTime,
