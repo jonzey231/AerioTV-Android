@@ -39,6 +39,14 @@ val EpgRepeatGray = Color(0xFF8A8F98)
 data class EpgFlag(val label: String, val color: Color)
 
 /**
+ * Whether EPG badges (flags + season/episode pill) render. Provided at the Live
+ * TV level from the per-device-type "Show program badges" setting; the badge
+ * call sites gate on it. Defaults to true so any surface without an explicit
+ * provider still shows badges.
+ */
+val LocalShowEpgBadges = androidx.compose.runtime.staticCompositionLocalOf { true }
+
+/**
  * Ordered badge list for a program, most-salient first. REPEAT is suppressed
  * when NEW is set (a program is one or the other). Empty when nothing applies.
  */

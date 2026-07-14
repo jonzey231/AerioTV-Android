@@ -60,6 +60,7 @@ import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.ui.EpgFlag
 import com.aeriotv.android.core.ui.EpgFlagsRow
 import com.aeriotv.android.core.ui.EpgLiveRed
+import com.aeriotv.android.core.ui.LocalShowEpgBadges
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -262,11 +263,15 @@ private fun ProgramInfoBody(
                 // Feed-driven badges (LIVE / NEW / PREMIERE / FINALE / REPEAT),
                 // plus an "ON NOW" pill for a program airing right now that is
                 // not itself flagged a live broadcast (avoids a double LIVE).
+                // "ON NOW" is a live-airing status, not one of the toggleable feed
+                // pills, so it stays; the LIVE/NEW/etc feed flags follow the user's
+                // "Show program badges" preference.
+                val showEpgBadges = LocalShowEpgBadges.current
                 val badges = buildList {
                     if (target.isLiveNow() && !target.isLiveBroadcast) {
                         add(EpgFlag("ON NOW", EpgLiveRed))
                     }
-                    addAll(target.epgFlags())
+                    if (showEpgBadges) addAll(target.epgFlags())
                 }
                 if (badges.isNotEmpty()) {
                     Spacer(Modifier.size(10.dp))

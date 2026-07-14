@@ -130,6 +130,7 @@ import com.aeriotv.android.core.data.db.entity.reminderKey
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.toInfoTarget
 import com.aeriotv.android.core.ui.EpgFlagsRow
+import com.aeriotv.android.core.ui.LocalShowEpgBadges
 import com.aeriotv.android.core.ui.SeasonEpisodePill
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
@@ -3049,8 +3050,10 @@ private fun ProgrammeCell(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        SeasonEpisodePill(programme.seasonEpisodeLabel(), compact = true)
-                        EpgFlagsRow(programme.epgFlags(), compact = true)
+                        if (LocalShowEpgBadges.current) {
+                            SeasonEpisodePill(programme.seasonEpisodeLabel(), compact = true)
+                            EpgFlagsRow(programme.epgFlags(), compact = true)
+                        }
                     }
                 }
             }
@@ -3092,7 +3095,7 @@ private fun ProgrammeCell(
                 }
                 // Badges sit BELOW the title and description so the cell reads
                 // cleanly top-down instead of a busy middle row.
-                if (!programme.isPlaceholder) {
+                if (!programme.isPlaceholder && LocalShowEpgBadges.current) {
                     val flags = programme.epgFlags()
                     val seLabel = programme.seasonEpisodeLabel()
                     if (flags.isNotEmpty() || seLabel != null) {

@@ -53,6 +53,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setShowChannelNumbers(value) }
     }
 
+    // EPG program badges. Per-device-type: the Settings screen passes the
+    // current device's isTv so the right value is read/written and synced.
+    fun showEpgBadges(isTv: Boolean): Flow<Boolean> = prefs.showEpgBadges(isTv)
+    fun setShowEpgBadges(isTv: Boolean, value: Boolean) {
+        viewModelScope.launch { prefs.setShowEpgBadges(isTv, value) }
+    }
+
     val playerAspectMode: Flow<String> = prefs.playerAspectMode
     fun setPlayerAspectMode(value: String) {
         viewModelScope.launch { prefs.setPlayerAspectMode(value) }

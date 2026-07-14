@@ -99,6 +99,7 @@ import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.ui.EpgFlagsRow
+import com.aeriotv.android.core.ui.LocalShowEpgBadges
 import com.aeriotv.android.core.ui.SeasonEpisodePill
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
@@ -1091,9 +1092,11 @@ internal fun ChannelRow(
                         // Feed badges on the now-playing line; kept inline (same
                         // single-line height) so the row's fixed-slot alignment
                         // across channels is preserved.
-                        nowProgramme?.epgFlags()?.takeIf { it.isNotEmpty() }?.let { flags ->
-                            Spacer(Modifier.width(6.dp))
-                            EpgFlagsRow(flags)
+                        if (LocalShowEpgBadges.current) {
+                            nowProgramme?.epgFlags()?.takeIf { it.isNotEmpty() }?.let { flags ->
+                                Spacer(Modifier.width(6.dp))
+                                EpgFlagsRow(flags)
+                            }
                         }
                     }
                     Text(
@@ -1557,13 +1560,15 @@ private fun UpcomingProgrammeRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    programme.seasonEpisodeLabel()?.let { seLabel ->
-                        Spacer(Modifier.width(6.dp))
-                        SeasonEpisodePill(seLabel)
-                    }
-                    programme.epgFlags().takeIf { it.isNotEmpty() }?.let { flags ->
-                        Spacer(Modifier.width(6.dp))
-                        EpgFlagsRow(flags)
+                    if (LocalShowEpgBadges.current) {
+                        programme.seasonEpisodeLabel()?.let { seLabel ->
+                            Spacer(Modifier.width(6.dp))
+                            SeasonEpisodePill(seLabel)
+                        }
+                        programme.epgFlags().takeIf { it.isNotEmpty() }?.let { flags ->
+                            Spacer(Modifier.width(6.dp))
+                            EpgFlagsRow(flags)
+                        }
                     }
                 }
                 if (programme.description.isNotBlank()) {

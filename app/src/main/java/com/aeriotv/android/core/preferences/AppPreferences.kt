@@ -115,6 +115,21 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Whether the EPG program badges (LIVE / NEW / PREMIERE / FINALE / REPEAT +
+     * season/episode pill) render in the guide, channel list, and info sheet.
+     * Default ON. Stored + Drive-synced PER DEVICE TYPE (a separate value for TV
+     * and for phone/tablet) so a TV's choice follows the user's TVs and a phone's
+     * follows their phones, independently. The UI reads/writes the key matching
+     * the current device via [showEpgBadges] / [setShowEpgBadges].
+     */
+    val showEpgBadgesTv: Flow<Boolean> = store.data.map { it[KEY_SHOW_EPG_BADGES_TV] ?: true }
+    val showEpgBadgesMobile: Flow<Boolean> = store.data.map { it[KEY_SHOW_EPG_BADGES_MOBILE] ?: true }
+    fun showEpgBadges(isTv: Boolean): Flow<Boolean> = if (isTv) showEpgBadgesTv else showEpgBadgesMobile
+    suspend fun setShowEpgBadges(isTv: Boolean, value: Boolean) {
+        store.edit { it[if (isTv) KEY_SHOW_EPG_BADGES_TV else KEY_SHOW_EPG_BADGES_MOBILE] = value }
+    }
+
+    /**
      * iOS Issue #26 player aspect mode: "fit" (letterbox, default), "zoom"
      * (crop to fill while preserving aspect), or "fill" (stretch). Maps to
      * Media3 AspectRatioFrameLayout RESIZE_MODE_FIT / ZOOM / FILL in the player.
@@ -820,6 +835,10 @@ class AppPreferences @Inject constructor(
         // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
         data[KEY_SKIP_LOADING_SCREEN]?.let { out["skipLoadingScreen"] = it.toString() }
         data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
+        // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
+        // phone's to other phones, independently. Each device reads its own.
+        data[KEY_SHOW_EPG_BADGES_TV]?.let { out["showEpgBadgesTv"] = it.toString() }
+        data[KEY_SHOW_EPG_BADGES_MOBILE]?.let { out["showEpgBadgesMobile"] = it.toString() }
         data[KEY_AUTO_RESUME_LAST_CHANNEL]?.let { out["autoResumeLastChannel"] = it.toString() }
         // TMDB poster fallback: sync the toggle + the user's own key via Drive
         // (their own Drive appData) so it carries across their devices, matching
@@ -859,6 +878,8 @@ class AppPreferences @Inject constructor(
             // never re-clobber this device's form-factor default.
             keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN] = it }
             keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
+            keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
+            keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
             keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
             keys["programPostersTmdbEnabled"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_POSTERS_TMDB_ENABLED] = it }
             // Re-encrypt the incoming cleartext key for storage at rest.
@@ -1076,6 +1097,8 @@ class AppPreferences @Inject constructor(
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
+        val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")
+        val KEY_SHOW_EPG_BADGES_MOBILE = booleanPreferencesKey("ui_show_epg_badges_mobile")
         val KEY_PLAYER_ASPECT_MODE = stringPreferencesKey("player_aspect_mode")
         val KEY_CUSTOM_ACCENT_HEX = stringPreferencesKey("custom_accent_hex")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")

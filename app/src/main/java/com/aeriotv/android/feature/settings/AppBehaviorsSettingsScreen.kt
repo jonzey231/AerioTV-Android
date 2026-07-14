@@ -85,6 +85,7 @@ fun AppBehaviorsSettingsScreen(
     val tmdbKeyState by viewModel.tmdbKeyTestState.collectAsStateWithLifecycle()
 
     val isTv = rememberIsTvDevice()
+    val showEpgBadges by viewModel.showEpgBadges(isTv).collectAsStateWithLifecycle(initialValue = true)
     TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "App Behaviors", onBack = onBack)
@@ -156,6 +157,23 @@ fun AppBehaviorsSettingsScreen(
                         onClick = { viewModel.setDefaultLiveTVView(value) },
                     )
                 }
+            }
+
+            SettingsSection(
+                header = "Guide",
+                footer = "Program badges are the LIVE, NEW, PREMIERE, FINALE, " +
+                    "REPEAT, and season/episode pills on the guide and channel " +
+                    "list. Remembered separately for " +
+                    (if (isTv) "TVs" else "phones and tablets") +
+                    " and synced across your " +
+                    (if (isTv) "TVs" else "mobile devices") + ".",
+            ) {
+                SettingsToggleRow(
+                    title = "Show program badges",
+                    subtitle = "LIVE, NEW, and season/episode pills on the guide",
+                    checked = showEpgBadges,
+                    onCheckedChange = { viewModel.setShowEpgBadges(isTv, it) },
+                )
             }
 
             // Live Rewind (task #145 P2): full surface. Storage location

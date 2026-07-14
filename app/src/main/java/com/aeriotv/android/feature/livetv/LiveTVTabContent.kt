@@ -1,6 +1,7 @@
 package com.aeriotv.android.feature.livetv
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.ui.LocalShowEpgBadges
 import com.aeriotv.android.feature.channels.ChannelListScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
@@ -51,6 +53,10 @@ fun LiveTVTabContent(
     val formFactor = rememberLiveTvFormFactor()
     val stored by settingsVm.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
+    // Per-device-type EPG badge visibility, provided to the guide / list / info
+    // sheet below so they hide the badges when the user turns them off.
+    val showEpgBadges by settingsVm.showEpgBadges(formFactor.isTv)
+        .collectAsStateWithLifecycle(initialValue = true)
 
     // Resolved DEFAULT view. An explicit Settings choice (Settings -> App
     // Behaviors -> Default Live TV View) wins; "Automatic" (blank) falls back to
@@ -95,6 +101,7 @@ fun LiveTVTabContent(
     // iOS canon scopes the "Live TV List" Display Scale slider to List mode
     // only (the Guide grid is a strict-pitch layout that the user shouldn't
     // be free-scaling). Match that scoping rule here.
+    CompositionLocalProvider(LocalShowEpgBadges provides showEpgBadges) {
     when (mode) {
         LiveTVViewMode.List -> WithDisplayScale(scale = scale) {
             ChannelListScreen(
@@ -119,5 +126,6 @@ fun LiveTVTabContent(
             onOpenSearch = onOpenSearch,
             onPlayCatchup = onPlayCatchup,
         )
+    }
     }
 }
