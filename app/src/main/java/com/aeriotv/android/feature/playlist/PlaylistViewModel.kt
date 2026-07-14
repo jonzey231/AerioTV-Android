@@ -878,7 +878,14 @@ class PlaylistViewModel @Inject constructor(
 
     /** Merge per iOS: keep the longer description, the existing non-blank
      *  category, the existing-else-new dispatcharrProgramId, widen the
-     *  time window to the union, and keep the first non-blank title. */
+     *  time window to the union, and keep the first non-blank title.
+     *
+     *  Badge metadata is UNIONED, not taken from `a` alone (matches iOS
+     *  GuideStore.mergeProgramInto): the two same-airing entries can come from
+     *  different sources -- e.g. a Dispatcharr grid entry (season/episode/
+     *  finale but never repeat) and a custom-XMLTV entry (repeat + sub-title) --
+     *  so coalesce the optionals and OR the flags, or one source's badges are
+     *  silently dropped. */
     private fun mergeProgrammes(a: EPGProgramme, b: EPGProgramme): EPGProgramme {
         val title = if (a.title.isNotBlank()) a.title else b.title
         val description = if (a.description.length >= b.description.length) a.description else b.description
@@ -893,6 +900,14 @@ class PlaylistViewModel @Inject constructor(
             startMillis = start,
             endMillis = end,
             dispatcharrProgramId = pid,
+            subTitle = a.subTitle ?: b.subTitle,
+            season = a.season ?: b.season,
+            episode = a.episode ?: b.episode,
+            isNew = a.isNew || b.isNew,
+            isLiveBroadcast = a.isLiveBroadcast || b.isLiveBroadcast,
+            isPremiere = a.isPremiere || b.isPremiere,
+            isFinale = a.isFinale || b.isFinale,
+            isRepeat = a.isRepeat || b.isRepeat,
         )
     }
 

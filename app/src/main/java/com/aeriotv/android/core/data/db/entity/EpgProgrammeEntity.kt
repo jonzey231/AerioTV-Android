@@ -1,5 +1,6 @@
 package com.aeriotv.android.core.data.db.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -44,4 +45,16 @@ data class EpgProgrammeEntity(
     val dispatcharrProgramId: Int?,
     /** Wall-clock millis when this row's batch was fetched (freshness check). */
     val fetchedAt: Long,
+    // EPG badge metadata (added in schema v22 / MIGRATION_21_22). Nullable
+    // columns need no SQL default; the NOT NULL booleans declare
+    // defaultValue = "0" so the ALTER's `DEFAULT 0` matches the entity schema
+    // (same rule the migration comments call out).
+    val subTitle: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    @ColumnInfo(defaultValue = "0") val isNew: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val isLiveBroadcast: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val isPremiere: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val isFinale: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val isRepeat: Boolean = false,
 )

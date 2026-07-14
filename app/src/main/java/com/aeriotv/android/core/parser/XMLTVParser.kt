@@ -136,6 +136,15 @@ object XMLTVParser {
         var title = ""
         var desc = ""
         val categories = mutableListOf<String>()
+        // EPG badge metadata (guide/list/info-sheet badges).
+        var subTitle = ""
+        var season: Int? = null
+        var episode: Int? = null
+        var isNew = false
+        var isLiveBroadcast = false
+        var isPremiere = false
+        var isRepeat = false
+        var epNumSystem = ""
         val text = StringBuilder()
 
         var event = parser.eventType
@@ -143,14 +152,33 @@ object XMLTVParser {
             when (event) {
                 XmlPullParser.START_TAG -> {
                     text.setLength(0)
-                    if (parser.name == "programme") {
-                        insideProgramme = true
-                        channelId = parser.getAttributeValue(null, "channel").orEmpty()
-                        startStr = parser.getAttributeValue(null, "start").orEmpty()
-                        stopStr = parser.getAttributeValue(null, "stop").orEmpty()
-                        title = ""
-                        desc = ""
-                        categories.clear()
+                    when (parser.name) {
+                        "programme" -> {
+                            insideProgramme = true
+                            channelId = parser.getAttributeValue(null, "channel").orEmpty()
+                            startStr = parser.getAttributeValue(null, "start").orEmpty()
+                            stopStr = parser.getAttributeValue(null, "stop").orEmpty()
+                            title = ""
+                            desc = ""
+                            categories.clear()
+                            subTitle = ""
+                            season = null
+                            episode = null
+                            isNew = false
+                            isLiveBroadcast = false
+                            isPremiere = false
+                            isRepeat = false
+                            epNumSystem = ""
+                        }
+                        // Empty/self-closing marker elements: presence is the
+                        // signal (they carry no text), so detect at START_TAG.
+                        "new" -> if (insideProgramme) isNew = true
+                        "live" -> if (insideProgramme) isLiveBroadcast = true
+                        "premiere" -> if (insideProgramme) isPremiere = true
+                        "previously-shown" -> if (insideProgramme) isRepeat = true
+                        "episode-num" -> if (insideProgramme) {
+                            epNumSystem = parser.getAttributeValue(null, "system").orEmpty()
+                        }
                     }
                 }
                 XmlPullParser.TEXT -> {
@@ -163,6 +191,12 @@ object XMLTVParser {
                             "title" -> if (title.isEmpty() && trimmed.isNotEmpty()) title = trimmed
                             "desc" -> if (desc.isEmpty() && trimmed.isNotEmpty()) desc = trimmed
                             "category" -> if (trimmed.isNotEmpty()) categories.add(trimmed)
+                            "sub-title" -> if (subTitle.isEmpty() && trimmed.isNotEmpty()) subTitle = trimmed
+                            "episode-num" -> {
+                                val (s, e) = parseEpisodeNum(epNumSystem, trimmed)
+                                if (s != null && season == null) season = s
+                                if (e != null && episode == null) episode = e
+                            }
                         }
                     }
                     if (parser.name == "programme") {
@@ -186,6 +220,15 @@ object XMLTVParser {
                                         startMillis = startMs,
                                         endMillis = stopMs,
                                         category = categories.joinToString(","),
+                                        subTitle = subTitle.takeIf { it.isNotEmpty() },
+                                        season = season,
+                                        episode = episode,
+                                        isNew = isNew,
+                                        isLiveBroadcast = isLiveBroadcast,
+                                        isPremiere = isPremiere,
+                                        // XMLTV has no standard finale tag; only
+                                        // repeat (<previously-shown>) is available.
+                                        isRepeat = isRepeat,
                                     )
                                 )
                             }
@@ -198,6 +241,33 @@ object XMLTVParser {
         }
 
         return out
+    }
+
+    /**
+     * Decode an XMLTV `<episode-num>` value into 1-based (season, episode).
+     *  - `system="xmltv_ns"`: dot-separated ZERO-based `season.episode.part`,
+     *    each part optionally `n/total`; empty parts mean unknown.
+     *    e.g. `"2.4.0/2"` -> season 3, episode 5.
+     *  - `system="onscreen"` (or anything else, e.g. a bare string): human
+     *    text; extract S/E digits tolerating `S3E5`, `S03E05`, `3x05`.
+     *  - `dd_progid` and other id-only systems yield `null to null`.
+     */
+    private fun parseEpisodeNum(system: String, raw: String): Pair<Int?, Int?> {
+        val value = raw.trim()
+        if (value.isEmpty()) return null to null
+        if (system == "xmltv_ns") {
+            val parts = value.split(".")
+            fun part(i: Int): Int? = parts.getOrNull(i)
+                ?.substringBefore("/")?.trim()?.toIntOrNull()?.let { it + 1 }
+            return part(0) to part(1)
+        }
+        Regex("[Ss]\\s*(\\d{1,4})\\s*[Ee]\\s*(\\d{1,4})").find(value)?.let {
+            return it.groupValues[1].toIntOrNull() to it.groupValues[2].toIntOrNull()
+        }
+        Regex("(\\d{1,4})\\s*[xX]\\s*(\\d{1,4})").find(value)?.let {
+            return it.groupValues[1].toIntOrNull() to it.groupValues[2].toIntOrNull()
+        }
+        return null to null
     }
 
     private fun parseXMLTVDate(raw: String): Long? {

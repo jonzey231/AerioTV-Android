@@ -57,6 +57,11 @@ import com.aeriotv.android.core.network.DispatcharrAuthBroker
 import com.aeriotv.android.core.network.DispatcharrClient
 import com.aeriotv.android.core.network.TMDBService
 import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.core.ui.EpgFlag
+import com.aeriotv.android.core.ui.EpgFlagsRow
+import com.aeriotv.android.core.ui.EpgLiveRed
+import com.aeriotv.android.core.ui.epgFlags
+import com.aeriotv.android.core.ui.seasonEpisodeLabel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.EntryPoint
@@ -254,10 +259,28 @@ private fun ProgramInfoBody(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                if (target.isLiveNow()) {
-                    Spacer(Modifier.size(10.dp))
-                    LiveBadge()
+                // Feed-driven badges (LIVE / NEW / PREMIERE / FINALE / REPEAT),
+                // plus an "ON NOW" pill for a program airing right now that is
+                // not itself flagged a live broadcast (avoids a double LIVE).
+                val badges = buildList {
+                    if (target.isLiveNow() && !target.isLiveBroadcast) {
+                        add(EpgFlag("ON NOW", EpgLiveRed))
+                    }
+                    addAll(target.epgFlags())
                 }
+                if (badges.isNotEmpty()) {
+                    Spacer(Modifier.size(10.dp))
+                    EpgFlagsRow(badges)
+                }
+            }
+            target.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = sub,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontStyle = FontStyle.Italic,
+                )
             }
         }
         if (posterUrl != null) {
@@ -344,6 +367,9 @@ private fun InfoColumnsRow(target: ProgramInfoTarget, rowPadding: Dp) {
         InfoRow(label = "Airs", value = airs, verticalPadding = rowPadding)
         InfoRow(label = "Date", value = date, verticalPadding = rowPadding)
         InfoRow(label = "Duration", value = duration, verticalPadding = rowPadding)
+        target.seasonEpisodeLabel()?.let {
+            InfoRow(label = "Episode", value = it, verticalPadding = rowPadding)
+        }
     }
 }
 
@@ -380,22 +406,6 @@ private fun SectionLabel(text: String) {
     )
 }
 
-@Composable
-private fun LiveBadge() {
-    Surface(
-        color = LIVE_RED,
-        shape = RoundedCornerShape(50),
-    ) {
-        Text(
-            text = "LIVE",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
-}
-
 private fun ProgramInfoTarget.isLiveNow(): Boolean {
     val now = System.currentTimeMillis()
     return startMillis <= now && endMillis > now
@@ -422,5 +432,3 @@ private fun formatDuration(millis: Long): String {
     val mins = totalMinutes % 60
     return if (mins == 0) "$hours h" else "$hours h $mins min"
 }
-
-private val LIVE_RED = Color(0xFFFF4757)

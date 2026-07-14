@@ -129,6 +129,10 @@ import com.aeriotv.android.core.data.canReplay
 import com.aeriotv.android.core.data.db.entity.reminderKey
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.toInfoTarget
+import com.aeriotv.android.core.ui.EpgFlagsRow
+import com.aeriotv.android.core.ui.SeasonEpisodePill
+import com.aeriotv.android.core.ui.epgFlags
+import com.aeriotv.android.core.ui.seasonEpisodeLabel
 import com.aeriotv.android.core.tv.TvActionMenuDialog
 import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.data.ChannelCollection
@@ -1494,7 +1498,16 @@ fun GuideScreen(
         // Task #138: keep guideNav's viewport clamp current so a freshly-
         // focused left-clipped cell anchors to the on-screen column, not its
         // (possibly hours-past, with catch-up history) programme start.
-        LaunchedEffect(guideNav) {
+        // Re-key on the SAME inputs as `visibleWindow`'s remember. Without
+        // windowStart here, this effect captured the FIRST derivedStateOf and kept
+        // reading it after windowStart leaped (cold-launch historyMs 1h -> full
+        // catch-up retention as the EPG finishes loading). viewportStartMs then
+        // froze days away from the real visible column, and onCellFocused's
+        // `coerceAtLeast(viewportStartMs)` dragged the nav anchor past every
+        // composed cell -- so D-pad Right/Left dead-ended (focusAdjacent found no
+        // next span). Restarting on windowStart / hourWidthPx / stripViewportPx
+        // rebinds to the current window so the anchor tracks the focused cell.
+        LaunchedEffect(guideNav, windowStart, hourWidthPx, stripViewportPx) {
             snapshotFlow { visibleWindow.first }
                 .distinctUntilChanged()
                 .collect { guideNav.viewportStartMs = it }
@@ -3018,17 +3031,27 @@ private fun ProgrammeCell(
                     )
                 }
                 if (!programme.isPlaceholder) {
-                    Text(
-                        text = timeRange,
-                        style = MaterialTheme.typography.labelSmall,
-                        // iOS parity: guide-cell time lines sit on the
-                        // textTertiary rung (EPGGuideView tvOS branch), a
-                        // full step dimmer than the description.
-                        color = if (focused) Color.White.copy(alpha = 0.7f)
-                        else MaterialTheme.colorScheme.tertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // Time range plus the season/episode pill and badge flags,
+                    // folded onto one line so the height-limited TV cell does
+                    // not gain a row. Trailing badges clip first on narrow cells.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = timeRange,
+                            style = MaterialTheme.typography.labelSmall,
+                            // iOS parity: guide-cell time lines sit on the
+                            // textTertiary rung (EPGGuideView tvOS branch), a
+                            // full step dimmer than the description.
+                            color = if (focused) Color.White.copy(alpha = 0.7f)
+                            else MaterialTheme.colorScheme.tertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        SeasonEpisodePill(programme.seasonEpisodeLabel(), compact = true)
+                        EpgFlagsRow(programme.epgFlags(), compact = true)
+                    }
                 }
             }
         } else {
@@ -3066,6 +3089,21 @@ private fun ProgrammeCell(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                // Badges sit BELOW the title and description so the cell reads
+                // cleanly top-down instead of a busy middle row.
+                if (!programme.isPlaceholder) {
+                    val flags = programme.epgFlags()
+                    val seLabel = programme.seasonEpisodeLabel()
+                    if (flags.isNotEmpty() || seLabel != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            SeasonEpisodePill(seLabel, compact = true)
+                            EpgFlagsRow(flags, compact = true)
+                        }
+                    }
                 }
             }
         }
@@ -3202,6 +3240,13 @@ private class GuideVerticalNavState {
     var anchorTimeMs: Long = Long.MIN_VALUE
         private set
 
+    /** Raw start time (ms) of the cell that actually holds focus -- unlike
+     *  [anchorTimeMs] it is never clamped forward to the viewport, so horizontal
+     *  Left/Right stepping keys off where focus truly is and cannot dead-end even
+     *  if the anchor is momentarily out of the composed span range. */
+    var focusedCellAnchorMs: Long = Long.MIN_VALUE
+        private set
+
     /** Content-coordinate px bounds (x relative to the scroll origin = window
      *  start) of the currently-focused cell, set on focus. The key handler reads
      *  these to PAGE the timeline within a long program instead of leaping a full
@@ -3336,8 +3381,15 @@ private class GuideVerticalNavState {
      *  the key so focus stays put instead of escaping to the chrome). */
     fun stepHorizontal(forward: Boolean): Boolean {
         val i = focusedChannelIndex
-        if (i < 0 || anchorTimeMs == Long.MIN_VALUE) return false
-        return rowHorizontalHandlers[i]?.focusAdjacent(forward, anchorTimeMs) ?: false
+        // Step from the ACTUAL focused cell's start, not the vertical-nav anchor.
+        // The anchor is clamped forward to viewportStartMs for a left-clipped cell
+        // (column preservation across channel moves); if viewportStartMs is ever
+        // stale/far-off, that clamp could push the anchor past every composed span
+        // and dead-end the step. The focused cell is always inside this row's spans,
+        // so keying off it makes Left/Right robust.
+        val fromMs = if (focusedCellAnchorMs != Long.MIN_VALUE) focusedCellAnchorMs else anchorTimeMs
+        if (i < 0 || fromMs == Long.MIN_VALUE) return false
+        return rowHorizontalHandlers[i]?.focusAdjacent(forward, fromMs) ?: false
     }
 
     /** Called by a cell when it gains focus. Records which channel row owns
@@ -3345,6 +3397,9 @@ private class GuideVerticalNavState {
     fun onCellFocused(channelIndex: Int, cellStartMs: Long) {
         focusedChannelIndex = channelIndex
         lastFocusedChannelIndex = channelIndex
+        // Raw column of the cell that actually holds focus (never clamped forward),
+        // so horizontal stepping keys off where focus really is.
+        focusedCellAnchorMs = cellStartMs
         // Preserve the navigation column across vertical (channel up/down) moves.
         // A handler-driven focus sets programmaticFocusPending first; we consume it
         // and keep the existing anchor instead of snapping to this cell's start.

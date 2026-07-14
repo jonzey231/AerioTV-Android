@@ -235,6 +235,36 @@ object DatabaseModule {
         }
     }
 
+    /** EPG program badge metadata (guide/list/info-sheet badges): sub-title,
+     *  season/episode, and the new/live/premiere/finale/repeat flags on the
+     *  cached programme rows. Nullable columns take no default; the NOT NULL
+     *  booleans use `DEFAULT 0`, which MUST match each field's
+     *  @ColumnInfo(defaultValue = "0") on EpgProgrammeEntity or Room rejects the
+     *  post-upgrade schema on open. Existing cached rows keep the defaults
+     *  (no badges) until the next feed refresh REPLACEs them with real values;
+     *  the cache is a pure derived store so no data loss. */
+    private val MIGRATION_21_22 = object : Migration(21, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `subTitle` TEXT")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `season` INTEGER")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `episode` INTEGER")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `isNew` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `isLiveBroadcast` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `isPremiere` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `isFinale` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `epg_programme` ADD COLUMN `isRepeat` INTEGER NOT NULL DEFAULT 0")
+            // Drop the pre-badge cache so the first post-upgrade launch fetches
+            // fresh EPG and the new badges appear immediately. Without this, the
+            // cached rows carry the column defaults (no badges) and, since the
+            // cache reads "fresh", the guide would show badge-less programmes
+            // until the next scheduled refresh -- and on Android TV there is no
+            // pull-to-refresh to force it. Same precedent as MIGRATION_16_17
+            // clearing channel_snapshot; the EPG cache is pure derived data and
+            // repopulates on that first fetch.
+            db.execSQL("DELETE FROM `epg_programme`")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -243,7 +273,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 

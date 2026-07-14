@@ -29,6 +29,15 @@ data class ProgramInfoTarget(
      * and for Dispatcharr's "Dummy EPG" rows.
      */
     val dispatcharrProgramId: Int? = null,
+    // EPG badge metadata carried through to the detail sheet.
+    val subTitle: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val isNew: Boolean = false,
+    val isLiveBroadcast: Boolean = false,
+    val isPremiere: Boolean = false,
+    val isFinale: Boolean = false,
+    val isRepeat: Boolean = false,
 ) {
     val id: String get() = "$title-$startMillis-$endMillis"
 }
@@ -46,4 +55,12 @@ fun EPGProgramme.toInfoTarget(
         category = category,
         channelDispatcharrId = channelDispatcharrId,
         dispatcharrProgramId = dispatcharrProgramId,
+        subTitle = subTitle,
+        season = season,
+        episode = episode,
+        isNew = isNew,
+        isLiveBroadcast = isLiveBroadcast,
+        isPremiere = isPremiere,
+        isFinale = isFinale,
+        isRepeat = isRepeat,
     )

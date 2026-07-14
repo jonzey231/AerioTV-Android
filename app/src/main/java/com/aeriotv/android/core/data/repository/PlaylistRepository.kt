@@ -1207,6 +1207,15 @@ private fun List<DispatcharrEpgEntry>.toProgrammes(): List<EPGProgramme> =
             // back to per-program lazy fetch in ProgramInfoSheet otherwise.
             category = entry.categories?.filter { it.isNotBlank() }?.joinToString(",").orEmpty(),
             dispatcharrProgramId = entry.programIdInt,
+            // Badge metadata already decoded off the grid; Dispatcharr has no
+            // previously-shown/repeat field, so isRepeat stays false here.
+            subTitle = entry.subTitle?.takeIf { it.isNotBlank() },
+            season = entry.season,
+            episode = entry.episode,
+            isNew = entry.isNew,
+            isLiveBroadcast = entry.isLive,
+            isPremiere = entry.isPremiere,
+            isFinale = entry.isFinale,
         )
     }
 
@@ -1219,6 +1228,14 @@ private fun EpgProgrammeEntity.toProgramme(): EPGProgramme = EPGProgramme(
     endMillis = endMillis,
     category = category,
     dispatcharrProgramId = dispatcharrProgramId,
+    subTitle = subTitle,
+    season = season,
+    episode = episode,
+    isNew = isNew,
+    isLiveBroadcast = isLiveBroadcast,
+    isPremiere = isPremiere,
+    isFinale = isFinale,
+    isRepeat = isRepeat,
 )
 
 private fun EPGProgramme.toCacheEntity(playlistId: String, fetchedAt: Long): EpgProgrammeEntity =
@@ -1232,6 +1249,14 @@ private fun EPGProgramme.toCacheEntity(playlistId: String, fetchedAt: Long): Epg
         category = category,
         dispatcharrProgramId = dispatcharrProgramId,
         fetchedAt = fetchedAt,
+        subTitle = subTitle,
+        season = season,
+        episode = episode,
+        isNew = isNew,
+        isLiveBroadcast = isLiveBroadcast,
+        isPremiere = isPremiere,
+        isFinale = isFinale,
+        isRepeat = isRepeat,
     )
 
 /** Channel snapshot cache row <-> M3UChannel mapping. We deliberately drop

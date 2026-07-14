@@ -98,6 +98,10 @@ import androidx.compose.ui.layout.ContentScale
 import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.EPGProgramme
+import com.aeriotv.android.core.ui.EpgFlagsRow
+import com.aeriotv.android.core.ui.SeasonEpisodePill
+import com.aeriotv.android.core.ui.epgFlags
+import com.aeriotv.android.core.ui.seasonEpisodeLabel
 import com.aeriotv.android.core.data.canReplay
 import com.aeriotv.android.feature.collections.AddToCollectionFlow
 import com.aeriotv.android.feature.collections.CollectionPill
@@ -1072,16 +1076,26 @@ internal fun ChannelRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text = nowProgramme?.title ?: " ",
-                        style = MaterialTheme.typography.bodyMedium,
-                        // iOS parity: the program-title line is accent at 0.85,
-                        // not full strength (ChannelListView.swift MarqueeText
-                        // accentPrimary.opacity(0.85)).
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = nowProgramme?.title ?: " ",
+                            style = MaterialTheme.typography.bodyMedium,
+                            // iOS parity: the program-title line is accent at 0.85,
+                            // not full strength (ChannelListView.swift MarqueeText
+                            // accentPrimary.opacity(0.85)).
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        // Feed badges on the now-playing line; kept inline (same
+                        // single-line height) so the row's fixed-slot alignment
+                        // across channels is preserved.
+                        nowProgramme?.epgFlags()?.takeIf { it.isNotEmpty() }?.let { flags ->
+                            Spacer(Modifier.width(6.dp))
+                            EpgFlagsRow(flags)
+                        }
+                    }
                     Text(
                         text = nowProgramme?.description?.takeIf { it.isNotBlank() } ?: " ",
                         style = MaterialTheme.typography.bodySmall,
@@ -1541,7 +1555,16 @@ private fun UpcomingProgrammeRow(
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
+                    programme.seasonEpisodeLabel()?.let { seLabel ->
+                        Spacer(Modifier.width(6.dp))
+                        SeasonEpisodePill(seLabel)
+                    }
+                    programme.epgFlags().takeIf { it.isNotEmpty() }?.let { flags ->
+                        Spacer(Modifier.width(6.dp))
+                        EpgFlagsRow(flags)
+                    }
                 }
                 if (programme.description.isNotBlank()) {
                     Text(
