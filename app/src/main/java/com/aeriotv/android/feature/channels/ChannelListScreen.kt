@@ -88,6 +88,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1100,7 +1101,16 @@ internal fun ChannelRow(
                         }
                     }
                     Text(
-                        text = nowProgramme?.description?.takeIf { it.isNotBlank() } ?: " ",
+                        // GH #34: lead the secondary line with the XMLTV
+                        // <sub-title> (match/episode name) so same-title live
+                        // events are distinguishable, then the description.
+                        // Folded into the existing fixed 2-line slot rather than
+                        // added as a new line, so the list's cross-row alignment
+                        // is preserved.
+                        text = listOfNotNull(
+                            nowProgramme?.subTitle?.takeIf { it.isNotBlank() },
+                            nowProgramme?.description?.takeIf { it.isNotBlank() },
+                        ).joinToString(" · ").ifBlank { " " },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         minLines = 2,
@@ -1570,6 +1580,19 @@ private fun UpcomingProgrammeRow(
                             EpgFlagsRow(flags)
                         }
                     }
+                }
+                // GH #34: surface the XMLTV <sub-title> (match/episode name) in
+                // the expanded schedule so back-to-back same-title programmes are
+                // distinguishable.
+                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                    Text(
+                        text = sub,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = FontStyle.Italic,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 if (programme.description.isNotBlank()) {
                     Text(

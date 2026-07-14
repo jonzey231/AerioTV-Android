@@ -113,6 +113,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import com.aeriotv.android.core.pip.findActivity
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -3052,6 +3053,20 @@ private fun ProgrammeCell(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // GH #34: the XMLTV <sub-title> (episode / sports-match name,
+                // e.g. "Team A vs Team B") is what distinguishes back-to-back
+                // programmes with the same generic title; surface it in the cell.
+                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                    Text(
+                        text = sub,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (focused) Color.White.copy(alpha = 0.85f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = FontStyle.Italic,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (programme.description.isNotBlank()) {
                     Text(
                         text = programme.description,
@@ -3112,6 +3127,17 @@ private fun ProgrammeCell(
                         color = titleColor,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // GH #34: surface the XMLTV <sub-title> (match/episode name).
+                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                    Text(
+                        text = sub,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = FontStyle.Italic,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
