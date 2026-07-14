@@ -402,8 +402,17 @@ fun MainScaffold(
                 val miniActive = miniPlayerState is MiniPlayerSession.State.Active
                 val topHintGap = when {
                     miniActive -> 78.dp
+                    // Idle Live TV: the two 8sp hint chips float at the nav bar's
+                    // height and only need a slim band under it. 40dp over-reserved
+                    // and pushed the guide grid down enough to clip the 7th channel
+                    // row (tvOS fits 7). 16dp still clears the idle hint stack while
+                    // reclaiming a full row. During background work the hints are
+                    // pushed DOWN to top=60dp to clear the Syncing pill, so reserve
+                    // the larger band then to avoid the pills overlapping them
+                    // (transient -- normal idle usage shows all 7 rows).
                     selectedTab == AppTab.LiveTV &&
-                        miniPlayerState !is MiniPlayerSession.State.Pending -> 40.dp
+                        miniPlayerState !is MiniPlayerSession.State.Pending ->
+                        if (anyBackgroundWork) 40.dp else 16.dp
                     else -> 0.dp
                 }
                 if (topHintGap > 0.dp) {
