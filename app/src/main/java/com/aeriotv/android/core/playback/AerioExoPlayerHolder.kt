@@ -504,18 +504,30 @@ class AerioExoPlayerHolder @Inject constructor(
      * Dispatcharr key rides along. The foreground path bypasses this entirely
      * (it calls player.setMediaSource(buildMediaSource(...)) directly), so this
      * factory never affects PlayerScreen playback.
+     *
+     * Parity with the foreground live fix (GH #32): Android Auto live TV is a
+     * separate, thinner path that historically used [DefaultHttpDataSource] --
+     * the same HttpURLConnection stack that can open the Dispatcharr raw-TS
+     * proxy on Android 16 yet never deliver bytes (permanent BUFFERING, silent
+     * car). The Auto browse tree is live-channels-only, so route it through the
+     * same OkHttp client the foreground live path uses (consistent across OS
+     * versions), and always send a real player User-Agent -- falling back to
+     * [DEFAULT_PLAYBACK_USER_AGENT] when the active source supplies none, so
+     * anti-restream WAFs don't drop the connection on the platform Dalvik UA.
+     * Headers are still read fresh per createDataSource for server switches.
+     * (DHU-verified 2026-07-14: Auto playback did not itself reproduce the
+     * stall on an Android 16 Z Fold, but this closes the same latent gap the
+     * foreground fix already covers.)
      */
     private val autoDataSourceFactory = DataSource.Factory {
-        val f = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(30_000)
-            .setReadTimeoutMs(30_000)
         val h = httpHeaders
-        if (h.isNotEmpty()) {
-            f.setDefaultRequestProperties(h)
-            h.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
-                ?.value?.let(f::setUserAgent)
-        }
+        val headerUa = h.entries
+            .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
+            ?.value
+        val f = OkHttpDataSource.Factory(liveHttpClient)
+            .setUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT)
+        val nonUaHeaders = h.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+        if (nonUaHeaders.isNotEmpty()) f.setDefaultRequestProperties(nonUaHeaders)
         f.createDataSource()
     }
 
