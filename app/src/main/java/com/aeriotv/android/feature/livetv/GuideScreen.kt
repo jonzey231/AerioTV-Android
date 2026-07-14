@@ -714,7 +714,16 @@ fun GuideScreen(
     // shifts and the strip is still EXACTLY where our anchor put it (the
     // user hasn't scrolled), re-anchor on the new timeline; a user-moved
     // strip is never yanked.
-    LaunchedEffect(filteredChannels.isNotEmpty(), windowStart) {
+    // Re-keyed on tvComfortScale (Android TV Live TV List display scale): the
+    // scale change alters hourWidthPx but leaves the horizontal scroll OFFSET
+    // (px) untouched, so the same px now maps to a different wall-clock time -
+    // the guide silently jumped hours/days into an empty window and the whole
+    // programme grid blanked (user video 2026-07-14). Re-anchoring to now on a
+    // scale change (only while the strip still sits at our own anchor, i.e. the
+    // user hasn't scrolled away) re-maps the offset for the new hourWidthPx.
+    // tvComfortScale is 1f and constant on phones, so this never re-fires there
+    // and never fights a live pinch (guideScale is deliberately NOT a key).
+    LaunchedEffect(filteredChannels.isNotEmpty(), windowStart, tvComfortScale) {
         if (filteredChannels.isEmpty()) return@LaunchedEffect
         if (didScrollToNow &&
             (autoAnchorPx < 0 || horizontalScrollState.value != autoAnchorPx)
@@ -2451,7 +2460,29 @@ private fun ChannelGuideRow(
                 .horizontalScroll(horizontalScrollState, flingBehavior = guideFling)
                 .fillMaxHeight(),
         ) {
-            val totalWidth = hourWidth * (windowDurationMs / 3_600_000L).toInt()
+            val totalWidth = run {
+                val raw = hourWidth * (windowDurationMs / 3_600_000L).toInt()
+                // Compose caps a fixed layout dimension at ~262143px. A wide EPG
+                // window at a high display scale (Live TV List 150-175% on
+                // Android TV) pushes hourWidth x total-hours past that, which
+                // SILENTLY blanks the entire programme strip -- cells render
+                // nothing while the channel rail + time header (which don't hang
+                // off this giant box) survive. Clamp the scroll-range width to a
+                // safe px budget so the strip always measures; cells beyond it
+                // are simply unreachable by horizontal scroll (many days out at
+                // that zoom) while every visible / near-now cell still renders.
+                val maxDp = with(LocalDensity.current) { GUIDE_MAX_STRIP_PX.toDp() }
+                if (raw > maxDp) {
+                    android.util.Log.w(
+                        "GuideScreen",
+                        "programme strip width $raw exceeds the ${maxDp} Compose layout cap " +
+                            "(scale x wide EPG window); clamping so the grid still renders",
+                    )
+                    maxDp
+                } else {
+                    raw
+                }
+            }
             Box(modifier = Modifier.width(totalWidth).fillMaxHeight()) {
                 // Programme cells, positioned by offset.
                 val windowEnd = windowStart + windowDurationMs
@@ -3148,6 +3179,15 @@ private object GuideMetrics {
 }
 
 private const val MS_PER_HOUR_F = 3_600_000f
+
+/** Compose packs a fixed layout dimension into ~262143px (Constraints). The
+ *  programme strip is a single Box spanning the ENTIRE EPG window
+ *  (hourWidth x total-hours); a wide window at a high Live TV display scale
+ *  overruns that cap and silently blanks the whole strip on Android TV. Clamp
+ *  the strip width to this safe budget (well under the limit, and still large
+ *  enough that the now-line and days of programmes on either side stay
+ *  scrollable at max zoom). */
+private const val GUIDE_MAX_STRIP_PX = 240_000f
 
 /** Minimum gap between channel up/down moves driven by a HELD D-pad key
  *  (auto-repeat). The initial press always moves (a tap is one channel); held
