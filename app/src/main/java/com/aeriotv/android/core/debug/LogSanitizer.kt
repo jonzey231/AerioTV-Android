@@ -37,6 +37,17 @@ internal object LogSanitizer {
         "(://)[^/@\\s]+@",
     )
 
+    private val XTREAM_PATH = Regex(
+        // Xtream stream URLs carry credentials as PATH segments, not query
+        // params: /live|movie|series/<user>/<pass>/<id>.ext . Neither
+        // QUERY_PARAM nor URL_USERINFO covers this shape, so these URLs (logged
+        // by the player / VOD / multiview tune paths) would otherwise leak a
+        // full credential pair into the shareable log. Redact the password
+        // slot; keep <user> so a log line stays correlatable to an account
+        // (mirrors iOS LogSanitizer xtreamPathRegex, commit 24297b5ea).
+        "(?i)(/(?:live|movie|series)/[^/\\s]+/)[^/\\s]+(/)",
+    )
+
     private val QUERY_PARAM = Regex(
         // [?&]name=value where name is one of the secret-y param names. The
         // value runs until the next `&`, whitespace, or end-of-line. We
@@ -72,6 +83,7 @@ internal object LogSanitizer {
         // pattern, prevents query-param regex from chopping a JWT mid-base64),
         // then JSON body fields, then prefix forms, then query params last.
         out = URL_USERINFO.replace(out, "$1***@")
+        out = XTREAM_PATH.replace(out) { mr -> mr.groupValues[1] + "***" + mr.groupValues[2] }
         out = HEADER_LINE.replace(out) { mr -> mr.groupValues[1] + "***" }
         out = JWT.replace(out, "eyJ***")
         out = JSON_CREDENTIAL.replace(out) { mr -> "\"${mr.groupValues[1]}\":\"***\"" }
