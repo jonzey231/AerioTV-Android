@@ -222,7 +222,7 @@ class OnDemandViewModel @Inject constructor(
             // Search results need the same group stamp as the browse list so
             // the Manage Groups filter applies identically to both.
             ensureDispatcharrCategories(playlist)
-            val base = playlist.urlString.trimEnd('/')
+            val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
             val url = "$base/api/vod/movies/?search=" +
                     java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
             val page = runCatching {
@@ -263,7 +263,7 @@ class OnDemandViewModel @Inject constructor(
             _state.update { it.copy(isSearchingSeries = true) }
             // Same group stamp as the browse list; see setSearchQuery.
             ensureDispatcharrCategories(playlist)
-            val base = playlist.urlString.trimEnd('/')
+            val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
             val url = "$base/api/vod/series/?search=" +
                     java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
             val page = runCatching {
@@ -407,6 +407,7 @@ class OnDemandViewModel @Inject constructor(
             // logged and skipped; one bad group never aborts the sweep.
             val totalCap = VOD_TOTAL_CAP
             val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODMovie>()
             val seen = HashSet<String>()
             // Categories that have >=1 movie for THIS account are the real
@@ -435,7 +436,7 @@ class OnDemandViewModel @Inject constructor(
                 // it for the categories past the row cap too.
                 val firstPage = runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                        dispatcharrClient.getVODMoviesByCategory(playlist.urlString, key, catName)
+                        dispatcharrClient.getVODMoviesByCategory(base, key, catName)
                     }
                 }.onFailure { Log.w(TAG, "VOD movies cat='$catName' failed; continuing", it) }.getOrNull()
                 if (firstPage != null) {
@@ -499,9 +500,10 @@ class OnDemandViewModel @Inject constructor(
      * stampMovieGroup (a no-op/Uncategorized when there are no categories).
      */
     private suspend fun loadDispatcharrMoviesUnfiltered(playlist: PlaylistEntity) {
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.getVODMoviesFirstPage(playlist.urlString, key)
+                dispatcharrClient.getVODMoviesFirstPage(base, key)
             }
         }.fold(
             onSuccess = { page ->
@@ -600,6 +602,7 @@ class OnDemandViewModel @Inject constructor(
             // seriesById). A failing category is logged and skipped.
             val totalCap = VOD_TOTAL_CAP
             val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODSeries>()
             val seen = HashSet<Int>()
             // Presence is recorded from each category's own first-page response,
@@ -615,7 +618,7 @@ class OnDemandViewModel @Inject constructor(
                 var fetchedForCat = 0
                 val firstPage = runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                        dispatcharrClient.getVODSeriesByCategory(playlist.urlString, key, catName)
+                        dispatcharrClient.getVODSeriesByCategory(base, key, catName)
                     }
                 }.onFailure { Log.w(TAG, "VOD series cat='$catName' failed; continuing", it) }.getOrNull()
                 if (firstPage != null) {
@@ -663,9 +666,10 @@ class OnDemandViewModel @Inject constructor(
 
     /** Series counterpart of [loadDispatcharrMoviesUnfiltered]; dedup by id. */
     private suspend fun loadDispatcharrSeriesUnfiltered(playlist: PlaylistEntity) {
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.getVODSeriesFirstPage(playlist.urlString, key)
+                dispatcharrClient.getVODSeriesFirstPage(base, key)
             }
         }.fold(
             onSuccess = { page ->
@@ -763,9 +767,10 @@ class OnDemandViewModel @Inject constructor(
      * behavior. Also publishes the Manage Groups dialog's name lists.
      */
     private suspend fun fetchDispatcharrCategories(playlist: PlaylistEntity) {
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         val categories = runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.getVODCategories(playlist.urlString, key)
+                dispatcharrClient.getVODCategories(base, key)
             }
         }.onFailure { Log.w(TAG, "getVODCategories failed; proceeding without groups", it) }
             .getOrDefault(emptyList())
@@ -904,7 +909,7 @@ class OnDemandViewModel @Inject constructor(
     ): DispatcharrVODMovie? {
         val playlist = dispatcharrPlaylistOrNull() ?: return null
         ensureDispatcharrCategories(playlist)
-        val base = playlist.urlString.trimEnd('/')
+        val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
         val url = "$base/api/vod/movies/?search=" +
                 java.net.URLEncoder.encode(item.title, "UTF-8") +
                 "&page_size=$KNOWN_FOR_SEARCH_PAGE_SIZE&page=1"
@@ -935,7 +940,7 @@ class OnDemandViewModel @Inject constructor(
     ): DispatcharrVODSeries? {
         val playlist = dispatcharrPlaylistOrNull() ?: return null
         ensureDispatcharrCategories(playlist)
-        val base = playlist.urlString.trimEnd('/')
+        val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
         val url = "$base/api/vod/series/?search=" +
                 java.net.URLEncoder.encode(item.title, "UTF-8") +
                 "&page_size=$KNOWN_FOR_SEARCH_PAGE_SIZE&page=1"
@@ -1035,10 +1040,11 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist() ?: return@launch
             if (playlist.apiKey.isNullOrBlank()) return@launch
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             _state.update { it.copy(movieProviderInfoLoading = it.movieProviderInfoLoading + movieId) }
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.getMovieProviderInfo(playlist.urlString, key, movieId)
+                    dispatcharrClient.getMovieProviderInfo(base, key, movieId)
                 }
             }.fold(
                 onSuccess = { info ->
@@ -1066,10 +1072,11 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist() ?: return@launch
             if (playlist.apiKey.isNullOrBlank()) return@launch
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             _state.update { it.copy(seriesProviderInfoLoading = it.seriesProviderInfoLoading + seriesId) }
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.getSeriesProviderInfo(playlist.urlString, key, seriesId)
+                    dispatcharrClient.getSeriesProviderInfo(base, key, seriesId)
                 }
             }.fold(
                 onSuccess = { info ->
@@ -1103,6 +1110,7 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             if (playlist.apiKey.isNullOrBlank()) return@launch
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             _state.update {
                 it.copy(
                     episodesLoadingFor = it.episodesLoadingFor + seriesId,
@@ -1121,7 +1129,7 @@ class OnDemandViewModel @Inject constructor(
             if (!current.seriesProviderInfo.containsKey(seriesId)) {
                 runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                        dispatcharrClient.getSeriesProviderInfo(playlist.urlString, key, seriesId)
+                        dispatcharrClient.getSeriesProviderInfo(base, key, seriesId)
                     }
                 }.onSuccess { info ->
                     _state.update { st ->
@@ -1134,7 +1142,7 @@ class OnDemandViewModel @Inject constructor(
             _state.update { it.copy(seriesProviderInfoLoading = it.seriesProviderInfoLoading - seriesId) }
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.getSeriesEpisodesFirstPage(playlist.urlString, key, seriesId)
+                    dispatcharrClient.getSeriesEpisodesFirstPage(base, key, seriesId)
                 }
             }.fold(
                 onSuccess = { page ->
@@ -1174,10 +1182,11 @@ class OnDemandViewModel @Inject constructor(
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.resolveVODEpisodeStreamUrl(
-                    baseUrl = playlist.urlString,
+                    baseUrl = base,
                     apiKey = key,
                     episodeUuid = episodeUuid,
                     streamId = streamId,
@@ -1205,10 +1214,11 @@ class OnDemandViewModel @Inject constructor(
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
         val movie = _state.value.movies.firstOrNull { it.uuid == movieUuid }
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.resolveVODStreamUrl(
-                    baseUrl = playlist.urlString,
+                    baseUrl = base,
                     apiKey = key,
                     movieUuid = movieUuid,
                     streamId = movie?.firstStreamId,
@@ -1293,7 +1303,7 @@ class OnDemandViewModel @Inject constructor(
     private suspend fun probeXtream(playlist: PlaylistEntity) {
         val user = playlist.username
         val pass = playlist.password
-        val base = playlist.urlString
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         if (user.isNullOrBlank() || pass == null) {
             _state.update {
                 it.copy(
@@ -1369,8 +1379,8 @@ class OnDemandViewModel @Inject constructor(
         val playlist = xtreamPlaylist ?: return
         val user = playlist.username ?: return
         val pass = playlist.password ?: return
-        val base = playlist.urlString
         xtreamItemsJob = viewModelScope.launch {
+            val base = playlistRepository.effectiveBaseUrl(playlist)
             _state.update { it.copy(isLoading = movieCats.isNotEmpty(), isLoadingSeries = seriesCats.isNotEmpty()) }
             Log.i(TAG, "XC On Demand: enumerating ${movieCats.size} movie + ${seriesCats.size} series categories (interleaved)")
             val work = ArrayList<Pair<XcKind, String>>(movieCats.size + seriesCats.size)
@@ -1421,8 +1431,9 @@ class OnDemandViewModel @Inject constructor(
         val user = playlist.username
         val pass = playlist.password
         if (user.isNullOrBlank() || pass == null) return
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         _state.update { it.copy(episodesLoadingFor = it.episodesLoadingFor + seriesId) }
-        runCatching { xtreamApi.getSeriesEpisodes(playlist.urlString, user, pass, seriesId) }.fold(
+        runCatching { xtreamApi.getSeriesEpisodes(base, user, pass, seriesId) }.fold(
             onSuccess = { eps ->
                 val mapped = eps.map { e ->
                     DispatcharrVODEpisode(
@@ -1461,7 +1472,7 @@ class OnDemandViewModel @Inject constructor(
     }
 
     /** Decode a sentinel uuid ("<prefix><id>-<ext>") and build the XC URL. */
-    private fun resolveXtreamUrl(
+    private suspend fun resolveXtreamUrl(
         playlist: PlaylistEntity,
         uuid: String,
         prefix: String,
@@ -1476,7 +1487,8 @@ class OnDemandViewModel @Inject constructor(
         val id = payload.substringBefore('-').toIntOrNull()
             ?: return Result.failure(IllegalStateException("Bad Xtream id in $uuid"))
         val ext = payload.substringAfter('-', "mp4").ifBlank { "mp4" }
-        return Result.success(build(playlist.urlString, user, pass, id, ext))
+        val base = playlistRepository.effectiveBaseUrl(playlist)
+        return Result.success(build(base, user, pass, id, ext))
     }
 
     private companion object {

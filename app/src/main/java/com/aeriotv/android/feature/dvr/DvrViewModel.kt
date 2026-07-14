@@ -273,7 +273,7 @@ class DvrViewModel @Inject constructor(
                 .getOrDefault(emptyMap())
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.listRecordings(playlist.urlString, key)
+                    dispatcharrClient.listRecordings(base, key)
                 }
             }.fold(
                 onSuccess = { remote ->
@@ -321,7 +321,7 @@ class DvrViewModel @Inject constructor(
                     // into _state as it lands (pills appear a moment later).
                     resolveCompletedCategoriesAsync(
                         playlistId = playlist.id,
-                        baseUrl = playlist.urlString,
+                        baseUrl = base,
                         recordings = fromCache,
                     )
                 },
@@ -377,8 +377,9 @@ class DvrViewModel @Inject constructor(
                     }
                     val intId = recording.id.removePrefix("server-").toIntOrNull()
                         ?: throw IllegalStateException("Invalid server recording id: ${recording.id}")
+                    val base = playlistRepository.effectiveBaseUrl(playlist)
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                        dispatcharrClient.deleteRecording(playlist.urlString, key, intId)
+                        dispatcharrClient.deleteRecording(base, key, intId)
                     }
                     refresh()
                 }
@@ -414,10 +415,11 @@ class DvrViewModel @Inject constructor(
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             val result = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.createRecording(
-                    baseUrl = playlist.urlString,
+                    baseUrl = base,
                     apiKey = key,
                     channelId = channelDispatcharrId,
                     startIso = startMillis.toIsoUtc(),
@@ -435,7 +437,6 @@ class DvrViewModel @Inject constructor(
             // Recording on its own, so no status guessing. The row uses the
             // same "server-$id" key the refresh-produced row will, so the
             // dedup-by-id guard in refresh() reconciles it in place.
-            val base = playlistRepository.effectiveBaseUrl(playlist)
             val optimistic = result.toRecording(base, dispatcharrClient)
             _state.update { st ->
                 val without = st.recordings.filterNot { it.id == optimistic.id }
@@ -465,10 +466,11 @@ class DvrViewModel @Inject constructor(
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             val result = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.updateRecording(
-                    baseUrl = playlist.urlString,
+                    baseUrl = base,
                     apiKey = key,
                     recordingId = recordingId,
                     startIso = startMillis.toIsoUtc(),
@@ -500,9 +502,10 @@ class DvrViewModel @Inject constructor(
         }
         val intId = recording.id.removePrefix("server-").toIntOrNull()
             ?: return Result.failure(IllegalStateException("Invalid recording id."))
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.applyComskip(playlist.urlString, key, intId)
+                dispatcharrClient.applyComskip(base, key, intId)
             }
             refresh()
         }
@@ -524,9 +527,10 @@ class DvrViewModel @Inject constructor(
         }
         val intId = recording.id.removePrefix("server-").toIntOrNull()
             ?: return Result.failure(IllegalStateException("Invalid recording id."))
+        val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.stopRecording(playlist.urlString, key, intId)
+                dispatcharrClient.stopRecording(base, key, intId)
             }
             refresh()
         }
