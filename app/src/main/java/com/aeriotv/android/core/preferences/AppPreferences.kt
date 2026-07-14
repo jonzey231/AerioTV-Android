@@ -18,6 +18,7 @@ import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.security.CredentialCipher
 import com.aeriotv.android.core.sync.SyncCategory
 import com.aeriotv.android.ui.theme.AppTheme
+import com.aeriotv.android.ui.theme.AppearanceMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -81,6 +82,23 @@ class AppPreferences @Inject constructor(
 
     suspend fun setSelectedTheme(theme: AppTheme) {
         store.edit { it[KEY_SELECTED_THEME] = theme.name }
+    }
+
+    /**
+     * Appearance mode (Dark / Light / System), ORTHOGONAL to [selectedTheme].
+     * Stored as the raw wire string ("dark" / "light" / "system"). CRITICAL:
+     * the persisted-absence path resolves to [AppearanceMode.Dark] so every
+     * existing install (no stored value) is visually unchanged on upgrade.
+     * Drive-synced (unlike the per-device defaultLiveTVView) so the choice
+     * follows the user across all of their devices, exactly like the custom
+     * accent hex.
+     */
+    val appearanceMode: Flow<AppearanceMode> = store.data.map { prefs ->
+        AppearanceMode.fromWire(prefs[KEY_APPEARANCE_MODE])
+    }
+
+    suspend fun setAppearanceMode(mode: AppearanceMode) {
+        store.edit { it[KEY_APPEARANCE_MODE] = mode.wire }
     }
 
     /**
@@ -828,6 +846,9 @@ class AppPreferences @Inject constructor(
         val data = store.data.first()
         val out = mutableMapOf<String, String>()
         data[KEY_SELECTED_THEME]?.let { out["selectedTheme"] = it }
+        // Appearance mode is the OPPOSITE of defaultLiveTVView: it MUST sync so
+        // the user's Dark/Light/System choice follows them to every device.
+        data[KEY_APPEARANCE_MODE]?.let { out["appearanceMode"] = it }
         data[KEY_DEFAULT_TAB]?.let { out["defaultTab"] = it }
         // NOTE: defaultLiveTVView is intentionally NOT synced -- it is a per-device
         // preference (the right default is form-factor specific: TV -> Guide,
@@ -872,6 +893,7 @@ class AppPreferences @Inject constructor(
     suspend fun applySyncedPreferences(keys: Map<String, String>) {
         store.edit { prefs ->
             keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME] = it }
+            keys["appearanceMode"]?.let { prefs[KEY_APPEARANCE_MODE] = it }
             keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB] = it }
             // defaultLiveTVView is per-device now (see snapshotSyncablePreferences);
             // ignore any legacy value carried in an older Drive snapshot so it can
@@ -1094,6 +1116,7 @@ class AppPreferences @Inject constructor(
         const val RECENT_CHANNELS_CAP = 15
         val KEY_RECENT_CHANNEL_IDS = stringPreferencesKey("recent_channel_ids")
         val KEY_SELECTED_THEME = stringPreferencesKey("selected_theme")
+        val KEY_APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")

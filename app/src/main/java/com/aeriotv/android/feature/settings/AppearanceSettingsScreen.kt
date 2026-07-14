@@ -51,6 +51,7 @@ import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.category.parseHex
 import com.aeriotv.android.ui.adaptive.rememberViewport
 import com.aeriotv.android.ui.theme.AppTheme
+import com.aeriotv.android.ui.theme.AppearanceMode
 
 /**
  * Appearance sub-screen. Mirrors iOS Settings -> Appearance
@@ -77,6 +78,7 @@ fun AppearanceSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val currentTheme by viewModel.selectedTheme.collectAsStateWithLifecycle(initialValue = AppTheme.Aerio)
+    val appearanceMode by viewModel.appearanceMode.collectAsStateWithLifecycle(initialValue = AppearanceMode.Dark)
     val palette by viewModel.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
     val scaleMovies by viewModel.displayScaleMovies.collectAsStateWithLifecycle(initialValue = 1.0f)
     val scaleLiveTV by viewModel.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
@@ -119,7 +121,7 @@ fun AppearanceSettingsScreen(
                 // THEME card — six brand presets + Custom Accent override row.
                 settingsCard(
                     header = "Theme",
-                    footer = "Choose the palette used across the app. Switching themes applies live; the preset accent kicks in unless Custom Accent is on.",
+                    footer = "Choose the palette and the light or dark appearance. Theme sets the color; Appearance sets light vs dark. They are independent, so any theme works in either appearance. Changes apply live; the preset accent kicks in unless Custom Accent is on.",
                 ) {
                     AppTheme.entries.forEachIndexed { index, theme ->
                         if (index > 0) DividerRow()
@@ -127,6 +129,19 @@ fun AppearanceSettingsScreen(
                             theme = theme,
                             selected = theme == currentTheme,
                             onClick = { viewModel.setSelectedTheme(theme) },
+                        )
+                    }
+                    // Appearance mode (Dark / Light / System). Orthogonal to the
+                    // theme above: this picks surface luminance, the theme picks
+                    // hue. Selecting the Light THEME does not flip this control.
+                    DividerRow()
+                    AppearanceModeHeaderRow()
+                    AppearanceMode.entries.forEach { mode ->
+                        DividerRow()
+                        AppearanceModeRow(
+                            mode = mode,
+                            selected = mode == appearanceMode,
+                            onClick = { viewModel.setAppearanceMode(mode) },
                         )
                     }
                     DividerRow()
@@ -406,6 +421,73 @@ private fun themeSubtitle(theme: AppTheme): String = when (theme) {
     AppTheme.Forest -> "Green on near-black"
     AppTheme.Lavender -> "Purple on near-black"
     AppTheme.Monochrome -> "Greyscale on near-black"
+    AppTheme.Light -> "Neutral teal-grey on white"
+}
+
+/** Inline sub-header for the appearance-mode group inside the Theme card. */
+@Composable
+private fun AppearanceModeHeaderRow() {
+    Text(
+        text = "APPEARANCE",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 2.dp),
+    )
+}
+
+private fun appearanceModeLabel(mode: AppearanceMode): String = when (mode) {
+    AppearanceMode.Dark -> "Dark"
+    AppearanceMode.Light -> "Light"
+    AppearanceMode.System -> "System"
+}
+
+private fun appearanceModeSubtitle(mode: AppearanceMode): String = when (mode) {
+    AppearanceMode.Dark -> "Dark surfaces everywhere (default)"
+    AppearanceMode.Light -> "Light surfaces everywhere"
+    AppearanceMode.System -> "Follow the device light or dark setting"
+}
+
+/**
+ * A single Dark / Light / System option row inside the Theme card. Mirrors
+ * [ThemeRow] chrome (D-pad wash + accent checkmark) but with no color swatch
+ * since it selects luminance, not hue.
+ */
+@Composable
+private fun AppearanceModeRow(
+    mode: AppearanceMode,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .dpadFocusWash()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = appearanceModeLabel(mode),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = appearanceModeSubtitle(mode),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
 }
 
 /**

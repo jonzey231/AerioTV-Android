@@ -43,6 +43,7 @@ import com.aeriotv.android.feature.player.PersistentExoWindow
 import com.aeriotv.android.feature.splash.SplashGate
 import com.aeriotv.android.ui.theme.AerioTVTheme
 import com.aeriotv.android.ui.theme.AppTheme
+import com.aeriotv.android.ui.theme.AppearanceMode
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -467,6 +468,10 @@ class MainActivity : ComponentActivity() {
         captureDeepLinkFrom(intent)
         setContent {
             val theme by appPreferences.selectedTheme.collectAsState(initial = AppTheme.Aerio)
+            // DEFAULT MUST be Dark: the initial (pre-first-emission) value AND
+            // the persisted-absence value both resolve to Dark, so an existing
+            // install sees zero visual change on upgrade.
+            val appearanceMode by appPreferences.appearanceMode.collectAsState(initial = AppearanceMode.Dark)
             val useCustomAccent by appPreferences.useCustomAccent.collectAsState(initial = false)
             val customAccentHex by appPreferences.customAccentHex.collectAsState(initial = "")
             val customAccent = if (useCustomAccent && customAccentHex.length == 6) {
@@ -479,7 +484,11 @@ class MainActivity : ComponentActivity() {
                     )
                 }.getOrNull()
             } else null
-            AerioTVTheme(appTheme = theme, customAccent = customAccent) {
+            AerioTVTheme(
+                appTheme = theme,
+                customAccent = customAccent,
+                appearanceMode = appearanceMode,
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

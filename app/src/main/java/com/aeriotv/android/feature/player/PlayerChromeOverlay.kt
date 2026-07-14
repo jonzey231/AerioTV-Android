@@ -70,6 +70,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
@@ -108,6 +109,8 @@ import com.aeriotv.android.core.pip.enterPip16x9
 import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.core.pip.supportsPip
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
+import com.aeriotv.android.ui.theme.LocalAppTheme
+import com.aeriotv.android.ui.theme.TextPrimary
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.delay
 import java.text.DateFormat
@@ -870,6 +873,20 @@ private fun PlayerMoreMenu(
     // line 2098+. Material 3 DropdownMenuItem natively supports the
     // leadingIcon slot, so the visual treatment lines up without a
     // custom row wrapper.
+    // Player chrome floats over video: force the Options menu to the active
+    // theme's DARK rendition so it stays dark in Light / System-light mode too.
+    // Byte-identical in dark mode (surface/onSurface/surfaceVariant/primary
+    // already equal the dark scheme there); in light mode this prevents a white
+    // menu with dark-on-dark text.
+    val moreMenuTheme = LocalAppTheme.current
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = moreMenuTheme.accentPrimary,
+            surface = moreMenuTheme.cardBackground,
+            onSurface = TextPrimary,
+            surfaceVariant = moreMenuTheme.cardBackground,
+        ),
+    ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
@@ -1011,6 +1028,7 @@ private fun PlayerMoreMenu(
             },
             onClick = onAudioOnly,
         )
+    }
     }
 }
 

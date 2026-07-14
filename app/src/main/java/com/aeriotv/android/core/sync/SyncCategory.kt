@@ -31,7 +31,7 @@ enum class SyncCategory(
     ),
     Preferences(
         displayName = "App Preferences",
-        subtitle = "Theme, accent color, default tab, hidden groups, palette overrides",
+        subtitle = "Theme, appearance mode, accent color, default tab, hidden groups, palette overrides",
         fileName = "preferences.v1.json",
         storageSuffix = "preferences",
     ),

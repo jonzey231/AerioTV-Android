@@ -8,6 +8,7 @@ import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.network.TMDBService
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.ui.theme.AppTheme
+import com.aeriotv.android.ui.theme.AppearanceMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
@@ -31,6 +32,12 @@ class SettingsViewModel @Inject constructor(
     val selectedTheme: Flow<AppTheme> = prefs.selectedTheme
     fun setSelectedTheme(theme: AppTheme) {
         viewModelScope.launch { prefs.setSelectedTheme(theme) }
+    }
+
+    // Appearance mode (Dark / Light / System), orthogonal to selectedTheme.
+    val appearanceMode: Flow<AppearanceMode> = prefs.appearanceMode
+    fun setAppearanceMode(mode: AppearanceMode) {
+        viewModelScope.launch { prefs.setAppearanceMode(mode) }
     }
 
     val displayScaleMovies: Flow<Float> = prefs.displayScaleMovies
