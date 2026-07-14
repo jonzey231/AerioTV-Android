@@ -72,6 +72,16 @@ fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
             ch.rawAttributes["channel-id"],
             ch.rawAttributes["channel-uuid"],
             ch.rawAttributes["uuid"],
+            // GH #35: Dispatcharr Dummy / no-EPG grid programmes are keyed by
+            // str(channel.uuid) (Dispatcharr apps/epg/api_views.py::EPGGridAPIView),
+            // NOT the channel's real tvg-id. These are exactly the OTA subchannels
+            // that carry major.minor numbers like "5.1", so the guide looked blank
+            // for float-numbered channels. The server UUID lives only inside the
+            // channel id ("disp:<uuid>") and rawAttributes is empty for Dispatcharr
+            // channels, so expose the bare UUID here as a bridge candidate. Mirrors
+            // the iOS uuidToChannelID third key (EPGGuideView.swift:947). Derived
+            // from `id` (not rawAttributes) so cache-restored cold starts bridge too.
+            ch.id.takeIf { it.startsWith("disp:") }?.removePrefix("disp:"),
         )
         for (raw in candidates) {
             val key = raw.trim().lowercase()
