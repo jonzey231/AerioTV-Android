@@ -24,6 +24,13 @@ googleId = "1.2.0"
 work = "2.10.5"
 mediaCompat = "1.7.0"
 media3 = "1.4.1"
+# Google Cast. cast-framework is the phone/tablet SENDER (Cast button, session
+# manager, RemoteMediaClient). cast-tv is the Android-TV RECEIVER library
+# (Cast Connect: CastReceiverContext + MediaManager) that lets the AerioTV ATV
+# app play the raw-TS load with its OWN ExoPlayer instead of the web receiver.
+castFramework = "21.5.0"
+castTv = "21.1.1"
+mediarouter = "1.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -76,6 +83,9 @@ androidx-media3-datasource-okhttp = { group = "androidx.media3", name = "media3-
 androidx-media3-extractor = { group = "androidx.media3", name = "media3-extractor", version.ref = "media3" }
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
+play-services-cast-framework = { group = "com.google.android.gms", name = "play-services-cast-framework", version.ref = "castFramework" }
+play-services-cast-tv = { group = "com.google.android.gms", name = "play-services-cast-tv", version.ref = "castTv" }
+androidx-mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version.ref = "mediarouter" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

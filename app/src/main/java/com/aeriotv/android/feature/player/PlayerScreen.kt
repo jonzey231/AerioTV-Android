@@ -143,6 +143,13 @@ fun PlayerScreen(
     val exoHolder = remember { playerEntry.exoPlayerHolder() }
     val exoWindowState = remember { playerEntry.exoWindowState() }
     val timeshiftController = remember { playerEntry.timeshiftController() }
+    // Cast Connect (GH #33) sender. isCasting drives the local-vs-remote swap:
+    // while a cast session is connected we stop the local codec and mirror the
+    // channel identity to the Android-TV receiver instead of playing here.
+    val castSender = remember { playerEntry.castSender() }
+    val castReceiver = remember { playerEntry.castReceiver() }
+    val castState by castSender.state.collectAsStateWithLifecycle()
+    val isCasting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
 
     // Channel-flip state. The MPV view stays alive across flips; only the
     // current channel index changes and we call playFile again with the new URL.
@@ -324,11 +331,39 @@ fun PlayerScreen(
         onDispose { exoHolder.onTerminalErrorRebuildUrl = null }
     }
 
+    // Cast Connect (GH #33): free/restore the LOCAL codec + surface as the cast
+    // session comes and goes. Stopping (not just pausing) the holder releases the
+    // MediaCodec and stops phone-side audio while the TV plays; on disconnect we
+    // restore the fullscreen surface and the prime effect above re-tunes locally.
+    LaunchedEffect(isCasting) {
+        if (isCasting) {
+            runCatching { exoHolder.stop() }
+            runCatching { exoWindowState.hide() }
+        } else {
+            runCatching { exoWindowState.requestFullscreen() }
+        }
+    }
+
+    // GH #33 (receiver side): when THIS TV is playing a cast and the phone flips
+    // the channel, the receiver's Navigation routes the request here instead of
+    // re-navigating. Move currentIndex so the persistent ExoPlayer re-primes to
+    // the new channel in place -- no nav, no PiP-pop. No-op on the sending phone
+    // (the request flow stays null there).
+    val castFlipChannels by rememberUpdatedState(channels)
+    LaunchedEffect(Unit) {
+        castReceiver.castChannelRequest.collect { requestedId ->
+            if (requestedId == null) return@collect
+            val idx = castFlipChannels.indexOfFirst { it.id == requestedId }
+            if (idx >= 0) currentIndex = idx
+            castReceiver.consumeCastChannelRequest()
+        }
+    }
+
     // Channel-switch / first-mount setMediaItem: when the held Exo
     // player is on a different channel than the user just selected,
     // swap streams via setMediaSource. The PlayerView at MainActivity
     // root holds the surface across this so no reattach is required.
-    LaunchedEffect(currentChannel?.id) {
+    LaunchedEffect(currentChannel?.id, isCasting) {
         // Task #148 milestone B: catch-up mode never primes the LIVE stream
         // (and never starts a rewind buffer session below).
         if (isCatchupMode) return@LaunchedEffect
@@ -336,6 +371,28 @@ fun PlayerScreen(
         val ch = currentChannel ?: return@LaunchedEffect
         val url = ch.url
         if (url.isBlank()) return@LaunchedEffect
+        // Cast Connect (GH #33): while casting, don't prime the LOCAL codec.
+        // Mirror the channel IDENTITY to the Android-TV receiver, which rebuilds
+        // its own /proxy/ts/ URL and plays with its own ExoPlayer. A channel flip
+        // re-fires this and re-casts. The suspend effect below frees the local
+        // codec so the phone isn't decoding in parallel.
+        if (isCasting) {
+            castSender.setContent(
+                com.aeriotv.android.core.cast.AerioCastSender.Content(
+                    mediaId = ch.id,
+                    kind = com.aeriotv.android.core.cast.AerioCastReceiverController.Kind.LIVE,
+                    title = ch.name,
+                    subtitle = nowProgramme?.title,
+                    artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
+                ),
+            )
+            // The initial load launches the receiver via the entity deep link, but
+            // Cast Connect won't re-deliver a second load() to an already-running
+            // receiver -- so also push the channel over the reliable control
+            // channel, which re-tunes the TV in place on every flip (GH #33).
+            castSender.setRemoteChannel(ch.id)
+            return@LaunchedEffect
+        }
         // GH #22: also re-prime when the holder claims this channel but is
         // actually IDLE (a stop path that missed clearing currentChannelId).
         // Skipping the prime against a dead player was the silent-black-
@@ -723,7 +780,13 @@ fun PlayerScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME &&
                 windowWasShown &&
-                exoWindowState.mode.value == ExoWindowState.Mode.Hidden
+                exoWindowState.mode.value == ExoWindowState.Mode.Hidden &&
+                // GH #33: while this TV is a live Cast Connect receiver, a channel
+                // change arrives as a cast LOAD that relaunches MainActivity; the
+                // transient Hidden window during that relaunch is NOT a PiP-X
+                // dismiss, so don't pop to the guide -- the incoming deep link
+                // re-tunes the persistent player in place.
+                !castReceiver.isReceivingCast()
             ) {
                 Log.i(TAG, "resumed onto a hidden player window (PiP X-dismiss) -> popping player")
                 // GH #15: this pop lands on a fresh guide composition with the
@@ -1235,6 +1298,14 @@ fun PlayerScreen(
             chromeVisible = chromeVisible,
             pillVisible = pillVisible,
             isTv = isTvForm,
+            // Cast Connect (GH #33): phone/tablet Cast button, only on a build
+            // with a registered Cast App ID. Live channels cast their identity to
+            // the Android-TV receiver.
+            castSlot = if (!isTvForm && castSender.castConfigured) {
+                { com.aeriotv.android.feature.cast.CastIconButton(castSender) }
+            } else {
+                null
+            },
             // Focusable Retry in the standard controls while the stream is
             // unavailable (the center card's button can't take remote focus).
             connectionIssue = streamUnavailable,
@@ -1342,6 +1413,40 @@ fun PlayerScreen(
             sleepRemainingMillis = sleepRemainingMillis,
             onInteractingChange = { chromeMenuOpen = it },
         )
+
+        // GH #33 full-parity cast remote: while a Cast Connect session is live the
+        // local codec is stopped, so replace the (black) player with the phone
+        // remote -- transport, channel up/down, stop, and the same audio/subtitle/
+        // speed/aspect controls, all driving the Android-TV receiver over the
+        // custom control channel. Drawn last = on top of the (now-idle) chrome.
+        if (isCasting) {
+            val remoteState by castSender.remoteState.collectAsStateWithLifecycle()
+            val remoteIsPlaying by castSender.isPlaying.collectAsStateWithLifecycle()
+            com.aeriotv.android.feature.cast.CastRemoteOverlay(
+                deviceName = (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName,
+                channelTitle = currentChannel?.name.orEmpty(),
+                programmeTitle = nowProgramme?.title,
+                remoteState = remoteState,
+                isPlaying = remoteIsPlaying,
+                onTogglePlayPause = { castSender.togglePlayPause() },
+                onChannelUp = {
+                    if (channels.isNotEmpty() && currentIndex >= 0) {
+                        currentIndex = (currentIndex + 1).coerceIn(0, channels.lastIndex)
+                    }
+                },
+                onChannelDown = {
+                    if (channels.isNotEmpty() && currentIndex >= 0) {
+                        currentIndex = (currentIndex - 1).coerceIn(0, channels.lastIndex)
+                    }
+                },
+                onStopCasting = { castSender.stopCasting() },
+                onSetAudioTrack = { id -> castSender.setRemoteAudioTrack(id) },
+                onSetTextTrack = { id -> castSender.setRemoteTextTrack(id) },
+                onSetSpeed = { s -> castSender.setRemoteSpeed(s) },
+                onSetAspect = { mode -> castSender.setRemoteAspect(mode) },
+                onRefreshState = { castSender.requestRemoteState() },
+            )
+        }
     }
 
     // Auto-hide chrome after AUTO_HIDE_MS of inactivity. Phase 172:
@@ -1665,4 +1770,6 @@ interface PlayerScreenEntryPoint {
     fun exoPlayerHolder(): com.aeriotv.android.core.playback.AerioExoPlayerHolder
     fun exoWindowState(): ExoWindowState
     fun timeshiftController(): com.aeriotv.android.core.timeshift.TimeshiftController
+    fun castSender(): com.aeriotv.android.core.cast.AerioCastSender
+    fun castReceiver(): com.aeriotv.android.core.cast.AerioCastReceiverController
 }

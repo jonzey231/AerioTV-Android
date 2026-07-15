@@ -58,6 +58,7 @@ class AerioMediaPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var exoHolder: AerioExoPlayerHolder
     @Inject lateinit var browseTree: AutoBrowseTree
+    @Inject lateinit var castReceiver: com.aeriotv.android.core.cast.AerioCastReceiverController
 
     private var mediaSession: MediaLibrarySession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -81,6 +82,14 @@ class AerioMediaPlaybackService : MediaLibraryService() {
         mediaSession = MediaLibrarySession.Builder(this, player, LibraryCallback())
             .setSessionActivity(launchPi)
             .build()
+
+        // Cast Connect (GH #33): hand this session's token to the receiver so a
+        // sender casting to this Android TV sees live play/pause + now-playing
+        // metadata. getSessionCompatToken() is exactly the type MediaManager
+        // wants; the controller no-ops off-TV / without Cast, so this is safe on
+        // every device. Playback itself still runs through the shared ExoPlayer
+        // the receiver drives via the fullscreen player.
+        mediaSession?.let { castReceiver.publishSessionToken(it.sessionCompatToken) }
 
         // Let Media3 own the foreground notification so it shows the REAL
         // now-playing (channel name, programme, logo, play/pause/next) pulled

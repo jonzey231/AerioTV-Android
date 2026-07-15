@@ -525,8 +525,10 @@ class AerioExoPlayerHolder @Inject constructor(
             .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
             ?.value
         val f = OkHttpDataSource.Factory(liveHttpClient)
-            .setUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT)
-        val nonUaHeaders = h.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+            .setUserAgent(okHttpSafeUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT))
+        val nonUaHeaders = okHttpSafeHeaders(
+            h.filterKeys { !it.equals("User-Agent", ignoreCase = true) },
+        )
         if (nonUaHeaders.isNotEmpty()) f.setDefaultRequestProperties(nonUaHeaders)
         f.createDataSource()
     }
@@ -1060,11 +1062,73 @@ class AerioExoPlayerHolder @Inject constructor(
             .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
             ?.value
         val factory = OkHttpDataSource.Factory(liveHttpClient)
-            .setUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT)
-        val nonUaHeaders = httpHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+            .setUserAgent(okHttpSafeUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT))
+        val nonUaHeaders = okHttpSafeHeaders(
+            httpHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) },
+        )
         if (nonUaHeaders.isNotEmpty()) factory.setDefaultRequestProperties(nonUaHeaders)
         return factory
     }
+
+    /**
+     * GH #32: okhttp3 (the client behind the live + Android Auto DataSources)
+     * enforces strict RFC-7230 header validation and throws
+     * IllegalArgumentException on ANY header name/value byte that is < 0x20
+     * (except tab) or >= 0x7f. The old [DefaultHttpDataSource] path -- Android's
+     * vendored okhttp-2.x under HttpURLConnection, still used for VOD/DVR --
+     * silently accepted those bytes. So a Dispatcharr source carrying a stray
+     * non-ASCII / control char in a custom header (or a device whose Build.MODEL
+     * puts a non-ASCII char in the default UA) opened fine on VOD/DVR yet nuked
+     * LIVE playback: the throw fires inside OkHttpDataSource.open() building the
+     * request, propagates as Loader.UnexpectedLoaderException -> the terminal
+     * ERROR_CODE_IO_UNSPECIFIED ("Unexpected IllegalArgumentException") the user
+     * sees, and the picture stays black. Sanitize to exactly the set okhttp3
+     * permits: a clean value passes through byte-for-byte (reference-equal map
+     * returned, no behavior change for the 99% case), and only an illegal value
+     * is repaired -- matching what the lenient HttpURLConnection path effectively
+     * did. Never log the header VALUE (it may carry an API key); log only the
+     * name and that a repair happened, so the offending header is visible in a
+     * shared debug log without leaking the secret.
+     */
+    private fun okHttpSafeHeaders(headers: Map<String, String>): Map<String, String> {
+        if (headers.isEmpty()) return headers
+        var changed = false
+        val out = LinkedHashMap<String, String>(headers.size)
+        for ((name, value) in headers) {
+            if (!isOkHttpSafeHeaderName(name)) {
+                changed = true
+                Log.w(TAG, "GH#32: dropped request header with illegal name (len=${name.length}) for okhttp")
+                continue
+            }
+            val safe = sanitizeOkHttpHeaderValue(value)
+            if (safe !== value) {
+                changed = true
+                Log.w(TAG, "GH#32: stripped illegal char(s) from '$name' header value for okhttp")
+            }
+            out[name] = safe
+        }
+        return if (changed) out else headers
+    }
+
+    /** Sanitize a User-Agent for okhttp3; falls back to the default UA if the
+     *  value would otherwise be empty after stripping illegal chars. */
+    private fun okHttpSafeUserAgent(ua: String): String =
+        sanitizeOkHttpHeaderValue(ua).ifBlank { DEFAULT_PLAYBACK_USER_AGENT }
+
+    /** okhttp3 Headers.checkValue: legal chars are tab or 0x20..0x7e. Returns
+     *  the same instance when already clean (so callers can cheaply detect a
+     *  no-op via referential equality). */
+    private fun sanitizeOkHttpHeaderValue(value: String): String {
+        if (value.all { it == '\t' || it.code in 0x20..0x7e }) return value
+        return buildString(value.length) {
+            for (c in value) if (c == '\t' || c.code in 0x20..0x7e) append(c)
+        }
+    }
+
+    /** okhttp3 Headers.checkName: legal name chars are 0x21..0x7e (no space,
+     *  no control chars). An empty or otherwise illegal name is unrepairable. */
+    private fun isOkHttpSafeHeaderName(name: String): Boolean =
+        name.isNotEmpty() && name.all { it.code in 0x21..0x7e }
 
     /** OkHttp client for live playback. The long read timeout keeps a silent
      *  connection alive across Dispatcharr's server-side dead-source failover
@@ -1465,8 +1529,26 @@ class AerioExoPlayerHolder @Inject constructor(
             Log.w(
                 TAG,
                 "load error uri=${loadEventInfo.uri} " +
-                    "${error.javaClass.simpleName}: ${error.message}",
+                    "${error.javaClass.simpleName}: ${error.message}${causeChain(error)}",
             )
+        }
+
+        /** Append the CLASS names of the cause chain (GH #32). Media3 wraps an
+         *  unexpected RuntimeException from a DataSource as UnexpectedLoaderException
+         *  ("Unexpected IllegalArgumentException"), whose own message hides the real
+         *  fault class; walking .cause surfaces it. Deliberately logs class names
+         *  ONLY -- a cause message can embed a request header value (e.g. okhttp's
+         *  "Unexpected char ... in <name> value: <value>"), which may be a credential. */
+        private fun causeChain(error: Throwable): String {
+            val sb = StringBuilder()
+            var cause = error.cause
+            var depth = 0
+            while (cause != null && depth < 4) {
+                sb.append(" <- ").append(cause.javaClass.simpleName)
+                cause = cause.cause
+                depth++
+            }
+            return sb.toString()
         }
     }
 

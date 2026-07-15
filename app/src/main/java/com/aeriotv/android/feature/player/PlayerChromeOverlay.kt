@@ -140,6 +140,9 @@ fun PlayerChromeOverlay(
     pillVisible: Boolean = chromeVisible,
     isTv: Boolean = false,
     showChannelFlipHint: Boolean = false,
+    /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
+     *  bar. Null on TV and on any Cast-disabled build. */
+    castSlot: (@Composable () -> Unit)? = null,
     onClose: () -> Unit,
     onAddToMultiview: () -> Unit,
     onShowRecord: (ProgramInfoTarget) -> Unit,
@@ -566,6 +569,10 @@ fun PlayerChromeOverlay(
                             onToggleAudioOnly()
                         },
                     )
+                }
+                if (castSlot != null && !isTv) {
+                    Spacer(Modifier.width(8.dp))
+                    castSlot()
                 }
                 if (pipAvailable) {
                     Spacer(Modifier.width(8.dp))

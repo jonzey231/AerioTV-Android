@@ -656,28 +656,32 @@ fun VODPlayerScreen(
                     color = Color.White,
                 )
             }
-            // Close affordance still available during load / error.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
+            // Close affordance during load / error. Phone/tablet only: the X is
+            // not D-pad-reachable on TV (GH #32), so TV cancels a stuck load with
+            // the remote Back button (pops the nav back stack) instead.
+            if (!isTvForm) {
+                Row(
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.55f)),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
+                        .padding(horizontal = 12.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onClose) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Close",
-                            tint = Color.White,
-                        )
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        IconButton(onClick = onClose) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Close",
+                                tint = Color.White,
+                            )
+                        }
                     }
                 }
             }
@@ -1060,22 +1064,32 @@ fun VODPlayerScreen(
                         .padding(horizontal = 12.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.55f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        IconButton(onClick = onClose) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "Close",
-                                tint = Color.White,
-                            )
+                    // GH #32 (djkotik): the Close "X" and the Fullscreen toggle
+                    // below are phone affordances -- on Android TV the X is not
+                    // reachable by the D-pad and Fullscreen is meaningless (TV is
+                    // always landscape). Match the tvOS player, which compiles both
+                    // out (#if !os(tvOS) / #if os(iOS)) and exits via the remote
+                    // Back/Menu button; here VOD Back falls through onPreviewKeyEvent
+                    // to pop the nav back stack. TV keeps only the title + the
+                    // bottom transport row.
+                    if (!isTvForm) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            IconButton(onClick = onClose) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White,
+                                )
+                            }
                         }
+                        Spacer(Modifier.width(12.dp))
                     }
-                    Spacer(Modifier.width(12.dp))
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
@@ -1083,34 +1097,38 @@ fun VODPlayerScreen(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.55f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        IconButton(onClick = {
-                            forcedLandscape = !forcedLandscape
-                            context.findActivity()?.requestedOrientation = if (forcedLandscape) {
-                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-                            } else {
-                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                            }
-                        }) {
-                            Icon(
-                                imageVector = if (forcedLandscape) {
-                                    Icons.Filled.FullscreenExit
+                    if (!isTvForm) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            IconButton(onClick = {
+                                forcedLandscape = !forcedLandscape
+                                context.findActivity()?.requestedOrientation = if (forcedLandscape) {
+                                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
                                 } else {
-                                    Icons.Filled.Fullscreen
-                                },
-                                contentDescription = if (forcedLandscape) "Exit fullscreen" else "Fullscreen",
-                                tint = Color.White,
-                            )
+                                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = if (forcedLandscape) {
+                                        Icons.Filled.FullscreenExit
+                                    } else {
+                                        Icons.Filled.Fullscreen
+                                    },
+                                    contentDescription = if (forcedLandscape) "Exit fullscreen" else "Fullscreen",
+                                    tint = Color.White,
+                                )
+                            }
                         }
                     }
-                    if (pipAvailable) {
+                    // PiP is a phone/tablet affordance; the TV player has no PiP
+                    // button (tvOS parity), and the top-bar cluster is hidden on TV.
+                    if (!isTvForm && pipAvailable) {
                         Spacer(Modifier.width(8.dp))
                         Box(
                             modifier = Modifier

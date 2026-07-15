@@ -33,6 +33,7 @@ import com.aeriotv.android.core.tv.TvActionMenuDialog
 import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import androidx.compose.ui.Modifier
+import com.aeriotv.android.core.cast.AerioCastReceiverController
 import com.aeriotv.android.core.pip.PipState
 import com.aeriotv.android.core.playback.AerioExoPlayerHolder
 import com.aeriotv.android.core.preferences.AppPreferences
@@ -54,6 +55,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var miniPlayerSession: MiniPlayerSession
     @Inject lateinit var exoHolder: AerioExoPlayerHolder
     @Inject lateinit var exoWindowState: ExoWindowState
+    @Inject lateinit var castReceiver: AerioCastReceiverController
+    @Inject lateinit var castSender: com.aeriotv.android.core.cast.AerioCastSender
 
     /**
      * Most recent deep-link target the activity has received from a
@@ -252,6 +255,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        // Cast Connect (GH #33): a Cast LAUNCH arriving while the app is already
+        // up lands here (singleTop). Let MediaManager consume it first; if it was
+        // a cast load the receiver's load callback fires and drives playback via
+        // the loadRequests collector, so we skip deep-link parsing for it.
+        if (castReceiver.handleIntent(intent)) return
         // singleTop means a second LAUNCH/aeriotv:// intent arrives here
         // instead of recreating the activity. Capture the URI for the
         // Compose tree.
@@ -462,10 +471,36 @@ class MainActivity : ComponentActivity() {
         val initialUrl = if (BuildConfig.DEBUG) intent?.getStringExtra("url") else null
         val initialEpgUrl = if (BuildConfig.DEBUG) intent?.getStringExtra("epg") else null
         val initialApiKey = if (BuildConfig.DEBUG) intent?.getStringExtra("apikey") else null
+        // Cast Connect (GH #33) SENDER: warm CastContext so the phone/tablet can
+        // discover cast devices and show the Cast button. No-op on a Cast-disabled
+        // build (no App ID) or a device without Google Play services.
+        runCatching { castSender.warm(this) }
+        // Cast Connect (GH #33): observe validated cast loads and route each into
+        // the SAME deep-link path a channel/vod tap uses, so the fullscreen player
+        // mounts the persistent surface and plays the raw TS with video enabled.
+        // Starting the media service guarantees the MediaSession exists so the
+        // sender gets play/pause + now-playing status back. No-op off Android TV.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                castReceiver.loadRequests.collect { req ->
+                    deepLinkTarget.value = when (req.kind) {
+                        AerioCastReceiverController.Kind.LIVE ->
+                            DeepLinkTarget.Channel(req.mediaId)
+                        AerioCastReceiverController.Kind.VOD ->
+                            DeepLinkTarget.Vod(req.mediaId)
+                    }
+                    runCatching { AerioMediaPlaybackService.startBackground(this@MainActivity) }
+                }
+            }
+        }
+        // Cast Connect: the initial LAUNCH that started the activity as a receiver
+        // arrives as the launch intent. Hand it to MediaManager before deep-link
+        // parsing; if consumed, the load callback drives navigation above.
+        val castLaunch = castReceiver.handleIntent(intent)
         // Audit task #47: parse the launching intent's data URI for a
         // aeriotv:// deep link. The Compose tree consumes deepLinkTarget
         // via a top-level effect, navigates, then clears it.
-        captureDeepLinkFrom(intent)
+        if (!castLaunch) captureDeepLinkFrom(intent)
         setContent {
             val theme by appPreferences.selectedTheme.collectAsState(initial = AppTheme.Aerio)
             // DEFAULT MUST be Dark: the initial (pre-first-emission) value AND

@@ -61,6 +61,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var multiviewStore: MultiviewStore
     @Inject lateinit var memoryPressureBus: MemoryPressureBus
     @Inject lateinit var activeCredentials: ActivePlaylistCredentials
+    @Inject lateinit var castReceiver: com.aeriotv.android.core.cast.AerioCastReceiverController
     @Inject lateinit var playlistRepository: PlaylistRepository
     @Inject lateinit var playlistDao: PlaylistDao
     @Inject lateinit var aerioDatabase: AerioDatabase
@@ -132,6 +133,11 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // Track foreground state so reminders that fire while the app is open
         // surface as an in-app banner instead of a system notification.
         reminderBannerBus.bind()
+        // Cast Connect receiver (GH #33). No-op on phones/tablets and on any
+        // device without Google Play services; only an Android TV can be
+        // launched as a receiver. Wired here so the receiver is ready the moment
+        // a sender casts, before MainActivity forwards the LAUNCH intent.
+        castReceiver.bootstrap(this)
         // Live Rewind launch sweep (user clarification 2026-07-11: buffers
         // die an hour after the SESSION ends, "which may end up meaning it
         // should be deleted the NEXT time the app is launched").

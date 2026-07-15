@@ -9,6 +9,14 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Google Cast (GH #33) sender-side device discovery. The Cast SDK's mDNS
+         discovery runs in-process (androidx.mediarouter) and needs a Wi-Fi
+         multicast lock to receive the _googlecast._tcp advertisements; without
+         these two normal-protection permissions the phone finds zero cast
+         devices and the Cast button never appears. Neither is a location or
+         hardware-feature permission, so Android TV eligibility is unaffected. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- LAN URL switching probes the server over HTTP (LanReachability); no
          location or wifi-state permissions needed since the SSID is never
          read. Keeping the manifest free of location permissions also keeps
@@ -95,6 +103,21 @@
                 <data android:host="channel" />
                 <data android:host="vod" />
             </intent-filter>
+
+            <!--
+                Cast Connect (GH #33). When a phone sender launches AerioTV as an
+                Android-TV RECEIVER, the framework delivers this LAUNCH action to
+                MainActivity. Because the activity is singleTop and already fields
+                MAIN/LEANBACK launches and aeriotv:// deep links, onNewIntent /
+                the launch-intent handler must disambiguate a Cast LAUNCH (route
+                it to the fullscreen player so the persistent PlayerView surface
+                exists) from a normal launch and a deep link. Only meaningful on
+                Android TV devices; harmless elsewhere.
+            -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.cast.tv.action.LAUNCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <service
@@ -124,6 +147,26 @@
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
+
+        <!--
+            Google Cast (GH #33). SENDER options provider: names the class the
+            Cast framework instantiates to obtain CastOptions (receiver App ID +
+            Cast Connect launch flag) the first time CastContext is requested.
+            Init is gated on BuildConfig.CAST_RECEIVER_APP_ID being non-blank, so
+            a build without a registered Cast App ID never touches CastContext
+            and this provider is simply never called.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.aeriotv.android.core.cast.AerioCastOptionsProvider" />
+
+        <!--
+            Cast Connect RECEIVER options provider: on Android TV, names the
+            class supplying CastReceiverOptions when CastReceiverContext starts.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.cast.tv.RECEIVER_OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.aeriotv.android.core.cast.AerioReceiverOptionsProvider" />
 
         <receiver
             android:name=".feature.reminders.ReminderBroadcastReceiver"

@@ -69,6 +69,7 @@ import kotlinx.coroutines.launch
 @InstallIn(SingletonComponent::class)
 interface NavEntryPoint {
     fun appPreferences(): AppPreferences
+    fun castReceiver(): com.aeriotv.android.core.cast.AerioCastReceiverController
 }
 
 object Routes {
@@ -491,6 +492,11 @@ fun AerioTVNavHost(
                 // / missing card. For Vod, we navigate to movie detail
                 // without needing the OnDemand state to be loaded; the
                 // detail screen has its own resolver.
+                val castReceiverForFlip = remember {
+                    dagger.hilt.android.EntryPointAccessors.fromApplication(
+                        context.applicationContext, NavEntryPoint::class.java,
+                    ).castReceiver()
+                }
                 LaunchedEffect(deepLinkTarget, state.channels.size) {
                     val target = deepLinkTarget ?: return@LaunchedEffect
                     when (target) {
@@ -499,7 +505,21 @@ fun AerioTVNavHost(
                                 it.id == target.channelId && it.url.isNotBlank()
                             }
                             if (exists) {
-                                navController.navigate(Routes.player(target.channelId))
+                                // GH #33: a cast channel-flip arrives as a channel
+                                // deep link. If this TV is already on the live
+                                // player AND acting as a cast receiver, re-tune it
+                                // in place (PlayerScreen observes castChannelRequest)
+                                // instead of navigating a new player route, which
+                                // won't re-prime the persistent surface (device-
+                                // verified 2026-07-15). The first cast (on the guide)
+                                // still navigates normally.
+                                val onPlayer = navController.currentDestination
+                                    ?.route?.startsWith("player/") == true
+                                if (onPlayer && castReceiverForFlip.isReceivingCast()) {
+                                    castReceiverForFlip.requestCastChannel(target.channelId)
+                                } else {
+                                    navController.navigate(Routes.player(target.channelId))
+                                }
                                 onDeepLinkConsumed()
                             } else if (state.phase == PlaylistViewModel.Phase.ChannelsReady) {
                                 // Channels are loaded but the id isn't here --
