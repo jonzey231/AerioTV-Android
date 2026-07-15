@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -93,7 +94,9 @@ fun CastRemoteOverlay(
     onRecord: () -> Unit,
     onSleepMinutes: (Int) -> Unit,
     onSeekBy: (Long) -> Unit,
+    onSeekToWall: (Long) -> Unit,
     onGoLive: () -> Unit,
+    position: CastControl.PositionSnapshot,
     canSwitchStream: Boolean,
     canRecord: Boolean,
     onRefreshState: () -> Unit = {},
@@ -161,17 +164,46 @@ fun CastRemoteOverlay(
                 .padding(horizontal = 20.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Live-rewind controls (GH #33): only when a rewind buffer is rolling
-            // on the TV. Back/Forward 30s drive the receiver's timeshift buffer;
-            // the LIVE pill returns to the edge and only shows while rewound.
-            if (remoteState.canSeek) {
+            // Live-rewind controls (GH #33): a draggable scrubber + 30s FF/RW +
+            // LIVE pill, shown only when a rewind buffer is rolling on the TV.
+            // Driven by the receiver's ~1Hz position tick so the thumb crawls with
+            // playback; a drag commits ONE seekToWall on release (never per-frame,
+            // which would thrash the receiver's buffer re-opens).
+            if (position.canSeek) {
+                val span = (position.windowEndMs - position.windowStartMs).coerceAtLeast(1L)
+                var dragFraction by remember { mutableStateOf<Float?>(null) }
+                val liveFraction =
+                    ((position.positionWallMs - position.windowStartMs).toFloat() / span).coerceIn(0f, 1f)
+                val shownFraction = dragFraction ?: liveFraction
+                val behindMs = (span - (shownFraction * span).toLong()).coerceAtLeast(0L)
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    Slider(
+                        value = shownFraction,
+                        onValueChange = { dragFraction = it },
+                        onValueChangeFinished = {
+                            dragFraction?.let { f ->
+                                onSeekToWall(position.windowStartMs + (f * span).toLong())
+                            }
+                            dragFraction = null
+                        },
+                    )
+                    Text(
+                        text = if (position.isLive && dragFraction == null) {
+                            "LIVE"
+                        } else {
+                            "-${formatBehindLive(behindMs)} behind live"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.8f),
+                    )
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 16.dp),
+                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
                 ) {
                     RemoteButton(Icons.Filled.Replay30, "Back 30 seconds", { onSeekBy(-30_000L) })
-                    if (!remoteState.isLive) {
+                    if (!position.isLive) {
                         GoLivePill(onClick = onGoLive)
                     }
                     RemoteButton(Icons.Filled.Forward30, "Forward 30 seconds", { onSeekBy(30_000L) })
@@ -400,6 +432,15 @@ private fun GoLivePill(onClick: () -> Unit) {
             fontWeight = FontWeight.Bold,
         )
     }
+}
+
+/** Format a "behind live" duration as M:SS (or H:MM:SS past an hour). */
+private fun formatBehindLive(ms: Long): String {
+    val totalSec = (ms / 1000).coerceAtLeast(0)
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 @Composable

@@ -101,6 +101,11 @@ class AerioCastSender @Inject constructor() {
      *  by the phone's cast-remote pickers. Empty until the receiver answers. */
     val remoteState: StateFlow<CastControl.RemoteState> = _remoteState.asStateFlow()
 
+    private val _position = MutableStateFlow(CastControl.PositionSnapshot())
+    /** ~1Hz live-rewind playhead + window pushed by the receiver, driving the
+     *  cast-remote scrubber. Resets to a non-seekable default when idle. */
+    val position: StateFlow<CastControl.PositionSnapshot> = _position.asStateFlow()
+
     private val _isPlaying = MutableStateFlow(true)
     /** Whether the cast receiver is currently playing (vs paused). */
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -111,8 +116,9 @@ class AerioCastSender @Inject constructor() {
         if (ns != CastControl.NAMESPACE) return@MessageReceivedCallback
         runCatching {
             val json = JSONObject(message)
-            if (json.optString(CastControl.KEY_CMD) == CastControl.CMD_STATE) {
-                _remoteState.value = CastControl.decodeState(json)
+            when (json.optString(CastControl.KEY_CMD)) {
+                CastControl.CMD_STATE -> _remoteState.value = CastControl.decodeState(json)
+                CastControl.CMD_POSITION -> _position.value = CastControl.decodePosition(json)
             }
         }
     }
@@ -336,6 +342,7 @@ class AerioCastSender @Inject constructor() {
         runCatching { s.remoteMediaClient?.unregisterCallback(remoteClientCallback) }
         controlSession = null
         _remoteState.value = CastControl.RemoteState()
+        _position.value = CastControl.PositionSnapshot()
     }
 
     private fun refreshFromContext() {

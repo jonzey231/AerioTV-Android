@@ -149,6 +149,7 @@ fun PlayerScreen(
     val castSender = remember { playerEntry.castSender() }
     val castReceiver = remember { playerEntry.castReceiver() }
     val castState by castSender.state.collectAsStateWithLifecycle()
+    val castPosition by castSender.position.collectAsStateWithLifecycle()
     val isCasting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
 
     // Channel-flip state. The MPV view stays alive across flips; only the
@@ -1502,7 +1503,9 @@ fun PlayerScreen(
                     sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
                 },
                 onSeekBy = { delta -> castSender.seekBy(delta) },
+                onSeekToWall = { target -> castSender.seekToWall(target) },
                 onGoLive = { castSender.goLiveRemote() },
+                position = castPosition,
                 canSwitchStream = isDispatcharrLive,
                 canRecord = currentChannel?.dispatcharrChannelId != null,
                 onRefreshState = { castSender.requestRemoteState() },

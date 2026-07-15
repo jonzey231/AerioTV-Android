@@ -47,6 +47,9 @@ object CastControl {
     const val CMD_SEEK_WALL = "seekWall" // absolute wall-clock target ms (scrubber)
     const val CMD_GO_LIVE = "goLive" // jump the receiver back to the live edge
     const val CMD_STATE = "state" // receiver -> sender snapshot
+    // Lightweight ~1Hz position tick (receiver -> sender). Separate from CMD_STATE
+    // so the crawling scrubber never triggers the heavy full-track state rebuild.
+    const val CMD_POSITION = "position"
 
     // Command args.
     const val KEY_TRACK_ID = "id" // audio/text track id; setText with "" (or absent) = Off
@@ -172,4 +175,40 @@ object CastControl {
             windowEndMs = json.optLong(KEY_WINDOW_END_MS, 0L),
         )
     }
+
+    // ---- lightweight position tick (GH #33 cast scrubber) ----
+
+    /** The crawling scrubber's live playhead + rewind window, pushed ~1Hz. */
+    data class PositionSnapshot(
+        val canSeek: Boolean = false,
+        val isLive: Boolean = true,
+        val positionWallMs: Long = 0L,
+        val windowStartMs: Long = 0L,
+        val windowEndMs: Long = 0L,
+    )
+
+    /** Build a receiver->sender [CMD_POSITION] tick. */
+    fun positionMessage(
+        canSeek: Boolean,
+        isLive: Boolean,
+        positionWallMs: Long,
+        windowStartMs: Long,
+        windowEndMs: Long,
+    ): String = JSONObject().apply {
+        put(KEY_CMD, CMD_POSITION)
+        put(KEY_CAN_SEEK, canSeek)
+        put(KEY_IS_LIVE, isLive)
+        put(KEY_POSITION_WALL_MS, positionWallMs)
+        put(KEY_WINDOW_START_MS, windowStartMs)
+        put(KEY_WINDOW_END_MS, windowEndMs)
+    }.toString()
+
+    /** Parse a [CMD_POSITION] tick. */
+    fun decodePosition(json: JSONObject): PositionSnapshot = PositionSnapshot(
+        canSeek = json.optBoolean(KEY_CAN_SEEK, false),
+        isLive = json.optBoolean(KEY_IS_LIVE, true),
+        positionWallMs = json.optLong(KEY_POSITION_WALL_MS, 0L),
+        windowStartMs = json.optLong(KEY_WINDOW_START_MS, 0L),
+        windowEndMs = json.optLong(KEY_WINDOW_END_MS, 0L),
+    )
 }

@@ -29,11 +29,14 @@ import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.TaskCompletionSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
@@ -169,8 +172,48 @@ class AerioCastReceiverController @Inject constructor(
 
     private fun stop() {
         if (!initialized || !started) return
+        stopPositionTicker()
         runCatching { CastReceiverContext.getInstance().stop() }
         started = false
+    }
+
+    // GH #33 cast scrubber: broadcast a ~1Hz live-position tick to connected
+    // senders so the phone scrubber crawls. Started lazily on the first control
+    // message (avoids the version-fragile EventCallback API); self-heals off when
+    // no sender remains, and is cancelled when the receiver backgrounds (stop()).
+    private var positionTickerJob: Job? = null
+
+    private fun ensurePositionTicker() {
+        if (positionTickerJob?.isActive == true) return
+        positionTickerJob = scope.launch {
+            while (isActive) {
+                val senders = runCatching { CastReceiverContext.getInstance().senders }
+                    .getOrNull().orEmpty()
+                if (senders.isEmpty()) break
+                val win = runCatching { holder.rewindWindow() }.getOrNull()
+                val msg = CastControl.positionMessage(
+                    canSeek = win != null,
+                    isLive = runCatching { !holder.isTimeshifting }.getOrDefault(true),
+                    positionWallMs = runCatching { holder.currentRewindWallMs() }.getOrNull()
+                        ?: (win?.get(1) ?: 0L),
+                    windowStartMs = win?.get(0) ?: 0L,
+                    windowEndMs = win?.get(1) ?: 0L,
+                )
+                senders.forEach { s ->
+                    runCatching {
+                        CastReceiverContext.getInstance()
+                            .sendMessage(CastControl.NAMESPACE, s.senderId, msg)
+                    }
+                }
+                delay(1_000L)
+            }
+            positionTickerJob = null
+        }
+    }
+
+    private fun stopPositionTicker() {
+        positionTickerJob?.cancel()
+        positionTickerJob = null
     }
 
     /**
@@ -278,6 +321,8 @@ class AerioCastReceiverController @Inject constructor(
         override fun onMessageReceived(namespace: String, senderId: String?, message: String) {
             if (namespace != CastControl.NAMESPACE) return
             val json = runCatching { JSONObject(message) }.getOrNull() ?: return
+            // A live sender is present -> start the position tick (idempotent).
+            ensurePositionTicker()
             // ExoPlayer is single-threaded (main); scope is Main.immediate.
             scope.launch {
                 when (json.optString(CastControl.KEY_CMD)) {
