@@ -113,6 +113,20 @@ class AerioCastReceiverController @Inject constructor(
         _castChannelRequest.value = null
     }
 
+    /**
+     * GH #33 companion remote: open [mediaId] through the SAME validated
+     * load-request -> deep-link path a cast LOAD uses. MainActivity's collector
+     * works from ANY app state (guide, menus, idle, already playing) and the
+     * Navigation layer decides navigate-vs-in-place-re-tune, so the companion
+     * host doesn't need to know what's on the TV screen. Returns false when the
+     * channel doesn't resolve to something playable (unknown id / hidden).
+     */
+    suspend fun requestOpenChannel(mediaId: String): Boolean {
+        val playable = runCatching { browseTree.resolveForPlayback(mediaId) }.getOrNull() != null
+        if (playable) _loadRequests.trySend(CastLoadRequest(mediaId, Kind.LIVE))
+        return playable
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private var initialized = false
@@ -401,6 +415,20 @@ class AerioCastReceiverController @Inject constructor(
 
     /** Read the live player + aspect pref and push a full snapshot to [senderId]. */
     private suspend fun replyState(senderId: String) {
+        val msg = buildRemoteStateMessage()
+        runCatching {
+            CastReceiverContext.getInstance()
+                .sendMessage(CastControl.NAMESPACE, senderId, msg)
+        }
+    }
+
+    /**
+     * Build the full encoded remote-state snapshot. Shared by the Cast receiver's
+     * [replyState] AND the LAN companion host (GH #33 second-screen), so both
+     * remotes render the identical tracks / speed / aspect / stream-info / rewind
+     * snapshot from the same source of truth.
+     */
+    suspend fun buildRemoteStateMessage(): String {
         val p = holder.player
         val audio = runCatching { p?.readAudioTracks() }.getOrNull().orEmpty()
         val curAid = runCatching { p?.readCurrentAid() }.getOrNull()
@@ -429,10 +457,7 @@ class AerioCastReceiverController @Inject constructor(
             windowStartMs = win?.get(0) ?: 0L,
             windowEndMs = win?.get(1) ?: 0L,
         )
-        runCatching {
-            CastReceiverContext.getInstance()
-                .sendMessage(CastControl.NAMESPACE, senderId, CastControl.encodeState(state))
-        }
+        return CastControl.encodeState(state)
     }
 
     // Compose the same one-line labels the on-device Audio Track / Subtitles

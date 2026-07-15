@@ -14,6 +14,10 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.aeriotv.android.core.cast.AerioCastReceiverController
 import com.aeriotv.android.core.cast.CastControl
 import com.aeriotv.android.core.playback.AerioExoPlayerHolder
+import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.feature.player.applySpeed
+import com.aeriotv.android.feature.player.selectAudioTrack
+import com.aeriotv.android.feature.player.selectSubtitleTrack
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
@@ -66,6 +70,7 @@ class CompanionHostController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val holder: AerioExoPlayerHolder,
     private val castReceiver: AerioCastReceiverController,
+    private val appPrefs: AppPreferences,
 ) {
     private companion object {
         const val TAG = "CompanionHost"
@@ -213,7 +218,7 @@ class CompanionHostController @Inject constructor(
                     }
                     continue // ignore control commands until authenticated
                 }
-                if (type == null) handleControl(json) // CastControl "cmd" frame
+                if (type == null) handleControl(json, this) // CastControl "cmd" frame
             }
         } finally {
             unregisterSession(this)
@@ -251,11 +256,21 @@ class CompanionHostController @Inject constructor(
 
     // ---- Command executor (reuses the Cast receiver's rules; drives the shared player) ----
 
-    private fun handleControl(json: JSONObject) {
+    private fun handleControl(json: JSONObject, session: DefaultWebSocketSession) {
         scope.launch {
             when (json.optString(CastControl.KEY_CMD)) {
                 CastControl.CMD_SET_CHANNEL -> json.optString(CastControl.KEY_CHANNEL_ID)
-                    .takeIf { it.isNotBlank() }?.let { castReceiver.requestCastChannel(it) }
+                    .takeIf { it.isNotBlank() }?.let { id ->
+                        // Ride the SAME validated load-request -> deep-link path a
+                        // cast LOAD uses: MainActivity collects it from ANY app
+                        // state (guide, menus, idle, playing) and the Navigation
+                        // layer decides navigate-vs-in-place-re-tune. Direct
+                        // requestCastChannel would only work while the live
+                        // player is mounted (its collector lives in PlayerScreen).
+                        if (!castReceiver.requestOpenChannel(id)) {
+                            Log.w(TAG, "companion setChannel: channel not playable: $id")
+                        }
+                    }
                 CastControl.CMD_PLAY -> runCatching { holder.player?.play() }
                 CastControl.CMD_PAUSE -> runCatching { holder.player?.pause() }
                 CastControl.CMD_TOGGLE -> runCatching {
@@ -273,6 +288,35 @@ class CompanionHostController @Inject constructor(
                 CastControl.CMD_SET_AUDIO_ONLY -> runCatching {
                     holder.setVideoTrackEnabled(!json.optBoolean(CastControl.KEY_AUDIO_ONLY))
                 }
+                // Options parity with the Cast receiver (GH #33): the phone's full
+                // CastRemoteOverlay drives the companion path too, so mirror the
+                // receiver's audio/subtitle/speed/aspect handlers verbatim.
+                CastControl.CMD_SET_AUDIO -> runCatching {
+                    holder.player?.selectAudioTrack(
+                        json.optString(CastControl.KEY_TRACK_ID).toIntOrNull(),
+                    )
+                }
+                CastControl.CMD_SET_TEXT -> runCatching {
+                    holder.player?.selectSubtitleTrack(
+                        json.optString(CastControl.KEY_TRACK_ID).toIntOrNull(),
+                    )
+                }
+                CastControl.CMD_SET_SPEED -> runCatching {
+                    holder.player?.applySpeed(json.optDouble(CastControl.KEY_SPEED, 1.0).toFloat())
+                }
+                CastControl.CMD_SET_ASPECT -> runCatching {
+                    appPrefs.setPlayerAspectMode(
+                        CastControl.AspectMode.fromKey(json.optString(CastControl.KEY_ASPECT)).key,
+                    )
+                }
+                // CMD_GET_STATE: no action; the state reply below answers it.
+            }
+            // Mirror the Cast receiver's replyState: after EVERY command, push the
+            // full snapshot (tracks/speed/aspect/streamInfo/rewind) built by the
+            // SAME AerioCastReceiverController code path, so both remotes render
+            // identical pickers. Plus the lightweight position tick.
+            runCatching {
+                session.send(Frame.Text(castReceiver.buildRemoteStateMessage()))
             }
             pushPosition()
         }

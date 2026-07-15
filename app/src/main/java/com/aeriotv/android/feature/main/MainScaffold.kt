@@ -218,6 +218,18 @@ fun MainScaffold(
     val castState by castSender.state.collectAsStateWithLifecycle()
     val castContent by castSender.content.collectAsStateWithLifecycle()
     val castIsPlaying by castSender.isPlaying.collectAsStateWithLifecycle()
+    // GH #33 companion remote: same-pattern "Controlling <TV>" indicator card +
+    // tap-to-reopen-the-remote, mirroring the Now-Casting card below.
+    val companionRemote = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            MainScaffoldEntryPoint::class.java,
+        ).companionRemote()
+    }
+    val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
+    val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
+    val companionNowPlaying by companionRemote.nowPlaying.collectAsStateWithLifecycle()
+    val companionChannelId by companionRemote.currentChannelId.collectAsStateWithLifecycle()
     // Poll pause state from the held ExoPlayer so the mini-player's
     // Pause/Play icon stays accurate when the notification action /
     // BT button toggles playback elsewhere.
@@ -647,6 +659,46 @@ fun MainScaffold(
                             },
                             onTogglePlayPause = { castSender.togglePlayPause() },
                             onStop = { castSender.stopCasting() },
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                // GH #33 companion remote: "Controlling <TV>" card, same chrome as
+                // the Now-Casting card above. Tap -> reopen the remote; play/pause
+                // -> TV transport; x -> disconnect from the TV. Local playback is
+                // independent of controlling a TV, so this may coexist with the
+                // local mini-player card below (they stack).
+                val companionTv = companionConn
+                    as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
+                if (companionTv != null && !isTv) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                RoundedCornerShape(20.dp),
+                            ),
+                    ) {
+                        com.aeriotv.android.feature.miniplayer.CastMiniController(
+                            title = companionNowPlaying.ifBlank { companionTv.name ?: "AerioTV" },
+                            deviceName = companionTv.name,
+                            artUri = null,
+                            isPlaying = companionIsPlaying,
+                            onTap = {
+                                // Same re-entry as the cast card: open the player
+                                // for the channel this phone last sent to the TV;
+                                // PlayerScreen renders the full remote overlay in
+                                // companion mode. Falls back to the tracked title.
+                                val ch = state.channels.firstOrNull { it.id == companionChannelId }
+                                    ?: state.channels.firstOrNull { it.name == companionNowPlaying }
+                                if (ch != null) onChannelClick(ch)
+                            },
+                            onTogglePlayPause = { companionRemote.togglePlayPause() },
+                            onStop = { companionRemote.disconnect() },
+                            subtitle = "Controlling ${companionTv.name ?: "TV"}",
                         )
                     }
                     Spacer(Modifier.height(8.dp))
@@ -1233,6 +1285,7 @@ interface MainScaffoldEntryPoint {
     fun exoPlayerHolder(): AerioExoPlayerHolder
     fun exoWindowState(): com.aeriotv.android.feature.player.ExoWindowState
     fun castSender(): com.aeriotv.android.core.cast.AerioCastSender
+    fun companionRemote(): com.aeriotv.android.core.cast.companion.CompanionRemoteController
 }
 
 /** Two-step Add Playlist flow embedded in the Settings tab. None = closed. */

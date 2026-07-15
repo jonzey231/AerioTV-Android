@@ -54,6 +54,9 @@ fun CastMiniController(
     onTogglePlayPause: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Overrides the "Casting to <device>" line -- the companion remote reuses
+     *  this exact card with "Controlling <device>" (GH #33 second-screen). */
+    subtitle: String? = null,
 ) {
     Row(
         modifier = modifier
@@ -96,7 +99,8 @@ fun CastMiniController(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = if (!deviceName.isNullOrBlank()) "Casting to $deviceName" else "Tap to control",
+                text = subtitle
+                    ?: if (!deviceName.isNullOrBlank()) "Casting to $deviceName" else "Tap to control",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,

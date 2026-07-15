@@ -31,8 +31,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.mediarouter.media.MediaRouter
 import com.aeriotv.android.core.cast.AerioCastSender
+import com.aeriotv.android.core.cast.companion.CompanionDiscovery
+import com.aeriotv.android.core.cast.companion.CompanionRemoteController
 
 /**
  * Phone Cast button (GH #33) for the player chrome. Hidden when no cast route is
@@ -45,8 +52,19 @@ import com.aeriotv.android.core.cast.AerioCastSender
 fun CastIconButton(
     sender: AerioCastSender,
     modifier: Modifier = Modifier,
+    // GH #33 companion remote: the SAME picker also lists AerioTV TVs on the LAN
+    // (with inline pairing), so casting and companion-controlling share one flow.
+    companionRemote: CompanionRemoteController? = null,
+    companionDiscovery: CompanionDiscovery? = null,
+    /** Reports the chooser dialog's open state so the host can pin the player
+     *  chrome: this button lives INSIDE the auto-hiding chrome, and without the
+     *  pin the 4s auto-hide unmounts the button (and the dialog with it) before
+     *  the user can read the device list (GH #33 field report). */
+    onChooserOpenChange: (Boolean) -> Unit = {},
 ) {
     val state by sender.state.collectAsState()
+    val companionConn = companionRemote?.connection?.collectAsState()?.value
+    val companionConnected = companionConn is CompanionRemoteController.Conn.Connected
     // Discovery is driven app-wide by AerioCastSender (tied to the process
     // foreground lifecycle), so CastState is already current here and the button
     // shows the moment a registered device is found.
@@ -59,9 +77,11 @@ fun CastIconButton(
     // on the second once the scan settled (GH #33 field report). Gate only the
     // button on availability; keep the dialog resilient to a transient flicker.
     var showChooser by remember { mutableStateOf(false) }
-    val connected = state is AerioCastSender.State.Connected
+    LaunchedEffect(showChooser) { onChooserOpenChange(showChooser) }
+    DisposableEffect(Unit) { onDispose { onChooserOpenChange(false) } }
+    val connected = state is AerioCastSender.State.Connected || companionConnected
 
-    if (state !is AerioCastSender.State.Unavailable) {
+    if (state !is AerioCastSender.State.Unavailable || companionConnected) {
         Box(
             modifier = modifier
                 .size(44.dp)
@@ -85,7 +105,12 @@ fun CastIconButton(
     }
 
     if (showChooser) {
-        CastRouteChooserDialog(sender = sender, onDismiss = { showChooser = false })
+        CastRouteChooserDialog(
+            sender = sender,
+            companionRemote = companionRemote,
+            companionDiscovery = companionDiscovery,
+            onDismiss = { showChooser = false },
+        )
     }
 }
 
@@ -98,11 +123,38 @@ fun CastIconButton(
 @Composable
 private fun CastRouteChooserDialog(
     sender: AerioCastSender,
+    companionRemote: CompanionRemoteController?,
+    companionDiscovery: CompanionDiscovery?,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val state by sender.state.collectAsState()
     val connected = state is AerioCastSender.State.Connected
+
+    // GH #33 companion remote: browse for open AerioTV TVs while the chooser is
+    // up. A Google TV device typically appears BOTH as a Cast route (basic cast,
+    // web receiver) and as an AerioTV TV (full native remote) -- the user picks
+    // the transport. Pairing happens inline: pick a TV -> the TV shows a 6-digit
+    // code -> enter it here (remembered per-TV afterwards).
+    DisposableEffect(companionDiscovery) {
+        companionDiscovery?.start()
+        onDispose { companionDiscovery?.stop() }
+    }
+    val tvs = companionDiscovery?.devices?.collectAsState()?.value.orEmpty()
+    val companionConn = companionRemote?.connection?.collectAsState()?.value
+    var pairCode by remember { mutableStateOf("") }
+    // Freshly paired -> the chooser's job is done; the remote overlay takes over.
+    // TRANSITION-only: opening the chooser while ALREADY connected must NOT
+    // insta-dismiss it (the user may want to read the list / disconnect).
+    var connectedAtOpen by remember {
+        mutableStateOf(companionConn is CompanionRemoteController.Conn.Connected)
+    }
+    LaunchedEffect(companionConn) {
+        when {
+            companionConn !is CompanionRemoteController.Conn.Connected -> connectedAtOpen = false
+            !connectedAtOpen -> onDismiss()
+        }
+    }
 
     val selector = remember { sender.routeSelector() }
     val router = remember { runCatching { MediaRouter.getInstance(context) }.getOrNull() }
@@ -138,7 +190,9 @@ private fun CastRouteChooserDialog(
         title = { Text(if (connected) "Casting" else "Cast to") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (routes.isEmpty()) {
+                if (routes.isEmpty() && tvs.isEmpty() &&
+                    companionConn !is CompanionRemoteController.Conn.NeedsPairing
+                ) {
                     Text("Searching for devices...")
                 }
                 routes.forEach { route ->
@@ -146,6 +200,8 @@ private fun CastRouteChooserDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
+                                // Mutual exclusion: one remote target at a time.
+                                companionRemote?.disconnect()
                                 runCatching { router?.selectRoute(route) }
                                 onDismiss()
                             }
@@ -160,19 +216,73 @@ private fun CastRouteChooserDialog(
                         Text(route.name)
                     }
                 }
+                // AerioTV TVs (GH #33 companion remote). A pending pairing takes
+                // over the section with the code entry.
+                when (companionConn) {
+                    is CompanionRemoteController.Conn.NeedsPairing -> {
+                        Text("Enter the code shown on ${companionConn.name ?: "the TV"}")
+                        OutlinedTextField(
+                            value = pairCode,
+                            onValueChange = { v ->
+                                if (v.length <= 6 && v.all { it.isDigit() }) pairCode = v
+                            },
+                            label = { Text("6-digit code") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                            singleLine = true,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { companionRemote?.disconnect() }) { Text("Cancel") }
+                            TextButton(
+                                onClick = { companionRemote?.submitPairingCode(pairCode) },
+                                enabled = pairCode.length == 6,
+                            ) { Text("Pair") }
+                        }
+                    }
+                    is CompanionRemoteController.Conn.Connecting ->
+                        Text("Connecting to ${companionConn.name ?: "TV"}...")
+                    else -> tvs.forEach { tv ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    // Mutual exclusion with a live cast session.
+                                    sender.stopCasting()
+                                    companionRemote?.connect(tv)
+                                }
+                                .padding(vertical = 12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Tv,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 12.dp),
+                            )
+                            Column {
+                                Text(tv.name)
+                                Text(
+                                    "AerioTV Remote",
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                    color = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
-            if (connected) {
-                TextButton(onClick = {
+            when {
+                connected -> TextButton(onClick = {
                     sender.stopCasting()
                     onDismiss()
                 }) { Text("Stop casting") }
-            } else {
-                TextButton(onClick = onDismiss) { Text("Close") }
+                companionConn is CompanionRemoteController.Conn.Connected -> TextButton(onClick = {
+                    companionRemote?.disconnect()
+                    onDismiss()
+                }) { Text("Disconnect TV") }
+                else -> TextButton(onClick = onDismiss) { Text("Close") }
             }
         },
-        dismissButton = if (connected) {
+        dismissButton = if (connected || companionConn is CompanionRemoteController.Conn.Connected) {
             { TextButton(onClick = onDismiss) { Text("Close") } }
         } else {
             null

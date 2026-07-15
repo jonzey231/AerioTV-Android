@@ -75,6 +75,18 @@ class CompanionRemoteController @Inject constructor(
     private val _isPlaying = MutableStateFlow(true)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    // Best-effort title of what the TV is playing, for the "Controlling <TV>" mini
+    // card (GH #33): seeded from the hello frame, updated by every channel this
+    // phone sends. Blank when unknown.
+    private val _nowPlaying = MutableStateFlow("")
+    val nowPlaying: StateFlow<String> = _nowPlaying.asStateFlow()
+
+    // The last channel id this phone sent to the TV: dedups re-tunes (re-entering
+    // the player for the same channel must not re-issue setChannel) and resolves
+    // the card-tap re-entry target (GH #33).
+    private val _currentChannelId = MutableStateFlow<String?>(null)
+    val currentChannelId: StateFlow<String?> = _currentChannelId.asStateFlow()
+
     // ---- connection lifecycle ----
 
     fun connect(tv: CompanionDiscovery.Tv) {
@@ -117,6 +129,8 @@ class CompanionRemoteController @Inject constructor(
         _remoteState.value = CastControl.RemoteState()
         _position.value = CastControl.PositionSnapshot()
         _isPlaying.value = true
+        _nowPlaying.value = ""
+        _currentChannelId.value = null
         if (_connection.value !is Conn.Failed) _connection.value = Conn.Idle
     }
 
@@ -124,6 +138,8 @@ class CompanionRemoteController @Inject constructor(
         when (CompanionProtocol.typeOf(json)) {
             CompanionProtocol.T_HELLO -> {
                 deviceName = json.optString(CompanionProtocol.KEY_DEVICE_NAME).takeIf { it.isNotBlank() }
+                json.optString(CompanionProtocol.KEY_NOW_PLAYING).takeIf { it.isNotBlank() }
+                    ?.let { _nowPlaying.value = it }
             }
             CompanionProtocol.T_AUTH_OK -> {
                 json.optString(CompanionProtocol.KEY_TOKEN).takeIf { it.isNotBlank() }
@@ -148,8 +164,11 @@ class CompanionRemoteController @Inject constructor(
 
     // ---- command surface (mirrors AerioCastSender; bound by CastRemoteOverlay) ----
 
-    fun setRemoteChannel(channelId: String) =
+    fun setRemoteChannel(channelId: String, title: String? = null) {
+        title?.takeIf { it.isNotBlank() }?.let { _nowPlaying.value = it }
+        _currentChannelId.value = channelId
         send(CastControl.command(CastControl.CMD_SET_CHANNEL) { put(CastControl.KEY_CHANNEL_ID, channelId) })
+    }
 
     fun togglePlayPause() = send(CastControl.command(CastControl.CMD_TOGGLE))
     fun play() = send(CastControl.command(CastControl.CMD_PLAY))

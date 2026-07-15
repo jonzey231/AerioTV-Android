@@ -105,6 +105,8 @@ fun CastRemoteOverlay(
     canRecord: Boolean,
     onRefreshState: () -> Unit = {},
     modifier: Modifier = Modifier,
+    /** "Casting to" (Cast) vs "Controlling" (LAN companion remote, GH #33). */
+    statusVerb: String = "Casting to",
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -186,7 +188,7 @@ fun CastRemoteOverlay(
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "Casting to ${deviceName ?: "your TV"}",
+                text = "$statusVerb ${deviceName ?: "your TV"}",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,

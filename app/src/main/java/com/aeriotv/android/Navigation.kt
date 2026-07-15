@@ -505,17 +505,19 @@ fun AerioTVNavHost(
                                 it.id == target.channelId && it.url.isNotBlank()
                             }
                             if (exists) {
-                                // GH #33: a cast channel-flip arrives as a channel
-                                // deep link. If this TV is already on the live
-                                // player AND acting as a cast receiver, re-tune it
-                                // in place (PlayerScreen observes castChannelRequest)
-                                // instead of navigating a new player route, which
-                                // won't re-prime the persistent surface (device-
-                                // verified 2026-07-15). The first cast (on the guide)
-                                // still navigates normally.
+                                // GH #33: a cast OR companion channel-flip arrives
+                                // as a channel deep link. If this TV is already on
+                                // the live player, re-tune it in place (PlayerScreen
+                                // observes castChannelRequest) instead of navigating
+                                // a new player route, which won't re-prime the
+                                // persistent surface (device-verified 2026-07-15).
+                                // Applies to ANY channel deep link while on the
+                                // player -- cast flips, companion-remote flips, and
+                                // aeriotv:// links alike; a first open (on the
+                                // guide) still navigates normally.
                                 val onPlayer = navController.currentDestination
                                     ?.route?.startsWith("player/") == true
-                                if (onPlayer && castReceiverForFlip.isReceivingCast()) {
+                                if (onPlayer) {
                                     castReceiverForFlip.requestCastChannel(target.channelId)
                                 } else {
                                     navController.navigate(Routes.player(target.channelId))
@@ -562,9 +564,13 @@ fun AerioTVNavHost(
                 ) {
                 MainScaffold(
                     onChannelClick = { channel ->
-                        // launchSingleTop: a rapid double-tap (e.g. of the
-                        // Now-Casting mini controller, GH #33) can't stack two
-                        // identical player destinations on the back stack.
+                        // GH #33: while companion-connected or casting, this route
+                        // IS the remote -- PlayerScreen's remote mode mirrors the
+                        // channel to the TV (no local playback) and renders the
+                        // full CastRemoteOverlay, exactly like the cast flow.
+                        // launchSingleTop: a rapid double-tap (e.g. of a mini
+                        // controller card) can't stack two identical player
+                        // destinations on the back stack.
                         navController.navigate(Routes.player(channel.id)) {
                             launchSingleTop = true
                         }
