@@ -612,7 +612,12 @@ fun MainScaffold(
                 // these two cards never stack.
                 val casting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
                 val activeCastContent = castContent
-                if (casting && activeCastContent != null && !isTv) {
+                // Only LIVE content has a re-entry target today (the live cast
+                // remote). VOD casting has no phone remote yet, so don't show a
+                // card whose tap would dead-end (wire this on when VOD cast lands).
+                val castReentrySupported = activeCastContent?.kind ==
+                    com.aeriotv.android.core.cast.AerioCastReceiverController.Kind.LIVE
+                if (casting && activeCastContent != null && castReentrySupported && !isTv) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -643,8 +648,10 @@ fun MainScaffold(
                 // Phase 139 / audit #22: on TV the mini-player is a top-right
                 // video window (TvMiniPlayerOverlay, mounted at NavHost root).
                 // Suppress the phone-style card so we don't double-render the
-                // same session.
-                if (miniState is MiniPlayerSession.State.Active && !isTv) {
+                // same session. GH #33: also suppress it while casting so it can
+                // never stack under the Now-Casting card (a local mini session
+                // that was Active before the cast started would otherwise show).
+                if (miniState is MiniPlayerSession.State.Active && !isTv && !casting) {
                     val channel = miniState.channel
                     val nowProgramme = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
                     Box(

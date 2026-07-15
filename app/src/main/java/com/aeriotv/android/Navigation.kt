@@ -562,7 +562,12 @@ fun AerioTVNavHost(
                 ) {
                 MainScaffold(
                     onChannelClick = { channel ->
-                        navController.navigate(Routes.player(channel.id))
+                        // launchSingleTop: a rapid double-tap (e.g. of the
+                        // Now-Casting mini controller, GH #33) can't stack two
+                        // identical player destinations on the back stack.
+                        navController.navigate(Routes.player(channel.id)) {
+                            launchSingleTop = true
+                        }
                     },
                     onMovieClick = { movieUuid ->
                         navController.navigate(Routes.movieDetail(movieUuid))

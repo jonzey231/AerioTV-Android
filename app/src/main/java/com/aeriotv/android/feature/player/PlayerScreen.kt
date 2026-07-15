@@ -377,20 +377,29 @@ fun PlayerScreen(
         // re-fires this and re-casts. The suspend effect below frees the local
         // codec so the phone isn't decoding in parallel.
         if (isCasting) {
-            castSender.setContent(
-                com.aeriotv.android.core.cast.AerioCastSender.Content(
-                    mediaId = ch.id,
-                    kind = com.aeriotv.android.core.cast.AerioCastReceiverController.Kind.LIVE,
-                    title = ch.name,
-                    subtitle = nowProgramme?.title,
-                    artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
-                ),
-            )
-            // The initial load launches the receiver via the entity deep link, but
-            // Cast Connect won't re-deliver a second load() to an already-running
-            // receiver -- so also push the channel over the reliable control
-            // channel, which re-tunes the TV in place on every flip (GH #33).
-            castSender.setRemoteChannel(ch.id)
+            // Re-tune the receiver ONLY on a genuine channel change. Re-entering
+            // the player from the Now-Casting mini controller re-fires this effect
+            // for the SAME channel; without this guard we'd re-issue setContent()
+            // (an autoplay load) + setRemoteChannel and make the TV needlessly
+            // reload/flicker the feed it is already playing. The sender's current
+            // content mediaId is the source of truth for "what the TV is on".
+            val alreadyCastingThisChannel = castSender.content.value?.mediaId == ch.id
+            if (!alreadyCastingThisChannel) {
+                castSender.setContent(
+                    com.aeriotv.android.core.cast.AerioCastSender.Content(
+                        mediaId = ch.id,
+                        kind = com.aeriotv.android.core.cast.AerioCastReceiverController.Kind.LIVE,
+                        title = ch.name,
+                        subtitle = nowProgramme?.title,
+                        artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
+                    ),
+                )
+                // The initial load launches the receiver via the entity deep link,
+                // but Cast Connect won't re-deliver a second load() to an already-
+                // running receiver -- so also push the channel over the reliable
+                // control channel, which re-tunes the TV in place on every flip.
+                castSender.setRemoteChannel(ch.id)
+            }
             return@LaunchedEffect
         }
         // GH #22: also re-prime when the holder claims this channel but is
@@ -555,6 +564,14 @@ fun PlayerScreen(
             // there is no explicit Stop in fullscreen or the mini).
             exoWindowState.requestMini()
             miniPlayerVm.showMiniPlayer()
+            onClose()
+        } else if (isCasting) {
+            // GH #33: while casting there is NO local playback to keep alive
+            // (LaunchedEffect(isCasting) stopped the local codec). Back just
+            // returns to the scaffold, where the persistent "Now Casting" mini
+            // controller is the re-entry point. Arming the local audio-only mini
+            // here would both start phone-side background audio during the cast
+            // AND stack a second card under the cast controller.
             onClose()
         } else {
             // Phone Back: promote to bottom-bar audio-only mini chip,

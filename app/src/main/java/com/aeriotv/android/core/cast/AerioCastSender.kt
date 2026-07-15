@@ -146,10 +146,15 @@ class AerioCastSender @Inject constructor() {
         override fun onSessionResuming(session: CastSession, sessionId: String) {
             _state.value = State.Connecting(session.castDevice?.friendlyName)
         }
-        override fun onSessionEnded(session: CastSession, error: Int) = refreshFromContext()
+        // A true END clears the cast content (hides the Now-Casting controller).
+        // A SUSPEND is transient (network blip / brief background) -- keep content
+        // so the controller reappears on resume; the render gate on state==Connected
+        // already hides it during the gap. onCastState below drops state to
+        // Available/Unavailable during the suspend, which is the correct hide.
+        override fun onSessionEnded(session: CastSession, error: Int) = endCleanup()
         override fun onSessionSuspended(session: CastSession, reason: Int) = refreshFromContext()
-        override fun onSessionStartFailed(session: CastSession, error: Int) = refreshFromContext()
-        override fun onSessionResumeFailed(session: CastSession, error: Int) = refreshFromContext()
+        override fun onSessionStartFailed(session: CastSession, error: Int) = endCleanup()
+        override fun onSessionResumeFailed(session: CastSession, error: Int) = endCleanup()
         override fun onSessionEnding(session: CastSession) {}
     }
 
@@ -321,9 +326,15 @@ class AerioCastSender @Inject constructor() {
 
     private fun refreshFromContext() {
         pending = null
-        _content.value = null
         detachControl()
         runCatching { CastContext.getSharedInstance()?.castState?.let { onCastState(it) } }
+    }
+
+    /** Terminal teardown: the session truly ended (not a transient suspend), so
+     *  drop the cast content that drives the Now-Casting mini controller too. */
+    private fun endCleanup() {
+        _content.value = null
+        refreshFromContext()
     }
 
     private fun onCastState(castState: Int) {
