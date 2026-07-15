@@ -2,6 +2,7 @@ package com.aeriotv.android.feature.cast
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +46,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -116,26 +118,36 @@ fun CastRemoteOverlay(
     androidx.compose.runtime.LaunchedEffect(Unit) { onRefreshState() }
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        // Top bar: minimize back to browsing. The cast keeps playing; the
-        // Now-Casting mini controller reappears on the tabs so a new channel can
-        // be picked (GH #33 - Stop below still ends the cast entirely).
+        // Top bar: minimize back to browsing, by tap OR a downward drag. The
+        // cast keeps playing; the Now-Casting mini controller reappears on the
+        // tabs so a new channel can be picked (GH #33 - Stop below ends the cast).
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 6.dp, vertical = 6.dp),
+                .pointerInput(Unit) {
+                    var draggedDown = 0f
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (draggedDown > 100f) onMinimize()
+                            draggedDown = 0f
+                        },
+                        onDragCancel = { draggedDown = 0f },
+                    ) { _, dy -> if (dy > 0) draggedDown += dy }
+                }
+                .clickable(onClick = onMinimize)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onMinimize) {
-                Icon(
-                    imageVector = Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "Back to browse",
-                    tint = Color.White,
-                )
-            }
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = Color.White,
+            )
+            Spacer(Modifier.width(6.dp))
             Text(
-                text = "Browse channels",
+                text = "Tap/Drag here to return to Guide",
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.White.copy(alpha = 0.85f),
             )
