@@ -86,6 +86,12 @@ class AerioCastSender @Inject constructor() {
      *  loads what is on screen. Cleared when the session ends. */
     private var pending: Content? = null
 
+    // The content currently being cast, exposed so an app-wide "Now Casting" mini
+    // controller (GH #33) can render its title/art and re-enter the player remote
+    // after the user leaves the player screen. Null when nothing is cast.
+    private val _content = MutableStateFlow<Content?>(null)
+    val content: StateFlow<Content?> = _content.asStateFlow()
+
     // --- Full-parity cast remote (GH #33). Transport (play/pause) rides
     // RemoteMediaClient; the receiver-only controls (audio/subtitle/speed/aspect)
     // ride the [CastControl] custom channel. Both reset when the session ends. ---
@@ -237,6 +243,7 @@ class AerioCastSender @Inject constructor() {
      *  held until one connects. */
     fun setContent(content: Content?) {
         pending = content
+        _content.value = content
         val session = currentSession() ?: return
         if (content != null) loadOnSession(session, content)
     }
@@ -314,6 +321,7 @@ class AerioCastSender @Inject constructor() {
 
     private fun refreshFromContext() {
         pending = null
+        _content.value = null
         detachControl()
         runCatching { CastContext.getSharedInstance()?.castState?.let { onCastState(it) } }
     }

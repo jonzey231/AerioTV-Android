@@ -207,6 +207,17 @@ fun MainScaffold(
             MainScaffoldEntryPoint::class.java,
         ).exoPlayerHolder()
     }
+    // GH #33 re-entry: an app-wide "Now Casting" mini controller above the tab
+    // bar so the user can re-open the cast remote after leaving the player.
+    val castSender = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            MainScaffoldEntryPoint::class.java,
+        ).castSender()
+    }
+    val castState by castSender.state.collectAsStateWithLifecycle()
+    val castContent by castSender.content.collectAsStateWithLifecycle()
+    val castIsPlaying by castSender.isPlaying.collectAsStateWithLifecycle()
     // Poll pause state from the held ExoPlayer so the mini-player's
     // Pause/Play icon stays accurate when the notification action /
     // BT button toggles playback elsewhere.
@@ -593,6 +604,41 @@ fun MainScaffold(
                     .padding(bottom = 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // GH #33 re-entry: while a Cast Connect session is active, show a
+                // "Now Casting" card above the tab bar (phone only -- TV is the
+                // receiver). Tapping it re-enters the player for the cast channel,
+                // which renders the full CastRemoteOverlay. The local mini-player
+                // is suppressed while casting (casting stops local playback), so
+                // these two cards never stack.
+                val casting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
+                val activeCastContent = castContent
+                if (casting && activeCastContent != null && !isTv) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                RoundedCornerShape(20.dp),
+                            ),
+                    ) {
+                        com.aeriotv.android.feature.miniplayer.CastMiniController(
+                            title = activeCastContent.title,
+                            deviceName = (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName,
+                            artUri = activeCastContent.artUri,
+                            isPlaying = castIsPlaying,
+                            onTap = {
+                                val ch = state.channels.firstOrNull { it.id == activeCastContent.mediaId }
+                                if (ch != null) onChannelClick(ch)
+                            },
+                            onTogglePlayPause = { castSender.togglePlayPause() },
+                            onStop = { castSender.stopCasting() },
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right
                 // video window (TvMiniPlayerOverlay, mounted at NavHost root).
@@ -1172,6 +1218,7 @@ internal fun visibleTabs(
 interface MainScaffoldEntryPoint {
     fun exoPlayerHolder(): AerioExoPlayerHolder
     fun exoWindowState(): com.aeriotv.android.feature.player.ExoWindowState
+    fun castSender(): com.aeriotv.android.core.cast.AerioCastSender
 }
 
 /** Two-step Add Playlist flow embedded in the Settings tab. None = closed. */
