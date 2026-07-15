@@ -1501,6 +1501,8 @@ fun PlayerScreen(
                 onSleepMinutes = { minutes ->
                     sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
                 },
+                onSeekBy = { delta -> castSender.seekBy(delta) },
+                onGoLive = { castSender.goLiveRemote() },
                 canSwitchStream = isDispatcharrLive,
                 canRecord = currentChannel?.dispatcharrChannelId != null,
                 onRefreshState = { castSender.requestRemoteState() },

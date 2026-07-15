@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
@@ -27,7 +28,9 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
@@ -89,6 +92,8 @@ fun CastRemoteOverlay(
     onSwitchStream: () -> Unit,
     onRecord: () -> Unit,
     onSleepMinutes: (Int) -> Unit,
+    onSeekBy: (Long) -> Unit,
+    onGoLive: () -> Unit,
     canSwitchStream: Boolean,
     canRecord: Boolean,
     onRefreshState: () -> Unit = {},
@@ -148,29 +153,50 @@ fun CastRemoteOverlay(
         }
 
         // Bottom transport + options bar.
-        Row(
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp, vertical = 28.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            RemoteButton(Icons.Filled.KeyboardArrowDown, "Channel down", onChannelDown)
-            RemoteButton(
-                icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                desc = if (isPlaying) "Pause" else "Play",
-                onClick = onTogglePlayPause,
-                emphasized = true,
-            )
-            RemoteButton(Icons.Filled.KeyboardArrowUp, "Channel up", onChannelUp)
-            Spacer(Modifier.width(6.dp))
-            RemoteButton(Icons.Filled.Tune, "Options", {
-                onRefreshState()
-                optionsOpen = true
-            })
-            RemoteButton(Icons.Filled.Close, "Stop casting", onStopCasting)
+            // Live-rewind controls (GH #33): only when a rewind buffer is rolling
+            // on the TV. Back/Forward 30s drive the receiver's timeshift buffer;
+            // the LIVE pill returns to the edge and only shows while rewound.
+            if (remoteState.canSeek) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                ) {
+                    RemoteButton(Icons.Filled.Replay30, "Back 30 seconds", { onSeekBy(-30_000L) })
+                    if (!remoteState.isLive) {
+                        GoLivePill(onClick = onGoLive)
+                    }
+                    RemoteButton(Icons.Filled.Forward30, "Forward 30 seconds", { onSeekBy(30_000L) })
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RemoteButton(Icons.Filled.KeyboardArrowDown, "Channel down", onChannelDown)
+                RemoteButton(
+                    icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    desc = if (isPlaying) "Pause" else "Play",
+                    onClick = onTogglePlayPause,
+                    emphasized = true,
+                )
+                RemoteButton(Icons.Filled.KeyboardArrowUp, "Channel up", onChannelUp)
+                Spacer(Modifier.width(6.dp))
+                RemoteButton(Icons.Filled.Tune, "Options", {
+                    onRefreshState()
+                    optionsOpen = true
+                })
+                RemoteButton(Icons.Filled.Close, "Stop casting", onStopCasting)
+            }
         }
     }
 
@@ -346,6 +372,33 @@ private fun RemoteButton(
                 modifier = Modifier.size(if (emphasized) 32.dp else 26.dp),
             )
         }
+    }
+}
+
+/** Red "LIVE" pill shown while the cast is rewound; tap returns to the live edge. */
+@Composable
+private fun GoLivePill(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xFFD32F2F))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .clip(CircleShape)
+                .background(Color.White),
+        )
+        Text(
+            text = "LIVE",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 

@@ -891,6 +891,27 @@ class AerioExoPlayerHolder @Inject constructor(
         playUrl(url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
     }
 
+    // GH #33 cast rewind: read-only accessors so the cast RECEIVER can drive the
+    // SAME rewind buffer the on-TV chrome scrubs (via playTimeshift/goLive) and
+    // report the window/playhead back to the phone remote, without the receiver
+    // needing its own TimeshiftController reference. Reads run on the ExoPlayer
+    // main thread (the cast control listener's Main.immediate scope).
+
+    /** Current wall-clock playhead while rewound, or null at the live edge / no
+     *  session. Mirrors the on-TV formula (baseWallMs + raw player position). */
+    fun currentRewindWallMs(): Long? =
+        if (isTimeshifting) {
+            timeshift.get().state.value.baseWallMs + (player?.currentPosition ?: 0L)
+        } else {
+            null
+        }
+
+    /** The rewind window as [tailWallMs, headWallMs], read FRESH off the active
+     *  writer (the non-lagging source the on-TV commitScrubWall also reads), or
+     *  null when no rewind session is rolling. */
+    fun rewindWindow(): LongArray? =
+        timeshift.get().activeWriter?.let { longArrayOf(it.tailWallMs, it.headWallMs) }
+
     /** True while the shared player runs a catch-up (server archive)
      *  replay inside the unified live player (task #148). Gates the same
      *  live-only machinery [isTimeshifting] gates - the stall watchdog,

@@ -42,18 +42,30 @@ object CastControl {
     // Audio-only: drop the receiver's video track (keeps decoding audio). Bool arg.
     const val CMD_SET_AUDIO_ONLY = "setAudioOnly"
     const val KEY_AUDIO_ONLY = "audioOnly"
+    // GH #33 live-rewind cast controls: drive the receiver's timeshift buffer.
+    const val CMD_SEEK_BY = "seekBy" // signed delta ms (e.g. -30000 / +30000)
+    const val CMD_SEEK_WALL = "seekWall" // absolute wall-clock target ms (scrubber)
+    const val CMD_GO_LIVE = "goLive" // jump the receiver back to the live edge
     const val CMD_STATE = "state" // receiver -> sender snapshot
 
     // Command args.
     const val KEY_TRACK_ID = "id" // audio/text track id; setText with "" (or absent) = Off
     const val KEY_SPEED = "speed" // Double
     const val KEY_ASPECT = "aspect" // AspectMode.key
+    const val KEY_DELTA_MS = "deltaMs" // Long, CMD_SEEK_BY
+    const val KEY_TARGET_WALL_MS = "targetWallMs" // Long, CMD_SEEK_WALL
 
     // State snapshot fields.
     const val KEY_AUDIO = "audio" // JSONArray<track>
     const val KEY_TEXT = "text" // JSONArray<track> (does NOT include the implicit Off row)
     const val KEY_TEXT_OFF = "textOff" // Boolean: true when no subtitle is selected
     const val KEY_STREAM_INFO = "streamInfo" // String: receiver-composed decode summary
+    // Live-rewind snapshot fields (GH #33 cast scrubber / FF-RW).
+    const val KEY_CAN_SEEK = "canSeek" // Boolean: a rewind session is rolling on the TV
+    const val KEY_IS_LIVE = "isLive" // Boolean: playing the live edge (vs rewound)
+    const val KEY_POSITION_WALL_MS = "positionWallMs" // Long
+    const val KEY_WINDOW_START_MS = "windowStartMs" // Long (= tailWallMs)
+    const val KEY_WINDOW_END_MS = "windowEndMs" // Long (= headWallMs)
     // Track object fields.
     const val KEY_ID = "id"
     const val KEY_LABEL = "label"
@@ -76,6 +88,16 @@ object CastControl {
         val audioOnly: Boolean = false,
         /** Receiver-composed one-line decode summary for the Stream Info sheet. */
         val streamInfo: String = "",
+        /** True when a rewind session is rolling on the TV (seek controls shown). */
+        val canSeek: Boolean = false,
+        /** True when playing the live edge; false when rewound into the buffer. */
+        val isLive: Boolean = true,
+        /** Current wall-clock playhead (epoch ms) while rewound. */
+        val positionWallMs: Long = 0L,
+        /** Rewind window start (oldest available) wall-clock ms (= tailWallMs). */
+        val windowStartMs: Long = 0L,
+        /** Rewind window end (live edge) wall-clock ms (= headWallMs). */
+        val windowEndMs: Long = 0L,
     )
 
     /**
@@ -111,6 +133,11 @@ object CastControl {
         put(KEY_ASPECT, state.aspect.key)
         put(KEY_AUDIO_ONLY, state.audioOnly)
         put(KEY_STREAM_INFO, state.streamInfo)
+        put(KEY_CAN_SEEK, state.canSeek)
+        put(KEY_IS_LIVE, state.isLive)
+        put(KEY_POSITION_WALL_MS, state.positionWallMs)
+        put(KEY_WINDOW_START_MS, state.windowStartMs)
+        put(KEY_WINDOW_END_MS, state.windowEndMs)
     }.toString()
 
     private fun trackJson(t: Track) = JSONObject().apply {
@@ -138,6 +165,11 @@ object CastControl {
             aspect = AspectMode.fromKey(json.optString(KEY_ASPECT)),
             audioOnly = json.optBoolean(KEY_AUDIO_ONLY, false),
             streamInfo = json.optString(KEY_STREAM_INFO),
+            canSeek = json.optBoolean(KEY_CAN_SEEK, false),
+            isLive = json.optBoolean(KEY_IS_LIVE, true),
+            positionWallMs = json.optLong(KEY_POSITION_WALL_MS, 0L),
+            windowStartMs = json.optLong(KEY_WINDOW_START_MS, 0L),
+            windowEndMs = json.optLong(KEY_WINDOW_END_MS, 0L),
         )
     }
 }

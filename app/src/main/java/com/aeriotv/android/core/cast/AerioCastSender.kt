@@ -293,6 +293,20 @@ class AerioCastSender @Inject constructor() {
     fun setRemoteAudioOnly(on: Boolean) =
         sendControl(CastControl.command(CastControl.CMD_SET_AUDIO_ONLY) { put(CastControl.KEY_AUDIO_ONLY, on) })
 
+    // GH #33 live-rewind controls: drive the receiver's timeshift buffer. The
+    // receiver clamps to its own rewind window and echoes a fresh state snapshot.
+    /** Skip the TV's live-rewind playhead by a signed delta (e.g. -30000/+30000). */
+    fun seekBy(deltaMs: Long) =
+        sendControl(CastControl.command(CastControl.CMD_SEEK_BY) { put(CastControl.KEY_DELTA_MS, deltaMs) })
+
+    /** Seek the TV's live-rewind playhead to an absolute wall-clock target (scrubber). */
+    fun seekToWall(targetWallMs: Long) =
+        sendControl(CastControl.command(CastControl.CMD_SEEK_WALL) { put(CastControl.KEY_TARGET_WALL_MS, targetWallMs) })
+
+    /** Jump the TV back to the live edge. */
+    fun goLiveRemote() =
+        sendControl(CastControl.command(CastControl.CMD_GO_LIVE))
+
     private fun sendControl(message: String) {
         val session = currentSession() ?: return
         runCatching { session.sendMessage(CastControl.NAMESPACE, message) }

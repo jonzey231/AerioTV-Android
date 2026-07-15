@@ -320,11 +320,36 @@ class AerioCastReceiverController @Inject constructor(
                         val on = json.optBoolean(CastControl.KEY_AUDIO_ONLY)
                         runCatching { holder.setVideoTrackEnabled(!on) }
                     }
+                    // Live-rewind seeks drive the SAME timeshift buffer the on-TV
+                    // chrome scrubs (holder.playTimeshift/goLive). Falls through to
+                    // replyState so the phone gets the post-seek position echo.
+                    CastControl.CMD_GO_LIVE -> runCatching { holder.goLive() }
+                    CastControl.CMD_SEEK_BY -> runCatching {
+                        val delta = json.optLong(CastControl.KEY_DELTA_MS)
+                        // Base off the current playhead if rewound, else the live edge.
+                        val base = holder.currentRewindWallMs() ?: holder.rewindWindow()?.get(1)
+                        if (base != null) commitRewindSeek(base + delta)
+                    }
+                    CastControl.CMD_SEEK_WALL -> runCatching {
+                        commitRewindSeek(json.optLong(CastControl.KEY_TARGET_WALL_MS))
+                    }
                     else -> return@launch
                 }
                 senderId?.let { replyState(it) }
             }
         }
+    }
+
+    /** Clamp + apply a rewind seek to an absolute wall-clock target, reusing the
+     *  on-TV chrome's commitScrubWall rule (PlayerScreen.commitScrubWall): read
+     *  the window FRESH, snap to live within 5s of the head, else re-open the
+     *  timeshift buffer at the clamped target. No-ops when no session is rolling. */
+    private fun commitRewindSeek(target: Long) {
+        val w = holder.rewindWindow() ?: return
+        val tail = w[0]
+        val head = w[1]
+        if (target >= head - 5_000) holder.goLive()
+        else holder.playTimeshift(target.coerceAtLeast(tail))
     }
 
     /** Read the live player + aspect pref and push a full snapshot to [senderId]. */
@@ -338,6 +363,7 @@ class AerioCastReceiverController @Inject constructor(
         val aspect = CastControl.AspectMode.fromKey(
             runCatching { prefs.playerAspectMode.first() }.getOrNull(),
         )
+        val win = runCatching { holder.rewindWindow() }.getOrNull()
         val state = CastControl.RemoteState(
             audio = audio.map { CastControl.Track(it.id.toString(), audioLabel(it), it.id == curAid) },
             text = subs.map { CastControl.Track(it.id.toString(), subtitleLabel(it), it.id == curSid) },
@@ -349,6 +375,12 @@ class AerioCastReceiverController @Inject constructor(
             // through CMD_SET_AUDIO_ONLY, so a cached bool would stick stale-true.
             audioOnly = runCatching { receiverVideoDisabled() }.getOrDefault(false),
             streamInfo = runCatching { composeStreamInfo() }.getOrDefault(""),
+            // Live-rewind window + playhead for the phone's FF/RW + scrubber.
+            canSeek = win != null,
+            isLive = runCatching { !holder.isTimeshifting }.getOrDefault(true),
+            positionWallMs = runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L),
+            windowStartMs = win?.get(0) ?: 0L,
+            windowEndMs = win?.get(1) ?: 0L,
         )
         runCatching {
             CastReceiverContext.getInstance()
