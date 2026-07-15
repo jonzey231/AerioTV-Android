@@ -1584,6 +1584,12 @@ fun PlayerScreen(
         }
     }
 
+    // GH #33: read cast state LIVE at expiry. The effect is keyed only on
+    // sleepEndsAt, so a timer armed before the cast state changes (start/stop
+    // casting after arming) would otherwise branch on the stale captured value
+    // -- closing the player mid-cast, or no-op'ing stopCasting on a dead session
+    // and never closing the resumed local player.
+    val isCastingAtExpiry by rememberUpdatedState(isCasting)
     LaunchedEffect(sleepEndsAt) {
         val target = sleepEndsAt
         if (target == null) {
@@ -1597,24 +1603,11 @@ fun PlayerScreen(
                 sleepEndsAt = null
                 // GH #33: a sleep timer set from the cast remote ends the CAST
                 // (the local player is already suspended); otherwise close locally.
-                if (isCasting) castSender.stopCasting() else onClose()
+                if (isCastingAtExpiry) castSender.stopCasting() else onClose()
                 break
             }
             sleepRemainingMillis = remaining
             delay(1_000L)
-        }
-    }
-
-    // GH #33: when a stream is switched while casting, re-tune the receiver so the
-    // TV follows the new server-side stream (additive; the local switch path above
-    // is untouched). Keyed on switchedStreamId; brief delay lets change_stream land.
-    LaunchedEffect(switchedStreamId) {
-        if (isCasting && switchedStreamId != null) {
-            val id = currentChannel?.id
-            if (id != null) {
-                delay(1_500L)
-                castSender.setRemoteChannel(id)
-            }
         }
     }
 
@@ -1762,6 +1755,16 @@ fun PlayerScreen(
                         }
 
                         Toast.makeText(context, "Switching stream...", Toast.LENGTH_SHORT).show()
+                        // GH #33: while casting, the phone must NOT start a local decode.
+                        // change_stream already landed server-side (confirmed above), so the
+                        // channel's /proxy/ts/ URL now serves the switched upstream -- re-tune
+                        // the RECEIVER to the same channel and let the TV follow. Re-priming
+                        // the local player here would spin up a parallel decode (and phone-side
+                        // audio) alongside the cast. The keepalive re-prime below is local-only.
+                        if (isCasting) {
+                            castSender.setRemoteChannel(ch.id)
+                            return@launch
+                        }
                         // Re-prime onto the switched upstream with a keepalive held across the
                         // flush (see AerioExoPlayerHolder.reprimeWithKeepalive). bypassCooldown:
                         // a user-initiated switch always re-primes, even if an auto-reload or the

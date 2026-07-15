@@ -318,7 +318,6 @@ class AerioCastReceiverController @Inject constructor(
                     }
                     CastControl.CMD_SET_AUDIO_ONLY -> {
                         val on = json.optBoolean(CastControl.KEY_AUDIO_ONLY)
-                        receiverAudioOnly = on
                         runCatching { holder.setVideoTrackEnabled(!on) }
                     }
                     else -> return@launch
@@ -345,7 +344,10 @@ class AerioCastReceiverController @Inject constructor(
             textOff = curSid == null,
             speed = speed,
             aspect = aspect,
-            audioOnly = receiverAudioOnly,
+            // Derive from the LIVE track selection, not a cached flag: a channel
+            // flip / watchdog re-prime re-enables the video track without going
+            // through CMD_SET_AUDIO_ONLY, so a cached bool would stick stale-true.
+            audioOnly = runCatching { receiverVideoDisabled() }.getOrDefault(false),
             streamInfo = runCatching { composeStreamInfo() }.getOrDefault(""),
         )
         runCatching {
@@ -371,9 +373,14 @@ class AerioCastReceiverController @Inject constructor(
         if (t.lang.isNotBlank()) append("  ·  ${t.lang}")
     }
 
-    /** True while the receiver's video track is disabled (audio-only). Tracked
-     *  here because the sender toggles it and needs it echoed in the snapshot. */
-    private var receiverAudioOnly = false
+    /** True when the receiver's ExoPlayer currently has its video track disabled
+     *  (audio-only). Read from the LIVE track params rather than a cached flag so
+     *  the snapshot self-heals: a channel flip / watchdog re-prime re-enables the
+     *  video track (holder.setVideoTrackEnabled(true)) without going through
+     *  CMD_SET_AUDIO_ONLY, which would otherwise leave a cached bool stuck true. */
+    private fun receiverVideoDisabled(): Boolean =
+        holder.player?.trackSelectionParameters
+            ?.disabledTrackTypes?.contains(androidx.media3.common.C.TRACK_TYPE_VIDEO) == true
 
     /** A one-line decode summary of what the TV is actually playing, for the
      *  phone's Stream Info sheet. Reads the live ExoPlayer's selected formats. */
