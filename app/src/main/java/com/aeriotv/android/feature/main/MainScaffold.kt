@@ -643,7 +643,6 @@ fun MainScaffold(
                                 // channel instead of dead-ending.
                                 val ch = state.channels.firstOrNull { it.id == activeCastContent.mediaId }
                                     ?: state.channels.firstOrNull { it.name == activeCastContent.mediaId }
-                                    ?: state.channels.firstOrNull { it.name == activeCastContent.title }
                                 if (ch != null) onChannelClick(ch)
                             },
                             onTogglePlayPause = { castSender.togglePlayPause() },

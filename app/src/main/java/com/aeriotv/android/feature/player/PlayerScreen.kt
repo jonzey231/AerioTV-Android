@@ -319,11 +319,16 @@ fun PlayerScreen(
             currentChannel?.id?.takeIf { it.startsWith("disp:") }
                 ?.let { onRebuildLiveUrl(it.removePrefix("disp:")) }
         }
-        // Bring up the MediaSessionService so the session is alive
-        // before the first frame. Idempotent -- if it's already
-        // running this is a no-op.
-        com.aeriotv.android.core.playback.AerioMediaPlaybackService
-            .startBackground(context)
+        // Bring up the MediaSessionService so the session is alive before the
+        // first frame. Idempotent -- if it's already running this is a no-op.
+        // NOT while casting: the phone isn't playing locally, so a media FGS would
+        // post a second "Casting to <TV>" notification competing with the
+        // standalone cast chip (GH #33 - re-entering the player from the
+        // Now-Casting mini controller is the path that hit this).
+        if (!isCasting) {
+            com.aeriotv.android.core.playback.AerioMediaPlaybackService
+                .startBackground(context)
+        }
     }
 
     // Clear the LAN/WAN failover hook when leaving the player so a backgrounded /
@@ -388,9 +393,12 @@ fun PlayerScreen(
             // as mediaId (the receiver's bridged MediaSession drops our id), so
             // also treat a title match as "already on this channel" -- otherwise
             // re-entering it would needlessly re-tune the TV (GH #33).
+            // On resume mediaId IS the channel name, so a name match on mediaId
+            // covers that case. (Do NOT also match cc.title==ch.name: on a normal
+            // cast that would wrongly suppress a real switch between two channels
+            // sharing a name.)
             val cc = castSender.content.value
-            val alreadyCastingThisChannel =
-                cc?.mediaId == ch.id || cc?.mediaId == ch.name || cc?.title == ch.name
+            val alreadyCastingThisChannel = cc?.mediaId == ch.id || cc?.mediaId == ch.name
             if (!alreadyCastingThisChannel) {
                 castSender.setContent(
                     com.aeriotv.android.core.cast.AerioCastSender.Content(

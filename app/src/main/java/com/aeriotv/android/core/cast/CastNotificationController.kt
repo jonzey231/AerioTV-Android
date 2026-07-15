@@ -47,6 +47,12 @@ class CastNotificationController @Inject constructor(
         if (started) return
         started = true
         ensureChannel()
+        // Cancel any chip left over from a PRIOR process death: this is a plain
+        // notify() (not an FGS notification), so it survives an OS kill. If the
+        // cast ended while we were dead, no true->false transition will fire to
+        // clear it, so clear up front -- the collector re-posts immediately if a
+        // session is genuinely still active/resuming.
+        clear()
         scope.launch {
             combine(castSender.state, castSender.content) { s, c -> s to c }
                 .collect { (state, content) ->
