@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AerioTV</title>
+<!--
+  AerioTV custom Cast Web Receiver (GH #33).
+
+  Deliberately does NOT use <cast-media-player>: the CAF SDK drives the bare
+  <video class="castMediaElement"> below instead, so the stock receiver's
+  bottom-third timeline/metadata overlay (which never auto-hides on a live
+  progressive fMP4 whose duration keeps growing) simply does not exist.
+  Documented pattern: developers.google.com/cast/docs/web_receiver/customize_ui
+  ("Custom UI data binding" / castMediaElement).
+
+  UI owned by this page:
+   - idle/launch screen: AerioTV wordmark on a dark gradient
+   - a channel banner that shows for 4s after each load, then fades out
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #000; overflow: hidden;
+    font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
+  }
+  video.castMediaElement {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+  /* Idle / launch screen (visible until the first load; back after playback ends) */
+  #idle {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: radial-gradient(120% 120% at 50% 20%, #0e2230 0%, #060d13 55%, #03070b 100%);
+    transition: opacity .6s ease;
+  }
+  #idle.hidden { opacity: 0; pointer-events: none; }
+  #idle .wordmark {
+    color: #ffffff; font-size: 64px; font-weight: 700; letter-spacing: 1px;
+  }
+  #idle .wordmark span { color: #22c3e6; }
+  #idle .tagline {
+    margin-top: 14px; color: rgba(255,255,255,.55); font-size: 24px; font-weight: 400;
+  }
+  /* Channel banner: shows ~4s on tune, then fades. This page owns the timer,
+     so nothing re-wakes it. */
+  #banner {
+    position: absolute; left: 56px; bottom: 56px;
+    max-width: 62%;
+    padding: 18px 30px; border-radius: 14px;
+    background: rgba(6, 13, 19, .72);
+    border: 1px solid rgba(34, 195, 230, .25);
+    color: #fff;
+    opacity: 0; transition: opacity .5s ease;
+    pointer-events: none;
+  }
+  #banner.visible { opacity: 1; }
+  #banner .title { font-size: 38px; font-weight: 600; line-height: 1.2; }
+  #banner .subtitle {
+    margin-top: 4px; color: rgba(255,255,255,.65);
+    font-size: 26px; font-weight: 400; line-height: 1.25;
+  }
+  #banner .subtitle:empty { display: none; }
+</style>
+<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body>
+  <video class="castMediaElement" playsinline autoplay></video>
+
+  <div id="idle">
+    <div class="wordmark">Aerio<span>TV</span></div>
+    <div class="tagline">Ready to cast</div>
+  </div>
+
+  <div id="banner">
+    <div class="title" id="bannerTitle"></div>
+    <div class="subtitle" id="bannerSubtitle"></div>
+  </div>
+
+  <script>
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = context.getPlayerManager();
+
+    const idle = document.getElementById('idle');
+    const banner = document.getElementById('banner');
+    const bannerTitle = document.getElementById('bannerTitle');
+    const bannerSubtitle = document.getElementById('bannerSubtitle');
+    let bannerTimer = null;
+
+    function flashBanner(title, subtitle) {
+      if (!title) return;
+      bannerTitle.textContent = title;
+      bannerSubtitle.textContent = subtitle || '';
+      banner.classList.add('visible');
+      clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => banner.classList.remove('visible'), 4000);
+    }
+
+    // Normalize each LOAD. Keep the sender's streamType (VOD casting later);
+    // for LIVE, duration -1 is the documented contract ("the player instances
+    // are responsible for calculating it when the content is LIVE") and it
+    // keeps sender mini-controllers from binding to a growing finite duration.
+    playerManager.setMessageInterceptor(
+      cast.framework.messages.MessageType.LOAD,
+      (loadRequestData) => {
+        const media = loadRequestData.media;
+        if (media) {
+          media.contentType = media.contentType || 'video/mp4';
+          if (media.streamType === cast.framework.messages.StreamType.LIVE) {
+            media.duration = -1;
+          }
+        }
+        return loadRequestData;
+      });
+
+    // Once per successful load (NOT on buffering recoveries, which are common
+    // on live IPTV): hide the idle screen and flash the channel banner.
+    playerManager.addEventListener(
+      cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
+      () => {
+        idle.classList.add('hidden');
+        const info = playerManager.getMediaInformation();
+        const md = info && info.metadata;
+        flashBanner(md && md.title, md && md.subtitle);
+      });
+
+    // Playback truly over (stop / idle): back to the launch screen.
+    playerManager.addEventListener(
+      cast.framework.events.EventType.MEDIA_FINISHED,
+      () => {
+        idle.classList.remove('hidden');
+        banner.classList.remove('visible');
+      });
+
+    context.start({
+      // Required when not using <cast-media-player>, so smart displays don't
+      // paint their own default controls/scrim over this page.
+      uiConfig: { touchScreenOptimizedApp: true },
+    });
+  </script>
+</body>
+</html>
