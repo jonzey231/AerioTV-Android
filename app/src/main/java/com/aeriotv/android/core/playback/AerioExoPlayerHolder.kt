@@ -881,7 +881,14 @@ class AerioExoPlayerHolder @Inject constructor(
         return true
     }
 
-    /** Leave the timeshift buffer and re-tune the direct live stream. */
+    /** Return to the live edge by re-tuning the DIRECT live stream. This blacks the
+     *  screen ~1s while it re-primes (same cost as a channel tune) but it is CORRECT:
+     *  a "smooth" seek to the buffer head instead STARVES -- you can only play as far
+     *  as the recorder has written (~1x realtime), so there is no buffer-ahead cushion
+     *  at the edge and the player constantly catches the write head and re-buffers
+     *  (device: constant frame flashing, GH #33 2026-07-15). The direct stream pulls
+     *  its own buffer-ahead off the live feed, so it plays smoothly at the edge. A
+     *  truly smooth go-live would need a background direct re-prime + seamless swap. */
     fun goLive() {
         if (!isTimeshifting) return
         isTimeshifting = false
@@ -889,6 +896,16 @@ class AerioExoPlayerHolder @Inject constructor(
         val url = lastPlayUrl ?: return
         Log.i(TAG, "[REWIND] go live -> re-tune direct stream")
         playUrl(url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
+    }
+
+    /** True when playback is at the live edge: on the direct stream, or (in timeshift
+     *  mode) with the playhead within 5s of the buffer head. Lets a smooth
+     *  go-live-to-buffer-head still read as "live" for the LIVE indicators. */
+    fun isAtLiveEdge(): Boolean {
+        if (!isTimeshifting) return true
+        val w = rewindWindow() ?: return true
+        val pos = currentRewindWallMs() ?: return true
+        return pos >= w[1] - 5_000
     }
 
     // GH #33 cast rewind: read-only accessors so the cast RECEIVER can drive the

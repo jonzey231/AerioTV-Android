@@ -305,7 +305,7 @@ class CompanionHostController @Inject constructor(
             val pos = runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L)
             CastControl.positionMessage(
                 canSeek = win != null,
-                isLive = runCatching { !holder.isTimeshifting }.getOrDefault(true),
+                isLive = runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
                 positionWallMs = pos,
                 windowStartMs = win?.get(0) ?: 0L,
                 windowEndMs = win?.get(1) ?: 0L,

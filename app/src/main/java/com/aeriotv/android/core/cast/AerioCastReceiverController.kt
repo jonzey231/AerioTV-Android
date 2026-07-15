@@ -193,7 +193,7 @@ class AerioCastReceiverController @Inject constructor(
                 val win = runCatching { holder.rewindWindow() }.getOrNull()
                 val msg = CastControl.positionMessage(
                     canSeek = win != null,
-                    isLive = runCatching { !holder.isTimeshifting }.getOrDefault(true),
+                    isLive = runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
                     positionWallMs = runCatching { holder.currentRewindWallMs() }.getOrNull()
                         ?: (win?.get(1) ?: 0L),
                     windowStartMs = win?.get(0) ?: 0L,
@@ -424,7 +424,7 @@ class AerioCastReceiverController @Inject constructor(
             streamInfo = runCatching { composeStreamInfo() }.getOrDefault(""),
             // Live-rewind window + playhead for the phone's FF/RW + scrubber.
             canSeek = win != null,
-            isLive = runCatching { !holder.isTimeshifting }.getOrDefault(true),
+            isLive = runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
             positionWallMs = runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L),
             windowStartMs = win?.get(0) ?: 0L,
             windowEndMs = win?.get(1) ?: 0L,

@@ -1296,7 +1296,11 @@ private fun RewindTransportBar(
                     onClick = { onSeekWall(current + 30_000) },
                 )
             }
-            if (state.timeshifting) {
+            // Hide the Go Live pill once we're at the live edge (matches the LIVE
+            // label above): a smooth go-live seeks to the buffer head and stays in
+            // timeshift mode, so gate on the same behind-live threshold, not just
+            // state.timeshifting, or the pill would linger when already live (GH #33).
+            if (state.timeshifting && behindMs > 5_000) {
                 var goLiveFocused by remember { mutableStateOf(false) }
                 Surface(
                     shape = RoundedCornerShape(50),
