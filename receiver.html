@@ -127,9 +127,24 @@
         flashBanner(md && md.title, md && md.subtitle);
       });
 
-    // Playback truly over (stop / idle): back to the launch screen.
+    // Playback truly over: back to the launch screen. MEDIA_FINISHED ALSO fires
+    // with endedReason INTERRUPTED on every new LOAD (a channel flip replacing
+    // the playing media) -- returning to idle on that would paint the "Ready to
+    // cast" splash over the whole multi-second IPTV tune (review 2026-07-15).
+    // Only a real stop / end-of-stream / error goes back to idle.
     playerManager.addEventListener(
       cast.framework.events.EventType.MEDIA_FINISHED,
+      (event) => {
+        if (event && event.endedReason ===
+            cast.framework.events.EndedReason.INTERRUPTED) return;
+        idle.classList.remove('hidden');
+        banner.classList.remove('visible');
+      });
+
+    // Surface a failed load: without this a flip whose new stream errors would
+    // leave the previous idle/banner state stale. Return to a clean idle screen.
+    playerManager.addEventListener(
+      cast.framework.events.EventType.ERROR,
       () => {
         idle.classList.remove('hidden');
         banner.classList.remove('visible');
