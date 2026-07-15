@@ -165,37 +165,61 @@ fun CastRemoteOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // Live-rewind controls (GH #33): a draggable scrubber + 30s FF/RW +
-            // LIVE pill, shown only when a rewind buffer is rolling on the TV.
-            // Driven by the receiver's ~1Hz position tick so the thumb crawls with
-            // playback; a drag commits ONE seekToWall on release (never per-frame,
-            // which would thrash the receiver's buffer re-opens).
-            if (position.canSeek) {
-                val span = (position.windowEndMs - position.windowStartMs).coerceAtLeast(1L)
-                var dragFraction by remember { mutableStateOf<Float?>(null) }
-                val liveFraction =
-                    ((position.positionWallMs - position.windowStartMs).toFloat() / span).coerceIn(0f, 1f)
-                val shownFraction = dragFraction ?: liveFraction
-                val behindMs = (span - (shownFraction * span).toLong()).coerceAtLeast(0L)
-                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                    Slider(
-                        value = shownFraction,
-                        onValueChange = { dragFraction = it },
-                        onValueChangeFinished = {
-                            dragFraction?.let { f ->
-                                onSeekToWall(position.windowStartMs + (f * span).toLong())
-                            }
+            // LIVE pill. Shown as soon as the receiver reports a rewind buffer via
+            // EITHER the getState echo's canSeek or the ~1Hz position tick, so the
+            // buttons never wait a tick to appear; the draggable scrubber needs the
+            // tick's window, so it renders once position data arrives.
+            val rewindActive = position.canSeek || remoteState.canSeek
+            val atLive = if (position.canSeek) position.isLive else remoteState.isLive
+            if (rewindActive) {
+                if (position.canSeek) {
+                    val span = (position.windowEndMs - position.windowStartMs).coerceAtLeast(1L)
+                    var dragFraction by remember { mutableStateOf<Float?>(null) }
+                    var pendingSeekWall by remember { mutableStateOf<Long?>(null) }
+                    // After release, HOLD the dragged thumb until the receiver's
+                    // reported position reaches the seek target, so it doesn't snap
+                    // back to the pre-seek position for the ~1s+re-buffer gap. The
+                    // convergence effect is re-keyed on each tick to read the fresh
+                    // position; a 6s timeout releases the hold if it never converges.
+                    androidx.compose.runtime.LaunchedEffect(pendingSeekWall, position.positionWallMs) {
+                        val target = pendingSeekWall ?: return@LaunchedEffect
+                        if (kotlin.math.abs(position.positionWallMs - target) < 4_000L) {
                             dragFraction = null
-                        },
-                    )
-                    Text(
-                        text = if (position.isLive && dragFraction == null) {
-                            "LIVE"
-                        } else {
-                            "-${formatBehindLive(behindMs)} behind live"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.8f),
-                    )
+                            pendingSeekWall = null
+                        }
+                    }
+                    androidx.compose.runtime.LaunchedEffect(pendingSeekWall) {
+                        if (pendingSeekWall == null) return@LaunchedEffect
+                        kotlinx.coroutines.delay(6_000L)
+                        dragFraction = null
+                        pendingSeekWall = null
+                    }
+                    val liveFraction =
+                        ((position.positionWallMs - position.windowStartMs).toFloat() / span).coerceIn(0f, 1f)
+                    val shownFraction = dragFraction ?: liveFraction
+                    val behindMs = (span - (shownFraction * span).toLong()).coerceAtLeast(0L)
+                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                        Slider(
+                            value = shownFraction,
+                            onValueChange = { dragFraction = it },
+                            onValueChangeFinished = {
+                                dragFraction?.let { f ->
+                                    val target = position.windowStartMs + (f * span).toLong()
+                                    onSeekToWall(target)
+                                    pendingSeekWall = target
+                                }
+                            },
+                        )
+                        Text(
+                            text = if (position.isLive && dragFraction == null) {
+                                "LIVE"
+                            } else {
+                                "-${formatBehindLive(behindMs)} behind live"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
                 }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
@@ -203,7 +227,7 @@ fun CastRemoteOverlay(
                     modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
                 ) {
                     RemoteButton(Icons.Filled.Replay30, "Back 30 seconds", { onSeekBy(-30_000L) })
-                    if (!position.isLive) {
+                    if (!atLive) {
                         GoLivePill(onClick = onGoLive)
                     }
                     RemoteButton(Icons.Filled.Forward30, "Forward 30 seconds", { onSeekBy(30_000L) })

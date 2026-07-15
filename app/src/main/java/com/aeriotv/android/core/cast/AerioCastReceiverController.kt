@@ -321,10 +321,12 @@ class AerioCastReceiverController @Inject constructor(
         override fun onMessageReceived(namespace: String, senderId: String?, message: String) {
             if (namespace != CastControl.NAMESPACE) return
             val json = runCatching { JSONObject(message) }.getOrNull() ?: return
-            // A live sender is present -> start the position tick (idempotent).
-            ensurePositionTicker()
             // ExoPlayer is single-threaded (main); scope is Main.immediate.
             scope.launch {
+                // A live sender is present -> start the position tick. Done inside
+                // the Main-immediate scope so the check-then-start is serialized
+                // across senders/messages (never double-launches the ticker).
+                ensurePositionTicker()
                 when (json.optString(CastControl.KEY_CMD)) {
                     CastControl.CMD_GET_STATE -> {} // just reply below
                     CastControl.CMD_SET_AUDIO ->
