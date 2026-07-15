@@ -737,12 +737,16 @@ fun PlayerScreen(
     // Publish playback state for the activity's leave-the-app handling: video
     // (not audio-only) auto-enters PiP; audio-only instead keeps a background
     // media notification (no PiP). Cleared when the player leaves composition.
-    DisposableEffect(audioOnly, currentChannel?.id, nowProgramme?.title) {
+    DisposableEffect(audioOnly, isCasting, currentChannel?.id, nowProgramme?.title) {
         PipState.nowPlayingTitle = currentChannel?.name ?: "AerioTV"
         PipState.nowPlayingSubtitle = nowProgramme?.title.orEmpty()
         PipState.nowPlayingLogo = currentChannel?.tvgLogo?.takeIf { it.isNotBlank() }
-        PipState.videoPlaybackActive.value = !audioOnly
-        PipState.audioPlaybackActive.value = audioOnly
+        // GH #33: while casting, the local player is stopped and the TV is
+        // playing, so leaving the phone app must NOT auto-enter PiP (nor arm a
+        // local audio notification) -- the Now-Casting mini controller is the
+        // re-entry path instead.
+        PipState.videoPlaybackActive.value = !audioOnly && !isCasting
+        PipState.audioPlaybackActive.value = audioOnly && !isCasting
         onDispose {
             PipState.videoPlaybackActive.value = false
             PipState.audioPlaybackActive.value = false
@@ -1505,6 +1509,9 @@ fun PlayerScreen(
                 onSeekBy = { delta -> castSender.seekBy(delta) },
                 onSeekToWall = { target -> castSender.seekToWall(target) },
                 onGoLive = { castSender.goLiveRemote() },
+                // GH #33: minimize returns to the tabs (cast stays alive; the
+                // Now-Casting mini controller reappears to pick a new channel).
+                onMinimize = { onClose() },
                 position = castPosition,
                 canSwitchStream = isDispatcharrLive,
                 canRecord = currentChannel?.dispatcharrChannelId != null,

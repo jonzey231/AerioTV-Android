@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -96,6 +97,7 @@ fun CastRemoteOverlay(
     onSeekBy: (Long) -> Unit,
     onSeekToWall: (Long) -> Unit,
     onGoLive: () -> Unit,
+    onMinimize: () -> Unit,
     position: CastControl.PositionSnapshot,
     canSwitchStream: Boolean,
     canRecord: Boolean,
@@ -114,6 +116,30 @@ fun CastRemoteOverlay(
     androidx.compose.runtime.LaunchedEffect(Unit) { onRefreshState() }
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+        // Top bar: minimize back to browsing. The cast keeps playing; the
+        // Now-Casting mini controller reappears on the tabs so a new channel can
+        // be picked (GH #33 - Stop below still ends the cast entirely).
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onMinimize) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Back to browse",
+                    tint = Color.White,
+                )
+            }
+            Text(
+                text = "Browse channels",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White.copy(alpha = 0.85f),
+            )
+        }
         // Centered "casting to" panel.
         Column(
             modifier = Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
