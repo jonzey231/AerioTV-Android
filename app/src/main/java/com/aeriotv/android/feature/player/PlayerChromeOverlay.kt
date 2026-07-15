@@ -168,6 +168,9 @@ fun PlayerChromeOverlay(
     // session; the band falls back to the read-only EPG progress bar.
     timeshiftState: com.aeriotv.android.core.timeshift.TimeshiftController.State? = null,
     timeshiftPositionWallMs: Long = 0L,
+    /** Live channel with Live Rewind available but the pref OFF: show a hint that
+     *  pause/rewind needs it enabled, instead of just an empty transport area. */
+    showLiveRewindHint: Boolean = false,
     isPlayerPaused: Boolean = false,
     onRewindTogglePause: () -> Unit = {},
     onRewindSeekWall: (Long) -> Unit = {},
@@ -654,6 +657,16 @@ fun PlayerChromeOverlay(
                         color = Color.White,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+                if (showLiveRewindHint) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Turn on Live Rewind in Settings to pause & rewind live TV",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.65f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }

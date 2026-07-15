@@ -134,6 +134,8 @@ fun PlayerScreen(
     val appleTVChannelFlip by settingsVm.appleTVChannelFlip.collectAsStateWithLifecycle(initialValue = true)
     val streamBufferSize by settingsVm.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
     val aspectMode by settingsVm.playerAspectMode.collectAsStateWithLifecycle(initialValue = "fit")
+    // Live Rewind pref, to hint (below) that pause/rewind needs it turned on.
+    val liveRewindEnabled by settingsVm.liveRewindEnabled.collectAsStateWithLifecycle(initialValue = true)
     val playerEntry = remember {
         EntryPointAccessors.fromApplication(
             context.applicationContext,
@@ -1267,6 +1269,12 @@ fun PlayerScreen(
             nowProgramme = nowProgramme,
             timeshiftState = if (tsState.buffering) tsState else null,
             timeshiftPositionWallMs = tsPositionWallMs,
+            // Live TV with pause/rewind OFF: the transport comes from Live Rewind,
+            // so hint that it's a setting rather than silently showing no controls.
+            // Only when the channel COULD buffer (raw TS) -- not HLS/DASH live.
+            showLiveRewindHint = !isCatchupMode && !liveRewindEnabled &&
+                currentChannel?.url?.takeIf { it.isNotBlank() }
+                    ?.let { exoHolder.canBufferLiveRewind(it) } == true,
             // Task #148 milestone B: catch-up transport context.
             catchupMode = isCatchupMode,
             catchupTitle = catchupTitle,
