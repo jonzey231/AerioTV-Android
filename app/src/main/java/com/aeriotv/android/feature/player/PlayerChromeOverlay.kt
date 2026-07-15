@@ -66,6 +66,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -499,13 +500,22 @@ fun PlayerChromeOverlay(
                     onClick = onClose,
                     modifier = Modifier.focusRequester(closeFocus),
                 )
-                channel?.let { ch ->
-                    Spacer(Modifier.width(12.dp))
-                    InfoCard(
-                        channel = ch,
-                        programme = nowProgramme,
-                        sleepRemainingMillis = sleepRemainingMillis,
-                    )
+                // On compact widths (portrait phone / folded Fold cover screen)
+                // the secondary channel InfoCard would consume the row and push
+                // the fixed right-side controls (Cast / PiP / Add) off the edge,
+                // so the user couldn't reach them (GH #33 note #3). Drop the pill
+                // there; it returns in landscape / on tablets / unfolded where the
+                // row has room for both.
+                val compactTopBar = LocalConfiguration.current.screenWidthDp < 500
+                if (!compactTopBar) {
+                    channel?.let { ch ->
+                        Spacer(Modifier.width(12.dp))
+                        InfoCard(
+                            channel = ch,
+                            programme = nowProgramme,
+                            sleepRemainingMillis = sleepRemainingMillis,
+                        )
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 CircleIconButton(
