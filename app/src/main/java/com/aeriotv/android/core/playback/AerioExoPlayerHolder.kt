@@ -1313,11 +1313,19 @@ class AerioExoPlayerHolder @Inject constructor(
                     continue
                 }
 
-                // Only when we intend to play, have a url to reload, have reached
-                // steady playback at least once (skip cold-start probes + user
-                // pauses), and aren't at end-of-stream.
+                // Only when we intend to play, have a url to reload, and aren't at
+                // end-of-stream. Steady gate: skip a TRUE cold start (never reached
+                // steady AND never rendered a frame -- the cold-start net above owns
+                // that). But once a frame HAS rendered, keep monitoring even if the
+                // steady flag later drops: a stream that played then wedged (proxy
+                // dropped our read / decoder hung) clears hasReachedPlaybackRestart
+                // WITHOUT a reload, and used to fall through BOTH the cold-start net
+                // (needs !videoFrameRendered + 0 position) and this position-stall
+                // check -- so it froze forever with no recovery (Shield field freeze
+                // 2026-07-15: status 404 / read wedged, no reload for >1min).
                 if (lastPlayUrl == null || isTimeshifting || isCatchup || !p.playWhenReady ||
-                    !hasReachedPlaybackRestart || p.playbackState == Player.STATE_ENDED
+                    (!hasReachedPlaybackRestart && !videoFrameRendered) ||
+                    p.playbackState == Player.STATE_ENDED
                 ) {
                     continue
                 }

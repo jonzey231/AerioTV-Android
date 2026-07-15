@@ -409,6 +409,12 @@ fun PlayerScreen(
                         title = ch.name,
                         subtitle = nowProgramme?.title,
                         artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
+                        // Web/Styled-receiver path (GH #33): non-Android-TV Cast
+                        // targets can't launch Cast Connect, so hand them a directly-
+                        // playable Dispatcharr fMP4 (H.264+AAC) URL. The ATV receiver
+                        // ignores it and rebuilds its own raw-TS URL. Null for non-
+                        // proxy channels (Cast Connect stays the only path there).
+                        webCastUrl = com.aeriotv.android.core.cast.webReceiverCastUrl(url),
                     ),
                 )
                 // The initial load launches the receiver via the entity deep link,
@@ -657,6 +663,7 @@ fun PlayerScreen(
         followLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             var baseline: String? = null     // last-known status.url for this channel/foreground session
             var backoffMs = 4_000L
+            var deadStatusCount = 0           // consecutive 404/dead-session polls (GH #33 freeze recovery)
             while (isActive) {
                 delay(backoffMs)
                 if (currentChannel?.id != ch.id) break
@@ -670,11 +677,35 @@ fun PlayerScreen(
                 // OFF the main thread: the GET + JSON parse + auth-retry must never run on
                 // Main or it drops frames every tick (a periodic judder with no rebuffer).
                 val statusUrl = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
-                if (statusUrl.isNullOrBlank()) {     // 404 / stopped / transient: back off, never treat as divergence
+                if (statusUrl.isNullOrBlank()) {
+                    // 404 / stopped: Dispatcharr has no active connection for this
+                    // channel. One blank is transient (mid-switch blip) -> back off.
+                    // But a SUSTAINED dead session while we still intend to play means
+                    // our read wedged and the proxy dropped us (Shield field freeze
+                    // 2026-07-15: status 404 for >1min, no recovery). Hand Dispatcharr
+                    // a fresh connection via a keepalive re-prime.
                     backoffMs = (backoffMs + 4_000L).coerceAtMost(12_000L)
+                    if (++deadStatusCount >= 3 && currentChannel?.id == ch.id &&
+                        switchStream == null && !exoHolder.isReprimeInFlight &&
+                        !exoHolder.isTimeshifting
+                    ) {
+                        android.util.Log.w(
+                            "DispatcharrSwitch",
+                            "[FOLLOW] dead session (status 404 x$deadStatusCount) ch=${ch.id}; reconnecting",
+                        )
+                        val ran = exoHolder.reprimeWithKeepalive(
+                            url = proxyUrl,
+                            title = ch.name,
+                            subtitle = nowProgramme?.title.orEmpty(),
+                            artworkUri = ch.tvgLogo.takeIf { it.isNotBlank() }
+                                ?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() },
+                        )
+                        if (ran) { deadStatusCount = 0; baseline = null }
+                    }
                     continue
                 }
                 backoffMs = 4_000L
+                deadStatusCount = 0
                 if (baseline == null) { baseline = statusUrl; continue }   // seed
                 if (statusUrl != baseline) {
                     // confirm with one re-read so a momentary mid-switch blip can't trip us

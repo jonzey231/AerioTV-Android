@@ -36,9 +36,16 @@ class AerioCastOptionsProvider : OptionsProvider {
         }
 
         val launchOptions = LaunchOptions.Builder()
-            // Launch the AerioTV Android-TV app as the receiver (Cast Connect)
-            // rather than the web receiver when the target supports it.
-            .setAndroidReceiverCompatible(true)
+            // GH #33 web-receiver pivot (TEST, reversible): set to FALSE so EVERY
+            // cast target -- including Android TV -- uses the Cast WEB receiver and
+            // plays the Dispatcharr fMP4 (H.264 + AAC) contentUrl the sender now
+            // supplies, instead of launching the Cast Connect native app. This
+            // trades native raw-TS decode + on-receiver Live Rewind for UNIVERSAL
+            // device support (legacy dongles, Nest Hub, and sideloaded installs
+            // that Cast Connect can never reach) and a far simpler control model
+            // (channel change = a new sender-side loadMedia). Flip back to true to
+            // restore Cast Connect. Cast Connect receiver code is left intact.
+            .setAndroidReceiverCompatible(false)
             .build()
 
         return CastOptions.Builder()

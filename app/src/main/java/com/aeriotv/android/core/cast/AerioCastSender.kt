@@ -64,15 +64,21 @@ class AerioCastSender @Inject constructor() {
         val subtitle: String?,
         val artUri: String?,
         /**
-         * Legacy / web-receiver support (GH #33 phase 2, see
-         * docs/chromecast-web-receiver-hls-plan.md). An HLS (.m3u8) URL for this
-         * content. NULL today because Dispatcharr emits no HLS, so only Cast
-         * Connect (Android TV receiver, raw TS) works. When set, the Styled Media
-         * Receiver used by legacy Chromecast dongles / Nest Hub can play it, while
-         * the Android TV receiver still ignores it and rebuilds its own raw-TS URL
-         * from customData. One payload, both receiver types.
+         * Web/Styled-receiver playback URL (GH #33). A directly-playable stream URL
+         * for the devices Cast Connect can't launch the native app on: legacy
+         * Chromecast dongles, Nest Hub, Google Home displays, any non-Android-TV
+         * Cast target. DEVICE-CONFIRMED (2026-07-15) that a Dispatcharr fMP4 stream
+         * (H.264 + AAC via ?output_format=fmp4&output_profile=<aac>) plays on
+         * Google's default web receiver over BOTH http (LAN) and https. NULL for a
+         * non-Dispatcharr channel (a direct source has nothing to transcode). When
+         * set it rides in MediaInfo.contentUrl; the Android-TV Cast Connect receiver
+         * IGNORES contentUrl and rebuilds its own raw-TS URL from customData/entity,
+         * so this one payload serves both receiver types. See [webCastMime].
          */
-        val hlsUrl: String? = null,
+        val webCastUrl: String? = null,
+        /** Content-Type for [webCastUrl]: "video/mp4" for fMP4, "application/x-mpegURL"
+         *  for a future HLS manifest. Ignored when [webCastUrl] is null. */
+        val webCastMime: String = "video/mp4",
     )
 
     private val _state = MutableStateFlow<State>(State.Unavailable)
@@ -454,15 +460,17 @@ class AerioCastSender @Inject constructor() {
             .setEntity(entity)
             .setMetadata(metadata)
             .setCustomData(custom)
-        if (content.hlsUrl != null) {
-            // Web/Styled receiver path (legacy Chromecast, Nest Hub): they need a
-            // real playable URL, and HLS is what the default receiver supports.
-            // The Cast Connect ATV receiver ignores contentUrl and rebuilds its own
-            // raw-TS URL from customData, so this one payload works for both.
-            builder.setContentUrl(content.hlsUrl)
-                .setContentType("application/x-mpegURL")
+        if (content.webCastUrl != null) {
+            // Web/Styled receiver path (legacy Chromecast, Nest Hub, any non-ATV):
+            // they can't launch the native app, so they need a directly-playable
+            // URL. DEVICE-CONFIRMED that a Dispatcharr fMP4 (H.264 + AAC) plays here
+            // over http and https. The Cast Connect ATV receiver ignores contentUrl
+            // and rebuilds its own raw-TS URL from customData/entity, so this one
+            // payload serves both receiver types.
+            builder.setContentUrl(content.webCastUrl)
+                .setContentType(content.webCastMime)
         } else {
-            // Cast Connect only (today): identity in customData, no playable URL.
+            // Cast Connect only: identity in customData, no playable URL.
             builder.setContentType(if (isVod) "video/mp4" else "video/mp2t")
         }
         val info = builder.build()
@@ -472,4 +480,27 @@ class AerioCastSender @Inject constructor() {
             .build()
         runCatching { client.load(request) }
     }
+}
+
+/**
+ * Dispatcharr output-profile id that transcodes audio to AAC (H.264 video copied)
+ * for the web/styled Cast receiver, which cannot DECODE AC-3 -- it only passes Dolby
+ * through to an HDMI sink, so AC-3 is silent on Nest Hub / Home displays. Profile
+ * ids are per-Dispatcharr-instance. TODO(GH#33): auto-detect via GET
+ * /api/core/outputprofiles/ (pick the AAC profile) or expose a Cast output-profile
+ * setting before shipping; hardcoded to the test server's "Web Player (AAC Audio)"
+ * profile for the initial web-receiver integration.
+ */
+const val CAST_WEB_OUTPUT_PROFILE_ID = 2
+
+/**
+ * Build the web/styled-receiver cast URL from a channel's local proxy URL by asking
+ * Dispatcharr for the fMP4 container + the AAC [outputProfileId]. Returns null when
+ * [localUrl] is not a Dispatcharr /proxy/ts/stream URL (a direct source has nothing
+ * to transcode), leaving Cast Connect as the only cast path for that channel.
+ */
+fun webReceiverCastUrl(localUrl: String, outputProfileId: Int = CAST_WEB_OUTPUT_PROFILE_ID): String? {
+    if (!localUrl.contains("/proxy/ts/stream/", ignoreCase = true)) return null
+    val sep = if (localUrl.contains('?')) '&' else '?'
+    return "$localUrl${sep}output_format=fmp4&output_profile=$outputProfileId"
 }

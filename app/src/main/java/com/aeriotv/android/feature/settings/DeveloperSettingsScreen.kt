@@ -2,6 +2,8 @@ package com.aeriotv.android.feature.settings
 
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -97,6 +99,15 @@ fun DeveloperSettingsScreen(
         entry.debugLogger()
     }
     val loggingEnabled by settingsVm.debugLoggingEnabled.collectAsStateWithLifecycle(initialValue = false)
+    // GH #33 companion remote (beta): grab the discovery + client singletons the same
+    // way the debug logger is grabbed, and open the remote screen as a full overlay.
+    val companion = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            com.aeriotv.android.core.cast.companion.CompanionEntryPoint::class.java,
+        )
+    }
+    var showCompanion by remember { mutableStateOf(false) }
 
     val isTv = rememberIsTvDevice()
     var pendingEnable by remember { mutableStateOf(false) }
@@ -154,9 +165,48 @@ fun DeveloperSettingsScreen(
                 }
             }
 
+            item("companion-remote") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { showCompanion = true }
+                        .padding(16.dp),
+                ) {
+                    Text("Companion Remote (beta)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Control an AerioTV TV from this phone over your network",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             item("captured") { WhatsCapturedSection() }
 
             item("build") { BuildInfoSection() }
+        }
+    }
+
+    if (showCompanion) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                // Consume stray taps so empty areas of the overlay don't fall through
+                // to the Developer settings rows behind it (e.g. the Disable-Logging
+                // toggle). indication=null keeps it invisible; the remote's own
+                // buttons are hit-tested first, so they still work.
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) {},
+        ) {
+            com.aeriotv.android.feature.cast.companion.CompanionRemoteScreen(
+                discovery = companion.discovery(),
+                controller = companion.remoteController(),
+                onClose = { showCompanion = false },
+            )
         }
     }
 

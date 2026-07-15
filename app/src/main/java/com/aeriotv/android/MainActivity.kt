@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var exoWindowState: ExoWindowState
     @Inject lateinit var castReceiver: AerioCastReceiverController
     @Inject lateinit var castSender: com.aeriotv.android.core.cast.AerioCastSender
+    @Inject lateinit var companionHost: com.aeriotv.android.core.cast.companion.CompanionHostController
 
     /**
      * Most recent deep-link target the activity has received from a
@@ -591,6 +592,14 @@ class MainActivity : ComponentActivity() {
                                         ),
                                     ),
                                 )
+                            }
+                            // GH #33 companion remote: while a phone is pairing, show
+                            // its 6-digit code over everything on the TV. Clears itself
+                            // when the phone pairs (the host nulls the code). Never
+                            // non-null on phones (the host advertises on TV only).
+                            val companionCode by companionHost.pairingCode.collectAsState()
+                            companionCode?.let {
+                                com.aeriotv.android.feature.cast.companion.CompanionPairingOverlay(it)
                             }
                         }
                     }

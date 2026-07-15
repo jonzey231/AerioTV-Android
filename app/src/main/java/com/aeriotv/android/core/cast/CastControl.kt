@@ -50,6 +50,12 @@ object CastControl {
     // Lightweight ~1Hz position tick (receiver -> sender). Separate from CMD_STATE
     // so the crawling scrubber never triggers the heavy full-track state rebuild.
     const val CMD_POSITION = "position"
+    // Transport play/pause. Over Cast Connect these ride the receiver's MediaSession
+    // bridge, so this protocol never needed them. The LAN companion remote (GH #33
+    // second-screen) has NO MediaSession bridge, so it drives transport explicitly.
+    const val CMD_PLAY = "play"
+    const val CMD_PAUSE = "pause"
+    const val CMD_TOGGLE = "toggle"
 
     // Command args.
     const val KEY_TRACK_ID = "id" // audio/text track id; setText with "" (or absent) = Off
@@ -178,6 +184,8 @@ object CastControl {
 
     // ---- lightweight position tick (GH #33 cast scrubber) ----
 
+    const val KEY_IS_PLAYING = "isPlaying" // Boolean: receiver transport state (companion remote)
+
     /** The crawling scrubber's live playhead + rewind window, pushed ~1Hz. */
     data class PositionSnapshot(
         val canSeek: Boolean = false,
@@ -185,15 +193,20 @@ object CastControl {
         val positionWallMs: Long = 0L,
         val windowStartMs: Long = 0L,
         val windowEndMs: Long = 0L,
+        /** Receiver transport state, carried on the tick for the LAN companion remote
+         *  (which has no Cast MediaSession bridge). Cast Connect reports true. */
+        val isPlaying: Boolean = true,
     )
 
-    /** Build a receiver->sender [CMD_POSITION] tick. */
+    /** Build a receiver->sender [CMD_POSITION] tick. [isPlaying] defaults true so the
+     *  existing Cast-Connect ticker (transport rides its MediaSession) is unaffected. */
     fun positionMessage(
         canSeek: Boolean,
         isLive: Boolean,
         positionWallMs: Long,
         windowStartMs: Long,
         windowEndMs: Long,
+        isPlaying: Boolean = true,
     ): String = JSONObject().apply {
         put(KEY_CMD, CMD_POSITION)
         put(KEY_CAN_SEEK, canSeek)
@@ -201,6 +214,7 @@ object CastControl {
         put(KEY_POSITION_WALL_MS, positionWallMs)
         put(KEY_WINDOW_START_MS, windowStartMs)
         put(KEY_WINDOW_END_MS, windowEndMs)
+        put(KEY_IS_PLAYING, isPlaying)
     }.toString()
 
     /** Parse a [CMD_POSITION] tick. */
@@ -210,5 +224,6 @@ object CastControl {
         positionWallMs = json.optLong(KEY_POSITION_WALL_MS, 0L),
         windowStartMs = json.optLong(KEY_WINDOW_START_MS, 0L),
         windowEndMs = json.optLong(KEY_WINDOW_END_MS, 0L),
+        isPlaying = json.optBoolean(KEY_IS_PLAYING, true),
     )
 }
