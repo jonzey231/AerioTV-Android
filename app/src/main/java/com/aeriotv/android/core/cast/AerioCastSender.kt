@@ -128,6 +128,10 @@ class AerioCastSender @Inject constructor() {
             _isPlaying.value = runCatching {
                 currentSession()?.remoteMediaClient?.isPlaying
             }.getOrNull() ?: _isPlaying.value
+            // Resumed-session content recovery: mediaInfo is often null at
+            // onConnected and only lands with the first status update. No-op once
+            // content is known (GH #33).
+            currentSession()?.let { recoverContentFromSession(it) }
         }
     }
 
@@ -322,6 +326,41 @@ class AerioCastSender @Inject constructor() {
         _state.value = State.Connected(session.castDevice?.friendlyName)
         attachControl(session)
         pending?.let { loadOnSession(session, it) }
+        // Session RESUMED after an app force-close / reinstall: `pending` is null
+        // (this @Singleton sender was recreated with the process), so nothing set
+        // _content and the Now-Casting mini controller + its Stop would stay hidden
+        // until the user re-selected a channel. Recover the content from whatever
+        // the receiver is already playing so the indicator reappears immediately
+        // (GH #33). mediaInfo may not be populated yet on resume, so this is also
+        // retried from the RemoteMediaClient status callback below.
+        if (pending == null) recoverContentFromSession(session)
+    }
+
+    /** Rebuild [Content] from the session's currently-loaded media so a resumed
+     *  cast (app restarted) still drives the mini controller. Idempotent: no-op
+     *  once content is known. */
+    private fun recoverContentFromSession(session: CastSession) {
+        if (_content.value != null || pending != null) return
+        val info = runCatching { session.remoteMediaClient?.mediaInfo }.getOrNull() ?: return
+        val custom = info.customData
+        val mediaId = custom?.optString(AerioCastReceiverController.KEY_MEDIA_ID)?.takeIf { it.isNotBlank() }
+            ?: info.contentId?.takeIf { it.isNotBlank() }
+            ?: return
+        val kind = if (custom?.optString(AerioCastReceiverController.KEY_KIND) ==
+            AerioCastReceiverController.VALUE_KIND_VOD
+        ) {
+            AerioCastReceiverController.Kind.VOD
+        } else {
+            AerioCastReceiverController.Kind.LIVE
+        }
+        val meta = info.metadata
+        _content.value = Content(
+            mediaId = mediaId,
+            kind = kind,
+            title = meta?.getString(MediaMetadata.KEY_TITLE)?.takeIf { it.isNotBlank() } ?: mediaId,
+            subtitle = meta?.getString(MediaMetadata.KEY_SUBTITLE),
+            artUri = runCatching { meta?.images?.firstOrNull()?.url?.toString() }.getOrNull(),
+        )
     }
 
     /** Bind the custom control channel + RemoteMediaClient callback to a freshly

@@ -62,6 +62,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var memoryPressureBus: MemoryPressureBus
     @Inject lateinit var activeCredentials: ActivePlaylistCredentials
     @Inject lateinit var castReceiver: com.aeriotv.android.core.cast.AerioCastReceiverController
+    @Inject lateinit var castNotificationController: com.aeriotv.android.core.cast.CastNotificationController
     @Inject lateinit var playlistRepository: PlaylistRepository
     @Inject lateinit var playlistDao: PlaylistDao
     @Inject lateinit var aerioDatabase: AerioDatabase
@@ -138,6 +139,10 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // launched as a receiver. Wired here so the receiver is ready the moment
         // a sender casts, before MainActivity forwards the LAUNCH intent.
         castReceiver.bootstrap(this)
+        // GH #33: standalone "Casting to <TV>" notification driven by cast state,
+        // so it reappears after a force-close/reopen while the session resumes
+        // (the media FGS notification can't cover that case).
+        castNotificationController.start()
         // Live Rewind launch sweep (user clarification 2026-07-11: buffers
         // die an hour after the SESSION ends, "which may end up meaning it
         // should be deleted the NEXT time the app is launched").

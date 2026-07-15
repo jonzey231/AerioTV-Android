@@ -635,7 +635,15 @@ fun MainScaffold(
                             artUri = activeCastContent.artUri,
                             isPlaying = castIsPlaying,
                             onTap = {
+                                // Match by id first; fall back to name because a
+                                // cast resumed after an app restart only recovers
+                                // the channel TITLE as mediaId (the receiver's
+                                // bridged MediaSession drops our id/customData) --
+                                // GH #33, so the tap still re-enters the right
+                                // channel instead of dead-ending.
                                 val ch = state.channels.firstOrNull { it.id == activeCastContent.mediaId }
+                                    ?: state.channels.firstOrNull { it.name == activeCastContent.mediaId }
+                                    ?: state.channels.firstOrNull { it.name == activeCastContent.title }
                                 if (ch != null) onChannelClick(ch)
                             },
                             onTogglePlayPause = { castSender.togglePlayPause() },

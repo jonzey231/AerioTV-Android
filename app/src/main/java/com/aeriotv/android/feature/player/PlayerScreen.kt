@@ -384,7 +384,13 @@ fun PlayerScreen(
             // (an autoplay load) + setRemoteChannel and make the TV needlessly
             // reload/flicker the feed it is already playing. The sender's current
             // content mediaId is the source of truth for "what the TV is on".
-            val alreadyCastingThisChannel = castSender.content.value?.mediaId == ch.id
+            // A cast resumed after an app restart only recovers the channel TITLE
+            // as mediaId (the receiver's bridged MediaSession drops our id), so
+            // also treat a title match as "already on this channel" -- otherwise
+            // re-entering it would needlessly re-tune the TV (GH #33).
+            val cc = castSender.content.value
+            val alreadyCastingThisChannel =
+                cc?.mediaId == ch.id || cc?.mediaId == ch.name || cc?.title == ch.name
             if (!alreadyCastingThisChannel) {
                 castSender.setContent(
                     com.aeriotv.android.core.cast.AerioCastSender.Content(
