@@ -277,6 +277,10 @@ class AerioCastSender @Inject constructor() {
     fun setRemoteAspect(mode: CastControl.AspectMode) =
         sendControl(CastControl.command(CastControl.CMD_SET_ASPECT) { put(CastControl.KEY_ASPECT, mode.key) })
 
+    /** Toggle audio-only (drop the TV's video track) on the receiver. */
+    fun setRemoteAudioOnly(on: Boolean) =
+        sendControl(CastControl.command(CastControl.CMD_SET_AUDIO_ONLY) { put(CastControl.KEY_AUDIO_ONLY, on) })
+
     private fun sendControl(message: String) {
         val session = currentSession() ?: return
         runCatching { session.sendMessage(CastControl.NAMESPACE, message) }

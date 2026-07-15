@@ -316,6 +316,11 @@ class AerioCastReceiverController @Inject constructor(
                         if (id.isNotBlank()) requestCastChannel(id)
                         return@launch
                     }
+                    CastControl.CMD_SET_AUDIO_ONLY -> {
+                        val on = json.optBoolean(CastControl.KEY_AUDIO_ONLY)
+                        receiverAudioOnly = on
+                        runCatching { holder.setVideoTrackEnabled(!on) }
+                    }
                     else -> return@launch
                 }
                 senderId?.let { replyState(it) }
@@ -340,6 +345,8 @@ class AerioCastReceiverController @Inject constructor(
             textOff = curSid == null,
             speed = speed,
             aspect = aspect,
+            audioOnly = receiverAudioOnly,
+            streamInfo = runCatching { composeStreamInfo() }.getOrDefault(""),
         )
         runCatching {
             CastReceiverContext.getInstance()
@@ -362,6 +369,32 @@ class AerioCastReceiverController @Inject constructor(
     private fun subtitleLabel(t: SubtitleTrack): String = buildString {
         append(t.title.ifBlank { "Track ${t.id}" })
         if (t.lang.isNotBlank()) append("  ·  ${t.lang}")
+    }
+
+    /** True while the receiver's video track is disabled (audio-only). Tracked
+     *  here because the sender toggles it and needs it echoed in the snapshot. */
+    private var receiverAudioOnly = false
+
+    /** A one-line decode summary of what the TV is actually playing, for the
+     *  phone's Stream Info sheet. Reads the live ExoPlayer's selected formats. */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun composeStreamInfo(): String {
+        val p = holder.player ?: return ""
+        val v = p.videoFormat
+        val a = p.audioFormat
+        val parts = buildList {
+            v?.let { f ->
+                if (f.width > 0 && f.height > 0) add("${f.width}x${f.height}")
+                if (f.frameRate > 0f) add("${f.frameRate.toInt()}fps")
+                (f.codecs ?: f.sampleMimeType)?.takeIf { it.isNotBlank() }?.let { add(it) }
+            }
+            a?.let { f ->
+                (f.codecs ?: f.sampleMimeType)?.takeIf { it.isNotBlank() }?.let { add(it) }
+                if (f.channelCount > 0) add("${f.channelCount}ch")
+                if (f.sampleRate > 0) add("${f.sampleRate / 1000}kHz")
+            }
+        }
+        return parts.joinToString("  ·  ").ifBlank { "No stream details available" }
     }
 
     companion object {

@@ -1444,6 +1444,48 @@ fun PlayerScreen(
                 onSetTextTrack = { id -> castSender.setRemoteTextTrack(id) },
                 onSetSpeed = { s -> castSender.setRemoteSpeed(s) },
                 onSetAspect = { mode -> castSender.setRemoteAspect(mode) },
+                onSetAudioOnly = { on -> castSender.setRemoteAudioOnly(on) },
+                onSwitchStream = {
+                    // Reuse the live Switch Stream flow: it POSTs change_stream
+                    // server-side (works while casting); the sheet's onSelect also
+                    // re-tunes the receiver when casting (see below).
+                    val ch = currentChannel
+                    val chPk = ch?.dispatcharrChannelId
+                    if (ch != null && chPk != null) {
+                        val uuid = ch.id.removePrefix("disp:")
+                        scope.launch {
+                            val streams = onLoadChannelStreams(chPk)
+                            val current = onLoadCurrentStreamId(uuid)
+                            switchStream = SwitchStreamState(
+                                streams = streams,
+                                currentStreamId = switchedStreamId ?: current,
+                            )
+                        }
+                    }
+                },
+                onRecord = {
+                    // Server-side scheduling: works whether playing locally or cast.
+                    // A default 1-hour live window (the sheet lets the user adjust);
+                    // the current programme title is used when known.
+                    currentChannel?.let { ch ->
+                        val now = System.currentTimeMillis()
+                        recordTarget = ProgramInfoTarget(
+                            channelName = ch.name,
+                            title = nowProgramme?.title?.takeIf { it.isNotBlank() }
+                                ?: "${ch.name} live recording",
+                            startMillis = now,
+                            endMillis = now + 3_600_000L,
+                            description = "",
+                            category = "",
+                            channelDispatcharrId = ch.dispatcharrChannelId,
+                        )
+                    }
+                },
+                onSleepMinutes = { minutes ->
+                    sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
+                },
+                canSwitchStream = isDispatcharrLive,
+                canRecord = currentChannel?.dispatcharrChannelId != null,
                 onRefreshState = { castSender.requestRemoteState() },
             )
         }
@@ -1553,11 +1595,26 @@ fun PlayerScreen(
             if (remaining <= 0L) {
                 sleepRemainingMillis = null
                 sleepEndsAt = null
-                onClose()
+                // GH #33: a sleep timer set from the cast remote ends the CAST
+                // (the local player is already suspended); otherwise close locally.
+                if (isCasting) castSender.stopCasting() else onClose()
                 break
             }
             sleepRemainingMillis = remaining
             delay(1_000L)
+        }
+    }
+
+    // GH #33: when a stream is switched while casting, re-tune the receiver so the
+    // TV follows the new server-side stream (additive; the local switch path above
+    // is untouched). Keyed on switchedStreamId; brief delay lets change_stream land.
+    LaunchedEffect(switchedStreamId) {
+        if (isCasting && switchedStreamId != null) {
+            val id = currentChannel?.id
+            if (id != null) {
+                delay(1_500L)
+                castSender.setRemoteChannel(id)
+            }
         }
     }
 

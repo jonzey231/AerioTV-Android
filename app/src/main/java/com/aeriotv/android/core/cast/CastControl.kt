@@ -39,6 +39,9 @@ object CastControl {
     // reliable custom channel instead of RemoteMediaClient.load().
     const val CMD_SET_CHANNEL = "setChannel"
     const val KEY_CHANNEL_ID = "channelId"
+    // Audio-only: drop the receiver's video track (keeps decoding audio). Bool arg.
+    const val CMD_SET_AUDIO_ONLY = "setAudioOnly"
+    const val KEY_AUDIO_ONLY = "audioOnly"
     const val CMD_STATE = "state" // receiver -> sender snapshot
 
     // Command args.
@@ -50,6 +53,7 @@ object CastControl {
     const val KEY_AUDIO = "audio" // JSONArray<track>
     const val KEY_TEXT = "text" // JSONArray<track> (does NOT include the implicit Off row)
     const val KEY_TEXT_OFF = "textOff" // Boolean: true when no subtitle is selected
+    const val KEY_STREAM_INFO = "streamInfo" // String: receiver-composed decode summary
     // Track object fields.
     const val KEY_ID = "id"
     const val KEY_LABEL = "label"
@@ -68,6 +72,10 @@ object CastControl {
         val textOff: Boolean = true,
         val speed: Float = 1f,
         val aspect: AspectMode = AspectMode.FIT,
+        /** True when the receiver's video track is disabled (audio-only). */
+        val audioOnly: Boolean = false,
+        /** Receiver-composed one-line decode summary for the Stream Info sheet. */
+        val streamInfo: String = "",
     )
 
     /**
@@ -101,6 +109,8 @@ object CastControl {
         put(KEY_TEXT_OFF, state.textOff)
         put(KEY_SPEED, state.speed.toDouble())
         put(KEY_ASPECT, state.aspect.key)
+        put(KEY_AUDIO_ONLY, state.audioOnly)
+        put(KEY_STREAM_INFO, state.streamInfo)
     }.toString()
 
     private fun trackJson(t: Track) = JSONObject().apply {
@@ -126,6 +136,8 @@ object CastControl {
             textOff = json.optBoolean(KEY_TEXT_OFF, true),
             speed = json.optDouble(KEY_SPEED, 1.0).toFloat(),
             aspect = AspectMode.fromKey(json.optString(KEY_ASPECT)),
+            audioOnly = json.optBoolean(KEY_AUDIO_ONLY, false),
+            streamInfo = json.optString(KEY_STREAM_INFO),
         )
     }
 }

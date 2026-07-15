@@ -2,6 +2,8 @@ package com.aeriotv.android.feature.cast
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,13 +23,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.Icon
@@ -78,6 +85,12 @@ fun CastRemoteOverlay(
     onSetTextTrack: (String?) -> Unit,
     onSetSpeed: (Float) -> Unit,
     onSetAspect: (CastControl.AspectMode) -> Unit,
+    onSetAudioOnly: (Boolean) -> Unit,
+    onSwitchStream: () -> Unit,
+    onRecord: () -> Unit,
+    onSleepMinutes: (Int) -> Unit,
+    canSwitchStream: Boolean,
+    canRecord: Boolean,
     onRefreshState: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -85,6 +98,8 @@ fun CastRemoteOverlay(
     var audioOpen by remember { mutableStateOf(false) }
     var subsOpen by remember { mutableStateOf(false) }
     var speedOpen by remember { mutableStateOf(false) }
+    var sleepOpen by remember { mutableStateOf(false) }
+    var infoOpen by remember { mutableStateOf(false) }
 
     // Pull a fresh snapshot when the remote appears; each command reply keeps it
     // current thereafter, and re-opening Options re-pulls after a channel change.
@@ -161,7 +176,11 @@ fun CastRemoteOverlay(
 
     if (optionsOpen) {
         com.aeriotv.android.ui.FormFactorModal(onDismiss = { optionsOpen = false }) {
-            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 Text(
                     text = "Cast controls",
                     style = MaterialTheme.typography.titleMedium,
@@ -169,6 +188,12 @@ fun CastRemoteOverlay(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
+                if (canSwitchStream) {
+                    OptionRow(Icons.Filled.SwapHoriz, "Switch Stream", null) {
+                        optionsOpen = false
+                        onSwitchStream()
+                    }
+                }
                 OptionRow(Icons.Outlined.MusicNote, "Audio Track", remoteState.audio.firstOrNull { it.selected }?.label) {
                     optionsOpen = false
                     audioOpen = true
@@ -184,6 +209,73 @@ fun CastRemoteOverlay(
                 OptionRow(Icons.Outlined.AspectRatio, "Aspect Ratio", remoteState.aspect.label) {
                     onSetAspect(remoteState.aspect.next())
                 }
+                if (canRecord) {
+                    OptionRow(Icons.Filled.FiberManualRecord, "Record Current Program", null) {
+                        optionsOpen = false
+                        onRecord()
+                    }
+                }
+                OptionRow(Icons.Filled.Timer, "Sleep Timer", null) {
+                    optionsOpen = false
+                    sleepOpen = true
+                }
+                OptionRow(Icons.Filled.Info, "Stream Info", null) {
+                    optionsOpen = false
+                    infoOpen = true
+                }
+                OptionRow(Icons.Filled.VideocamOff, "Audio Only", if (remoteState.audioOnly) "On" else "Off") {
+                    onSetAudioOnly(!remoteState.audioOnly)
+                }
+            }
+        }
+    }
+
+    if (sleepOpen) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { sleepOpen = false }) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+                Text(
+                    text = "Sleep Timer",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(12.dp))
+                listOf(0 to "Off", 30 to "30 minutes", 60 to "1 hour", 90 to "1.5 hours", 120 to "2 hours")
+                    .forEach { (minutes, label) ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSleepMinutes(minutes)
+                                    sleepOpen = false
+                                }
+                                .padding(vertical = 12.dp),
+                        )
+                    }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+
+    if (infoOpen) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { infoOpen = false }) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                Text(
+                    text = "Stream Info",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = remoteState.streamInfo.ifBlank { "No stream details available" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
             }
         }
     }
