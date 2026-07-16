@@ -65,6 +65,17 @@ fun CastIconButton(
     val state by sender.state.collectAsState()
     val companionConn = companionRemote?.connection?.collectAsState()?.value
     val companionConnected = companionConn is CompanionRemoteController.Conn.Connected
+    // Browse for AerioTV TVs the whole time this button is composed, so a
+    // companion-only TV (advertising over mDNS but NOT a Google Cast route --
+    // e.g. a sideloaded install, or a phone with no Play services) still makes
+    // the button appear. Discovery is refcounted, so the chooser starting it
+    // again while open is harmless (review 2026-07-15).
+    DisposableEffect(companionDiscovery) {
+        companionDiscovery?.start()
+        onDispose { companionDiscovery?.stop() }
+    }
+    val companionTvsExist =
+        (companionDiscovery?.devices?.collectAsState()?.value?.isNotEmpty() == true)
     // Discovery is driven app-wide by AerioCastSender (tied to the process
     // foreground lifecycle), so CastState is already current here and the button
     // shows the moment a registered device is found.
@@ -81,7 +92,7 @@ fun CastIconButton(
     DisposableEffect(Unit) { onDispose { onChooserOpenChange(false) } }
     val connected = state is AerioCastSender.State.Connected || companionConnected
 
-    if (state !is AerioCastSender.State.Unavailable || companionConnected) {
+    if (state !is AerioCastSender.State.Unavailable || companionConnected || companionTvsExist) {
         Box(
             modifier = modifier
                 .size(44.dp)

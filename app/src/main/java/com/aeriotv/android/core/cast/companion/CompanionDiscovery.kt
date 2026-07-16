@@ -39,9 +39,15 @@ class CompanionDiscovery @Inject constructor(
     private val resolveQueue = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
 
+    // Refcount so nested owners (the cast button keeps discovery alive to decide
+    // whether to SHOW itself; the chooser also starts it while open) don't tear
+    // each other down -- discovery stops only when the last owner releases
+    // (review 2026-07-15).
+    private var starts = 0
+
     @Synchronized
     fun start() {
-        if (discoveryListener != null) return
+        if (starts++ > 0) return
         val mgr = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
         nsd = mgr
         acquireMulticastLock()
@@ -62,6 +68,8 @@ class CompanionDiscovery @Inject constructor(
 
     @Synchronized
     fun stop() {
+        if (starts > 0) starts--
+        if (starts > 0) return // another owner still needs discovery
         discoveryListener?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
         discoveryListener = null
         resolveQueue.clear()

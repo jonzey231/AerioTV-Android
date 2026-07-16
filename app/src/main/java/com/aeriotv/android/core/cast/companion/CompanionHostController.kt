@@ -45,7 +45,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.ServerSocket
 import java.util.Collections
 import java.util.UUID
 import javax.inject.Inject
@@ -152,12 +151,25 @@ class CompanionHostController @Inject constructor(
         advertising = true
         ioScope.launch {
             runCatching {
-                boundPort = freePort()
-                startServer(boundPort)
+                // Bind the server to an EPHEMERAL port and read back what it
+                // actually bound (review 2026-07-15): the old freePort()->probe,
+                // then startServer(port)->bind sequence was a TOCTOU (another
+                // process could grab the port in between) AND start(wait=false)'s
+                // async bind failure escaped the runCatching. resolvedConnectors()
+                // suspends until the real bind succeeds (or throws), so we only
+                // ever advertise a port we truly own.
+                boundPort = startServerAndResolvePort()
                 acquireMulticastLock()
                 registerNsd(boundPort)
                 Log.i(TAG, "companion host advertising on :$boundPort")
-            }.onFailure { Log.w(TAG, "startAdvertising failed", it) }
+            }.onFailure {
+                Log.w(TAG, "startAdvertising failed", it)
+                // Leave a clean slate so the next foreground can re-attempt
+                // (otherwise advertising stays true and NSD is never retried).
+                runCatching { server?.stop(200L, 500L) }
+                server = null
+                advertising = false
+            }
         }
     }
 
@@ -212,8 +224,8 @@ class CompanionHostController @Inject constructor(
     /** Live pairing sockets: the code overlay clears when the LAST one drops. */
     private val pairingWaiters = java.util.concurrent.atomic.AtomicInteger(0)
 
-    private fun startServer(port: Int) {
-        server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
+    private suspend fun startServerAndResolvePort(): Int {
+        val srv = embeddedServer(CIO, port = 0, host = "0.0.0.0") {
             install(WebSockets)
             routing {
                 webSocket(WS_PATH) {
@@ -229,7 +241,12 @@ class CompanionHostController @Inject constructor(
                     serveConnection()
                 }
             }
-        }.also { it.start(wait = false) }
+        }
+        server = srv
+        srv.start(wait = false)
+        // Suspends until the ephemeral port is actually bound; throws on bind
+        // failure (surfaced to startAdvertising's runCatching).
+        return srv.engine.resolvedConnectors().first().port
     }
 
     private suspend fun DefaultWebSocketSession.serveConnection() {
@@ -464,7 +481,10 @@ class CompanionHostController @Inject constructor(
                     positionWallMs = pos,
                     windowStartMs = win?.get(0) ?: 0L,
                     windowEndMs = win?.get(1) ?: 0L,
-                    isPlaying = runCatching { holder.player?.isPlaying }.getOrNull() ?: true,
+                    // Default false when there's no live player: reporting "playing"
+                    // while idle made the phone transport show a play state for
+                    // nothing (review 2026-07-15).
+                    isPlaying = runCatching { holder.player?.isPlaying }.getOrNull() ?: false,
                 )
             }
         }
@@ -498,5 +518,4 @@ class CompanionHostController @Inject constructor(
     }
 
     /** Allocate a free TCP port for the WS server (NSD advertises the resolved port). */
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 }
