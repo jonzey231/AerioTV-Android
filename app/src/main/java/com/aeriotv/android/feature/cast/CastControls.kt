@@ -65,15 +65,13 @@ fun CastIconButton(
     val state by sender.state.collectAsState()
     val companionConn = companionRemote?.connection?.collectAsState()?.value
     val companionConnected = companionConn is CompanionRemoteController.Conn.Connected
-    // Browse for AerioTV TVs the whole time this button is composed, so a
-    // companion-only TV (advertising over mDNS but NOT a Google Cast route --
-    // e.g. a sideloaded install, or a phone with no Play services) still makes
-    // the button appear. Discovery is refcounted, so the chooser starting it
-    // again while open is harmless (review 2026-07-15).
-    DisposableEffect(companionDiscovery) {
-        companionDiscovery?.start()
-        onDispose { companionDiscovery?.stop() }
-    }
+    // AerioTV TVs discovered over mDNS make the button appear even with NO
+    // Google Cast route (sideloaded TV install, or a phone without Play
+    // services). Discovery itself is owned by PlayerScreen (running the whole
+    // time the player is open) -- NOT this button, which lives inside the
+    // auto-hiding chrome: owning it here restarted the mDNS browse on every
+    // chrome show, leaving the button invisible for the first seconds each
+    // time (device test 2026-07-15).
     val companionTvsExist =
         (companionDiscovery?.devices?.collectAsState()?.value?.isNotEmpty() == true)
     // Discovery is driven app-wide by AerioCastSender (tied to the process

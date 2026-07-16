@@ -187,6 +187,97 @@ fun AerioTVNavHost(
         ).show()
     }
 
+    // Audit task #47 + GH #33: resolve any pending aeriotv:// / cast / companion
+    // deep link once channels are ready. HOISTED to NavHost scope (2026-07-15
+    // Streamer device test): this consumer used to live inside composable(MAIN),
+    // which is NOT composed while the player / VOD routes are on top -- so a
+    // companion or cast channel flip arriving while the TV sat on the live
+    // player QUEUED in deepLinkTarget until the user pressed Back (phone flipped
+    // ESPN2/ESPNU, TV stayed put). Here it runs no matter which screen is up.
+    // We still wait for the playlist graph + loaded channels before acting.
+    val dlCurrentEntry by navController.currentBackStackEntryAsState()
+    val dlGraphEntry = remember(dlCurrentEntry) {
+        runCatching { navController.getBackStackEntry(Routes.PLAYLIST_GRAPH) }.getOrNull()
+    }
+    val dlCastReceiver = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            navHostContext.applicationContext, NavEntryPoint::class.java,
+        ).castReceiver()
+    }
+    if (dlGraphEntry != null) {
+        val dlVm: PlaylistViewModel = hiltViewModel(dlGraphEntry)
+        val dlState by dlVm.state.collectAsStateWithLifecycle()
+        LaunchedEffect(deepLinkTarget, dlState.channels.size, dlCurrentEntry?.destination?.route) {
+            val target = deepLinkTarget ?: return@LaunchedEffect
+            when (target) {
+                is DeepLinkTarget.Channel -> {
+                    val exists = dlState.channels.any {
+                        it.id == target.channelId && it.url.isNotBlank()
+                    }
+                    if (exists) {
+                        // If this TV is already on the LIVE player, re-tune in
+                        // place (PlayerScreen observes castChannelRequest); a
+                        // catch-up replay shares the player/ route but its prime
+                        // effect early-returns, so those navigate a fresh live
+                        // player instead. First open (on the guide) navigates.
+                        val onPlayer = navController.currentDestination
+                            ?.route?.startsWith("player/") == true
+                        val onCatchup = navController.currentBackStackEntry
+                            ?.arguments?.getString("csUrl").orEmpty().isNotBlank()
+                        if (onPlayer && !onCatchup) {
+                            dlCastReceiver.requestCastChannel(target.channelId)
+                        } else {
+                            navController.navigate(Routes.player(target.channelId))
+                        }
+                        onDeepLinkConsumed()
+                    } else if (dlState.phase == PlaylistViewModel.Phase.ChannelsReady) {
+                        onDeepLinkConsumed() // channels loaded, id gone => drop
+                    }
+                }
+                is DeepLinkTarget.Vod -> {
+                    navController.navigate(Routes.movieDetail(target.movieUuid))
+                    onDeepLinkConsumed()
+                }
+                // GH #33 companion remote: AUTOPLAY targets -- straight into
+                // the player (the VOD players resolve by uuid themselves).
+                is DeepLinkTarget.VodPlay -> {
+                    navController.navigate(
+                        if (target.isEpisode) Routes.vodEpisodePlayer(target.videoId)
+                        else Routes.vodPlayer(target.videoId),
+                    ) { launchSingleTop = true }
+                    onDeepLinkConsumed()
+                }
+                is DeepLinkTarget.RecordingPlay -> {
+                    // Non-blank title: an empty {title} path segment makes
+                    // Routes.recordingPlayer build "recording_player/<url>//"
+                    // which throws in navigate() (review 2026-07-15).
+                    navController.navigate(
+                        Routes.recordingPlayer(
+                            target.playbackUrl,
+                            target.title.ifBlank { "Recording" },
+                        ),
+                    ) { launchSingleTop = true }
+                    onDeepLinkConsumed()
+                }
+                is DeepLinkTarget.GuideProgram -> {
+                    // Resolve by guideMatchKey (search results carry that key,
+                    // NOT M3UChannel.id); re-emit through the VM so MainScaffold
+                    // + GuideScreen both react.
+                    val exists = dlState.channels.any {
+                        it.guideMatchKey == target.channelId && it.url.isNotBlank()
+                    }
+                    if (exists) {
+                        dlVm.requestGuideJump(target.channelId, target.startMillis)
+                        onDeepLinkConsumed()
+                    } else if (dlState.phase == PlaylistViewModel.Phase.ChannelsReady) {
+                        onDeepLinkConsumed() // channels loaded, key gone => drop
+                    }
+                    // else: channels still loading; leave the target pending.
+                }
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = Routes.PLAYLIST_GRAPH) {
         navigation(startDestination = Routes.BOOTSTRAP, route = Routes.PLAYLIST_GRAPH) {
@@ -532,106 +623,11 @@ fun AerioTVNavHost(
                     }
                 }
 
-                // Audit task #47: resolve any pending aeriotv:// deep link
-                // once channels are ready. We deliberately wait until the
-                // playlist has loaded -- launching the player route before
-                // the channel exists in state.channels would show a stale
-                // / missing card. For Vod, we navigate to movie detail
-                // without needing the OnDemand state to be loaded; the
-                // detail screen has its own resolver.
-                val castReceiverForFlip = remember {
-                    dagger.hilt.android.EntryPointAccessors.fromApplication(
-                        context.applicationContext, NavEntryPoint::class.java,
-                    ).castReceiver()
-                }
-                LaunchedEffect(deepLinkTarget, state.channels.size) {
-                    val target = deepLinkTarget ?: return@LaunchedEffect
-                    when (target) {
-                        is DeepLinkTarget.Channel -> {
-                            val exists = state.channels.any {
-                                it.id == target.channelId && it.url.isNotBlank()
-                            }
-                            if (exists) {
-                                // GH #33: a cast OR companion channel-flip arrives
-                                // as a channel deep link. If this TV is already on
-                                // the live player, re-tune it in place (PlayerScreen
-                                // observes castChannelRequest) instead of navigating
-                                // a new player route, which won't re-prime the
-                                // persistent surface (device-verified 2026-07-15).
-                                // Applies to ANY channel deep link while on the
-                                // player -- cast flips, companion-remote flips, and
-                                // aeriotv:// links alike; a first open (on the
-                                // guide) still navigates normally.
-                                // In-place re-tune ONLY on the LIVE player. A catch-up
-                                // replay shares the player/ route but PlayerScreen's
-                                // prime effect early-returns on isCatchupMode, so an
-                                // in-place request would be consumed with no effect and
-                                // the dedup would then suppress retries (review
-                                // 2026-07-15). Route those to a fresh live player instead.
-                                val onPlayer = navController.currentDestination
-                                    ?.route?.startsWith("player/") == true
-                                val onCatchup = navController.currentBackStackEntry
-                                    ?.arguments?.getString("csUrl").orEmpty().isNotBlank()
-                                if (onPlayer && !onCatchup) {
-                                    castReceiverForFlip.requestCastChannel(target.channelId)
-                                } else {
-                                    navController.navigate(Routes.player(target.channelId))
-                                }
-                                onDeepLinkConsumed()
-                            } else if (state.phase == PlaylistViewModel.Phase.ChannelsReady) {
-                                // Channels are loaded but the id isn't here --
-                                // playlist might have changed since the deep
-                                // link was created. Drop it silently.
-                                onDeepLinkConsumed()
-                            }
-                        }
-                        is DeepLinkTarget.Vod -> {
-                            navController.navigate(Routes.movieDetail(target.movieUuid))
-                            onDeepLinkConsumed()
-                        }
-                        // GH #33 companion remote: AUTOPLAY targets -- straight into
-                        // the player (the VOD players resolve by uuid themselves).
-                        is DeepLinkTarget.VodPlay -> {
-                            navController.navigate(
-                                if (target.isEpisode) Routes.vodEpisodePlayer(target.videoId)
-                                else Routes.vodPlayer(target.videoId),
-                            ) { launchSingleTop = true }
-                            onDeepLinkConsumed()
-                        }
-                        is DeepLinkTarget.RecordingPlay -> {
-                            // Non-blank title: an empty {title} path segment makes
-                            // Routes.recordingPlayer build "recording_player/<url>//"
-                            // which throws in navigate() (review 2026-07-15). The
-                            // companion path carries network-supplied titles.
-                            navController.navigate(
-                                Routes.recordingPlayer(
-                                    target.playbackUrl,
-                                    target.title.ifBlank { "Recording" },
-                                ),
-                            ) { launchSingleTop = true }
-                            onDeepLinkConsumed()
-                        }
-                        is DeepLinkTarget.GuideProgram -> {
-                            // Resolve the channel by guideMatchKey (the search
-                            // result carries that key, NOT M3UChannel.id).
-                            val exists = state.channels.any {
-                                it.guideMatchKey == target.channelId && it.url.isNotBlank()
-                            }
-                            if (exists) {
-                                // Re-emit through the VM so MainScaffold (tab
-                                // switch + force guide mode) and GuideScreen
-                                // (scroll + focus) both react. selectedGroup is
-                                // reset to All inside requestGuideJump.
-                                vm.requestGuideJump(target.channelId, target.startMillis)
-                                onDeepLinkConsumed()
-                            } else if (state.phase == PlaylistViewModel.Phase.ChannelsReady) {
-                                onDeepLinkConsumed() // channels loaded, key gone => drop
-                            }
-                            // else: channels still loading; leave target pending
-                            // for the next (deepLinkTarget, channels.size) pass.
-                        }
-                    }
-                }
+                // Deep-link consumption moved to AerioTVNavHost scope (see the
+                // hoisted block above MainScaffold's NavHost): inside this MAIN
+                // composable it was NOT running while the player / VOD routes
+                // were on top, so companion/cast channel flips queued until the
+                // user pressed Back (Streamer device test 2026-07-15).
 
                 // Task #148 milestone B: routing decision for catch-up
                 // (TV = unified live player, phone = recording player).

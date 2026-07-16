@@ -165,6 +165,22 @@ fun PlayerScreen(
     // "Some remote screen is playing this, not the phone" -- the shared gate for
     // every local-playback suppression below.
     val isRemote = isCasting || isCompanion
+    // Own companion mDNS discovery for the player's whole lifetime (phones only;
+    // the TV is the host, never a client). The cast button reads the devices flow
+    // to decide its own visibility; if the BUTTON owned discovery (it lives inside
+    // the auto-hiding chrome) the browse would restart on every chrome show and
+    // the button would be invisible for the first seconds each time (device test
+    // 2026-07-15). Refcounted with the chooser dialog's own start/stop.
+    val uiModeIsTv = (
+        androidx.compose.ui.platform.LocalContext.current.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_TYPE_MASK
+        ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+    if (!uiModeIsTv) {
+        DisposableEffect(companionDiscovery) {
+            companionDiscovery.start()
+            onDispose { companionDiscovery.stop() }
+        }
+    }
     // Set true while the companion "Disconnect" button tears down the remote and
     // exits the player, so the prime effect (which re-fires when isCompanion flips
     // false) does NOT resume LOCAL playback on the phone -- that left the channel
@@ -364,6 +380,15 @@ fun PlayerScreen(
         if (isRemote) {
             runCatching { exoHolder.stop() }
             runCatching { exoWindowState.hide() }
+            // Also stop the media FGS the LOCAL mount started: the phone isn't
+            // playing anything now, and the leftover session (stuck PLAYING with
+            // a stale position) kept an "AerioTV" media notification in the shade
+            // through the whole remote session AND after Disconnect (device test
+            // 2026-07-15). The in-app Controlling/Now-Casting card is the
+            // re-entry point; the notification is purely local playback's.
+            runCatching {
+                com.aeriotv.android.core.playback.AerioMediaPlaybackService.stop(context)
+            }
         } else {
             runCatching { exoWindowState.requestFullscreen() }
         }
