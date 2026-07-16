@@ -428,8 +428,14 @@ class AerioCastReceiverController @Inject constructor(
      * remotes render the identical tracks / speed / aspect / stream-info / rewind
      * snapshot from the same source of truth.
      */
-    suspend fun buildRemoteStateMessage(): String {
-        val p = holder.player
+    suspend fun buildRemoteStateMessage(override: androidx.media3.exoplayer.ExoPlayer? = null): String {
+        // GH #33 companion VOD/DVR: when a per-screen VOD/recording player is
+        // registered on the host, tracks/speed/audio-only/stream-info must be read
+        // from THAT player, not the (stopped) shared live holder -- otherwise the
+        // phone's pickers render the last live channel's tracks while actually
+        // driving the VOD player (adversarial review 2026-07-15).
+        val p = override ?: holder.player
+        val isExternal = override != null
         val audio = runCatching { p?.readAudioTracks() }.getOrNull().orEmpty()
         val curAid = runCatching { p?.readCurrentAid() }.getOrNull()
         val subs = runCatching { p?.readSubtitleTracks() }.getOrNull().orEmpty()
@@ -438,7 +444,11 @@ class AerioCastReceiverController @Inject constructor(
         val aspect = CastControl.AspectMode.fromKey(
             runCatching { prefs.playerAspectMode.first() }.getOrNull(),
         )
-        val win = runCatching { holder.rewindWindow() }.getOrNull()
+        // Live-rewind window only applies to the shared live player. For a VOD/
+        // recording player the seek axis is media position (window [0,duration]),
+        // matching CompanionHostController.pushPosition's external branch.
+        val win = if (isExternal) null else runCatching { holder.rewindWindow() }.getOrNull()
+        val extDuration = if (isExternal) runCatching { p?.duration }.getOrNull()?.takeIf { it > 0 } ?: 0L else 0L
         val state = CastControl.RemoteState(
             audio = audio.map { CastControl.Track(it.id.toString(), audioLabel(it), it.id == curAid) },
             text = subs.map { CastControl.Track(it.id.toString(), subtitleLabel(it), it.id == curSid) },
@@ -448,14 +458,15 @@ class AerioCastReceiverController @Inject constructor(
             // Derive from the LIVE track selection, not a cached flag: a channel
             // flip / watchdog re-prime re-enables the video track without going
             // through CMD_SET_AUDIO_ONLY, so a cached bool would stick stale-true.
-            audioOnly = runCatching { receiverVideoDisabled() }.getOrDefault(false),
-            streamInfo = runCatching { composeStreamInfo() }.getOrDefault(""),
+            audioOnly = if (isExternal) false else runCatching { receiverVideoDisabled() }.getOrDefault(false),
+            streamInfo = runCatching { composeStreamInfo(p) }.getOrDefault(""),
             // Live-rewind window + playhead for the phone's FF/RW + scrubber.
-            canSeek = win != null,
-            isLive = runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
-            positionWallMs = runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L),
+            canSeek = if (isExternal) extDuration > 0 else win != null,
+            isLive = if (isExternal) false else runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
+            positionWallMs = if (isExternal) runCatching { p?.currentPosition }.getOrNull() ?: 0L
+                else runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L),
             windowStartMs = win?.get(0) ?: 0L,
-            windowEndMs = win?.get(1) ?: 0L,
+            windowEndMs = if (isExternal) extDuration else (win?.get(1) ?: 0L),
         )
         return CastControl.encodeState(state)
     }
@@ -489,8 +500,8 @@ class AerioCastReceiverController @Inject constructor(
     /** A one-line decode summary of what the TV is actually playing, for the
      *  phone's Stream Info sheet. Reads the live ExoPlayer's selected formats. */
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    private fun composeStreamInfo(): String {
-        val p = holder.player ?: return ""
+    private fun composeStreamInfo(player: androidx.media3.exoplayer.ExoPlayer? = null): String {
+        val p = player ?: holder.player ?: return ""
         val v = p.videoFormat
         val a = p.audioFormat
         val parts = buildList {

@@ -130,6 +130,29 @@ object Routes {
             "?isDvr=$isDvr&fromStart=$fromStart&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
 }
 
+/**
+ * Silence any LIVE session (persistent exo window + mini player + media service)
+ * before a VOD/recording player mounts. Extracted from the RECORDING_PLAYER route
+ * so the two VOD routes get the same teardown -- required once companion VodPlay
+ * can navigate player/... -> vod_player/... directly with live still running
+ * (adversarial review 2026-07-15).
+ */
+@Composable
+private fun tearDownLiveForVod(navController: androidx.navigation.NavController) {
+    val vm: MiniPlayerViewModel = hiltViewModel()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        val entry = dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            MainScaffoldEntryPoint::class.java,
+        )
+        vm.dismiss()
+        entry.exoWindowState().hide()
+        entry.exoPlayerHolder().stop()
+        com.aeriotv.android.core.playback.AerioMediaPlaybackService.stop(context.applicationContext)
+    }
+}
+
 @Composable
 fun AerioTVNavHost(
     initialUrl: String? = null,
@@ -139,6 +162,30 @@ fun AerioTVNavHost(
     onDeepLinkConsumed: () -> Unit = {},
 ) {
     val navController = rememberNavController()
+
+    // GH #33 companion VOD/DVR: while this phone is connected to an AerioTV TV,
+    // the VOD/recording PLAY actions below send the item to the TV instead of
+    // playing locally (live channels already do this inside PlayerScreen's
+    // companion mode). Hoisted here so every route's play lambda can share it.
+    val navHostContext = androidx.compose.ui.platform.LocalContext.current
+    val companionRemoteNav = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            navHostContext.applicationContext,
+            com.aeriotv.android.feature.player.PlayerScreenEntryPoint::class.java,
+        ).companionRemote()
+    }
+    val companionConnNav by companionRemoteNav.connection.collectAsStateWithLifecycle()
+    /** Non-null TV name while companion-connected; null otherwise. */
+    val companionTvName: String? =
+        (companionConnNav as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected)
+            ?.name
+    fun toastPlayingOnTv() {
+        android.widget.Toast.makeText(
+            navHostContext,
+            "Playing on ${companionTvName ?: "TV"}",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = Routes.PLAYLIST_GRAPH) {
@@ -515,9 +562,17 @@ fun AerioTVNavHost(
                                 // player -- cast flips, companion-remote flips, and
                                 // aeriotv:// links alike; a first open (on the
                                 // guide) still navigates normally.
+                                // In-place re-tune ONLY on the LIVE player. A catch-up
+                                // replay shares the player/ route but PlayerScreen's
+                                // prime effect early-returns on isCatchupMode, so an
+                                // in-place request would be consumed with no effect and
+                                // the dedup would then suppress retries (review
+                                // 2026-07-15). Route those to a fresh live player instead.
                                 val onPlayer = navController.currentDestination
                                     ?.route?.startsWith("player/") == true
-                                if (onPlayer) {
+                                val onCatchup = navController.currentBackStackEntry
+                                    ?.arguments?.getString("csUrl").orEmpty().isNotBlank()
+                                if (onPlayer && !onCatchup) {
                                     castReceiverForFlip.requestCastChannel(target.channelId)
                                 } else {
                                     navController.navigate(Routes.player(target.channelId))
@@ -532,6 +587,28 @@ fun AerioTVNavHost(
                         }
                         is DeepLinkTarget.Vod -> {
                             navController.navigate(Routes.movieDetail(target.movieUuid))
+                            onDeepLinkConsumed()
+                        }
+                        // GH #33 companion remote: AUTOPLAY targets -- straight into
+                        // the player (the VOD players resolve by uuid themselves).
+                        is DeepLinkTarget.VodPlay -> {
+                            navController.navigate(
+                                if (target.isEpisode) Routes.vodEpisodePlayer(target.videoId)
+                                else Routes.vodPlayer(target.videoId),
+                            ) { launchSingleTop = true }
+                            onDeepLinkConsumed()
+                        }
+                        is DeepLinkTarget.RecordingPlay -> {
+                            // Non-blank title: an empty {title} path segment makes
+                            // Routes.recordingPlayer build "recording_player/<url>//"
+                            // which throws in navigate() (review 2026-07-15). The
+                            // companion path carries network-supplied titles.
+                            navController.navigate(
+                                Routes.recordingPlayer(
+                                    target.playbackUrl,
+                                    target.title.ifBlank { "Recording" },
+                                ),
+                            ) { launchSingleTop = true }
                             onDeepLinkConsumed()
                         }
                         is DeepLinkTarget.GuideProgram -> {
@@ -582,7 +659,12 @@ fun AerioTVNavHost(
                         navController.navigate(Routes.seriesDetail(seriesId))
                     },
                     onEpisodeResume = { videoId ->
-                        navController.navigate(Routes.vodEpisodePlayer(videoId))
+                        if (companionTvName != null) {
+                            companionRemoteNav.playVod(videoId, isEpisode = true)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.vodEpisodePlayer(videoId))
+                        }
                     },
                     // #9: resume an in-progress movie from Continue Watching by
                     // opening its detail (which offers the Resume button).
@@ -590,7 +672,16 @@ fun AerioTVNavHost(
                         navController.navigate(Routes.movieDetail(videoId))
                     },
                     onPlayRecording = { playbackUrl, title ->
-                        navController.navigate(Routes.recordingPlayer(playbackUrl, title))
+                        // Only http(s) recordings can play on the TV; a LOCAL
+                        // recording (file://, content://) lives on THIS phone and
+                        // the TV can't resolve it -- play those locally even when
+                        // companion-connected (review 2026-07-15).
+                        if (companionTvName != null && playbackUrl.startsWith("http")) {
+                            companionRemoteNav.playRecording(playbackUrl, title)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.recordingPlayer(playbackUrl, title))
+                        }
                     },
                     onPlayCatchup = { catchupChannelId, playbackUrl, title, progStart, progEnd, panelTz, channelUuid ->
                         // Task #148 milestone B: TV plays catch-up INSIDE the
@@ -789,7 +880,12 @@ fun AerioTVNavHost(
                     seriesId = seriesId,
                     onBack = { navController.popBackStack() },
                     onEpisodeClick = { episode ->
-                        navController.navigate(Routes.vodEpisodePlayer(episode.uuid))
+                        if (companionTvName != null) {
+                            companionRemoteNav.playVod(episode.uuid, isEpisode = true, title = episode.title)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.vodEpisodePlayer(episode.uuid))
+                        }
                     },
                     // Known For tile in the cast bio dialog: a PLAIN push (no
                     // popUpTo / singleTop) so remote BACK pops the new detail
@@ -812,7 +908,14 @@ fun AerioTVNavHost(
                 com.aeriotv.android.feature.ondemand.MovieDetailScreen(
                     movieUuid = movieUuid,
                     onBack = { navController.popBackStack() },
-                    onPlay = { navController.navigate(Routes.vodPlayer(movieUuid)) },
+                    onPlay = {
+                        if (companionTvName != null) {
+                            companionRemoteNav.playVod(movieUuid, isEpisode = false)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.vodPlayer(movieUuid))
+                        }
+                    },
                     // Same plain Known For push as SERIES_DETAIL above.
                     onOpenMovie = { uuid -> navController.navigate(Routes.movieDetail(uuid)) },
                     onOpenSeries = { id -> navController.navigate(Routes.seriesDetail(id)) },
@@ -830,6 +933,14 @@ fun AerioTVNavHost(
                 val playlistVm: PlaylistViewModel = hiltViewModel(parent)
                 val playlistState by playlistVm.state.collectAsStateWithLifecycle()
                 val onDemandVm: OnDemandViewModel = hiltViewModel()
+
+                // Silence any LIVE session before VOD starts. A companion VodPlay
+                // deep link navigates player/... -> vod_episode_player/... directly
+                // while the shared holder + persistent exo window are still live;
+                // without this the live channel keeps streaming (and sounding)
+                // under the movie (review 2026-07-15). Same teardown the
+                // RECORDING_PLAYER route already does.
+                tearDownLiveForVod(navController)
 
                 val episodeUuid = Uri.decode(entry.arguments?.getString("episodeUuid").orEmpty())
 
@@ -962,6 +1073,9 @@ fun AerioTVNavHost(
                 val playlistState by playlistVm.state.collectAsStateWithLifecycle()
                 val onDemandVm: OnDemandViewModel = hiltViewModel()
                 val onDemandState by onDemandVm.state.collectAsStateWithLifecycle()
+
+                // Silence any live session first (see the episode route above).
+                tearDownLiveForVod(navController)
 
                 val movieUuid = Uri.decode(entry.arguments?.getString("movieUuid").orEmpty())
                 val movie = onDemandState.movies.firstOrNull { it.uuid == movieUuid }

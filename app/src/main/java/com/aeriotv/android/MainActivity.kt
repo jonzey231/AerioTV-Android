@@ -494,6 +494,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // GH #33 companion VOD/DVR: a paired phone asked this TV to play a movie /
+        // episode / recording. Route through the same deep-link navigation the
+        // cast loads use; the VodPlay/RecordingPlay targets AUTOPLAY (straight to
+        // the VOD player, not the detail screen).
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                companionHost.playRequests.collect { req ->
+                    deepLinkTarget.value = when (req) {
+                        is com.aeriotv.android.core.cast.companion.CompanionHostController.PlayRequest.Vod ->
+                            DeepLinkTarget.VodPlay(req.videoId, req.isEpisode)
+                        is com.aeriotv.android.core.cast.companion.CompanionHostController.PlayRequest.Recording ->
+                            DeepLinkTarget.RecordingPlay(req.url, req.title)
+                    }
+                }
+            }
+        }
         // Cast Connect: the initial LAUNCH that started the activity as a receiver
         // arrives as the launch intent. Hand it to MediaManager before deep-link
         // parsing; if consumed, the load callback drives navigation above.

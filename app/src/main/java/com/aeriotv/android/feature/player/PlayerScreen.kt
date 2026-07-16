@@ -698,16 +698,34 @@ fun PlayerScreen(
                 if (!exoHolder.reachedSteadyPlayback.value) { baseline = null; continue }
                 // OFF the main thread: the GET + JSON parse + auth-retry must never run on
                 // Main or it drops frames every tick (a periodic judder with no rebuffer).
+                // Tri-state (review 2026-07-15): null = transport/auth failure
+                // (UNKNOWN -- don't count it as a dead session; a Wi-Fi blip or a
+                // server restart while we coast on the live buffer is not a wedge),
+                // "" = Dispatcharr answered "no active session" (CONFIRMED dead),
+                // url = alive.
                 val statusUrl = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
-                if (statusUrl.isNullOrBlank()) {
-                    // 404 / stopped: Dispatcharr has no active connection for this
-                    // channel. One blank is transient (mid-switch blip) -> back off.
-                    // But a SUSTAINED dead session while we still intend to play means
-                    // our read wedged and the proxy dropped us (Shield field freeze
-                    // 2026-07-15: status 404 for >1min, no recovery). Hand Dispatcharr
-                    // a fresh connection via a keepalive re-prime.
+                if (statusUrl == null) {
+                    // Unknown: transport error. Back off and RE-READ, but never
+                    // reprime on this alone -- reset the dead counter so a real
+                    // outage doesn't accumulate across transient failures.
                     backoffMs = (backoffMs + 4_000L).coerceAtMost(12_000L)
-                    if (++deadStatusCount >= 3 && currentChannel?.id == ch.id &&
+                    deadStatusCount = 0
+                    continue
+                }
+                if (statusUrl.isBlank()) {
+                    // Confirmed dead session: Dispatcharr has no active connection
+                    // for this channel. One blank is transient (mid-switch blip) ->
+                    // back off. A SUSTAINED dead session while we still intend to
+                    // PLAY means our read wedged and the proxy dropped us (Shield
+                    // field freeze 2026-07-15: status 404 for >1min, no recovery).
+                    // Hand Dispatcharr a fresh connection via a keepalive re-prime.
+                    // Gated on playWhenReady: a user pause legitimately stops our
+                    // read and drops the session -- do NOT force it back to life.
+                    backoffMs = (backoffMs + 4_000L).coerceAtMost(12_000L)
+                    val stillPlaying = withContext(Dispatchers.Main.immediate) {
+                        exoHolder.player?.playWhenReady == true
+                    }
+                    if (stillPlaying && ++deadStatusCount >= 3 && currentChannel?.id == ch.id &&
                         switchStream == null && !exoHolder.isReprimeInFlight &&
                         !exoHolder.isTimeshifting
                     ) {
@@ -1997,4 +2015,5 @@ interface PlayerScreenEntryPoint {
     fun castReceiver(): com.aeriotv.android.core.cast.AerioCastReceiverController
     fun companionRemote(): com.aeriotv.android.core.cast.companion.CompanionRemoteController
     fun companionDiscovery(): com.aeriotv.android.core.cast.companion.CompanionDiscovery
+    fun companionHost(): com.aeriotv.android.core.cast.companion.CompanionHostController
 }

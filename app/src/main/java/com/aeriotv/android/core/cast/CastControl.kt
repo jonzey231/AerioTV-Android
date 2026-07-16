@@ -56,6 +56,14 @@ object CastControl {
     const val CMD_PLAY = "play"
     const val CMD_PAUSE = "pause"
     const val CMD_TOGGLE = "toggle"
+    // Companion VOD/DVR (GH #33): play a movie/episode (by uuid) or a DVR
+    // recording (by resolved playback URL) on the TV's own VOD player.
+    const val CMD_PLAY_VOD = "playVod"
+    const val CMD_PLAY_RECORDING = "playRecording"
+    const val KEY_VIDEO_ID = "videoId"
+    const val KEY_IS_EPISODE = "isEpisode"
+    const val KEY_URL = "url"
+    const val KEY_TITLE = "title"
 
     // Command args.
     const val KEY_TRACK_ID = "id" // audio/text track id; setText with "" (or absent) = Off

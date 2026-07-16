@@ -62,6 +62,13 @@ class CompanionRemoteController @Inject constructor(
     private var job: Job? = null
     private var current: CompanionDiscovery.Tv? = null
     private var deviceName: String? = null
+    // Monotonic connection generation: each connect() bumps it, and a cancelled
+    // job's tail only mutates shared state if it is still the current attempt.
+    // Without this, cancelling job A (disconnect / switch to TV B) makes A's
+    // suspended read throw CancellationException, whose onFailure/tail would
+    // otherwise clobber B's Connecting/session with a stale Failed/null
+    // (adversarial review 2026-07-15).
+    private val generation = java.util.concurrent.atomic.AtomicInteger(0)
 
     private val _connection = MutableStateFlow<Conn>(Conn.Idle)
     val connection: StateFlow<Conn> = _connection.asStateFlow()
@@ -92,10 +99,12 @@ class CompanionRemoteController @Inject constructor(
     fun connect(tv: CompanionDiscovery.Tv) {
         disconnect()
         current = tv
+        val gen = generation.incrementAndGet()
         _connection.value = Conn.Connecting(tv.name)
         job = scope.launch {
             runCatching {
                 val s = client.webSocketSession { url("ws://${tv.host}:${tv.port}/remote") }
+                if (gen != generation.get()) { runCatching { s.close() }; return@launch }
                 session = s
                 // Authenticate immediately with a remembered token (blank on first pair);
                 // the TV replies authOk, or authFail + shows a code -> NeedsPairing.
@@ -105,10 +114,17 @@ class CompanionRemoteController @Inject constructor(
                     val json = runCatching { JSONObject(text) }.getOrNull() ?: continue
                     handleFrame(tv, json)
                 }
-            }.onFailure { _connection.value = Conn.Failed(it.message ?: "connect failed") }
-            session = null
-            if (_connection.value is Conn.Connected || _connection.value is Conn.Connecting) {
-                _connection.value = Conn.Idle
+            }.onFailure {
+                // Only settle failure if this is still the current attempt: a
+                // disconnect()/switch cancels the read (CancellationException),
+                // whose tail must NOT overwrite the successor's state.
+                if (gen == generation.get()) _connection.value = Conn.Failed(it.message ?: "connect failed")
+            }
+            if (gen == generation.get()) {
+                session = null
+                if (_connection.value is Conn.Connected || _connection.value is Conn.Connecting) {
+                    _connection.value = Conn.Idle
+                }
             }
         }
     }
@@ -121,6 +137,7 @@ class CompanionRemoteController @Inject constructor(
     }
 
     fun disconnect() {
+        generation.incrementAndGet() // invalidate the in-flight attempt's tail
         job?.cancel()
         job = null
         val s = session
@@ -168,6 +185,30 @@ class CompanionRemoteController @Inject constructor(
         title?.takeIf { it.isNotBlank() }?.let { _nowPlaying.value = it }
         _currentChannelId.value = channelId
         send(CastControl.command(CastControl.CMD_SET_CHANNEL) { put(CastControl.KEY_CHANNEL_ID, channelId) })
+    }
+
+    /** GH #33 companion VOD: play a movie/episode on the TV's VOD player. */
+    fun playVod(videoId: String, isEpisode: Boolean, title: String? = null) {
+        title?.takeIf { it.isNotBlank() }?.let { _nowPlaying.value = it }
+        _currentChannelId.value = null // not a live channel; card tap won't re-tune
+        send(
+            CastControl.command(CastControl.CMD_PLAY_VOD) {
+                put(CastControl.KEY_VIDEO_ID, videoId)
+                put(CastControl.KEY_IS_EPISODE, isEpisode)
+            },
+        )
+    }
+
+    /** GH #33 companion DVR: play a recording / catch-up by resolved URL on the TV. */
+    fun playRecording(url: String, title: String? = null) {
+        title?.takeIf { it.isNotBlank() }?.let { _nowPlaying.value = it }
+        _currentChannelId.value = null
+        send(
+            CastControl.command(CastControl.CMD_PLAY_RECORDING) {
+                put(CastControl.KEY_URL, url)
+                put(CastControl.KEY_TITLE, title ?: "")
+            },
+        )
     }
 
     fun togglePlayPause() = send(CastControl.command(CastControl.CMD_TOGGLE))

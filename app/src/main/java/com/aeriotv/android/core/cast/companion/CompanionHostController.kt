@@ -34,10 +34,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -79,6 +82,8 @@ class CompanionHostController @Inject constructor(
         const val KEY_TOKENS = "tokens" // StringSet of issued pairing tokens
         const val KEY_DEVICE_ID = "deviceId"
         const val TICK_MS = 1000L
+        /** Wrong-code guesses tolerated on one socket before it is closed. */
+        const val MAX_CODE_ATTEMPTS = 5
     }
 
     /** Player commands executed on the single ExoPlayer thread (Main), like the Cast receiver. */
@@ -102,6 +107,27 @@ class CompanionHostController @Inject constructor(
      *  TV UI observes this to render the "enter this code on your phone" overlay. */
     private val _pairingCode = MutableStateFlow<String?>(null)
     val pairingCode: StateFlow<String?> = _pairingCode.asStateFlow()
+
+    /** GH #33 companion VOD/DVR: a phone asked this TV to play a movie/episode or
+     *  a recording. One-shot Channel (same rationale as the cast loadRequests) --
+     *  MainActivity collects it and routes into the deep-link navigation. */
+    sealed interface PlayRequest {
+        data class Vod(val videoId: String, val isEpisode: Boolean) : PlayRequest
+        data class Recording(val url: String, val title: String) : PlayRequest
+    }
+    private val _playRequests = Channel<PlayRequest>(Channel.BUFFERED)
+    val playRequests: Flow<PlayRequest> = _playRequests.receiveAsFlow()
+
+    /**
+     * GH #33 companion VOD/DVR transport: the TV's VOD/recording playback uses a
+     * PER-SCREEN ExoPlayer (VODPlayerScreen), NOT the shared live holder -- so that
+     * screen registers its player here while mounted and companion transport /
+     * seek / position drive it instead of the (stopped) live player.
+     */
+    @Volatile var externalPlayerProvider: (() -> androidx.media3.exoplayer.ExoPlayer?)? = null
+
+    private fun controlPlayer(): androidx.media3.exoplayer.ExoPlayer? =
+        externalPlayerProvider?.invoke() ?: holder.player
 
     private val prefs by lazy { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
@@ -183,17 +209,33 @@ class CompanionHostController @Inject constructor(
 
     // ---- WebSocket server ----
 
+    /** Live pairing sockets: the code overlay clears when the LAST one drops. */
+    private val pairingWaiters = java.util.concurrent.atomic.AtomicInteger(0)
+
     private fun startServer(port: Int) {
         server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
             install(WebSockets)
             routing {
-                webSocket(WS_PATH) { serveConnection() }
+                webSocket(WS_PATH) {
+                    // Drive-by-web hardening (adversarial review 2026-07-15): browser
+                    // WebSockets are NOT blocked by same-origin policy, so a hostile
+                    // page on any LAN device could script this socket. Browsers always
+                    // send an Origin header on WS upgrades; our native clients never
+                    // do -- reject any upgrade that carries one.
+                    if (call.request.headers["Origin"] != null) {
+                        close()
+                        return@webSocket
+                    }
+                    serveConnection()
+                }
             }
         }.also { it.start(wait = false) }
     }
 
     private suspend fun DefaultWebSocketSession.serveConnection() {
         var authed = false
+        var wasPairing = false
+        var codeAttempts = 0
         runCatching { send(Frame.Text(CompanionProtocol.hello(deviceName(), needsPairing = true, nowPlaying = nowPlayingTitle()))) }
         try {
             for (frame in incoming) {
@@ -202,14 +244,34 @@ class CompanionHostController @Inject constructor(
                 val type = CompanionProtocol.typeOf(json)
                 if (!authed) {
                     if (type == CompanionProtocol.T_AUTH) {
-                        val issued = tryAuth(json.optString(CompanionProtocol.KEY_TOKEN), json.optString(CompanionProtocol.KEY_CODE))
+                        val code = json.optString(CompanionProtocol.KEY_CODE)
+                        val issued = tryAuth(json.optString(CompanionProtocol.KEY_TOKEN), code)
                         if (issued != null) {
                             authed = true
                             _pairingCode.value = null
                             runCatching { send(Frame.Text(CompanionProtocol.authOk(issued))) }
                             registerSession(this)
                         } else {
+                            // Brute-force hardening (adversarial review 2026-07-15):
+                            // a WRONG code both counts against a small per-connection
+                            // budget AND rotates the displayed code, so the 6-digit
+                            // space can't be swept -- every guess invalidates itself.
+                            // Token-only failures (remembered device gone stale) don't
+                            // rotate: the phone follows up with a code entry.
+                            if (code.isNotBlank()) {
+                                codeAttempts++
+                                _pairingCode.value = null // rotate on every miss
+                            }
+                            if (codeAttempts >= MAX_CODE_ATTEMPTS) {
+                                runCatching { send(Frame.Text(CompanionProtocol.authFail(CompanionProtocol.REASON_BAD_CODE))) }
+                                close()
+                                break
+                            }
                             // No valid token/code yet -> show a code on the TV and ask for it.
+                            if (!wasPairing) {
+                                wasPairing = true
+                                pairingWaiters.incrementAndGet()
+                            }
                             ensurePairingCode()
                             val reason = if (json.optString(CompanionProtocol.KEY_TOKEN).isNotBlank())
                                 CompanionProtocol.REASON_BAD_TOKEN else CompanionProtocol.REASON_BAD_CODE
@@ -222,6 +284,12 @@ class CompanionHostController @Inject constructor(
             }
         } finally {
             unregisterSession(this)
+            // This socket was the one a code was minted for: when the LAST pairing
+            // socket drops without success, take the overlay down and kill the code
+            // (review finding: it used to linger on screen indefinitely).
+            if (wasPairing && pairingWaiters.decrementAndGet() <= 0 && !authed) {
+                _pairingCode.value = null
+            }
         }
     }
 
@@ -271,19 +339,44 @@ class CompanionHostController @Inject constructor(
                             Log.w(TAG, "companion setChannel: channel not playable: $id")
                         }
                     }
-                CastControl.CMD_PLAY -> runCatching { holder.player?.play() }
-                CastControl.CMD_PAUSE -> runCatching { holder.player?.pause() }
+                // GH #33 companion VOD/DVR: route to the TV's VOD player via the
+                // deep-link navigation (MainActivity collects playRequests).
+                CastControl.CMD_PLAY_VOD -> json.optString(CastControl.KEY_VIDEO_ID)
+                    .takeIf { it.isNotBlank() }?.let { id ->
+                        _playRequests.trySend(
+                            PlayRequest.Vod(id, json.optBoolean(CastControl.KEY_IS_EPISODE)),
+                        )
+                    }
+                CastControl.CMD_PLAY_RECORDING -> json.optString(CastControl.KEY_URL)
+                    .takeIf { it.isNotBlank() }?.let { url ->
+                        _playRequests.trySend(
+                            PlayRequest.Recording(url, json.optString(CastControl.KEY_TITLE)),
+                        )
+                    }
+                // Transport prefers the registered VOD/recording player when one
+                // is on screen; otherwise the shared live player.
+                CastControl.CMD_PLAY -> runCatching { controlPlayer()?.play() }
+                CastControl.CMD_PAUSE -> runCatching { controlPlayer()?.pause() }
                 CastControl.CMD_TOGGLE -> runCatching {
-                    holder.player?.let { if (it.isPlaying) it.pause() else it.play() }
+                    controlPlayer()?.let { if (it.isPlaying) it.pause() else it.play() }
                 }
                 CastControl.CMD_GO_LIVE -> runCatching { holder.goLive() }
                 CastControl.CMD_SEEK_BY -> runCatching {
                     val delta = json.optLong(CastControl.KEY_DELTA_MS)
-                    val base = holder.currentRewindWallMs() ?: holder.rewindWindow()?.get(1)
-                    if (base != null) commitRewindSeek(base + delta)
+                    val ext = externalPlayerProvider?.invoke()
+                    if (ext != null) {
+                        ext.seekTo((ext.currentPosition + delta).coerceAtLeast(0L))
+                    } else {
+                        val base = holder.currentRewindWallMs() ?: holder.rewindWindow()?.get(1)
+                        if (base != null) commitRewindSeek(base + delta)
+                    }
                 }
                 CastControl.CMD_SEEK_WALL -> runCatching {
-                    commitRewindSeek(json.optLong(CastControl.KEY_TARGET_WALL_MS))
+                    val target = json.optLong(CastControl.KEY_TARGET_WALL_MS)
+                    val ext = externalPlayerProvider?.invoke()
+                    // For a VOD/recording player the "wall" axis IS media position
+                    // (the position tick maps window [0, duration] onto it).
+                    if (ext != null) ext.seekTo(target.coerceAtLeast(0L)) else commitRewindSeek(target)
                 }
                 CastControl.CMD_SET_AUDIO_ONLY -> runCatching {
                     holder.setVideoTrackEnabled(!json.optBoolean(CastControl.KEY_AUDIO_ONLY))
@@ -292,17 +385,17 @@ class CompanionHostController @Inject constructor(
                 // CastRemoteOverlay drives the companion path too, so mirror the
                 // receiver's audio/subtitle/speed/aspect handlers verbatim.
                 CastControl.CMD_SET_AUDIO -> runCatching {
-                    holder.player?.selectAudioTrack(
+                    controlPlayer()?.selectAudioTrack(
                         json.optString(CastControl.KEY_TRACK_ID).toIntOrNull(),
                     )
                 }
                 CastControl.CMD_SET_TEXT -> runCatching {
-                    holder.player?.selectSubtitleTrack(
+                    controlPlayer()?.selectSubtitleTrack(
                         json.optString(CastControl.KEY_TRACK_ID).toIntOrNull(),
                     )
                 }
                 CastControl.CMD_SET_SPEED -> runCatching {
-                    holder.player?.applySpeed(json.optDouble(CastControl.KEY_SPEED, 1.0).toFloat())
+                    controlPlayer()?.applySpeed(json.optDouble(CastControl.KEY_SPEED, 1.0).toFloat())
                 }
                 CastControl.CMD_SET_ASPECT -> runCatching {
                     appPrefs.setPlayerAspectMode(
@@ -316,7 +409,10 @@ class CompanionHostController @Inject constructor(
             // SAME AerioCastReceiverController code path, so both remotes render
             // identical pickers. Plus the lightweight position tick.
             runCatching {
-                session.send(Frame.Text(castReceiver.buildRemoteStateMessage()))
+                // Pass the registered VOD/recording player (if any) so the snapshot
+                // reflects the player the commands actually drive, not the stopped
+                // live holder (review 2026-07-15).
+                session.send(Frame.Text(castReceiver.buildRemoteStateMessage(externalPlayerProvider?.invoke())))
             }
             pushPosition()
         }
@@ -345,16 +441,32 @@ class CompanionHostController @Inject constructor(
 
     private suspend fun pushPosition() {
         val msg = withContext(Dispatchers.Main.immediate) {
-            val win = runCatching { holder.rewindWindow() }.getOrNull()
-            val pos = runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L)
-            CastControl.positionMessage(
-                canSeek = win != null,
-                isLive = runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
-                positionWallMs = pos,
-                windowStartMs = win?.get(0) ?: 0L,
-                windowEndMs = win?.get(1) ?: 0L,
-                isPlaying = runCatching { holder.player?.isPlaying }.getOrNull() ?: true,
-            )
+            val ext = externalPlayerProvider?.invoke()
+            if (ext != null) {
+                // VOD / recording player: map the seek axis onto media position --
+                // window [0, duration], playhead = currentPosition. The phone's
+                // scrubber + seek commands then work unchanged.
+                val duration = runCatching { ext.duration }.getOrNull()?.takeIf { it > 0 } ?: 0L
+                CastControl.positionMessage(
+                    canSeek = duration > 0,
+                    isLive = false,
+                    positionWallMs = runCatching { ext.currentPosition }.getOrDefault(0L),
+                    windowStartMs = 0L,
+                    windowEndMs = duration,
+                    isPlaying = runCatching { ext.isPlaying }.getOrDefault(false),
+                )
+            } else {
+                val win = runCatching { holder.rewindWindow() }.getOrNull()
+                val pos = runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L)
+                CastControl.positionMessage(
+                    canSeek = win != null,
+                    isLive = runCatching { holder.isAtLiveEdge() }.getOrDefault(true),
+                    positionWallMs = pos,
+                    windowStartMs = win?.get(0) ?: 0L,
+                    windowEndMs = win?.get(1) ?: 0L,
+                    isPlaying = runCatching { holder.player?.isPlaying }.getOrNull() ?: true,
+                )
+            }
         }
         broadcast(msg)
     }

@@ -200,6 +200,31 @@ fun VODPlayerScreen(
     var chromeVisible by remember { mutableStateOf(true) }
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
 
+    // GH #33 companion remote: register this screen's per-screen player with the
+    // companion host while mounted, so a paired phone's play/pause/seek drives
+    // THIS VOD/recording playback (the host otherwise drives the shared live
+    // player, which is stopped on this route). Inert off Android TV: the host
+    // only starts on FEATURE_LEANBACK devices.
+    val companionHostReg = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            PlayerScreenEntryPoint::class.java,
+        ).companionHost()
+    }
+    DisposableEffect(Unit) {
+        val provider = { exoPlayer }
+        companionHostReg.externalPlayerProvider = provider
+        onDispose {
+            // Identity check: on A->B navigation between two VOD/recording items
+            // the NavHost keeps A composed through the transition, so B registers
+            // FIRST and A's dispose runs after -- an unconditional null here would
+            // clobber B's registration and kill companion transport on B.
+            if (companionHostReg.externalPlayerProvider === provider) {
+                companionHostReg.externalPlayerProvider = null
+            }
+        }
+    }
+
     // Player progress, polled every 500ms while the player is mounted. Backs
     // the scrubber + position/duration row. positionMs is the canonical
     // playback position; previewMs is the user's pending-drag position before
