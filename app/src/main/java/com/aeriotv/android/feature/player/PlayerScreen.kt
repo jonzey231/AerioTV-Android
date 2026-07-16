@@ -165,6 +165,11 @@ fun PlayerScreen(
     // "Some remote screen is playing this, not the phone" -- the shared gate for
     // every local-playback suppression below.
     val isRemote = isCasting || isCompanion
+    // Set true while the companion "Disconnect" button tears down the remote and
+    // exits the player, so the prime effect (which re-fires when isCompanion flips
+    // false) does NOT resume LOCAL playback on the phone -- that left the channel
+    // playing on BOTH the phone and the TV (device report 2026-07-15).
+    var remoteStopping by remember { mutableStateOf(false) }
 
     // Channel-flip state. The MPV view stays alive across flips; only the
     // current channel index changes and we call playFile again with the new URL.
@@ -387,6 +392,9 @@ fun PlayerScreen(
         // Task #148 milestone B: catch-up mode never primes the LIVE stream
         // (and never starts a rewind buffer session below).
         if (isCatchupMode) return@LaunchedEffect
+        // Companion Disconnect is tearing this player down -- do not resume local
+        // playback as isCompanion flips false (GH #33 double-play fix).
+        if (remoteStopping) return@LaunchedEffect
         val channelId = currentChannel?.id ?: return@LaunchedEffect
         val ch = currentChannel ?: return@LaunchedEffect
         val url = ch.url
@@ -1564,6 +1572,7 @@ fun PlayerScreen(
                 remoteState = remoteState,
                 isPlaying = remoteIsPlaying,
                 statusVerb = if (isCompanion) "Controlling" else "Casting to",
+                stopLabel = if (isCompanion) "Disconnect" else "Stop casting",
                 onTogglePlayPause = {
                     if (isCompanion) companionRemote.togglePlayPause() else castSender.togglePlayPause()
                 },
@@ -1578,10 +1587,21 @@ fun PlayerScreen(
                     }
                 },
                 onStopCasting = {
-                    // Companion: disconnect from the TV (the TV keeps playing --
-                    // it's the user's own device); local playback resumes here via
-                    // the isRemote effects. Cast: end the session as before.
-                    if (isCompanion) companionRemote.disconnect() else castSender.stopCasting()
+                    if (isCompanion) {
+                        // Companion Disconnect: stop controlling the TV and LEAVE
+                        // the player. Do NOT resume local playback (remoteStopping
+                        // gates the prime effect) -- resuming here left the channel
+                        // playing on BOTH the phone and the TV (device report). The
+                        // TV keeps playing (it's the user's own device); the
+                        // scaffold's card is gone once disconnected.
+                        remoteStopping = true
+                        companionRemote.disconnect()
+                        onClose()
+                    } else {
+                        // Cast: end the session; local playback resumes via the
+                        // isRemote effects (standard "bring it back to my phone").
+                        castSender.stopCasting()
+                    }
                 },
                 onSetAudioTrack = { id ->
                     if (isCompanion) companionRemote.setRemoteAudioTrack(id) else castSender.setRemoteAudioTrack(id)

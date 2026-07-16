@@ -88,6 +88,9 @@ fun CastRemoteOverlay(
     onChannelUp: () -> Unit,
     onChannelDown: () -> Unit,
     onStopCasting: () -> Unit,
+    /** Label for the stop button: "Stop casting" for Cast, "Disconnect" for the
+     *  companion remote (where it stops controlling + exits, GH #33). */
+    stopLabel: String = "Stop casting",
     onSetAudioTrack: (String) -> Unit,
     onSetTextTrack: (String?) -> Unit,
     onSetSpeed: (Float) -> Unit,
@@ -291,7 +294,7 @@ fun CastRemoteOverlay(
                     onRefreshState()
                     optionsOpen = true
                 })
-                RemoteButton(Icons.Filled.Close, "Stop casting", onStopCasting)
+                RemoteButton(Icons.Filled.Close, stopLabel, onStopCasting)
             }
         }
     }
