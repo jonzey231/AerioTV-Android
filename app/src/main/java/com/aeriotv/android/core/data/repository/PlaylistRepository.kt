@@ -839,12 +839,19 @@ class PlaylistRepository @Inject constructor(
     /** The currently-active upstream URL for a Dispatcharr channel, from
      *  /proxy/ts/status. Used to confirm a stream switch landed (reliable on both
      *  the owner-direct and event-apply paths, unlike stream_id). */
+    /**
+     * Tri-state for the player's dead-session poller (adversarial review
+     * 2026-07-15): url = session alive; "" = Dispatcharr ANSWERED and reported
+     * no active session (confirmed dead); null = transport/auth failure --
+     * unknown, and must NOT be treated as a dead session (a Wi-Fi blip or a
+     * server restart while ExoPlayer coasts on its buffer is not a wedge).
+     */
     suspend fun currentDispatcharrStreamUrl(channelUuid: String): String? {
         val playlist = activePlaylist() ?: return null
         val base = effectiveBaseUrl(playlist)
         return runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.getCurrentStreamUrl(base, key, channelUuid)
+                dispatcharrClient.getCurrentStreamUrl(base, key, channelUuid) ?: ""
             }
         }.getOrNull()
     }

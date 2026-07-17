@@ -66,6 +66,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -140,6 +141,9 @@ fun PlayerChromeOverlay(
     pillVisible: Boolean = chromeVisible,
     isTv: Boolean = false,
     showChannelFlipHint: Boolean = false,
+    /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
+     *  bar. Null on TV and on any Cast-disabled build. */
+    castSlot: (@Composable () -> Unit)? = null,
     onClose: () -> Unit,
     onAddToMultiview: () -> Unit,
     onShowRecord: (ProgramInfoTarget) -> Unit,
@@ -164,6 +168,9 @@ fun PlayerChromeOverlay(
     // session; the band falls back to the read-only EPG progress bar.
     timeshiftState: com.aeriotv.android.core.timeshift.TimeshiftController.State? = null,
     timeshiftPositionWallMs: Long = 0L,
+    /** Live channel with Live Rewind available but the pref OFF: show a hint that
+     *  pause/rewind needs it enabled, instead of just an empty transport area. */
+    showLiveRewindHint: Boolean = false,
     isPlayerPaused: Boolean = false,
     onRewindTogglePause: () -> Unit = {},
     onRewindSeekWall: (Long) -> Unit = {},
@@ -496,13 +503,22 @@ fun PlayerChromeOverlay(
                     onClick = onClose,
                     modifier = Modifier.focusRequester(closeFocus),
                 )
-                channel?.let { ch ->
-                    Spacer(Modifier.width(12.dp))
-                    InfoCard(
-                        channel = ch,
-                        programme = nowProgramme,
-                        sleepRemainingMillis = sleepRemainingMillis,
-                    )
+                // On compact widths (portrait phone / folded Fold cover screen)
+                // the secondary channel InfoCard would consume the row and push
+                // the fixed right-side controls (Cast / PiP / Add) off the edge,
+                // so the user couldn't reach them (GH #33 note #3). Drop the pill
+                // there; it returns in landscape / on tablets / unfolded where the
+                // row has room for both.
+                val compactTopBar = LocalConfiguration.current.screenWidthDp < 500
+                if (!compactTopBar) {
+                    channel?.let { ch ->
+                        Spacer(Modifier.width(12.dp))
+                        InfoCard(
+                            channel = ch,
+                            programme = nowProgramme,
+                            sleepRemainingMillis = sleepRemainingMillis,
+                        )
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 CircleIconButton(
@@ -566,6 +582,10 @@ fun PlayerChromeOverlay(
                             onToggleAudioOnly()
                         },
                     )
+                }
+                if (castSlot != null && !isTv) {
+                    Spacer(Modifier.width(8.dp))
+                    castSlot()
                 }
                 if (pipAvailable) {
                     Spacer(Modifier.width(8.dp))
@@ -637,6 +657,16 @@ fun PlayerChromeOverlay(
                         color = Color.White,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+                if (showLiveRewindHint) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Turn on Live Rewind in Settings to pause & rewind live TV",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.65f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
@@ -1266,7 +1296,11 @@ private fun RewindTransportBar(
                     onClick = { onSeekWall(current + 30_000) },
                 )
             }
-            if (state.timeshifting) {
+            // Hide the Go Live pill once we're at the live edge (matches the LIVE
+            // label above): a smooth go-live seeks to the buffer head and stays in
+            // timeshift mode, so gate on the same behind-live threshold, not just
+            // state.timeshifting, or the pill would linger when already live (GH #33).
+            if (state.timeshifting && behindMs > 5_000) {
                 var goLiveFocused by remember { mutableStateOf(false) }
                 Surface(
                     shape = RoundedCornerShape(50),

@@ -21,6 +21,18 @@ val googleDriveWebClientId: String =
         ?: System.getenv("GOOGLE_DRIVE_WEB_CLIENT_ID")
         ?: ""
 
+// Google Cast receiver application ID (registered in the Cast SDK Developer
+// Console; ties the Cast App ID to this app's package for Cast Connect). Read
+// from local.properties / env like the Drive client id so it's never checked
+// in. Left EMPTY by default: the Cast button and CastContext init are gated on
+// this being non-blank (see AerioCastOptionsProvider + MainActivity), so a
+// build without a registered id simply ships Cast disabled rather than crashing
+// on an invalid application id.
+val castReceiverAppId: String =
+    localProps.getProperty("CAST_RECEIVER_APP_ID")
+        ?: System.getenv("CAST_RECEIVER_APP_ID")
+        ?: ""
+
 // Release signing for Play uploads. Reads from keystore.properties (gitignored,
 // never committed). When absent (e.g. a contributor without the upload key),
 // the release signingConfig is simply not created and release builds stay
@@ -50,6 +62,11 @@ android {
             "String",
             "GOOGLE_DRIVE_WEB_CLIENT_ID",
             "\"$googleDriveWebClientId\"",
+        )
+        buildConfigField(
+            "String",
+            "CAST_RECEIVER_APP_ID",
+            "\"$castReceiverAppId\"",
         )
     }
 
@@ -154,12 +171,30 @@ dependencies {
     // files() so its base media3 classes resolve against the maven deps above.
     implementation(files("libs/media3-decoder-ffmpeg.aar"))
 
+    // Google Cast (GH #33). SENDER: cast-framework gives the phone/tablet the
+    // Cast button, SessionManager, and RemoteMediaClient; mediarouter backs the
+    // route discovery/selection we drive from a custom Compose chooser (avoids
+    // the AppCompat Theme.MediaRouter dependency the stock MediaRouteButton
+    // needs). RECEIVER: cast-tv is the Cast Connect library (CastReceiverContext
+    // + MediaManager) so the AerioTV Android-TV build plays a cast load with its
+    // OWN ExoPlayer (raw MPEG-TS via TsExtractor + the ffmpeg AC-3 AAR) instead
+    // of the web receiver, which cannot play raw TS. All flavors: on a device
+    // without Google Play services Cast simply finds no routes and stays hidden.
+    implementation(libs.play.services.cast.framework)
+    implementation(libs.play.services.cast.tv)
+    implementation(libs.androidx.mediarouter)
+
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
+    // Companion remote (GH #33 second-screen): TV-side embedded WS server + phone-side WS client.
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.websockets)
+    implementation(libs.ktor.client.websockets)
     implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.hilt.android)

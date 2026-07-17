@@ -58,9 +58,24 @@ class AerioMediaPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var exoHolder: AerioExoPlayerHolder
     @Inject lateinit var browseTree: AutoBrowseTree
+    @Inject lateinit var castReceiver: com.aeriotv.android.core.cast.AerioCastReceiverController
+    @Inject lateinit var castSender: com.aeriotv.android.core.cast.AerioCastSender
 
     private var mediaSession: MediaLibrarySession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Tap target for the foreground notification -> back into the app (the
+     *  stream when local, the cast remote when casting via the mini controller). */
+    private val launchPi: PendingIntent by lazy {
+        PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -68,19 +83,17 @@ class AerioMediaPlaybackService : MediaLibraryService() {
 
         val player = exoHolder.acquireOrCreate(this)
 
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        val launchPi = PendingIntent.getActivity(
-            this,
-            0,
-            launchIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-
         mediaSession = MediaLibrarySession.Builder(this, player, LibraryCallback())
             .setSessionActivity(launchPi)
             .build()
+
+        // Cast Connect (GH #33): hand this session's token to the receiver so a
+        // sender casting to this Android TV sees live play/pause + now-playing
+        // metadata. getSessionCompatToken() is exactly the type MediaManager
+        // wants; the controller no-ops off-TV / without Cast, so this is safe on
+        // every device. Playback itself still runs through the shared ExoPlayer
+        // the receiver drives via the fullscreen player.
+        mediaSession?.let { castReceiver.publishSessionToken(it.sessionCompatToken) }
 
         // Let Media3 own the foreground notification so it shows the REAL
         // now-playing (channel name, programme, logo, play/pause/next) pulled
@@ -105,7 +118,7 @@ class AerioMediaPlaybackService : MediaLibraryService() {
         // beat the API 31+ 5s foreground-start deadline. Android Auto only
         // BINDS to browse, so it never reaches here -- no spurious foreground
         // notification, no FGS-start-not-allowed risk.
-        startForegroundCompat(buildPlaceholderNotification())
+        startForegroundCompat(buildNowPlayingNotification())
         return super.onStartCommand(intent, flags, startId)
     }
 
@@ -276,15 +289,32 @@ class AerioMediaPlaybackService : MediaLibraryService() {
         mgr.createNotificationChannel(channel)
     }
 
-    private fun buildPlaceholderNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    /** The live "Now Playing" notification: real channel + programme (or
+     *  "Casting to <TV>" while casting), tappable back into the app. Replaces the
+     *  old static "Starting playback..." placeholder that stuck + did nothing. */
+    private fun buildNowPlayingNotification(): Notification {
+        val casting = castSender.state.value is
+            com.aeriotv.android.core.cast.AerioCastSender.State.Connected
+        val title = com.aeriotv.android.core.pip.PipState.nowPlayingTitle.ifBlank { "AerioTV" }
+        val text = if (casting) {
+            val device = (
+                castSender.state.value as?
+                    com.aeriotv.android.core.cast.AerioCastSender.State.Connected
+                )?.deviceName
+            if (!device.isNullOrBlank()) "Casting to $device" else "Casting"
+        } else {
+            com.aeriotv.android.core.pip.PipState.nowPlayingSubtitle.ifBlank { "Live" }
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("AerioTV")
-            .setContentText("Starting playback...")
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(launchPi)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
+    }
 
     private fun startForegroundCompat(notification: Notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

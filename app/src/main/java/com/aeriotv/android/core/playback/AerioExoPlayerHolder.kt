@@ -525,8 +525,10 @@ class AerioExoPlayerHolder @Inject constructor(
             .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
             ?.value
         val f = OkHttpDataSource.Factory(liveHttpClient)
-            .setUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT)
-        val nonUaHeaders = h.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+            .setUserAgent(okHttpSafeUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT))
+        val nonUaHeaders = okHttpSafeHeaders(
+            h.filterKeys { !it.equals("User-Agent", ignoreCase = true) },
+        )
         if (nonUaHeaders.isNotEmpty()) f.setDefaultRequestProperties(nonUaHeaders)
         f.createDataSource()
     }
@@ -879,7 +881,14 @@ class AerioExoPlayerHolder @Inject constructor(
         return true
     }
 
-    /** Leave the timeshift buffer and re-tune the direct live stream. */
+    /** Return to the live edge by re-tuning the DIRECT live stream. This blacks the
+     *  screen ~1s while it re-primes (same cost as a channel tune) but it is CORRECT:
+     *  a "smooth" seek to the buffer head instead STARVES -- you can only play as far
+     *  as the recorder has written (~1x realtime), so there is no buffer-ahead cushion
+     *  at the edge and the player constantly catches the write head and re-buffers
+     *  (device: constant frame flashing, GH #33 2026-07-15). The direct stream pulls
+     *  its own buffer-ahead off the live feed, so it plays smoothly at the edge. A
+     *  truly smooth go-live would need a background direct re-prime + seamless swap. */
     fun goLive() {
         if (!isTimeshifting) return
         isTimeshifting = false
@@ -888,6 +897,37 @@ class AerioExoPlayerHolder @Inject constructor(
         Log.i(TAG, "[REWIND] go live -> re-tune direct stream")
         playUrl(url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
     }
+
+    /** True when playback is at the live edge: on the direct stream, or (in timeshift
+     *  mode) with the playhead within 5s of the buffer head. Lets a smooth
+     *  go-live-to-buffer-head still read as "live" for the LIVE indicators. */
+    fun isAtLiveEdge(): Boolean {
+        if (!isTimeshifting) return true
+        val w = rewindWindow() ?: return true
+        val pos = currentRewindWallMs() ?: return true
+        return pos >= w[1] - 5_000
+    }
+
+    // GH #33 cast rewind: read-only accessors so the cast RECEIVER can drive the
+    // SAME rewind buffer the on-TV chrome scrubs (via playTimeshift/goLive) and
+    // report the window/playhead back to the phone remote, without the receiver
+    // needing its own TimeshiftController reference. Reads run on the ExoPlayer
+    // main thread (the cast control listener's Main.immediate scope).
+
+    /** Current wall-clock playhead while rewound, or null at the live edge / no
+     *  session. Mirrors the on-TV formula (baseWallMs + raw player position). */
+    fun currentRewindWallMs(): Long? =
+        if (isTimeshifting) {
+            timeshift.get().state.value.baseWallMs + (player?.currentPosition ?: 0L)
+        } else {
+            null
+        }
+
+    /** The rewind window as [tailWallMs, headWallMs], read FRESH off the active
+     *  writer (the non-lagging source the on-TV commitScrubWall also reads), or
+     *  null when no rewind session is rolling. */
+    fun rewindWindow(): LongArray? =
+        timeshift.get().activeWriter?.let { longArrayOf(it.tailWallMs, it.headWallMs) }
 
     /** True while the shared player runs a catch-up (server archive)
      *  replay inside the unified live player (task #148). Gates the same
@@ -936,7 +976,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastCatchupSubtitle = subtitle
         lastCatchupArtworkUri = artworkUri
         resetWatchdogStateForNewStream()
-        setVideoTrackEnabled(true)
+        setVideoTrackEnabled(!remoteAudioOnly)
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(title)
             .setArtist(subtitle)
@@ -1007,8 +1047,10 @@ class AerioExoPlayerHolder @Inject constructor(
         // watchdogReloadEnabled is kept current by the collector in init{}; the
         // cached value reflects the latest pref without blocking the main thread.
         // Foreground playback wants video; re-enable it in case an Android Auto
-        // session previously dropped the video track on this shared player.
-        setVideoTrackEnabled(true)
+        // session previously dropped the video track on this shared player --
+        // UNLESS a companion remote explicitly asked for Audio Only, which a
+        // watchdog/poller re-prime must not undo.
+        setVideoTrackEnabled(!remoteAudioOnly)
         val source = buildMediaSource(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey)
         p.setMediaSource(source)
         p.prepare()
@@ -1060,11 +1102,73 @@ class AerioExoPlayerHolder @Inject constructor(
             .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
             ?.value
         val factory = OkHttpDataSource.Factory(liveHttpClient)
-            .setUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT)
-        val nonUaHeaders = httpHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+            .setUserAgent(okHttpSafeUserAgent(headerUa ?: DEFAULT_PLAYBACK_USER_AGENT))
+        val nonUaHeaders = okHttpSafeHeaders(
+            httpHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) },
+        )
         if (nonUaHeaders.isNotEmpty()) factory.setDefaultRequestProperties(nonUaHeaders)
         return factory
     }
+
+    /**
+     * GH #32: okhttp3 (the client behind the live + Android Auto DataSources)
+     * enforces strict RFC-7230 header validation and throws
+     * IllegalArgumentException on ANY header name/value byte that is < 0x20
+     * (except tab) or >= 0x7f. The old [DefaultHttpDataSource] path -- Android's
+     * vendored okhttp-2.x under HttpURLConnection, still used for VOD/DVR --
+     * silently accepted those bytes. So a Dispatcharr source carrying a stray
+     * non-ASCII / control char in a custom header (or a device whose Build.MODEL
+     * puts a non-ASCII char in the default UA) opened fine on VOD/DVR yet nuked
+     * LIVE playback: the throw fires inside OkHttpDataSource.open() building the
+     * request, propagates as Loader.UnexpectedLoaderException -> the terminal
+     * ERROR_CODE_IO_UNSPECIFIED ("Unexpected IllegalArgumentException") the user
+     * sees, and the picture stays black. Sanitize to exactly the set okhttp3
+     * permits: a clean value passes through byte-for-byte (reference-equal map
+     * returned, no behavior change for the 99% case), and only an illegal value
+     * is repaired -- matching what the lenient HttpURLConnection path effectively
+     * did. Never log the header VALUE (it may carry an API key); log only the
+     * name and that a repair happened, so the offending header is visible in a
+     * shared debug log without leaking the secret.
+     */
+    private fun okHttpSafeHeaders(headers: Map<String, String>): Map<String, String> {
+        if (headers.isEmpty()) return headers
+        var changed = false
+        val out = LinkedHashMap<String, String>(headers.size)
+        for ((name, value) in headers) {
+            if (!isOkHttpSafeHeaderName(name)) {
+                changed = true
+                Log.w(TAG, "GH#32: dropped request header with illegal name (len=${name.length}) for okhttp")
+                continue
+            }
+            val safe = sanitizeOkHttpHeaderValue(value)
+            if (safe !== value) {
+                changed = true
+                Log.w(TAG, "GH#32: stripped illegal char(s) from '$name' header value for okhttp")
+            }
+            out[name] = safe
+        }
+        return if (changed) out else headers
+    }
+
+    /** Sanitize a User-Agent for okhttp3; falls back to the default UA if the
+     *  value would otherwise be empty after stripping illegal chars. */
+    private fun okHttpSafeUserAgent(ua: String): String =
+        sanitizeOkHttpHeaderValue(ua).ifBlank { DEFAULT_PLAYBACK_USER_AGENT }
+
+    /** okhttp3 Headers.checkValue: legal chars are tab or 0x20..0x7e. Returns
+     *  the same instance when already clean (so callers can cheaply detect a
+     *  no-op via referential equality). */
+    private fun sanitizeOkHttpHeaderValue(value: String): String {
+        if (value.all { it == '\t' || it.code in 0x20..0x7e }) return value
+        return buildString(value.length) {
+            for (c in value) if (c == '\t' || c.code in 0x20..0x7e) append(c)
+        }
+    }
+
+    /** okhttp3 Headers.checkName: legal name chars are 0x21..0x7e (no space,
+     *  no control chars). An empty or otherwise illegal name is unrepairable. */
+    private fun isOkHttpSafeHeaderName(name: String): Boolean =
+        name.isNotEmpty() && name.all { it.code in 0x21..0x7e }
 
     /** OkHttp client for live playback. The long read timeout keeps a silent
      *  connection alive across Dispatcharr's server-side dead-source failover
@@ -1147,6 +1251,19 @@ class AerioExoPlayerHolder @Inject constructor(
             .build()
     }
 
+    /**
+     * Sticky Audio Only requested by a companion remote / cast sender
+     * (GH #33). [playUrl]'s unconditional video re-enable exists for the
+     * Android Auto case; without this flag any re-prime (follow-poller,
+     * stall watchdog, LAN/WAN flip) silently restored video seconds after
+     * a phone toggled Audio Only on (2026-07-17 Streamer test: state
+     * flipped On -> video back -> state self-healed to Off). Set/cleared
+     * only by the remote command paths; the foreground re-enables consult
+     * it.
+     */
+    @Volatile
+    var remoteAudioOnly = false
+
     /** Full teardown for the X-close button. Releases the codec,
      *  audio renderer, and DataSource. Next acquire creates fresh. */
     fun destroy() {
@@ -1228,11 +1345,19 @@ class AerioExoPlayerHolder @Inject constructor(
                     continue
                 }
 
-                // Only when we intend to play, have a url to reload, have reached
-                // steady playback at least once (skip cold-start probes + user
-                // pauses), and aren't at end-of-stream.
+                // Only when we intend to play, have a url to reload, and aren't at
+                // end-of-stream. Steady gate: skip a TRUE cold start (never reached
+                // steady AND never rendered a frame -- the cold-start net above owns
+                // that). But once a frame HAS rendered, keep monitoring even if the
+                // steady flag later drops: a stream that played then wedged (proxy
+                // dropped our read / decoder hung) clears hasReachedPlaybackRestart
+                // WITHOUT a reload, and used to fall through BOTH the cold-start net
+                // (needs !videoFrameRendered + 0 position) and this position-stall
+                // check -- so it froze forever with no recovery (Shield field freeze
+                // 2026-07-15: status 404 / read wedged, no reload for >1min).
                 if (lastPlayUrl == null || isTimeshifting || isCatchup || !p.playWhenReady ||
-                    !hasReachedPlaybackRestart || p.playbackState == Player.STATE_ENDED
+                    (!hasReachedPlaybackRestart && !videoFrameRendered) ||
+                    p.playbackState == Player.STATE_ENDED
                 ) {
                     continue
                 }
@@ -1465,8 +1590,26 @@ class AerioExoPlayerHolder @Inject constructor(
             Log.w(
                 TAG,
                 "load error uri=${loadEventInfo.uri} " +
-                    "${error.javaClass.simpleName}: ${error.message}",
+                    "${error.javaClass.simpleName}: ${error.message}${causeChain(error)}",
             )
+        }
+
+        /** Append the CLASS names of the cause chain (GH #32). Media3 wraps an
+         *  unexpected RuntimeException from a DataSource as UnexpectedLoaderException
+         *  ("Unexpected IllegalArgumentException"), whose own message hides the real
+         *  fault class; walking .cause surfaces it. Deliberately logs class names
+         *  ONLY -- a cause message can embed a request header value (e.g. okhttp's
+         *  "Unexpected char ... in <name> value: <value>"), which may be a credential. */
+        private fun causeChain(error: Throwable): String {
+            val sb = StringBuilder()
+            var cause = error.cause
+            var depth = 0
+            while (cause != null && depth < 4) {
+                sb.append(" <- ").append(cause.javaClass.simpleName)
+                cause = cause.cause
+                depth++
+            }
+            return sb.toString()
         }
     }
 
