@@ -552,6 +552,9 @@ class CompanionHostController @Inject constructor(
                     // while idle made the phone transport show a play state for
                     // nothing (review 2026-07-15).
                     isPlaying = runCatching { holder.player?.isPlaying }.getOrNull() ?: false,
+                    // Anchor rides the tick: the post-setChannel state push races
+                    // the async re-prime and would otherwise leave clients stale.
+                    channelId = holder.currentChannelId ?: castReceiver.castChannelRequest.value,
                 )
             }
         }

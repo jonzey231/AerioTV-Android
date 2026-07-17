@@ -195,6 +195,7 @@ object CastControl {
             positionWallMs = json.optLong(KEY_POSITION_WALL_MS, 0L),
             windowStartMs = json.optLong(KEY_WINDOW_START_MS, 0L),
             windowEndMs = json.optLong(KEY_WINDOW_END_MS, 0L),
+            channelId = json.optString(KEY_CHANNEL_ID).takeIf { it.isNotBlank() },
         )
     }
 
@@ -212,6 +213,8 @@ object CastControl {
         /** Receiver transport state, carried on the tick for the LAN companion remote
          *  (which has no Cast MediaSession bridge). Cast Connect reports true. */
         val isPlaying: Boolean = true,
+        /** Live anchor ("disp:<uuid>") riding the tick; null when idle/VOD. */
+        val channelId: String? = null,
     )
 
     /** Build a receiver->sender [CMD_POSITION] tick. [isPlaying] defaults true so the
@@ -223,6 +226,7 @@ object CastControl {
         windowStartMs: Long,
         windowEndMs: Long,
         isPlaying: Boolean = true,
+        channelId: String? = null,
     ): String = JSONObject().apply {
         put(KEY_CMD, CMD_POSITION)
         put(KEY_CAN_SEEK, canSeek)
@@ -231,6 +235,14 @@ object CastControl {
         put(KEY_WINDOW_START_MS, windowStartMs)
         put(KEY_WINDOW_END_MS, windowEndMs)
         put(KEY_IS_PLAYING, isPlaying)
+        // GH #33: the full-state push after CMD_SET_CHANNEL races the async
+        // deep-link re-prime (holder.currentChannelId still holds the OLD
+        // channel), and nothing re-sent the anchor afterwards -- the phone's
+        // flip/Switch-Stream anchor stayed stale (2026-07-17: sheet offered
+        // "Streams for ESPN HD" while the TV played ESPN2). Riding the anchor
+        // on the ~1Hz tick keeps clients current through companion flips AND
+        // native TV-side flips.
+        channelId?.takeIf { it.isNotBlank() }?.let { put(KEY_CHANNEL_ID, it) }
     }.toString()
 
     /** Parse a [CMD_POSITION] tick. */
@@ -241,5 +253,6 @@ object CastControl {
         windowStartMs = json.optLong(KEY_WINDOW_START_MS, 0L),
         windowEndMs = json.optLong(KEY_WINDOW_END_MS, 0L),
         isPlaying = json.optBoolean(KEY_IS_PLAYING, true),
+        channelId = json.optString(KEY_CHANNEL_ID).takeIf { it.isNotBlank() },
     )
 }

@@ -169,11 +169,19 @@ class CompanionRemoteController @Inject constructor(
                 _connection.value = Conn.NeedsPairing(deviceName ?: tv.name)
             }
             else -> when (json.optString(CastControl.KEY_CMD)) {
-                CastControl.CMD_STATE -> _remoteState.value = CastControl.decodeState(json)
+                CastControl.CMD_STATE -> {
+                    val s = CastControl.decodeState(json)
+                    _remoteState.value = s
+                    // Adopt the TV's live anchor: without this a fresh reconnect
+                    // to an already-playing TV has no flip anchor, and a native
+                    // TV-side flip leaves the optimistic value stale (GH #33).
+                    s.channelId?.let { _currentChannelId.value = it }
+                }
                 CastControl.CMD_POSITION -> {
                     val p = CastControl.decodePosition(json)
                     _position.value = p
                     _isPlaying.value = p.isPlaying
+                    p.channelId?.let { _currentChannelId.value = it }
                 }
             }
         }
