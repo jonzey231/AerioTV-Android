@@ -403,14 +403,30 @@ class CompanionHostController @Inject constructor(
 
     private fun unregisterSession(session: DefaultWebSocketSession) {
         synchronized(sessions) { sessions.remove(session) }
-        if (synchronized(sessions) { sessions.isEmpty() }) { tickerJob?.cancel(); tickerJob = null }
+        if (synchronized(sessions) { sessions.isEmpty() }) {
+            tickerJob?.cancel(); tickerJob = null
+            // No phone left to turn it back off: don't leave the TV stuck on a
+            // dark screen after the controlling phone goes away.
+            if (holder.remoteAudioOnly) {
+                Log.i(TAG, "last phone disconnected while audioOnly -> restoring video")
+                holder.remoteAudioOnly = false
+                scope.launch { runCatching { holder.setVideoTrackEnabled(true) } }
+            }
+        }
     }
 
     // ---- Command executor (reuses the Cast receiver's rules; drives the shared player) ----
 
     private fun handleControl(json: JSONObject, session: DefaultWebSocketSession) {
         scope.launch {
-            when (json.optString(CastControl.KEY_CMD)) {
+            val cmd = json.optString(CastControl.KEY_CMD)
+            // GH #33 diagnostics: one breadcrumb per inbound phone command (skip
+            // the noisy getState poll) so a user's captured log shows exactly
+            // what the phone asked the TV to do.
+            if (cmd.isNotBlank() && cmd != CastControl.CMD_GET_STATE) {
+                Log.i(TAG, "companion cmd: $cmd")
+            }
+            when (cmd) {
                 CastControl.CMD_SET_CHANNEL -> json.optString(CastControl.KEY_CHANNEL_ID)
                     .takeIf { it.isNotBlank() }?.let { id ->
                         // Ride the SAME validated load-request -> deep-link path a
@@ -463,7 +479,11 @@ class CompanionHostController @Inject constructor(
                     if (ext != null) ext.seekTo(target.coerceAtLeast(0L)) else commitRewindSeek(target)
                 }
                 CastControl.CMD_SET_AUDIO_ONLY -> runCatching {
-                    holder.setVideoTrackEnabled(!json.optBoolean(CastControl.KEY_AUDIO_ONLY))
+                    val on = json.optBoolean(CastControl.KEY_AUDIO_ONLY)
+                    // Sticky: re-primes must not silently restore video.
+                    holder.remoteAudioOnly = on
+                    holder.setVideoTrackEnabled(!on)
+                    Log.i(TAG, "companion audioOnly=$on (video ${if (on) "disabled" else "enabled"})")
                 }
                 // Options parity with the Cast receiver (GH #33): the phone's full
                 // CastRemoteOverlay drives the companion path too, so mirror the

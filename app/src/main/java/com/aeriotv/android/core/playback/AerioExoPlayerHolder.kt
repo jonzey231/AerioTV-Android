@@ -976,7 +976,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastCatchupSubtitle = subtitle
         lastCatchupArtworkUri = artworkUri
         resetWatchdogStateForNewStream()
-        setVideoTrackEnabled(true)
+        setVideoTrackEnabled(!remoteAudioOnly)
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(title)
             .setArtist(subtitle)
@@ -1047,8 +1047,10 @@ class AerioExoPlayerHolder @Inject constructor(
         // watchdogReloadEnabled is kept current by the collector in init{}; the
         // cached value reflects the latest pref without blocking the main thread.
         // Foreground playback wants video; re-enable it in case an Android Auto
-        // session previously dropped the video track on this shared player.
-        setVideoTrackEnabled(true)
+        // session previously dropped the video track on this shared player --
+        // UNLESS a companion remote explicitly asked for Audio Only, which a
+        // watchdog/poller re-prime must not undo.
+        setVideoTrackEnabled(!remoteAudioOnly)
         val source = buildMediaSource(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey)
         p.setMediaSource(source)
         p.prepare()
@@ -1248,6 +1250,19 @@ class AerioExoPlayerHolder @Inject constructor(
             .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !enabled)
             .build()
     }
+
+    /**
+     * Sticky Audio Only requested by a companion remote / cast sender
+     * (GH #33). [playUrl]'s unconditional video re-enable exists for the
+     * Android Auto case; without this flag any re-prime (follow-poller,
+     * stall watchdog, LAN/WAN flip) silently restored video seconds after
+     * a phone toggled Audio Only on (2026-07-17 Streamer test: state
+     * flipped On -> video back -> state self-healed to Off). Set/cleared
+     * only by the remote command paths; the foreground re-enables consult
+     * it.
+     */
+    @Volatile
+    var remoteAudioOnly = false
 
     /** Full teardown for the X-close button. Releases the codec,
      *  audio renderer, and DataSource. Next acquire creates fresh. */

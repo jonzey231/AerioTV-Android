@@ -897,7 +897,9 @@ fun PlayerScreen(
     DisposableEffect(lifecycleOwner, audioOnly) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                exoHolder.setVideoTrackEnabled(!audioOnly)
+                // A companion remote's Audio Only is an equally explicit user
+                // choice -- the resume restore must not clobber it (GH #33).
+                exoHolder.setVideoTrackEnabled(!(audioOnly || exoHolder.remoteAudioOnly))
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

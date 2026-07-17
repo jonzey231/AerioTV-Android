@@ -379,6 +379,8 @@ class AerioCastReceiverController @Inject constructor(
                     }
                     CastControl.CMD_SET_AUDIO_ONLY -> {
                         val on = json.optBoolean(CastControl.KEY_AUDIO_ONLY)
+                        // Sticky: re-primes must not silently restore video.
+                        holder.remoteAudioOnly = on
                         runCatching { holder.setVideoTrackEnabled(!on) }
                     }
                     // Live-rewind seeks drive the SAME timeshift buffer the on-TV

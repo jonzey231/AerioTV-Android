@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.cast.companion
 
 import android.content.Context
+import android.util.Log
 import com.aeriotv.android.core.cast.CastControl
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.client.HttpClient
@@ -50,6 +51,7 @@ class CompanionRemoteController @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "CompanionClient"
         const val PREFS = "aeriotv_companion_client"
         fun tokenKey(deviceId: String) = "token_$deviceId"
     }
@@ -162,11 +164,13 @@ class CompanionRemoteController @Inject constructor(
                 json.optString(CompanionProtocol.KEY_TOKEN).takeIf { it.isNotBlank() }
                     ?.let { storeToken(tv.deviceId, it) }
                 _connection.value = Conn.Connected(deviceName ?: tv.name)
+                Log.i(TAG, "companion authOk -> controlling ${deviceName ?: tv.name}")
                 requestRemoteState()
             }
             CompanionProtocol.T_AUTH_FAIL -> {
                 // Bad/absent token or wrong code: the TV is now showing a pairing code.
                 _connection.value = Conn.NeedsPairing(deviceName ?: tv.name)
+                Log.w(TAG, "companion authFail -> needs pairing (${deviceName ?: tv.name})")
             }
             else -> when (json.optString(CastControl.KEY_CMD)) {
                 CastControl.CMD_STATE -> {
@@ -240,6 +244,13 @@ class CompanionRemoteController @Inject constructor(
     fun requestRemoteState() = send(CastControl.command(CastControl.CMD_GET_STATE))
 
     private fun send(text: String) {
+        // GH #33 diagnostics: log the command name (not the full frame -- avoids
+        // leaking ids into logs) so a user's captured log shows what the phone
+        // sent. getState is the ~1Hz poll; skip it to keep the log readable.
+        val cmd = runCatching { JSONObject(text).optString(CastControl.KEY_CMD) }.getOrNull()
+        if (!cmd.isNullOrBlank() && cmd != CastControl.CMD_GET_STATE) {
+            Log.i(TAG, "-> TV cmd: $cmd")
+        }
         scope.launch { runCatching { session?.send(Frame.Text(text)) } }
     }
 
