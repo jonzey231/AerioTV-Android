@@ -38,6 +38,8 @@ class CompanionDiscovery @Inject constructor(
     // concurrent call fails with FAILURE_ALREADY_ACTIVE), so serialize them.
     private val resolveQueue = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
+    /** Service names already given their one failed-resolve retry. */
+    private val retriedResolves = mutableSetOf<String>()
 
     // Refcount so nested owners (the cast button keeps discovery alive to decide
     // whether to SHOW itself; the chooser also starts it while open) don't tear
@@ -45,13 +47,44 @@ class CompanionDiscovery @Inject constructor(
     // (review 2026-07-15).
     private var starts = 0
 
+    /**
+     * Self-heal (2026-07-17 Fold field test): an NSD browse can go silently
+     * deaf -- after a TV's advert dropped and came back, no onServiceFound
+     * ever arrived even though `dns-sd -B` saw the re-registration on the
+     * wire. While discovery is wanted and the device list is EMPTY, restart
+     * the browse every 30s; a healthy-but-quiet browse restarts harmlessly
+     * (no UI flicker, the list is already empty).
+     */
+    private val healHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val healTick = object : Runnable {
+        override fun run() {
+            heal()
+            healHandler.postDelayed(this, 30_000)
+        }
+    }
+
+    @Synchronized
+    private fun heal() {
+        if (starts <= 0 || _devices.value.isNotEmpty()) return
+        Log.i(TAG, "browse quiet + list empty -> restarting NSD browse")
+        discoveryListener?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
+        discoveryListener = null
+        beginBrowse()
+    }
+
     @Synchronized
     fun start() {
         if (starts++ > 0) return
-        val mgr = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
-        nsd = mgr
+        nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
         acquireMulticastLock()
         _devices.value = emptyList()
+        beginBrowse()
+        healHandler.removeCallbacks(healTick)
+        healHandler.postDelayed(healTick, 30_000)
+    }
+
+    private fun beginBrowse() {
+        val mgr = nsd ?: return
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {}
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { Log.w(TAG, "discover start failed $errorCode") }
@@ -70,10 +103,12 @@ class CompanionDiscovery @Inject constructor(
     fun stop() {
         if (starts > 0) starts--
         if (starts > 0) return // another owner still needs discovery
+        healHandler.removeCallbacks(healTick)
         discoveryListener?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
         discoveryListener = null
         resolveQueue.clear()
         resolving = false
+        retriedResolves.clear()
         _devices.value = emptyList()
         multicastLock?.let { lock -> runCatching { if (lock.isHeld) lock.release() } }
         multicastLock = null
@@ -93,7 +128,17 @@ class CompanionDiscovery @Inject constructor(
         resolving = true
         @Suppress("DEPRECATION")
         val rl = object : NsdManager.ResolveListener {
-            override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) { onResolveDone() }
+            override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                // One delayed retry per service: a resolve raced against a
+                // just-(re)registered advert loses the device FOREVER
+                // otherwise (announcements stop and nothing re-triggers
+                // onServiceFound).
+                val key = info.serviceName.orEmpty()
+                if (retriedResolves.add(key)) {
+                    healHandler.postDelayed({ enqueueResolve(info) }, 2_000)
+                }
+                onResolveDone()
+            }
             override fun onServiceResolved(info: NsdServiceInfo) {
                 @Suppress("DEPRECATION")
                 val host = info.host?.hostAddress
