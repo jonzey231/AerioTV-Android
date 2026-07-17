@@ -115,6 +115,13 @@ object CastControl {
         val windowStartMs: Long = 0L,
         /** Rewind window end (live edge) wall-clock ms (= headWallMs). */
         val windowEndMs: Long = 0L,
+        /**
+         * The channel this receiver is playing, in the shared "disp:<uuid>"
+         * format. Anchors a freshly connected companion phone (channel
+         * up/down + phone-side Switch Stream) when the PHONE didn't start
+         * the channel -- the tvOS host already sends this (parity 2026-07-17).
+         */
+        val channelId: String? = null,
     )
 
     /**
@@ -155,6 +162,7 @@ object CastControl {
         put(KEY_POSITION_WALL_MS, state.positionWallMs)
         put(KEY_WINDOW_START_MS, state.windowStartMs)
         put(KEY_WINDOW_END_MS, state.windowEndMs)
+        state.channelId?.takeIf { it.isNotBlank() }?.let { put(KEY_CHANNEL_ID, it) }
     }.toString()
 
     private fun trackJson(t: Track) = JSONObject().apply {

@@ -467,6 +467,13 @@ class AerioCastReceiverController @Inject constructor(
                 else runCatching { holder.currentRewindWallMs() }.getOrNull() ?: (win?.get(1) ?: 0L),
             windowStartMs = win?.get(0) ?: 0L,
             windowEndMs = if (isExternal) extDuration else (win?.get(1) ?: 0L),
+            // Live only: the "disp:<uuid>" the shared live holder is playing,
+            // so a freshly connected phone has a flip/Switch-Stream anchor.
+            // holder.currentChannelId covers NATIVE tunes too (PlayerScreen
+            // stamps it on every channel start); the cast request is the
+            // fallback for the receiver-launch window before first stamp.
+            channelId = if (isExternal) null
+                else holder.currentChannelId ?: castChannelRequest.value,
         )
         return CastControl.encodeState(state)
     }
