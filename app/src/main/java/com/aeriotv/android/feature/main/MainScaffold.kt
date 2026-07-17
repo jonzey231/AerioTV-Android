@@ -807,6 +807,10 @@ fun MainScaffold(
 
     // GH #33: companion device picker opened from the floating "Control TV" pill.
     if (showCompanionPicker) {
+        // Force a fresh query sweep the moment the picker opens: the Fold's
+        // WiFi misses mid-browse announcements, so a long-running browse can
+        // be stale-by-omission (a TV that came up after the browse started).
+        LaunchedEffect(Unit) { companionDiscovery.refresh() }
         CompanionControlPickerDialog(
             devices = companionDevices,
             connection = companionConn,

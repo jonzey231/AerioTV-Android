@@ -72,6 +72,23 @@ class CompanionDiscovery @Inject constructor(
         beginBrowse()
     }
 
+    /**
+     * Force a fresh query sweep NOW. The Fold's WiFi delivers only the
+     * initial-sweep answers of a browse; unsolicited mid-browse announcements
+     * (a TV that came up later) never arrive, so a long-running browse goes
+     * stale-by-omission (2026-07-17: ATV registered at 10:06, Mac saw it,
+     * Fold's 9:53 browse never did). Called when the Control-a-TV picker
+     * opens -- a browse restart re-queries immediately. Known entries are
+     * kept (re-found services refresh; a truly-gone one dies on connect).
+     */
+    @Synchronized
+    fun refresh() {
+        if (starts <= 0) return
+        discoveryListener?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
+        discoveryListener = null
+        beginBrowse()
+    }
+
     @Synchronized
     fun start() {
         if (starts++ > 0) return
