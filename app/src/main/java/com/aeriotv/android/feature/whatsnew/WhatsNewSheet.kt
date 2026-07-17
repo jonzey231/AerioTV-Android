@@ -202,14 +202,15 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Smoother Live TV guide",
-            body = "The guide now scrolls in controlled steps that settle on " +
-                "their own instead of coasting, matching the feel on iPhone.",
+            title = "Control your TV from your phone",
+            body = "Open AerioTV on your phone and tap the TV button to use it as " +
+                "a remote for your Android TV or Apple TV on the same network.",
         ),
         WhatsNewItem(
-            title = "Cleaner guide layout",
-            body = "A denser grid fits more on screen, and program titles stay " +
-                "readable as you scroll across the timeline.",
+            title = "Full remote controls",
+            body = "Browse the guide, change channels, pause and rewind, switch " +
+                "stream sources, record the current program, set a sleep timer, " +
+                "or go Audio Only - all from your phone.",
         ),
     )
 }
