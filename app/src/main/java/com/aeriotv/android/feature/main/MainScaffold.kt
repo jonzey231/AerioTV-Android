@@ -685,17 +685,25 @@ fun MainScaffold(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                // GH #33: floating "Control TV" pill -- appears when a
-                // controllable AerioTV TV is discovered on the LAN so the phone
-                // can be a remote without opening a channel first. Hidden while
-                // already controlling / casting (their cards take over).
+                // GH #33: round floating "Control a TV" button above the right
+                // end of the tab bar -- appears when a controllable AerioTV TV
+                // is discovered on the LAN so the phone can be a remote without
+                // opening a channel first. Hidden while already controlling /
+                // casting (their cards take over).
                 if (companionDevices.isNotEmpty() &&
                     companionConn !is com.aeriotv.android.core.cast.companion
                         .CompanionRemoteController.Conn.Connected &&
                     !casting && !isTv
                 ) {
-                    CompanionControlPill(onClick = { showCompanionPicker = true })
-                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        Modifier.fillMaxWidth().padding(end = 16.dp),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        CompanionControlFab(
+                            onClick = { showCompanionPicker = true },
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
                 }
                 // GH #33 companion remote: "Controlling <TV>" card, same chrome as
                 // the Now-Casting card above. Tap -> reopen the remote; play/pause
@@ -824,29 +832,30 @@ fun MainScaffold(
     }
 }
 
-/** GH #33: floating pill above the tab bar -- entry to control a discovered TV. */
+/**
+ * GH #33: round floating button above the right end of the tab bar -- entry
+ * to control a discovered TV. Matches the card chrome (surface + faint
+ * primary border) rather than a filled pill, mirroring the iOS glass FAB.
+ */
 @Composable
-private fun CompanionControlPill(onClick: () -> Unit) {
-    Row(
+private fun CompanionControlFab(onClick: () -> Unit) {
+    Box(
         modifier = Modifier
-            .padding(horizontal = 12.dp)
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.primary)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .size(52.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
+                androidx.compose.foundation.shape.CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = Icons.Filled.Tv,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimary,
-        )
-        Text(
-            "Control TV",
-            color = MaterialTheme.colorScheme.onPrimary,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
+            contentDescription = "Control a TV",
+            tint = MaterialTheme.colorScheme.primary,
         )
     }
 }

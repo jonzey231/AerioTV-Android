@@ -91,7 +91,7 @@ class CompanionHostController @Inject constructor(
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var started = false
-    private var advertising = false
+    @Volatile private var advertising = false
     private var server: io.ktor.server.engine.EmbeddedServer<*, *>? = null
     private var boundPort = 0
     private var nsd: NsdManager? = null
@@ -134,6 +134,28 @@ class CompanionHostController @Inject constructor(
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
             context.packageManager.hasSystemFeature("android.software.leanback")
 
+    private var watchdogJob: Job? = null
+
+    /**
+     * On-demand foreground truth. The Google TV Streamer delivers STALE lifecycle
+     * events ~1s after every (re)launch ("Activity pause timeout" in the system
+     * log): a late onStop lands after the new onStart, so the ProcessLifecycleOwner
+     * observer tears the advert down and leaves this host dark while the app is
+     * visibly foreground (2026-07-16 field trace: register -> Removing service
+     * 130ms later on every launch). Activity resume/pause callbacks are delivered
+     * equally out of order, so no event bookkeeping is trustworthy here -- the
+     * recheck and watchdog ask ActivityManager for the process importance instead.
+     */
+    private fun isForeground(): Boolean {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            ?: return false
+        val myPid = android.os.Process.myPid()
+        return am.runningAppProcesses?.any {
+            it.pid == myPid &&
+                it.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        } == true
+    }
+
     /** Idempotent; called once from Application.onCreate. No-op on non-TV. */
     fun start() {
         if (started || !isTv()) return
@@ -141,11 +163,34 @@ class CompanionHostController @Inject constructor(
         // Advertise only while the TV app is foregrounded; tear down when it leaves.
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = startAdvertising()
-            override fun onStop(owner: LifecycleOwner) = stopAdvertising()
+            override fun onStop(owner: LifecycleOwner) {
+                stopAdvertising()
+                // Stale-stop guard: if the process is still foreground shortly
+                // after, this stop was out-of-order -- bring the host straight back.
+                ioScope.launch {
+                    delay(2_000)
+                    if (!advertising && isForeground()) {
+                        Log.i(TAG, "stale lifecycle stop while foreground -> re-advertising")
+                        startAdvertising()
+                    }
+                }
+            }
         })
         startAdvertising()
+        // Safety net for any teardown path the recheck misses: while the app is
+        // visibly foreground the host must be advertising.
+        watchdogJob = ioScope.launch {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                delay(15_000)
+                if (!advertising && isForeground()) {
+                    Log.i(TAG, "watchdog: foreground but not advertising -> restart")
+                    startAdvertising()
+                }
+            }
+        }
     }
 
+    @Synchronized
     private fun startAdvertising() {
         if (advertising) return
         advertising = true
@@ -162,6 +207,19 @@ class CompanionHostController @Inject constructor(
                 acquireMulticastLock()
                 registerNsd(boundPort)
                 Log.i(TAG, "companion host advertising on :$boundPort")
+                // stopAdvertising may have run while we were binding (stale
+                // lifecycle events interleave on some devices, and its regListener/
+                // server fields were still null then) -- tear down what we just
+                // built so a dead advert doesn't linger on the network.
+                if (!advertising) {
+                    Log.i(TAG, "advertising cancelled mid-setup -> tearing down")
+                    runCatching { regListener?.let { nsd?.unregisterService(it) } }
+                    regListener = null
+                    runCatching { server?.stop(200L, 500L) }
+                    server = null
+                    multicastLock?.let { l -> runCatching { if (l.isHeld) l.release() } }
+                    multicastLock = null
+                }
             }.onFailure {
                 Log.w(TAG, "startAdvertising failed", it)
                 // Leave a clean slate so the next foreground can re-attempt
@@ -173,6 +231,7 @@ class CompanionHostController @Inject constructor(
         }
     }
 
+    @Synchronized
     private fun stopAdvertising() {
         if (!advertising) return
         advertising = false
