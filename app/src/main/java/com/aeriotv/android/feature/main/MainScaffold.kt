@@ -25,7 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -230,6 +234,24 @@ fun MainScaffold(
     val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
     val companionNowPlaying by companionRemote.nowPlaying.collectAsStateWithLifecycle()
     val companionChannelId by companionRemote.currentChannelId.collectAsStateWithLifecycle()
+    // GH #33: browse for controllable AerioTV TVs at the SCAFFOLD level (phone
+    // only; the TV is a host, not a client) so the floating "Control TV" pill
+    // can appear without opening a channel first. Refcounted with the in-player
+    // chooser's start/stop.
+    val companionDiscovery = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            MainScaffoldEntryPoint::class.java,
+        ).companionDiscovery()
+    }
+    if (!rememberLiveTvFormFactor().isTv) {
+        DisposableEffect(Unit) {
+            companionDiscovery.start()
+            onDispose { companionDiscovery.stop() }
+        }
+    }
+    val companionDevices by companionDiscovery.devices.collectAsStateWithLifecycle()
+    var showCompanionPicker by remember { mutableStateOf(false) }
     // Poll pause state from the held ExoPlayer so the mini-player's
     // Pause/Play icon stays accurate when the notification action /
     // BT button toggles playback elsewhere.
@@ -663,6 +685,18 @@ fun MainScaffold(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
+                // GH #33: floating "Control TV" pill -- appears when a
+                // controllable AerioTV TV is discovered on the LAN so the phone
+                // can be a remote without opening a channel first. Hidden while
+                // already controlling / casting (their cards take over).
+                if (companionDevices.isNotEmpty() &&
+                    companionConn !is com.aeriotv.android.core.cast.companion
+                        .CompanionRemoteController.Conn.Connected &&
+                    !casting && !isTv
+                ) {
+                    CompanionControlPill(onClick = { showCompanionPicker = true })
+                    Spacer(Modifier.height(8.dp))
+                }
                 // GH #33 companion remote: "Controlling <TV>" card, same chrome as
                 // the Now-Casting card above. Tap -> reopen the remote; play/pause
                 // -> TV transport; x -> disconnect from the TV. Local playback is
@@ -762,6 +796,134 @@ fun MainScaffold(
             }
         }
     }
+
+    // GH #33: companion device picker opened from the floating "Control TV" pill.
+    if (showCompanionPicker) {
+        CompanionControlPickerDialog(
+            devices = companionDevices,
+            connection = companionConn,
+            onConnect = { companionRemote.connect(it) },
+            onSubmitCode = { companionRemote.submitPairingCode(it) },
+            onDismiss = {
+                // Abandon an in-flight/unpaired attempt so it doesn't linger.
+                if (companionConn !is com.aeriotv.android.core.cast.companion
+                        .CompanionRemoteController.Conn.Connected) {
+                    companionRemote.disconnect()
+                }
+                showCompanionPicker = false
+            },
+        )
+    }
+    // A fresh connection made from the picker -> close it; the Controlling card
+    // + player remote take over.
+    LaunchedEffect(companionConn) {
+        if (companionConn is com.aeriotv.android.core.cast.companion
+                .CompanionRemoteController.Conn.Connected) {
+            showCompanionPicker = false
+        }
+    }
+}
+
+/** GH #33: floating pill above the tab bar -- entry to control a discovered TV. */
+@Composable
+private fun CompanionControlPill(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(horizontal = 12.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Tv,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimary,
+        )
+        Text(
+            "Control TV",
+            color = MaterialTheme.colorScheme.onPrimary,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+/** GH #33: picks a discovered AerioTV TV to control; inline 6-digit pairing. */
+@Composable
+private fun CompanionControlPickerDialog(
+    devices: List<com.aeriotv.android.core.cast.companion.CompanionDiscovery.Tv>,
+    connection: com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn,
+    onConnect: (com.aeriotv.android.core.cast.companion.CompanionDiscovery.Tv) -> Unit,
+    onSubmitCode: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val needsPairing = connection is
+        com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.NeedsPairing
+    val connecting = connection is
+        com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connecting
+    var code by remember { mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            if (needsPairing) {
+                androidx.compose.material3.TextButton(
+                    onClick = { onSubmitCode(code); code = "" },
+                    enabled = code.trim().length >= 6,
+                ) { Text("Pair") }
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        title = { Text("Control a TV") },
+        text = {
+            Column {
+                when {
+                    needsPairing -> {
+                        Text("Enter the code shown on the TV")
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = code,
+                            onValueChange = { code = it.filter(Char::isDigit).take(6) },
+                            singleLine = true,
+                            label = { Text("6-digit code") },
+                        )
+                    }
+                    connecting -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text("Connecting…")
+                        }
+                    }
+                    devices.isEmpty() -> Text(
+                        "No AerioTV devices found. Open AerioTV on your TV, then check again.",
+                    )
+                    else -> Column {
+                        devices.forEach { tv ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onConnect(tv) }
+                                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Icon(Icons.Filled.Tv, contentDescription = null)
+                                Text(tv.name, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
 }
 
 /**
@@ -1286,6 +1448,7 @@ interface MainScaffoldEntryPoint {
     fun exoWindowState(): com.aeriotv.android.feature.player.ExoWindowState
     fun castSender(): com.aeriotv.android.core.cast.AerioCastSender
     fun companionRemote(): com.aeriotv.android.core.cast.companion.CompanionRemoteController
+    fun companionDiscovery(): com.aeriotv.android.core.cast.companion.CompanionDiscovery
 }
 
 /** Two-step Add Playlist flow embedded in the Settings tab. None = closed. */
