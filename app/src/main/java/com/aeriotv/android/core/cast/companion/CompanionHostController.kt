@@ -327,6 +327,14 @@ class CompanionHostController @Inject constructor(
                             _pairingCode.value = null
                             runCatching { send(Frame.Text(CompanionProtocol.authOk(issued))) }
                             registerSession(this)
+                            // On-TV confirmation that a remote took control.
+                            scope.launch {
+                                runCatching {
+                                    android.widget.Toast.makeText(
+                                        context, "Phone connected", android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
                         } else {
                             // Brute-force hardening (adversarial review 2026-07-15):
                             // a WRONG code both counts against a small per-connection
