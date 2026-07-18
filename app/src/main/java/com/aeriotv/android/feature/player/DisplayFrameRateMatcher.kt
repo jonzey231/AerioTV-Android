@@ -73,20 +73,40 @@ object DisplayFrameRateMatcher {
             if (deltasUs.size >= 30) {
                 val sorted = deltasUs.sorted()
                 val fps = (1_000_000.0 / sorted[sorted.size / 2]).toFloat()
-                // Re-request only on a meaningful cadence change (a channel flip
-                // to different-fps content), not every frame.
-                if (fps in 20f..130f && abs(fps - lastAppliedFps) > 1.0f) {
-                    lastAppliedFps = fps
+                // Map measured CONTENT fps to the rate we actually request.
+                // Only the 50 / 59.94 / 60 class is ever requested: 25 / 29.97
+                // / 30 content is requested at DOUBLE rate, which the panel
+                // shows with a clean 2:2 cadence - same judder-free result as
+                // a native low-rate mode, on a mode the UI can also live on.
+                //
+                // NEVER request a sub-mode rate directly. Requesting 25 while
+                // in the 1080p50 mode put kirkwood's SurfaceFlinger into a
+                // 25Hz per-uid frameRateOverride with broken present pacing:
+                // 38-40 skipped UI frames at a time and repeated visible video
+                // dropouts on the TV (Logan's Hisense, 2026-07-18). The
+                // doubling also makes a 25-vs-50 measurement flap harmless -
+                // both map to a 50 request, so no repeated mode switches.
+                //
+                // 24-class film cadence (23.976 / 24) is deliberately NOT
+                // requested: it divides neither 50 nor 60, so it keeps the
+                // status-quo 3:2 behavior until handled on purpose.
+                val target = when {
+                    fps in 45f..65f -> fps
+                    fps in 24.5f..32.5f -> fps * 2f
+                    else -> 0f
+                }
+                if (target > 0f && abs(target - lastAppliedFps) > 1.0f) {
+                    lastAppliedFps = target
                     val surface = surfaceView.holder.surface
                     if (surface != null && surface.isValid) {
                         runCatching {
                             surface.setFrameRate(
-                                fps,
+                                target,
                                 Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
                                 Surface.CHANGE_FRAME_RATE_ALWAYS,
                             )
                         }.onSuccess {
-                            Log.i(TAG, "setFrameRate(${"%.2f".format(fps)}) strategy=ALWAYS (OS setting arbitrates)")
+                            Log.i(TAG, "setFrameRate(${"%.2f".format(target)}) for content ${"%.2f".format(fps)}fps strategy=ALWAYS")
                         }
                     }
                 }
