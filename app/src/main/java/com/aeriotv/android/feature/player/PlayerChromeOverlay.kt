@@ -114,6 +114,7 @@ import com.aeriotv.android.ui.theme.LocalAppTheme
 import com.aeriotv.android.ui.theme.TextPrimary
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import java.text.DateFormat
 import java.util.Date
 
@@ -1798,6 +1799,58 @@ fun AudioTracksSheet(
                     )
                 }
             }
+            // Task #184: Audio Sync (session-wide, positive = audio later).
+            // Reads/writes the AudioSyncOffset singleton directly - it is a
+            // global playback knob shared by every player instance, so
+            // threading it through each caller would add plumbing for no
+            // isolation gain. Mirrored on iOS/tvOS via mpv audio-delay.
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f))
+            Spacer(Modifier.height(10.dp))
+            var syncMs by remember {
+                mutableStateOf(com.aeriotv.android.core.playback.AudioSyncOffset.offsetMs)
+            }
+            fun applySync(newMs: Long) {
+                val clamped = newMs.coerceIn(
+                    com.aeriotv.android.core.playback.AudioSyncOffset.MIN_MS,
+                    com.aeriotv.android.core.playback.AudioSyncOffset.MAX_MS,
+                )
+                syncMs = clamped
+                com.aeriotv.android.core.playback.AudioSyncOffset.offsetMs = clamped
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Audio Sync",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = if (syncMs == 0L) "0 ms" else "%+d ms".format(syncMs),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Slider(
+                value = syncMs.toFloat(),
+                onValueChange = { applySync((it / 50f).roundToInt() * 50L) },
+                valueRange = com.aeriotv.android.core.playback.AudioSyncOffset.MIN_MS.toFloat()..
+                    com.aeriotv.android.core.playback.AudioSyncOffset.MAX_MS.toFloat(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { applySync(syncMs - 100L) }) { Text("-100 ms") }
+                TextButton(onClick = { applySync(syncMs + 100L) }) { Text("+100 ms") }
+                Spacer(Modifier.weight(1f))
+                if (syncMs != 0L) {
+                    TextButton(onClick = { applySync(0L) }) { Text("Reset") }
+                }
+            }
+            Text(
+                text = "Positive plays audio later; negative plays it earlier.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(12.dp))
         }
     }

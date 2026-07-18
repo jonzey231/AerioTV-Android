@@ -59,6 +59,7 @@ fun aerioRenderersFactory(
             if (audioPassthrough) {
                 android.util.Log.i("AerioPlayerDiag", "audio sink -> stock context sink (passthrough on)")
                 return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                    ?.let { AudioSyncShiftSink(it) }
             }
             android.util.Log.i("AerioPlayerDiag", "audio sink -> forced-PCM no-context sink + PTS-smoothing (passthrough off)")
             @Suppress("DEPRECATION")
@@ -67,7 +68,7 @@ fun aerioRenderersFactory(
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                 .build()
-            return PtsSmoothingAudioSink(pcmSink)
+            return AudioSyncShiftSink(PtsSmoothingAudioSink(pcmSink))
         }
 
         override fun buildVideoRenderers(
@@ -117,6 +118,42 @@ fun aerioRenderersFactory(
         // (PREFER would route ALL audio through the software decoder, wasting
         // CPU on formats the hardware handles fine.)
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+}
+
+/**
+ * Task #184: session-wide user audio sync offset (positive = audio later),
+ * mirrored on iOS/tvOS as mpv's audio-delay. Shared by every player built
+ * from [aerioRenderersFactory] and reset only on app restart - matching
+ * the Apple side, where the offset lives on the warm mpv instance. Not
+ * persisted to disk.
+ */
+object AudioSyncOffset {
+    const val MIN_MS = -1000L
+    const val MAX_MS = 1000L
+
+    @Volatile
+    var offsetMs: Long = 0L
+        set(value) {
+            field = value.coerceIn(MIN_MS, MAX_MS)
+        }
+}
+
+/**
+ * Task #184: applies [AudioSyncOffset] by shifting the position the audio
+ * sink reports. The audio renderer is the player's MediaClock, so video
+ * release timing follows the reported audio position: inflating it by X
+ * makes video run X early, i.e. audio plays X LATER relative to video
+ * (positive = audio later, matching mpv audio-delay). ExoPlayer has no
+ * first-class audio-delay knob; this clock shift is the established
+ * Media3 pattern. Changes mid-playback re-sync within a frame or two.
+ */
+@OptIn(UnstableApi::class)
+private class AudioSyncShiftSink(sink: AudioSink) : ForwardingAudioSink(sink) {
+    override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
+        val p = super.getCurrentPositionUs(sourceEnded)
+        if (p == AudioSink.CURRENT_POSITION_NOT_SET) return p
+        return (p + AudioSyncOffset.offsetMs * 1000L).coerceAtLeast(0L)
+    }
 }
 
 /**
