@@ -1539,7 +1539,38 @@ fun GuideScreen(
         androidx.activity.compose.BackHandler(enabled = !miniActive) {
             val atTop = listState.firstVisibleItemIndex == 0 &&
                 listState.firstVisibleItemScrollOffset == 0
-            if (!atTop) {
+            // Task #185 (user request): after browsing hours into the future or
+            // past there was NO way back to "now" short of stepping cell-by-cell
+            // (hold-LEFT abandons the grid for the All pill entirely). Extend
+            // the Back ladder: timeline-away-from-now -> snap the timeline back
+            // to the left-aligned now anchor and refocus the CURRENT row's now
+            // cell; then (next press) scroll to the top channel; then exit.
+            // The anchor is recomputed fresh (autoAnchorPx goes stale as wall
+            // clock advances); half an hourWidth of drift still counts as "at
+            // now" so Back doesn't burn a press micro-correcting.
+            val nowOffsetPx =
+                ((System.currentTimeMillis() - windowStart).toFloat() / 3_600_000f) * hourWidthPx
+            val nowAnchorPx = (nowOffsetPx - stripViewportPx * 0.20f).toInt()
+                .coerceIn(0, horizontalScrollState.maxValue)
+            val awayFromNow =
+                kotlin.math.abs(horizontalScrollState.value - nowAnchorPx) > hourWidthPx.toInt() / 2
+            if (awayFromNow) {
+                backScope.launch {
+                    horizontalScrollState.animateScrollTo(nowAnchorPx)
+                    autoAnchorPx = nowAnchorPx
+                    // Refocus the row the user was on at its now cell. The
+                    // horizontal-reveal window is deliberately NOT opened, so
+                    // the landing focus cannot nudge the timeline we just
+                    // placed (matches the vertical-move no-scroll model).
+                    if (isTv) {
+                        guideNav.focusChannelAtNow(
+                            guideNav.lastFocusedChannelIndex.coerceAtLeast(0),
+                            nowMillis,
+                            listState,
+                        )
+                    }
+                }
+            } else if (!atTop) {
                 backScope.launch {
                     listState.animateScrollToItem(0)
                     // Land focus on the top channel's NOW cell, not the "All"
