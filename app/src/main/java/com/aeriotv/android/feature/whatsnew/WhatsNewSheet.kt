@@ -202,15 +202,20 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Control your TV from your phone",
-            body = "Open AerioTV on your phone and tap the TV button to use it as " +
-                "a remote for your Android TV or Apple TV on the same network.",
+            title = "TV Guide navigation overhaul",
+            body = "On TV, the focus highlight always stays visible, rides a " +
+                "steady lane while you scroll channels, and never wanders into " +
+                "the past. Press Back to snap the timeline home to now.",
         ),
         WhatsNewItem(
-            title = "Full remote controls",
-            body = "Browse the guide, change channels, pause and rewind, switch " +
-                "stream sources, record the current program, set a sleep timer, " +
-                "or go Audio Only - all from your phone.",
+            title = "Audio Sync",
+            body = "New Audio Sync slider in the player's audio track sheet: " +
+                "nudge audio up to a second earlier or later to fix lip-sync.",
+        ),
+        WhatsNewItem(
+            title = "Catch-up improvements",
+            body = "Smarter programme windows (no more clipped endings) and " +
+                "paused catch-up sessions no longer expire mid-break.",
         ),
     )
 }
