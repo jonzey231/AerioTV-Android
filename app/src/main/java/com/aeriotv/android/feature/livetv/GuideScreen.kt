@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -658,7 +659,15 @@ fun GuideScreen(
     }
     val visibleWindow by remember(windowStart, hourWidthPx, stripViewportPx) {
         derivedStateOf {
-            val bucketMs = 5L * 60_000L
+            // Task #188: 30-min buckets (was 5). Every bucket crossing during
+            // an animated horizontal step re-emits this window and recomposes
+            // EVERY visible row; a single step gliding across a wide cell
+            // crossed 6-12 five-minute buckets = 6-12 full-grid passes, the
+            // dominant slice of the measured 85ms-median horizontal frames.
+            // Correctness is unaffected: rows compose GUIDE_VIEWPORT_PAD_MS
+            // (90 min) beyond the window on both sides, so a 30-min snap can
+            // never reveal an uncomposed region.
+            val bucketMs = 30L * 60_000L
             val padMs = GUIDE_VIEWPORT_PAD_MS
             val scrollPx = horizontalScrollState.value.toFloat()
             val startMs = windowStart + (scrollPx / hourWidthPx * 3_600_000f).toLong()
@@ -1519,19 +1528,27 @@ fun GuideScreen(
         // next span). Restarting on windowStart / hourWidthPx / stripViewportPx
         // rebinds to the current window so the anchor tracks the focused cell.
         LaunchedEffect(guideNav, windowStart, hourWidthPx, stripViewportPx) {
-            snapshotFlow { visibleWindow.first }
+            // Task #185 ROOT CAUSE of "guide gets away": the nav anchor must
+            // track the TRUE on-screen edge, not the padded compose window
+            // (feeding the padded start let vertical moves land on cells
+            // wholly left of the viewport: invisible focus ring + timeline
+            // dragged backward; Streamer 50-down field trace 2026-07-17).
+            //
+            // Task #188 REGRESSION FIX (Logan, ch 111/113 focus loss): after
+            // visibleWindow moved to 30-min buckets for recomposition cost,
+            // deriving the anchor from it quantized the anchor up to 30 min
+            // into the past -- rapid vertical bursts landed focus on a cell
+            // that ENDED before the visible edge, and the reveal dragged the
+            // timeline into the past (same symptom class #185 fixed). The
+            // nav anchor now computes the UNSNAPPED edge straight from the
+            // scroll position: full precision for navigation, while the
+            // render window keeps its coarse buckets for the perf win.
+            snapshotFlow {
+                val scrollPx = horizontalScrollState.value.toFloat()
+                windowStart + (scrollPx / hourWidthPx * 3_600_000f).toLong()
+            }
                 .distinctUntilChanged()
-                // Task #185 ROOT CAUSE of "guide gets away": visibleWindow.first
-                // is the COMPOSE-CLIP start = true visible edge MINUS the 90min
-                // pad. Feeding it raw let the anchor clamp settle up to 90min
-                // into the off-screen past, so vertical moves landed on cells
-                // wholly left of the viewport: short cells = invisible focus
-                // ring, and the next LEFT/RIGHT bring-into-view dragged the
-                // whole timeline backward (Streamer 50-down field trace
-                // 2026-07-17, GuideNav logs). Add the pad back so the nav
-                // clamp tracks the TRUE on-screen edge; composition clipping
-                // still uses the padded window.
-                .collect { guideNav.viewportStartMs = it + GUIDE_VIEWPORT_PAD_MS }
+                .collect { guideNav.viewportStartMs = it }
         }
         val navScope = rememberCoroutineScope()
         val backScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -1800,12 +1817,26 @@ fun GuideScreen(
                             val right = event.key == Key.DirectionRight
                             if (right && cellEndPx > scroll + viewportPx + epsilon && scroll < maxScroll) {
                                 val target = (scroll + page).toInt().coerceIn(0, maxScroll)
-                                navScope.launch { horizontalScrollState.animateScrollTo(target) }
+                                navScope.launch {
+                                    // Task #188: short page animation (layout-based scroll,
+                                    // see GuideLeadingEdgeBringIntoViewSpec.scrollAnimationSpec).
+                                    horizontalScrollState.animateScrollTo(
+                                        target,
+                                        androidx.compose.animation.core.tween(durationMillis = 100),
+                                    )
+                                }
                                 return@onPreviewKeyEvent true
                             }
                             if (!right && cellStartPx < scroll - epsilon && scroll > 0) {
                                 val target = (scroll - page).toInt().coerceIn(0, maxScroll)
-                                navScope.launch { horizontalScrollState.animateScrollTo(target) }
+                                navScope.launch {
+                                    // Task #188: short page animation (layout-based scroll,
+                                    // see GuideLeadingEdgeBringIntoViewSpec.scrollAnimationSpec).
+                                    horizontalScrollState.animateScrollTo(
+                                        target,
+                                        androidx.compose.animation.core.tween(durationMillis = 100),
+                                    )
+                                }
                                 return@onPreviewKeyEvent true
                             }
                         }
@@ -2179,7 +2210,6 @@ private fun ChannelGuideRow(
     // "12345" at the rail's type scale so nothing clips (24dp/28dp rendered
     // "5200" as "520", user reports).
     val numberStyle = MaterialTheme.typography.labelMedium
-    val numberWidth = 40.dp
     // Rail name is labelSmall on both form factors: ~9.9sp at the TV 0.9 type
     // scale (per user request, frees rail width for long names) and 11sp on
     // phone, matching the iOS channelLabel 10pt name.
@@ -2253,10 +2283,15 @@ private fun ChannelGuideRow(
                             color = MaterialTheme.colorScheme.tertiary,
                             textAlign = TextAlign.End,
                             maxLines = 1,
-                            modifier = Modifier.width(numberWidth),
+                            // tvOS parity (rail-match pass): .frame(minWidth: 38,
+                            // alignment: .trailing) + fixedSize -> a 19dp MINIMUM
+                            // that grows for 4-5 digit numbers. The old fixed
+                            // 40dp reserved double tvOS's width and squeezed the
+                            // name column into truncating ("NBC Sports ...").
+                            modifier = Modifier.widthIn(min = 19.dp),
                         )
                     }
-                    Spacer(Modifier.width(3.dp))
+                    Spacer(Modifier.width(4.dp))
                 }
                 Column(
                     modifier = Modifier.weight(1f),
@@ -2266,33 +2301,36 @@ private fun ChannelGuideRow(
                     // iOS Issue #28: omit the channel logo when "Show Channel
                     // Logos" is off so the name takes the full space.
                     if (showLogo) {
-                    // Landscape logo box, tvOS 72x48pt proportional on the 540dp
-                    // canvas -> 36x24dp (matching the channel column's tvOS ratios).
-                    Box(
-                        modifier = Modifier
-                            .size(width = 36.dp, height = 24.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.background),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (channel.tvgLogo.isNotBlank()) {
-                            val ctx = androidx.compose.ui.platform.LocalContext.current
-                            // Phase 174: decode at 128x128 px so the
-                            // downsample to ~60x36 px display happens
-                            // via GPU bilinear rather than CPU
-                            // box-filter. Sharper text/glyphs in
-                            // logos that would otherwise look mushy.
-                            AsyncImage(
-                                model = coil3.request.ImageRequest.Builder(ctx)
-                                    .data(channel.tvgLogo)
-                                    .size(128, 128)
-                                    .build(),
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(3.dp),
-                            )
-                        } else {
+                    // Landscape logo, tvOS 72x48pt proportional on the 540dp
+                    // canvas -> 36x24dp (matching the channel column's tvOS
+                    // ratios). tvOS parity (rail-match pass): a REAL logo
+                    // floats directly on the rail background like tvOS's
+                    // CachedLogoImage -- no rounded box, no backing fill, no
+                    // inner padding (the dark chip behind every logo was an
+                    // Android-only invention). The boxed treatment survives
+                    // ONLY as the no-logo placeholder, mirroring tvOS's
+                    // guidePlaceholder rounded rect.
+                    if (channel.tvgLogo.isNotBlank()) {
+                        val ctx = androidx.compose.ui.platform.LocalContext.current
+                        // Phase 174: decode at 128x128 px so the downsample to
+                        // display size happens via GPU bilinear rather than
+                        // CPU box-filter. Sharper text/glyphs in logos.
+                        AsyncImage(
+                            model = coil3.request.ImageRequest.Builder(ctx)
+                                .data(channel.tvgLogo)
+                                .size(128, 128)
+                                .build(),
+                            contentDescription = null,
+                            modifier = Modifier.size(width = 36.dp, height = 24.dp),
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 36.dp, height = 24.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
                             Text(
                                 text = channel.name.take(2).uppercase(),
                                 style = MaterialTheme.typography.labelMedium,
@@ -2566,6 +2604,22 @@ private fun ChannelGuideRow(
                     if (!rowIsFocused &&
                         (rawEnd <= visibleStartMs || rawStart >= visibleEndMs)
                     ) return@forEachIndexed
+                    // Task #188: BOUND the focused-row exception. Composing the
+                    // focused row's ENTIRE window made its per-press cost scale
+                    // with EPG size (alturismo's large EPG = worst case; a
+                    // dense channel landing = the 350-900ms vertical hitch).
+                    // A halo of 2x the padded visible span on each side keeps
+                    // every cell a page-jump (0.85 viewport) or bring-into-view
+                    // step could land on alive -- the focus-orphan bug the
+                    // exception exists for cannot reach cells 2+ windows away,
+                    // because the column snap and retarget logic always pull
+                    // focus back toward the viewport first.
+                    if (rowIsFocused) {
+                        val haloMs = (visibleEndMs - visibleStartMs) * 2
+                        if (rawEnd <= visibleStartMs - haloMs ||
+                            rawStart >= visibleEndMs + haloMs
+                        ) return@forEachIndexed
+                    }
                     val clippedStart = rawStart.coerceAtLeast(windowStart)
                     // Anti-overlap: clamp the cell end to the next programme's start
                     // so a feed with overlapping entries doesn't paint cells on top
@@ -2690,21 +2744,29 @@ private fun ChannelGuideRow(
             // which cell the anchor resolved to and how many spans were
             // composed. Field evidence for wrong-column landings (2026-07-12
             // Streamer: a row-down snapped to the far-right cell).
-            android.util.Log.i(
-                "GuideNav",
-                "land row=$channelIndex anchor=$anchorTimeMs " +
-                    "cell=${target.startMs}..${target.endMs} " +
-                    "contained=${containing != null} spans=${spans.size} " +
-                    "spanRange=${spans.minOf { it.startMs }}..${spans.maxOf { it.endMs }}",
-            )
+            // Debug builds only (task #188): the string build includes two
+            // O(spans) scans and sat directly on the per-press path.
+            if (com.aeriotv.android.BuildConfig.DEBUG) {
+                android.util.Log.i(
+                    "GuideNav",
+                    "land row=$channelIndex anchor=$anchorTimeMs " +
+                        "cell=${target.startMs}..${target.endMs} " +
+                        "contained=${containing != null} spans=${spans.size} " +
+                        "spanRange=${spans.minOf { it.startMs }}..${spans.maxOf { it.endMs }}",
+                )
+            }
             // requestFocus() throws if the node isn't attached yet (row composed
             // but not laid out). The caller retries for a few frames, so swallow
             // and report failure rather than crash.
             runCatching { target.requester.requestFocus() }.isSuccess
         }
         // Explicit LEFT/RIGHT: step to the adjacent COMPOSED cell in this row.
+        // Task #188: visibleCellSpans is built in programme-start order (the
+        // composition loop walks the start-sorted programme list), so the old
+        // per-press sortedBy COPY was a pure allocation + O(n log n) tax on
+        // the hot path. Use the list directly.
         guideNav.registerRowHorizontal(channelIndex) { forward, fromMs ->
-            val spans = visibleCellSpans.sortedBy { it.startMs }
+            val spans = visibleCellSpans
             if (spans.isEmpty()) return@registerRowHorizontal false
             // The cell the user is currently in (contains fromMs), else the last
             // one starting at/before fromMs (anchor sitting in a gap), else first.
@@ -3537,11 +3599,14 @@ private class GuideVerticalNavState {
                 cellStartMs
             }
         }
-        android.util.Log.i(
-            "GuideNav",
-            "focused row=$channelIndex cellStart=$cellStartMs " +
-                "anchor=$anchorTimeMs viewportStart=$viewportStartMs",
-        )
+        // Debug builds only (task #188): fired on EVERY cell focus.
+        if (com.aeriotv.android.BuildConfig.DEBUG) {
+            android.util.Log.i(
+                "GuideNav",
+                "focused row=$channelIndex cellStart=$cellStartMs " +
+                    "anchor=$anchorTimeMs viewportStart=$viewportStartMs",
+            )
+        }
     }
 
     /** Called by a cell when it loses focus; clears the focused index only if it
@@ -3646,7 +3711,18 @@ private class GuideVerticalNavState {
         // (rows 0/1 focus without scrolling); at the bottom the list runs out
         // of scroll range and the focused row naturally rides lower, exactly
         // like the reference guide.
-        listState.scrollToItem((index - 1).coerceAtLeast(0))
+        //
+        // Task #188: skip the scroll when the list already sits exactly on
+        // the target. scrollToItem forces a LazyColumn re-layout even when
+        // positionally a no-op, which was a measurable slice of EVERY
+        // vertical press (the genuine row-reveal work stays, but the
+        // already-positioned case is now free).
+        val target = (index - 1).coerceAtLeast(0)
+        if (listState.firstVisibleItemIndex != target ||
+            listState.firstVisibleItemScrollOffset != 0
+        ) {
+            listState.scrollToItem(target)
+        }
     }
 }
 
@@ -3695,6 +3771,15 @@ private class GuideLeadingEdgeBringIntoViewSpec(
     private val verticalMoveLeadingEdgeTargetPx: () -> Float?,
     private val horizontalNavActive: () -> Boolean,
 ) : BringIntoViewSpec {
+    // Task #188: short reveal animation. Compose's horizontalScroll is
+    // LAYOUT-based (unlike SwiftUI's GPU offset transform on tvOS), so every
+    // animation frame re-lays-out every visible row's 240k-px strip; the
+    // default spec's ~300ms glide = ~18 such frames per D-pad step and was
+    // the largest slice of the measured 69-85ms median horizontal frames.
+    // ~100ms keeps a readable hint of motion at a third of the layout passes.
+    override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float> =
+        androidx.compose.animation.core.tween(durationMillis = 100)
+
     override fun calculateScrollDistance(
         offset: Float,
         size: Float,
