@@ -1521,7 +1521,17 @@ fun GuideScreen(
         LaunchedEffect(guideNav, windowStart, hourWidthPx, stripViewportPx) {
             snapshotFlow { visibleWindow.first }
                 .distinctUntilChanged()
-                .collect { guideNav.viewportStartMs = it }
+                // Task #185 ROOT CAUSE of "guide gets away": visibleWindow.first
+                // is the COMPOSE-CLIP start = true visible edge MINUS the 90min
+                // pad. Feeding it raw let the anchor clamp settle up to 90min
+                // into the off-screen past, so vertical moves landed on cells
+                // wholly left of the viewport: short cells = invisible focus
+                // ring, and the next LEFT/RIGHT bring-into-view dragged the
+                // whole timeline backward (Streamer 50-down field trace
+                // 2026-07-17, GuideNav logs). Add the pad back so the nav
+                // clamp tracks the TRUE on-screen edge; composition clipping
+                // still uses the padded window.
+                .collect { guideNav.viewportStartMs = it + GUIDE_VIEWPORT_PAD_MS }
         }
         val navScope = rememberCoroutineScope()
         val backScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -1768,13 +1778,26 @@ fun GuideScreen(
                                 return@onPreviewKeyEvent true
                             }
                         }
-                        // Focus is not on a grid cell yet (fresh entry from the
-                        // chrome: focusedChannelIndex == -1). Let the default search
-                        // drive the descent INTO a cell, exactly like the UP/DOWN
-                        // handler does for cur < 0. (Change B keeps the focused cell
-                        // composed during navigation, so this -1 state only happens
-                        // on entry, never from a mid-scroll orphan.)
-                        if (guideNav.focusedChannelIndex < 0) return@onPreviewKeyEvent false
+                        // Focus is not on a grid cell. Two distinct cases:
+                        // (a) ORPHANED mid-browse (a cell disposed out from under
+                        //     focus): lastFocusedChannelIndex still knows the row.
+                        //     Task #185: re-assert focus there at the current
+                        //     anchor and CONSUME -- falling through to the default
+                        //     2D search from an orphan is the path that focused an
+                        //     off-screen past cell and dragged the whole timeline
+                        //     backward (Streamer field trace 2026-07-17).
+                        // (b) genuine fresh entry from the chrome (lastFocused is
+                        //     -1 too): let the default search drive the descent.
+                        if (guideNav.focusedChannelIndex < 0) {
+                            val recoverRow = guideNav.lastFocusedChannelIndex
+                            if (recoverRow >= 0 && !guideNav.verticalMoveInFlight) {
+                                navScope.launch {
+                                    guideNav.moveFocusToChannel(recoverRow, listState)
+                                }
+                                return@onPreviewKeyEvent true
+                            }
+                            return@onPreviewKeyEvent false
+                        }
                         // On a cell: step focus EXPLICITLY to the adjacent composed
                         // cell. If there is one, we moved; if not (edge of the
                         // composed window), CONSUME so Compose's default 2D
@@ -3582,44 +3605,17 @@ private class GuideVerticalNavState {
     /** Scroll [listState] the minimum amount to bring [index] fully on-screen,
      *  composing it if it was scrolled off entirely. */
     private suspend fun ensureRowVisible(index: Int, listState: LazyListState) {
-        var info = listState.layoutInfo
-        var item = info.visibleItemsInfo.firstOrNull { it.index == index }
-        if (item == null) {
-            // The row is scrolled fully off an edge. Bring it to the NEAREST
-            // edge so a D-pad move advances ONE row at a time, instead of
-            // slamming the target to the leading (top) edge -- that was the
-            // "guide jumps to N..N+7 when you cross the bottom fold" bug (e.g.
-            // ch 1 -> down -> ch 9 suddenly shows 9..16). scrollToItem still
-            // composes the row instantly.
-            val visible = info.visibleItemsInfo
-            val firstVisible = visible.firstOrNull()?.index ?: index
-            if (visible.isEmpty() || index < firstVisible) {
-                // Off the TOP (moving up) or no anchor: align to the top edge,
-                // which is the minimal scroll in that direction.
-                listState.scrollToItem(index)
-            } else {
-                // Off the BOTTOM (moving down): land the target as the LAST
-                // visible row so the guide advances a single row.
-                listState.scrollToItem((index - visible.size + 1).coerceAtLeast(0))
-            }
-            // Re-read after composing so the deficit nudge below can finish the
-            // job: scrollToItem(last) lands the target at the bottom but leaves it
-            // PARTIALLY CLIPPED (its bottom hangs below the fold), which read as
-            // "the bottom focused channel is cut off so I can't read it". Falling
-            // through to the bottomOverflow nudge pulls the whole row on-screen.
-            info = listState.layoutInfo
-            item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return
-        }
-        // Partially clipped at an edge: nudge by the deficit so the whole row is
-        // visible before we focus it.
-        val viewportStart = info.viewportStartOffset
-        val viewportEnd = info.viewportEndOffset
-        val topGap = item.offset - viewportStart
-        val bottomOverflow = (item.offset + item.size) - viewportEnd
-        when {
-            topGap < 0 -> listState.scrollBy(topGap.toFloat())
-            bottomOverflow > 0 -> listState.scrollBy(bottomOverflow.toFloat())
-        }
+        // Task #185, reference-guide lane model (Emby 50-down field study
+        // 2026-07-17): hold the focused row as the SECOND visible row (one
+        // context row above), so vertical navigation scrolls continuously and
+        // the focus ring never rides the top/bottom screen edge half-clipped.
+        // The old nearest-edge behaviour parked the ring on the bottom fold
+        // and only scrolled when focus was about to fall off, which read as
+        // sudden unpredictable jumps. At the top of the list this clamps to 0
+        // (rows 0/1 focus without scrolling); at the bottom the list runs out
+        // of scroll range and the focused row naturally rides lower, exactly
+        // like the reference guide.
+        listState.scrollToItem((index - 1).coerceAtLeast(0))
     }
 }
 
