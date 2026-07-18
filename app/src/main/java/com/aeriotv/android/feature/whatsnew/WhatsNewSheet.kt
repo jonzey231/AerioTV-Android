@@ -202,6 +202,14 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "Match content frame rate",
+            body = "The player now asks your device for a real refresh-rate " +
+                "switch when the stream's frame rate differs (50fps content on " +
+                "a 60Hz output, for example). Your system's Match content " +
+                "frame rate setting stays in charge: set it to Always for the " +
+                "full switch, Seamless-only to avoid the brief black resync.",
+        ),
+        WhatsNewItem(
             title = "TV Guide navigation overhaul",
             body = "On TV, the focus highlight always stays visible, rides a " +
                 "steady lane while you scroll channels, and never wanders into " +
