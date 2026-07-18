@@ -174,6 +174,18 @@ class AerioExoPlayerHolder @Inject constructor(
     private var watchdogJob: Job? = null
     private var lastPositionAdvanceAtMs = 0L
     private var lastKnownPositionMs = 0L
+    // Byte-ingest progress, tracked separately from render position. A wedged
+    // proxy read stalls BOTH; an honest re-buffer (slow network moment, weak
+    // device starved by UI work) stalls position while bufferedPosition keeps
+    // advancing -- and reloading an honestly-buffering stream only makes it
+    // worse (Chromecast field report 2026-07-18: EPG-scroll jank -> 3 stale
+    // reloads in 18s -> player wedged -> terminal NO-DATA give-up).
+    private var lastKnownBufferedPositionMs = 0L
+    private var lastBufferAdvanceAtMs = 0L
+    // When the watchdog tick itself arrives late, the MAIN THREAD was blocked
+    // (the scope is Main.immediate) -- staleness accrued during that hang is
+    // evidence of UI jank, not of a dead stream.
+    private var lastWatchdogTickAtMs = 0L
     private var lastForcedReloadAtMs = 0L
     // Armed only once the stream reaches steady playback (iOS
     // hasReachedPlaybackRestartForStream) so a slow cold-start probe is never
@@ -1295,6 +1307,8 @@ class AerioExoPlayerHolder @Inject constructor(
         hasReachedPlaybackRestart = true
         lastPositionAdvanceAtMs = SystemClock.elapsedRealtime()
         lastKnownPositionMs = player?.currentPosition ?: 0L
+        lastBufferAdvanceAtMs = lastPositionAdvanceAtMs
+        lastKnownBufferedPositionMs = player?.bufferedPosition ?: 0L
         // Measure the no-frame window from steady playback, not from prime,
         // so a slow cold start is never mistaken for a black screen.
         if (!videoFrameRendered) streamPrimedAtMs = lastPositionAdvanceAtMs
@@ -1302,11 +1316,32 @@ class AerioExoPlayerHolder @Inject constructor(
 
     private fun startWatchdog() {
         if (watchdogJob?.isActive == true) return
+        lastWatchdogTickAtMs = 0L
         watchdogJob = watchdogScope.launch {
             while (isActive) {
                 delay(watchdogPollMs)
                 val p = player ?: continue
                 val now = SystemClock.elapsedRealtime()
+
+                // Jank discount. This loop runs on Main.immediate, so a tick
+                // arriving well past its schedule means the MAIN THREAD was
+                // hung (EPG scroll on a weak device, GC storm). Playback
+                // starved by that same hang looks "stale" without the stream
+                // being at fault -- don't count the hang against it.
+                // (Chromecast field report 2026-07-18.)
+                if (lastWatchdogTickAtMs != 0L) {
+                    val overshoot = (now - lastWatchdogTickAtMs) - watchdogPollMs
+                    if (overshoot > 2_000L) {
+                        // Cap at `now`: an unbounded bump after a very long
+                        // gap would park the baselines in the future and
+                        // blind the watchdog for that long.
+                        lastPositionAdvanceAtMs =
+                            minOf(lastPositionAdvanceAtMs + overshoot, now)
+                        lastBufferAdvanceAtMs =
+                            minOf(lastBufferAdvanceAtMs + overshoot, now)
+                    }
+                }
+                lastWatchdogTickAtMs = now
 
                 // Cold-start NO-DATA net (never-started stream). Runs INDEPENDENT
                 // of hasReachedPlaybackRestart: a dead Dispatcharr proxy stream
@@ -1397,9 +1432,27 @@ class AerioExoPlayerHolder @Inject constructor(
                     consecutiveReloads = 0
                     continue
                 }
+                // Byte-ingest discriminator: bufferedPosition advancing while
+                // render position is stuck = data IS arriving and the player
+                // is honestly buffering (or the decoder is starved on a weak
+                // device). A reload there throws away the buffer it just
+                // built and re-primes a healthy connection -- the reload
+                // storm that wedged Frankie's Chromecast. Only a stream whose
+                // INGEST is also stale (wedged proxy read, dead source) gets
+                // the stale reload; that is the Shield 2026-07-15 wedge this
+                // check exists for.
+                val buffered = p.bufferedPosition
+                if (buffered > lastKnownBufferedPositionMs) {
+                    lastKnownBufferedPositionMs = buffered
+                    lastBufferAdvanceAtMs = now
+                }
                 val staleMs = now - lastPositionAdvanceAtMs
-                if (watchdogReloadEnabled && staleMs >= staleReloadThresholdMs) {
-                    forceReload("stale=${staleMs}ms")
+                val ingestStaleMs = now - lastBufferAdvanceAtMs
+                if (watchdogReloadEnabled &&
+                    staleMs >= staleReloadThresholdMs &&
+                    ingestStaleMs >= staleReloadThresholdMs
+                ) {
+                    forceReload("stale=${staleMs}ms ingest-stale=${ingestStaleMs}ms")
                 }
             }
         }
@@ -1413,7 +1466,13 @@ class AerioExoPlayerHolder @Inject constructor(
         val p = player ?: return false
         val url = lastPlayUrl ?: return false
         val now = SystemClock.elapsedRealtime()
-        if (now - lastForcedReloadAtMs < reloadCooldownMs) return false   // shared 5s cooldown
+        // Exponential backoff: 5s before attempt 1, 10s before attempt 2,
+        // 20s before attempt 3. Back-to-back re-primes on a struggling
+        // device compound the problem (each throws away buffer + decoder
+        // state); spacing them out gives a healthy-but-starved pipeline
+        // room to recover on its own before the next hammer falls.
+        val backoffMs = reloadCooldownMs shl consecutiveReloads.coerceAtMost(3)
+        if (now - lastForcedReloadAtMs < backoffMs) return false
         if (consecutiveReloads >= maxConsecutiveReloads) {
             Log.w(TAG, "[MPV-RELOAD] giving up after $consecutiveReloads attempts ch=$currentChannelId reason=$reason")
             return false
@@ -1427,6 +1486,8 @@ class AerioExoPlayerHolder @Inject constructor(
         lastPositionAdvanceAtMs = now
         videoFrameRendered = false
         streamPrimedAtMs = now
+        lastKnownBufferedPositionMs = 0L
+        lastBufferAdvanceAtMs = now
         val source = buildMediaSource(
             url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri,
             lastPlayDrmType, lastPlayDrmKey,
