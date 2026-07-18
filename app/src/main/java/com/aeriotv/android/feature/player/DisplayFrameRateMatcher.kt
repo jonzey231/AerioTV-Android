@@ -11,7 +11,7 @@ import kotlin.math.abs
 
 /**
  * tvOS-style content frame-rate matching for live TV (the UHD "super stuttery"
- * fix) -- SEAMLESS edition.
+ * fix).
  *
  * Dispatcharr's MPEG-TS feed for UK UHD channels (e.g. Sky Sports Main Event
  * UHD) runs at 50fps but does NOT signal its frame rate in the container
@@ -20,16 +20,25 @@ import kotlin.math.abs
  *
  * We measure the real frame rate from rendered-frame presentation timestamps
  * and request a matching display refresh rate via [Surface.setFrameRate] with
- * [Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS].
+ * [Surface.CHANGE_FRAME_RATE_ALWAYS].
  *
- * Why this and NOT the old preferredDisplayModeId pin (GOTCHA 23): pinning
- * window.preferredDisplayModeId on a TV box is a NON-seamless HDMI re-handshake
- * that destroys the persistent SurfaceView mid-stream with no rebind -> the
- * decoder writes into a dead surface and the picture goes BLACK while audio
- * keeps playing. The seamless path can NEVER do that: if the panel can change
- * refresh rate WITHOUT a mode switch it does so smoothly; if it can't, the
- * request is a no-op (judder remains, but video keeps playing). So it is safe
- * to leave on for TV.
+ * ALWAYS here does NOT mean "force a mode switch": the framework arbitrates
+ * against the USER'S system setting (Display & Sound -> Match content frame
+ * rate). Seamless-only users get exactly the old behavior (seamless when the
+ * panel can, no-op when it can't); users who chose "Always" get the real
+ * non-seamless 60->50 switch they explicitly opted into - the short black
+ * resync TiviMate/Plex/Emby do. The previous ONLY_IF_SEAMLESS request capped
+ * everyone at seamless and made the OS-level "Always" opt-in dead weight:
+ * 60->50 is a different mode group on virtually every panel, so European
+ * 50fps streams never matched (field report alturismo 2026-07-18, Google TV
+ * Streamer + Shield, system setting Always, TV pinned at 60Hz).
+ *
+ * Why this and NOT the old preferredDisplayModeId pin (GOTCHA 23): the pin
+ * forced a raw HDMI re-handshake that destroyed the persistent SurfaceView
+ * mid-stream with no rebind -> dead surface, black picture, audio continuing.
+ * A setFrameRate-driven switch is framework-managed: the system coordinates
+ * the mode change and the SurfaceView receives normal destroyed/created
+ * callbacks, which PlayerView handles by rebinding the video surface.
  *
  * Lifetime: attached once by [PersistentExoWindow] to the activity-lifetime
  * PlayerView's SurfaceView. The listener only does work while frames are
@@ -40,8 +49,9 @@ object DisplayFrameRateMatcher {
     private const val TAG = "AerioFpsMatch"
 
     /**
-     * Start measuring [player]'s frame rate and request a SEAMLESS refresh-rate
-     * match on [surfaceView]'s Surface. Returns an opaque handle to pass back to
+     * Start measuring [player]'s frame rate and request a refresh-rate match on
+     * [surfaceView]'s Surface (framework arbitrates via the user's OS Match
+     * content frame rate setting). Returns an opaque handle to pass back to
      * [detach]; null on API < S (the 3-arg setFrameRate strategy is API 31+).
      */
     fun attach(player: ExoPlayer, surfaceView: SurfaceView): Any? {
@@ -73,10 +83,10 @@ object DisplayFrameRateMatcher {
                             surface.setFrameRate(
                                 fps,
                                 Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                                Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS,
+                                Surface.CHANGE_FRAME_RATE_ALWAYS,
                             )
                         }.onSuccess {
-                            Log.i(TAG, "seamless setFrameRate(${"%.2f".format(fps)})")
+                            Log.i(TAG, "setFrameRate(${"%.2f".format(fps)}) strategy=ALWAYS (OS setting arbitrates)")
                         }
                     }
                 }

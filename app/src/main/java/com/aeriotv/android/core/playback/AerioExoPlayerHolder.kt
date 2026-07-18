@@ -657,6 +657,14 @@ class AerioExoPlayerHolder @Inject constructor(
                 // a VOD concern.
                 repeatMode = Player.REPEAT_MODE_OFF
                 playWhenReady = true
+                // DisplayFrameRateMatcher is the SOLE owner of the surface
+                // frame-rate vote. Media3's own MediaCodecVideoRenderer also
+                // calls Surface.setFrameRate from the container-signaled
+                // Format.frameRate (seamless-only), which would race and
+                // overwrite the matcher's measured CHANGE_FRAME_RATE_ALWAYS
+                // request. Dispatcharr TS rarely signals fps, but when it does
+                // the two owners fight -- so turn Media3's off here.
+                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
             }
 
         player = fresh
