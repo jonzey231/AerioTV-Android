@@ -210,6 +210,14 @@ private object WhatsNewContent {
                 "full switch, Seamless-only to avoid the brief black resync.",
         ),
         WhatsNewItem(
+            title = "Steadier playback on lower-power devices",
+            body = "Fixed a freeze where scrolling the guide on a busy device " +
+                "(like an older Chromecast) could trick the player into " +
+                "reloading a healthy stream over and over until it gave up. " +
+                "The stream watchdog now checks whether data is still " +
+                "arriving before it intervenes, and spaces out its retries.",
+        ),
+        WhatsNewItem(
             title = "TV Guide navigation overhaul",
             body = "On TV, the focus highlight always stays visible, rides a " +
                 "steady lane while you scroll channels, and never wanders into " +
