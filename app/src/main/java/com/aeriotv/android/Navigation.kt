@@ -806,9 +806,14 @@ fun AerioTVNavHost(
                     catchupTz = csTz,
                     catchupChannelUuid = csUuid,
                     onRemintCatchup = { uuid, currentUrl, absStartMillis ->
-                        vm.remintCatchupSession(uuid, currentUrl, absStartMillis)
+                        // Task #183: csEnd rides along so the re-mint asks the
+                        // provider for only the REMAINING programme length.
+                        vm.remintCatchupSession(uuid, currentUrl, absStartMillis, csEnd)
                     },
                     onRevokeCatchup = { url -> vm.revokeCatchupSession(url) },
+                    onReportCatchupPosition = { url, secs, paused ->
+                        vm.reportCatchupPosition(url, secs, paused)
+                    },
                     onClose = { navController.popBackStack() },
                     onLaunchMultiview = {
                         // The now-playing stream is being absorbed into the
@@ -1194,9 +1199,14 @@ fun AerioTVNavHost(
                     catchupTz = csTz,
                     catchupChannelUuid = csUuid,
                     onRemintCatchup = { uuid, currentUrl, absStartMillis ->
-                        playlistVm.remintCatchupSession(uuid, currentUrl, absStartMillis)
+                        // Task #183: csEnd rides along so the re-mint asks the
+                        // provider for only the REMAINING programme length.
+                        playlistVm.remintCatchupSession(uuid, currentUrl, absStartMillis, csEnd)
                     },
                     onRevokeCatchup = { url -> playlistVm.revokeCatchupSession(url) },
+                    onReportCatchupPosition = { url, secs, paused ->
+                        playlistVm.reportCatchupPosition(url, secs, paused)
+                    },
                     onClose = { navController.popBackStack() },
                     loadingMessage = null,
                     videoId = playbackUrl,

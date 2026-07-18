@@ -172,6 +172,12 @@ fun VODPlayerScreen(
     /** Task #149: best-effort revoke of the native session on close
      *  (frees the server's per-session provider slot early). */
     onRevokeCatchup: (playbackUrl: String) -> Unit = {},
+    /** Task #183: report local playhead/pause for a native catch-up
+     *  session (keeps server stats honest + refreshes the idle TTL
+     *  through long pauses). Returns false when the server lacks the
+     *  endpoint - the screen then stops reporting for this playback. */
+    onReportCatchupPosition: suspend (playbackUrl: String, positionSecs: Double, paused: Boolean) -> Boolean =
+        { _, _, _ -> true },
 ) {
     // Keep the screen on during VOD playback. Matches PlayerScreen for the
     // same reason: system screen-timeout would otherwise dim/sleep the panel
@@ -985,6 +991,15 @@ fun VODPlayerScreen(
         LaunchedEffect(exoPlayer) {
             val player = exoPlayer ?: return@LaunchedEffect
             val window = androidx.media3.common.Timeline.Window()
+            // Task #183: throttled position/pause reports for native
+            // catch-up sessions ride this poll (which keeps running while
+            // paused - each accepted report refreshes the session idle
+            // TTL, so a long pause can't expire the session). 20s cadence,
+            // immediate on a pause-state flip; one 404 latches reporting
+            // off (stable-tag server without the endpoint).
+            var reportUnsupported = false
+            var lastReportAtMs = 0L
+            var lastReportedPaused: Boolean? = null
             while (true) {
                 delay(500L)
                 if (isDragging) continue
@@ -995,6 +1010,23 @@ fun VODPlayerScreen(
                     positionMs = catchupOffsetMs + player.contentPosition.coerceAtLeast(0L)
                     durationMs = catchupEndMillis - catchupStartMillis
                     isPaused = !player.playWhenReady
+                    if (isNativeCatchup && !reportUnsupported) {
+                        val nowMs = android.os.SystemClock.elapsedRealtime()
+                        val pausedChanged = lastReportedPaused != isPaused
+                        if (pausedChanged || nowMs - lastReportAtMs >= 20_000L) {
+                            lastReportAtMs = nowMs
+                            lastReportedPaused = isPaused
+                            val url = currentPlaybackUrl
+                            val posSecs = positionMs / 1000.0
+                            val pausedNow = isPaused
+                            // Child launch so a slow report can't stall the poll.
+                            launch {
+                                if (!onReportCatchupPosition(url, posSecs, pausedNow)) {
+                                    reportUnsupported = true
+                                }
+                            }
+                        }
+                    }
                     continue
                 }
                 positionMs = player.contentPosition.coerceAtLeast(0L)

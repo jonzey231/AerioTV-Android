@@ -950,6 +950,7 @@ class PlaylistViewModel @Inject constructor(
         channelUuid: String,
         currentPlaybackUrl: String,
         absStartMillis: Long,
+        programmeEndMillis: Long = 0L,
     ): String? {
         val active = repository.activePlaylist() ?: return null
         return catchupResolver.remintNative(
@@ -957,7 +958,20 @@ class PlaylistViewModel @Inject constructor(
             channelUuid = channelUuid,
             currentPlaybackUrl = currentPlaybackUrl,
             absStartMillis = absStartMillis,
+            programmeEndMillis = programmeEndMillis,
         )
+    }
+
+    /** Task #183: report the local catch-up playhead / pause state for
+     *  the native session in `playbackUrl`. Returns false only when the
+     *  server lacks the position endpoint (caller stops reporting). */
+    suspend fun reportCatchupPosition(
+        playbackUrl: String,
+        positionSecs: Double,
+        paused: Boolean,
+    ): Boolean {
+        val active = repository.activePlaylist() ?: return true
+        return catchupResolver.reportNativePosition(active, playbackUrl, positionSecs, paused)
     }
 
     /** Task #149: best-effort revoke of a native catch-up session when

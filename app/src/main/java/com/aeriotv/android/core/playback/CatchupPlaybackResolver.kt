@@ -102,6 +102,7 @@ class CatchupPlaybackResolver @Inject constructor(
                         apiKey = apiKey,
                         channelUuid = channelUuid,
                         startMillis = startMillis,
+                        durationMinutes = programmeMinutes(startMillis, endMillis),
                     )) {
                         is DispatcharrClient.CatchupSessionResult.Created -> {
                             nativeSupportCache[base] = true
@@ -199,6 +200,7 @@ class CatchupPlaybackResolver @Inject constructor(
         channelUuid: String,
         currentPlaybackUrl: String,
         absStartMillis: Long,
+        programmeEndMillis: Long = 0L,
     ): String? {
         val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: return null
         val base = baseOf(currentPlaybackUrl) ?: return null
@@ -207,9 +209,42 @@ class CatchupPlaybackResolver @Inject constructor(
             apiKey = apiKey,
             channelUuid = channelUuid,
             startMillis = absStartMillis,
+            // Task #183: window the re-mint to the REMAINING length (the
+            // start is mid-programme); full length would overshoot into
+            // the next show by the seek offset. 0/absent end => null =>
+            // server default window.
+            durationMinutes = programmeMinutes(absStartMillis, programmeEndMillis),
         )
         return (minted as? DispatcharrClient.CatchupSessionResult.Created)
             ?.let { base + it.session.playbackUrl }
+    }
+
+    /** Task #183: report the local playhead / pause state for the native
+     *  session embedded in `playbackUrl`. Returns false ONLY when the
+     *  server lacks the endpoint (404) so the caller can stop reporting
+     *  for this playback; any other failure returns true (keep trying). */
+    suspend fun reportNativePosition(
+        playlist: PlaylistEntity,
+        playbackUrl: String,
+        positionSecs: Double,
+        paused: Boolean,
+    ): Boolean {
+        val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: return true
+        val base = baseOf(playbackUrl) ?: return true
+        val sessionId = playbackUrl.substringAfter("session_id=", "")
+            .substringBefore('&')
+            .takeIf { it.isNotBlank() } ?: return true
+        return dispatcharrClient.reportCatchupPosition(base, apiKey, sessionId, positionSecs, paused)
+    }
+
+    /** Task #183: programme length in whole minutes for the server's
+     *  `duration` hint (rounded up so a 29m30s programme asks for 30),
+     *  or null when the window is empty/invalid (server derives from its
+     *  own EPG or default instead). */
+    private fun programmeMinutes(startMillis: Long, endMillis: Long): Int? {
+        val spanMs = endMillis - startMillis
+        if (spanMs <= 0L) return null
+        return (((spanMs + 59_999L) / 60_000L).toInt()).coerceAtLeast(1)
     }
 
     /** Task #149: best-effort revoke of the session embedded in a native

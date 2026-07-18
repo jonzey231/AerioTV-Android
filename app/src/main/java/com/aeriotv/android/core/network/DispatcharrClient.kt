@@ -718,12 +718,18 @@ class DispatcharrClient @Inject constructor() {
      * archived show to play - or programmeStart+offset for the
      * floored-minute seek model); rendered as ISO-8601 UTC, one of the
      * server's accepted shapes.
+     *
+     * Task #183: `durationMinutes` is OUR guide's programme length. The
+     * server (dev 14bfd25d) prefers it over its EPG-derived duration and
+     * adds its own provider-lag buffer, so send the exact length - do
+     * not pre-pad. Older servers ignore unknown fields; safe always.
      */
     suspend fun createCatchupSession(
         baseUrl: String,
         apiKey: String,
         channelUuid: String,
         startMillis: Long,
+        durationMinutes: Int? = null,
     ): CatchupSessionResult = runCatching {
         val url = "${baseUrl.trimEnd('/')}/api/catchup/sessions/"
         val startIso = java.time.Instant.ofEpochMilli(startMillis)
@@ -732,7 +738,14 @@ class DispatcharrClient @Inject constructor() {
         val response = client.post(url) {
             applyAuth(apiKey)
             contentType(ContentType.Application.Json)
-            setBody(mapOf("channel_uuid" to channelUuid, "start" to startIso))
+            setBody(
+                buildJsonObject {
+                    put("channel_uuid", JsonPrimitive(channelUuid))
+                    put("start", JsonPrimitive(startIso))
+                    durationMinutes?.takeIf { it >= 1 }
+                        ?.let { put("duration", JsonPrimitive(it)) }
+                },
+            )
         }
         when {
             response.status.isSuccess() -> {
@@ -762,6 +775,44 @@ class DispatcharrClient @Inject constructor() {
             client.delete(url) { applyAuth(apiKey) }
         }
     }
+
+    /**
+     * Task #183: report the local playhead / pause state for a native
+     * catch-up session (POST /api/catchup/sessions/<id>/position/, dev
+     * 6f62d807). Keeps the server's admin stats aligned with what the
+     * viewer sees after local pause/scrub AND refreshes the session's
+     * idle TTL - which protects a long-paused session from expiring. It
+     * does NOT seek the stream. Trailing slash required (Django).
+     *
+     * Returns false ONLY when the endpoint is absent (404, stable-tag
+     * server): the caller should stop reporting for this playback.
+     * Transient failures return true so reporting continues.
+     */
+    suspend fun reportCatchupPosition(
+        baseUrl: String,
+        apiKey: String,
+        sessionId: String,
+        positionSecs: Double,
+        paused: Boolean,
+    ): Boolean = runCatching {
+        val url = "${baseUrl.trimEnd('/')}/api/catchup/sessions/$sessionId/position/"
+        val response = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(
+                buildJsonObject {
+                    put("position_secs", JsonPrimitive(positionSecs.coerceAtLeast(0.0)))
+                    put("paused", JsonPrimitive(paused))
+                },
+            )
+        }
+        if (response.status.value == 404) {
+            android.util.Log.i("DispatcharrCatchup", "position endpoint absent (404) - disabling reports")
+            false
+        } else {
+            true
+        }
+    }.getOrDefault(true)
 
     // NOTE: an earlier revision pre-resolved the timeshift 301 here to pin the
     // ?session_id=. That is WRONG for Dispatcharr: the server binds a session's

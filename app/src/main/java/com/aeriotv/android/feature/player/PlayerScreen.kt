@@ -105,6 +105,12 @@ fun PlayerScreen(
         { _, _, _ -> null },
     /** Task #149: best-effort revoke of a native session (exit + re-tune). */
     onRevokeCatchup: (playbackUrl: String) -> Unit = {},
+    /** Task #183: report local playhead/pause for a native catch-up
+     *  session (keeps server stats honest + refreshes the idle TTL
+     *  through long pauses). Returns false when the server lacks the
+     *  endpoint - the screen then stops reporting for this playback. */
+    onReportCatchupPosition: suspend (playbackUrl: String, positionSecs: Double, paused: Boolean) -> Boolean =
+        { _, _, _ -> true },
     onClose: () -> Unit = {},
     onLaunchMultiview: () -> Unit = {},
     onLoadChannelStreams: suspend (Int) -> List<StreamOption> = { emptyList() },
@@ -999,10 +1005,35 @@ fun PlayerScreen(
             subtitle = currentChannel?.name,
         )
         exoHolder.currentChannelId = null
+        // Task #183: throttled position/pause reports for native sessions
+        // ride this ticker (which keeps running while paused - each
+        // accepted report refreshes the session idle TTL, so a long pause
+        // can't expire the session). 20s cadence, immediate on a pause
+        // state flip; one 404 latches reporting off (stable-tag server).
+        var reportUnsupported = false
+        var lastReportAtMs = 0L
+        var lastReportedPaused: Boolean? = null
         while (true) {
             catchupPositionMs = (catchupOffsetMs + (exoHolder.player?.contentPosition ?: 0L))
                 .coerceIn(0L, catchupDurationMs)
             tsPaused = exoHolder.isPaused()
+            if (isNativeCatchup && !reportUnsupported) {
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val pausedChanged = lastReportedPaused != tsPaused
+                if (pausedChanged || nowMs - lastReportAtMs >= 20_000L) {
+                    lastReportAtMs = nowMs
+                    lastReportedPaused = tsPaused
+                    val url = catchupCurrentUrl
+                    val posSecs = catchupPositionMs / 1000.0
+                    val pausedNow = tsPaused
+                    // Child launch so a slow report can't stall the ticker.
+                    launch {
+                        if (!onReportCatchupPosition(url, posSecs, pausedNow)) {
+                            reportUnsupported = true
+                        }
+                    }
+                }
+            }
             delay(500)
         }
     }
