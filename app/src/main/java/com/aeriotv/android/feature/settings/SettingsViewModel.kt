@@ -14,6 +14,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -154,6 +155,14 @@ class SettingsViewModel @Inject constructor(
     }
 
     val appleTVChannelFlip: Flow<Boolean> = prefs.appleTVChannelFlip
+
+    /** Remote Control initiative: decoded button map (tolerant of unknown
+     *  slots/actions; defaults when unset). */
+    val remoteControlMap: Flow<com.aeriotv.android.core.remote.RemoteControlMap> =
+        prefs.remoteControlMap.map { com.aeriotv.android.core.remote.RemoteControlMap.fromJson(it) }
+    fun setRemoteControlMap(map: com.aeriotv.android.core.remote.RemoteControlMap) {
+        viewModelScope.launch { prefs.setRemoteControlMap(map.toJson()) }
+    }
     fun setAppleTVChannelFlip(value: Boolean) {
         viewModelScope.launch { prefs.setAppleTVChannelFlip(value) }
     }

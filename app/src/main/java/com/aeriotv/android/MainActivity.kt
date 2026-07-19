@@ -84,6 +84,13 @@ class MainActivity : ComponentActivity() {
      *  as a backstop if the release event is missed. */
     private var rightHoldPinUntil = 0L
 
+    /** Remote Control initiative: the live button map. @Volatile because
+     *  dispatchKeyEvent reads it on the main thread while the DataStore
+     *  collector writes from a coroutine. Defaults keep byte-identical
+     *  legacy behavior until the user customizes. */
+    @Volatile private var remoteMap: com.aeriotv.android.core.remote.RemoteControlMap =
+        com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT
+
     /**
      * Audit task #22 mini-player resume. The Google TV Streamer remote has
      * no dedicated play/pause key, so we repurpose a double-press of D-pad
@@ -112,7 +119,21 @@ class MainActivity : ComponentActivity() {
                 event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) &&
             miniPlayerSession.state.value is MiniPlayerSession.State.Active
         ) {
-            miniPlayerSession.requestResume()
+            // Remote Control map: guide-context playPause slot (mini up =
+            // guide frontmost). Default = resumePlayer (today's behavior).
+            // ALWAYS consumed here regardless of mapping: falling through
+            // would let the MediaSession pause the mini's playback.
+            when (remoteMap.guideAction(com.aeriotv.android.core.remote.RemoteSlot.PLAY_PAUSE)) {
+                com.aeriotv.android.core.remote.GuideRemoteAction.RESUME_PLAYER ->
+                    miniPlayerSession.requestResume()
+                com.aeriotv.android.core.remote.GuideRemoteAction.CLOSE_MINI_PLAYER -> {
+                    runCatching { miniPlayerSession.dismiss() }
+                    runCatching { exoWindowState.hide() }
+                    runCatching { exoHolder.stop() }
+                    AerioMediaPlaybackService.stop(this)
+                }
+                else -> { /* NONE or an action wired in Phase A2: no-op */ }
+            }
             return true
         }
         // Hold D-pad RIGHT while the corner mini-player is Active to close it:
@@ -137,12 +158,27 @@ class MainActivity : ComponentActivity() {
             if (android.os.SystemClock.uptimeMillis() < rightHoldPinUntil) {
                 return true   // pinned after close: hold position until release
             }
-            if (miniPlayerSession.state.value is MiniPlayerSession.State.Active) {
+            val rightLongAction =
+                remoteMap.guideAction(com.aeriotv.android.core.remote.RemoteSlot.RIGHT_LONG)
+            if (miniPlayerSession.state.value is MiniPlayerSession.State.Active &&
+                rightLongAction != com.aeriotv.android.core.remote.GuideRemoteAction.NONE
+            ) {
                 if (event.isLongPress || event.repeatCount >= MINI_CLOSE_HOLD_REPEAT) {
-                    runCatching { miniPlayerSession.dismiss() }
-                    runCatching { exoWindowState.hide() }
-                    runCatching { exoHolder.stop() }
-                    AerioMediaPlaybackService.stop(this)
+                    // Remote Control map: guide rightLong slot. Default =
+                    // closeMiniPlayer (today's behavior). The hold pin stays
+                    // for ANY mapped action so a still-held Right can't fly
+                    // focus across the guide after the action fires.
+                    when (rightLongAction) {
+                        com.aeriotv.android.core.remote.GuideRemoteAction.CLOSE_MINI_PLAYER -> {
+                            runCatching { miniPlayerSession.dismiss() }
+                            runCatching { exoWindowState.hide() }
+                            runCatching { exoHolder.stop() }
+                            AerioMediaPlaybackService.stop(this)
+                        }
+                        com.aeriotv.android.core.remote.GuideRemoteAction.RESUME_PLAYER ->
+                            miniPlayerSession.requestResume()
+                        else -> { /* wired in Phase A2 */ }
+                    }
                     rightHoldPinUntil = android.os.SystemClock.uptimeMillis() + RIGHT_HOLD_PIN_MS
                     return true
                 }
@@ -168,8 +204,22 @@ class MainActivity : ComponentActivity() {
                 event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) &&
             exoWindowState.mode.value == ExoWindowState.Mode.Fullscreen
         ) {
-            val delta = if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) 1 else -1
-            if (exoWindowState.onLiveChannelFlip?.invoke(delta) == true) return true
+            // Remote Control map: player upShort/downShort slots. Default =
+            // channelUp/channelDown (today's behavior, delta +1 for UP). A
+            // NONE mapping falls through so the keys keep operating the
+            // chrome exactly like the legacy flip-off setting did; other
+            // actions are wired in Phase A2 and fall through until then.
+            val slot = if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                com.aeriotv.android.core.remote.RemoteSlot.UP_SHORT
+            } else {
+                com.aeriotv.android.core.remote.RemoteSlot.DOWN_SHORT
+            }
+            val delta = when (remoteMap.playerAction(slot)) {
+                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_UP -> 1
+                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_DOWN -> -1
+                else -> 0
+            }
+            if (delta != 0 && exoWindowState.onLiveChannelFlip?.invoke(delta) == true) return true
         }
         return super.dispatchKeyEvent(event)
     }
@@ -440,6 +490,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Remote Control initiative: keep the button map hot for
+        // dispatchKeyEvent (which cannot suspend).
+        lifecycleScope.launch {
+            appPreferences.remoteControlMap.collect { raw ->
+                remoteMap = com.aeriotv.android.core.remote.RemoteControlMap.fromJson(raw)
+            }
+        }
         // TV soft-input mode history (GH #1 and two user reports):
         //  - RESIZE originally fed a per-frame recompose + bring-into-view
         //    loop (the onboarding jiggle) -> switched to PAN.

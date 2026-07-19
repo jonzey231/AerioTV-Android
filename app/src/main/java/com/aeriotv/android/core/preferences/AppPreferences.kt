@@ -234,6 +234,17 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * TV remote button mapping (Remote Control settings; plan
+     * ~/Desktop/AerioTV-Remote-Control-Plan.md). Raw JSON blob in the
+     * shared cross-platform schema; decode via RemoteControlMap.fromJson
+     * (tolerant of unknown slots/actions). Empty/absent = defaults.
+     */
+    val remoteControlMap: Flow<String> = store.data.map { it[KEY_REMOTE_CONTROL_MAP] ?: "" }
+    suspend fun setRemoteControlMap(json: String) {
+        store.edit { it[KEY_REMOTE_CONTROL_MAP] = json }
+    }
+
+    /**
      * iOS `appBehaviorsAutoRecoverFrozenStreams` parity (#37, commit fe93531c).
      * When false the live stall watchdogs (stale-position reload + black-screen
      * reload) are disabled so a channel that restarts/stutters at OTA commercial
@@ -856,6 +867,7 @@ class AppPreferences @Inject constructor(
         // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
         data[KEY_SKIP_LOADING_SCREEN]?.let { out["skipLoadingScreen"] = it.toString() }
         data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
+        data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
         data[KEY_SHOW_EPG_BADGES_TV]?.let { out["showEpgBadgesTv"] = it.toString() }
@@ -900,6 +912,7 @@ class AppPreferences @Inject constructor(
             // never re-clobber this device's form-factor default.
             keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN] = it }
             keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
+            keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
             keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
             keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
@@ -1128,6 +1141,7 @@ class AppPreferences @Inject constructor(
         val KEY_SKIP_LOADING_SCREEN = booleanPreferencesKey("app_behaviors_skip_loading_screen")
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
+        val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")
         val KEY_AUTO_RECOVER_FROZEN_STREAMS =
             booleanPreferencesKey("app_behaviors_auto_recover_frozen_streams")
         // Synced via Drive (snapshotSyncablePreferences) -- the user's own key.

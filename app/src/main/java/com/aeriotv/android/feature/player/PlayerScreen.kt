@@ -138,6 +138,10 @@ fun PlayerScreen(
     val settingsVm: SettingsViewModel = hiltViewModel()
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val appleTVChannelFlip by settingsVm.appleTVChannelFlip.collectAsStateWithLifecycle(initialValue = true)
+    // Remote Control initiative: live button map (player context slots).
+    val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(
+        initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
+    )
     val streamBufferSize by settingsVm.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
     val aspectMode by settingsVm.playerAspectMode.collectAsStateWithLifecycle(initialValue = "fit")
     // Live Rewind pref, to hint (below) that pause/rewind needs it turned on.
@@ -1186,7 +1190,21 @@ fun PlayerScreen(
                         )
                 ) {
                     if (native.action == android.view.KeyEvent.ACTION_DOWN) {
-                        val dir = if (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) -1 else +1
+                        // Remote Control map: player leftShort/rightShort.
+                        // Default = seekBackward/seekForward (today's
+                        // behavior). NONE or a not-yet-wired action falls
+                        // through so the key keeps operating the chrome.
+                        val slot = if (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) {
+                            com.aeriotv.android.core.remote.RemoteSlot.LEFT_SHORT
+                        } else {
+                            com.aeriotv.android.core.remote.RemoteSlot.RIGHT_SHORT
+                        }
+                        val dir = when (remoteMap.playerAction(slot)) {
+                            com.aeriotv.android.core.remote.PlayerRemoteAction.SEEK_BACKWARD -> -1
+                            com.aeriotv.android.core.remote.PlayerRemoteAction.SEEK_FORWARD -> +1
+                            else -> 0
+                        }
+                        if (dir == 0) return@onPreviewKeyEvent false
                         scrubStep(dir, native.repeatCount > 0)
                     }
                     return@onPreviewKeyEvent true
@@ -1211,7 +1229,16 @@ fun PlayerScreen(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                ) { chromeVisible = !chromeVisible }
+                ) {
+                    // Remote Control map: player okShort. Default =
+                    // toggleControls (today's behavior); other actions are
+                    // wired in Phase A2, NONE is a deliberate no-op.
+                    when (remoteMap.playerAction(com.aeriotv.android.core.remote.RemoteSlot.OK_SHORT)) {
+                        com.aeriotv.android.core.remote.PlayerRemoteAction.TOGGLE_CONTROLS ->
+                            chromeVisible = !chromeVisible
+                        else -> { /* Phase A2 */ }
+                    }
+                }
                 .pointerInput(channels.size, chromeVisible, appleTVChannelFlip) {
                     if (!chromeVisible || !appleTVChannelFlip || channels.size < 2) return@pointerInput
                     var totalDy = 0f
