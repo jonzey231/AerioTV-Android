@@ -89,7 +89,11 @@ object Routes {
     const val SERIES_DETAIL = "series_detail/{seriesId}"
     const val VOD_EPISODE_PLAYER = "vod_episode_player/{episodeUuid}"
     const val MULTIVIEW = "multiview"
-    const val SEARCH = "search"
+    // fromPlayer marks a search opened from the fullscreen player (Remote
+    // Control hold-Down): its Back then resumes the player instead of
+    // landing on the tabs. Plain navigate(SEARCH) keeps the default false.
+    const val SEARCH = "search?fromPlayer={fromPlayer}"
+    fun search(fromPlayer: Boolean) = "search?fromPlayer=$fromPlayer"
     const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
@@ -740,7 +744,7 @@ fun AerioTVNavHost(
                     // ~700MB of GC churn and ~7 seconds of duplicated
                     // work on cold launch (seen in the method trace).
                     viewModel = vm,
-                    onOpenSearch = { navController.navigate(Routes.SEARCH) },
+                    onOpenSearch = { navController.navigate(Routes.search(fromPlayer = false)) },
                 )
                 }
             }
@@ -829,7 +833,9 @@ fun AerioTVNavHost(
                     // itself to the corner mini (and popped via onClose), so the
                     // search route lands over MAIN with live video still playing.
                     onOpenSearch = {
-                        navController.navigate(Routes.SEARCH) { launchSingleTop = true }
+                        navController.navigate(Routes.search(fromPlayer = true)) {
+                            launchSingleTop = true
+                        }
                     },
                     // Player Options > Switch Stream (Dispatcharr Direct Connect):
                     // list the channel's member streams + their quality, then ask
@@ -1053,13 +1059,35 @@ fun AerioTVNavHost(
             // SharedFlow that MainScaffold + GuideScreen already collect (switch
             // to Live TV + guide mode + scroll/focus the cell); movie/series
             // results reuse the existing detail routes.
-            composable(Routes.SEARCH) { entry ->
+            composable(
+                route = Routes.SEARCH,
+                arguments = listOf(
+                    navArgument("fromPlayer") {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    },
+                ),
+            ) { entry ->
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
                 val playlistVm: PlaylistViewModel = hiltViewModel(parent)
+                val fromPlayer = entry.arguments?.getBoolean("fromPlayer") == true
+                // Session singleton via a local VM handle: the NavHost-scoped
+                // miniPlayerVm is declared after this builder, out of scope here.
+                val miniVm: com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel =
+                    hiltViewModel()
                 com.aeriotv.android.feature.search.SearchScreen(
-                    onBack = { navController.popBackStack() },
+                    onBack = {
+                        navController.popBackStack()
+                        // Hold-Down search came from the fullscreen player, which
+                        // minimized itself to the corner mini on the way out. Back
+                        // = return to watching: reuse the proven mini-resume flow
+                        // (the NavController-scoped collector re-pushes PLAYER
+                        // with the session's CURRENT channel). No-op if the mini
+                        // was somehow dismissed - then Back lands on the tabs.
+                        if (fromPlayer) miniVm.session.requestResume()
+                    },
                     onEpgResult = { channelKey, startMillis ->
                         playlistVm.requestGuideJump(channelKey, startMillis)
                         navController.popBackStack()
