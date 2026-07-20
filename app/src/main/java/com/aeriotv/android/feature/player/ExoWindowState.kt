@@ -64,6 +64,18 @@ class ExoWindowState @Inject constructor() {
         ((com.aeriotv.android.core.remote.PlayerRemoteAction) -> Boolean)? = null
 
     /**
+     * Whether the fullscreen player currently OWNS D-pad UP/DOWN (channel
+     * surf / hold actions). PlayerScreen publishes false while its chrome,
+     * a scrub HUD, a menu/sheet, or the Recently Watched overlay is up -
+     * then MainActivity's short/long split must NOT consume the keys, so
+     * Compose focus traversal can walk the visible controls instead.
+     * Defaults true (bare fullscreen video = surf keys). The A2 deferred
+     * split otherwise swallowed BOTH actions unconditionally, which left
+     * chrome/overlay focus nav dead whenever a hold action was mapped.
+     */
+    @Volatile var dpadVerticalCaptured: Boolean = true
+
+    /**
      * Remote Control phase A2: session-scoped last-channel zap memory
      * (`lastChannel` zap-back, a 1-deep stack). [recordTune] is called
      * on every successful live tune with the channel's stable id; it

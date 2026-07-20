@@ -49,6 +49,7 @@ enum class RemoteSlot(val wire: String) {
 enum class PlayerRemoteAction(val wire: String) {
     CHANNEL_UP("channelUp"), CHANNEL_DOWN("channelDown"),
     LAST_CHANNEL("lastChannel"),
+    RECENT_CHANNELS("recentChannels"),
     TOGGLE_CONTROLS("toggleControls"),
     SHOW_PROGRAM_INFO("showProgramInfo"),
     OPTIONS_MENU("optionsMenu"),
@@ -60,6 +61,10 @@ enum class PlayerRemoteAction(val wire: String) {
     SUBTITLES("subtitles"), AUDIO_TRACKS("audioTracks"),
     ASPECT_RATIO("aspectRatio"), RECORD("record"),
     SLEEP_TIMER("sleepTimer"), OPEN_SEARCH("openSearch"),
+    /** Fixed hold-Back behavior (stop with NO mini promotion); dispatched
+     *  by MainActivity's long-Back path, deliberately NOT offered as a
+     *  mappable choice in settings (Back semantics stay hardcoded). */
+    STOP_PLAYBACK("stopPlayback"),
     NONE("none");
 
     companion object {
@@ -86,11 +91,13 @@ enum class RemotePreset(val wire: String) {
     DEFAULT("default"), CUSTOM("custom");
 
     companion object {
-        /** Unknown wires (including anything written by pre-release
-         *  builds) decode as CUSTOM; the slot maps themselves stay
-         *  valid either way. */
-        fun fromWire(s: String): RemotePreset =
-            entries.firstOrNull { it.wire == s } ?: CUSTOM
+        /** Only wires this build has ever written are honored. Anything
+         *  else (notably the pre-release preset-picker blobs) is null and
+         *  the whole stored map is DISCARDED at decode - those betas'
+         *  slot layouts no longer match the shipped scheme, so keeping
+         *  them as CUSTOM stranded users on stale mappings. */
+        fun fromWire(s: String): RemotePreset? =
+            entries.firstOrNull { it.wire == s }
     }
 }
 
@@ -159,9 +166,9 @@ data class RemoteControlMap(
         )
 
         /** The app's standard control scheme: OK = program info, hold
-         *  OK = options, Up/Down = channel surf with hold-Up zap-back,
-         *  Right = previous-channel zap, hold-Left in the guide pages
-         *  into already-aired programmes. */
+         *  OK = options, Up/Down = channel surf, hold-Up = recently
+         *  watched, hold-Down = search, Right = previous-channel zap,
+         *  hold-Left in the guide pages into already-aired programmes. */
         val DEFAULT = RemoteControlMap(
             preset = RemotePreset.DEFAULT,
             player = mapOf(
@@ -169,7 +176,7 @@ data class RemoteControlMap(
                 RemoteSlot.OK_LONG to PlayerRemoteAction.OPTIONS_MENU,
                 RemoteSlot.UP_SHORT to PlayerRemoteAction.CHANNEL_UP,
                 RemoteSlot.DOWN_SHORT to PlayerRemoteAction.CHANNEL_DOWN,
-                RemoteSlot.UP_LONG to PlayerRemoteAction.LAST_CHANNEL,
+                RemoteSlot.UP_LONG to PlayerRemoteAction.RECENT_CHANNELS,
                 RemoteSlot.DOWN_LONG to PlayerRemoteAction.OPEN_SEARCH,
                 // channelList once the overlay ships (plan 1.1); until then
                 // the preset builder swaps in MINIMIZE_TO_GUIDE.
@@ -205,7 +212,14 @@ data class RemoteControlMap(
                 val obj = json.parseToJsonElement(raw).jsonObject
                 val preset = RemotePreset.fromWire(
                     obj["preset"]?.jsonPrimitive?.content ?: RemotePreset.DEFAULT.wire,
-                )
+                ) ?: return DEFAULT
+                // preset=default means "track the app's standard scheme":
+                // ignore any stored slot dump (older builds persisted the
+                // full resolved map, which would otherwise pin those users
+                // to that build's defaults forever - e.g. holding upLong on
+                // lastChannel after the scheme moved it to recentChannels).
+                // Stored slots are only authoritative for CUSTOM.
+                if (preset == RemotePreset.DEFAULT) return DEFAULT
                 RemoteControlMap(
                     preset = preset,
                     player = decodeContext(obj["player"] as? JsonObject) { PlayerRemoteAction.fromWire(it) },

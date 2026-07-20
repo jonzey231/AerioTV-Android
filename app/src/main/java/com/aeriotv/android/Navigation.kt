@@ -825,6 +825,12 @@ fun AerioTVNavHost(
                             launchSingleTop = true
                         }
                     },
+                    // Remote Control hold-Down: the player has already minimized
+                    // itself to the corner mini (and popped via onClose), so the
+                    // search route lands over MAIN with live video still playing.
+                    onOpenSearch = {
+                        navController.navigate(Routes.SEARCH) { launchSingleTop = true }
+                    },
                     // Player Options > Switch Stream (Dispatcharr Direct Connect):
                     // list the channel's member streams + their quality, then ask
                     // Dispatcharr to switch the active upstream.

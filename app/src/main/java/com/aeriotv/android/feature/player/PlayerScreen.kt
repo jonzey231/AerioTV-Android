@@ -113,6 +113,9 @@ fun PlayerScreen(
         { _, _, _ -> true },
     onClose: () -> Unit = {},
     onLaunchMultiview: () -> Unit = {},
+    /** Remote Control: hold-Down (openSearch action) hands off to the global
+     *  search screen; the caller navigates AFTER this screen minimizes. */
+    onOpenSearch: () -> Unit = {},
     onLoadChannelStreams: suspend (Int) -> List<StreamOption> = { emptyList() },
     onSwitchChannelStream: suspend (String, Int) -> String? = { _, _ -> null },
     onLoadCurrentStreamId: suspend (String) -> Int? = { null },
@@ -629,8 +632,17 @@ fun PlayerScreen(
     // Remote Control A2: OK short/long split latch (engaged only when an
     // okLong action is mapped; the default map keeps the plain clickable).
     var okLongFired by remember { mutableStateOf(false) }
+    // Remote Control (Logan spec 2026-07-20): hold-Up "Recently Watched"
+    // overlay. While open, Back dismisses it (guard below) and channel-flip
+    // keys are blocked so Up/Down walk the overlay list instead.
+    var recentsOverlayVisible by remember { mutableStateOf(false) }
+    val recentChannelIds by settingsVm.recentChannelIds.collectAsStateWithLifecycle(
+        initialValue = emptyList(),
+    )
     androidx.activity.compose.BackHandler {
-        if (isCatchupMode) {
+        if (recentsOverlayVisible) {
+            recentsOverlayVisible = false
+        } else if (isCatchupMode) {
             // Task #148 milestone B: Back on a catch-up replay exits to where
             // the user came from (tvOS parity: Menu on the catch-up player
             // returns to the guide). No mini for a replay - the mini is a
@@ -1201,7 +1213,7 @@ fun PlayerScreen(
                 // threshold instead; with okLong unmapped (the default map)
                 // this whole branch is skipped and the plain clickable
                 // handles OK exactly as before.
-                if (isTvForm && !chromeVisible &&
+                if (isTvForm && !chromeVisible && !recentsOverlayVisible &&
                     (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
                         native.keyCode == android.view.KeyEvent.KEYCODE_ENTER)
                 ) {
@@ -1231,7 +1243,8 @@ fun PlayerScreen(
                         }
                     }
                 }
-                if (isTvForm && !chromeVisible && (tsState.buffering || isCatchupMode) &&
+                if (isTvForm && !chromeVisible && !recentsOverlayVisible &&
+                    (tsState.buffering || isCatchupMode) &&
                     (
                         native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
                             native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
@@ -1810,6 +1823,23 @@ fun PlayerScreen(
                 },
             )
         }
+
+        // Remote Control: hold-Up Recently Watched overlay, drawn above the
+        // video and all chrome (last child of the root Box).
+        if (recentsOverlayVisible) {
+            RecentChannelsOverlay(
+                recentIds = recentChannelIds,
+                channels = channels,
+                currentChannelId = currentChannel?.id,
+                nowTitleFor = { ch -> epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title },
+                onSelect = { ch ->
+                    recentsOverlayVisible = false
+                    val idx = channels.indexOfFirst { it.id == ch.id }
+                    if (idx >= 0 && idx != currentIndex) currentIndex = idx
+                },
+                onDismiss = { recentsOverlayVisible = false },
+            )
+        }
     }
 
     // Auto-hide chrome after AUTO_HIDE_MS of inactivity. Phase 172:
@@ -1823,6 +1853,16 @@ fun PlayerScreen(
     val interactionLocked = chromeMenuOpen || recordTarget != null || streamInfo != null ||
         subtitles != null || audioTracks != null || playbackSpeedSheet != null ||
         switchStream != null || multiviewPickerOpen || castChooserOpen
+    // Publish whether the surf keys should stay at the activity layer (see
+    // ExoWindowState.dpadVerticalCaptured). Chrome, scrub HUD, menus/sheets
+    // and the Recently Watched overlay all release UP/DOWN to Compose focus.
+    androidx.compose.runtime.SideEffect {
+        exoWindowState.dpadVerticalCaptured = !chromeVisible && !scrubHudVisible &&
+            scrubTargetWallMs == null && !recentsOverlayVisible && !interactionLocked
+    }
+    DisposableEffect(exoWindowState) {
+        onDispose { exoWindowState.dpadVerticalCaptured = true }
+    }
     // streamUnavailable is a KEY (not just a guard): when it clears on
     // recovery, this effect must re-fire so the chrome that was pinned open
     // during the outage auto-hides again. Without it in the keys, the
@@ -1867,7 +1907,8 @@ fun PlayerScreen(
     // HUD reads as player controls, so zapping would yank the channel
     // out from under the user.
     val flipBlockedByChrome by rememberUpdatedState(
-        chromeVisible || scrubHudVisible || scrubTargetWallMs != null,
+        chromeVisible || scrubHudVisible || scrubTargetWallMs != null ||
+            recentsOverlayVisible,
     )
     var lastFlipAt by remember { mutableStateOf(0L) }
     DisposableEffect(exoWindowState) {
@@ -1921,6 +1962,35 @@ fun PlayerScreen(
                 com.aeriotv.android.core.remote.PlayerRemoteAction.MINIMIZE_TO_GUIDE -> {
                     exoWindowState.requestMini()
                     miniPlayerVm.showMiniPlayer()
+                    onClose()
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.RECENT_CHANNELS -> {
+                    // Hold-Up: Recently Watched overlay (a second hold while
+                    // open just keeps it open; Back / a pick dismisses).
+                    if (!isCatchupMode) recentsOverlayVisible = true
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.OPEN_SEARCH -> {
+                    // Hold-Down: global search. Same handoff shape as
+                    // minimizeToGuide - keep playing in the corner mini so
+                    // the search results land over a live picture - then the
+                    // nav layer pushes the search route.
+                    exoWindowState.requestMini()
+                    miniPlayerVm.showMiniPlayer()
+                    onClose()
+                    onOpenSearch()
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.STOP_PLAYBACK -> {
+                    // Hold-Back (fixed, dispatched by MainActivity): stop
+                    // outright, NO mini promotion. Same teardown as the
+                    // chrome's explicit X-close.
+                    miniPlayerVm.dismiss()
+                    exoWindowState.hide()
+                    exoHolder.stop()
+                    com.aeriotv.android.core.playback.AerioMediaPlaybackService
+                        .stop(context)
                     onClose()
                     true
                 }

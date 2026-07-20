@@ -1150,8 +1150,10 @@ class AppPreferences @Inject constructor(
         store.data.first()[KEY_DVR_KEEP_AWAKE] ?: true
 
     private companion object {
-        /** Max entries kept in [recentChannelIds]. iOS keeps a short LRU. */
-        const val RECENT_CHANNELS_CAP = 15
+        /** Max entries kept in [recentChannelIds]. Sized for the player's
+         *  Recently Watched overlay (top 25, Logan 2026-07-20); the
+         *  AddToMultiview sheet still shows only its first few. */
+        const val RECENT_CHANNELS_CAP = 25
         val KEY_RECENT_CHANNEL_IDS = stringPreferencesKey("recent_channel_ids")
         val KEY_SELECTED_THEME = stringPreferencesKey("selected_theme")
         val KEY_APPEARANCE_MODE = stringPreferencesKey("appearance_mode")

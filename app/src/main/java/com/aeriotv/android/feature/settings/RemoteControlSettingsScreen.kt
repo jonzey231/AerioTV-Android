@@ -65,6 +65,8 @@ private val PLAYER_ACTION_CHOICES = listOf(
     PlayerRemoteAction.CHANNEL_UP,
     PlayerRemoteAction.CHANNEL_DOWN,
     PlayerRemoteAction.LAST_CHANNEL,
+    PlayerRemoteAction.RECENT_CHANNELS,
+    PlayerRemoteAction.OPEN_SEARCH,
     PlayerRemoteAction.TOGGLE_CONTROLS,
     PlayerRemoteAction.SHOW_PROGRAM_INFO,
     PlayerRemoteAction.OPTIONS_MENU,
@@ -114,6 +116,10 @@ private val PlayerRemoteAction.displayName: String
         PlayerRemoteAction.CHANNEL_UP -> "Channel up"
         PlayerRemoteAction.CHANNEL_DOWN -> "Channel down"
         PlayerRemoteAction.LAST_CHANNEL -> "Previous channel"
+        PlayerRemoteAction.RECENT_CHANNELS -> "Recently watched"
+        // Fixed hold-Back behavior; named here for completeness but never
+        // offered in the choice lists (Back semantics stay hardcoded).
+        PlayerRemoteAction.STOP_PLAYBACK -> "Stop playback"
         PlayerRemoteAction.TOGGLE_CONTROLS -> "Show/hide controls"
         PlayerRemoteAction.SHOW_PROGRAM_INFO -> "Show program info"
         PlayerRemoteAction.OPTIONS_MENU -> "Options menu"

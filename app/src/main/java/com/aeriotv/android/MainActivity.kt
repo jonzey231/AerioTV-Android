@@ -224,7 +224,12 @@ class MainActivity : ComponentActivity() {
                 if (isUp) com.aeriotv.android.core.remote.RemoteSlot.UP_LONG
                 else com.aeriotv.android.core.remote.RemoteSlot.DOWN_LONG,
             )
-            if (longAction == com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+            if (!exoWindowState.dpadVerticalCaptured) {
+                // Chrome / a scrub HUD / an overlay owns vertical focus right
+                // now: hand the keys to Compose untouched. Without this the
+                // deferred split below consumes UP/DOWN outright and the
+                // on-screen controls become unreachable.
+            } else if (longAction == com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
                 if (event.action == KeyEvent.ACTION_DOWN &&
                     dispatchPlayerAction(shortAction)
                 ) return true
@@ -311,6 +316,20 @@ class MainActivity : ComponentActivity() {
         // the long-press cancels the follow-up onKeyUp (event.isCanceled), so the
         // short-Back paths (mini resume, guide back-to-top, nav-up) are untouched.
         if (keyCode == KeyEvent.KEYCODE_BACK && isTelevisionDevice()) {
+            // Remote Control initiative (Logan 2026-07-20): while the LIVE
+            // player is fullscreen, hold-Back STOPS playback outright (no
+            // mini promotion) instead of raising the exit confirm - the
+            // deliberate "I'm done watching" gesture. Everywhere else the
+            // hold keeps its issue #16 exit-confirm role. Fixed behavior,
+            // not a map slot: Back is never remappable.
+            if (exoWindowState.mode.value ==
+                com.aeriotv.android.feature.player.ExoWindowState.Mode.Fullscreen &&
+                exoWindowState.onPlayerRemoteAction?.invoke(
+                    com.aeriotv.android.core.remote.PlayerRemoteAction.STOP_PLAYBACK,
+                ) == true
+            ) {
+                return true
+            }
             showExitConfirm.value = true
             return true
         }
