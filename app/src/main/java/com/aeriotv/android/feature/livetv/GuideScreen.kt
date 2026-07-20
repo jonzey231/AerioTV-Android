@@ -249,6 +249,10 @@ fun GuideScreen(
     val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
     val epgWindowHours by settingsVm.epgWindowHours.collectAsStateWithLifecycle(initialValue = 24)
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    // Remote Control A2: live button map (guide context slots).
+    val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(
+        initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
+    )
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val multiviewStore = rememberMultiviewStoreHandle()
     // Observe the mini-player session so the guide's Back handler can stand
@@ -274,6 +278,13 @@ fun GuideScreen(
     // group pill. This requester is attached to that pill (the first item in
     // the group row) and fired from the grid's key handler.
     val allPillFocus = remember { FocusRequester() }
+    // Remote Control A2: late-bound handle so the (earlier-composed)
+    // pills-row hold-Left handler can dispatch through the guide action
+    // executor declared further down (it depends on nav scopes created
+    // later in composition).
+    val guideActionDispatcher = remember {
+        androidx.compose.runtime.mutableStateOf<((com.aeriotv.android.core.remote.GuideRemoteAction) -> Boolean)?>(null)
+    }
     // Streamer field report 2026-07-12: D-pad DOWN from the top nav landed on
     // whichever group pill sat geometrically under the Live TV tab ("General"),
     // not the SELECTED pill. This requester rides the currently selected group
@@ -1047,21 +1058,34 @@ fun GuideScreen(
                             leftHoldPinningAll = false
                             false
                         }
-                        KeyEventType.KeyDown -> when {
-                            leftHoldPinningAll -> {
-                                // Already pinned: swallow every further Left and
-                                // keep focus glued to All until release.
-                                runCatching { allPillFocus.requestFocus() }
-                                true
+                        KeyEventType.KeyDown -> {
+                            // Remote Control A2: guide leftLong slot. Default =
+                            // focusGroupPills (today's All-pill jump + pin).
+                            // NONE opts the interception out entirely; other
+                            // actions fire once at the threshold and swallow
+                            // until release (the pin without the focus glue).
+                            val leftLongAction =
+                                remoteMap.guideAction(com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG)
+                            when {
+                                leftLongAction == com.aeriotv.android.core.remote.GuideRemoteAction.NONE -> false
+                                leftHoldPinningAll -> {
+                                    if (leftLongAction == com.aeriotv.android.core.remote.GuideRemoteAction.FOCUS_GROUP_PILLS) {
+                                        runCatching { allPillFocus.requestFocus() }
+                                    }
+                                    true
+                                }
+                                event.nativeKeyEvent.isLongPress ||
+                                    event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT -> {
+                                    leftHoldPinningAll = true
+                                    if (leftLongAction == com.aeriotv.android.core.remote.GuideRemoteAction.FOCUS_GROUP_PILLS) {
+                                        runCatching { allPillFocus.requestFocus() }
+                                    } else {
+                                        guideActionDispatcher.value?.invoke(leftLongAction)
+                                    }
+                                    true
+                                }
+                                else -> false
                             }
-                            event.nativeKeyEvent.isLongPress ||
-                                event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT -> {
-                                // Hold threshold reached: jump to All and pin.
-                                leftHoldPinningAll = true
-                                runCatching { allPillFocus.requestFocus() }
-                                true
-                            }
-                            else -> false
                         }
                         else -> false
                     }
@@ -1553,6 +1577,61 @@ fun GuideScreen(
         val navScope = rememberCoroutineScope()
         val backScope = androidx.compose.runtime.rememberCoroutineScope()
         val activity = LocalContext.current.findActivity()
+
+        // Remote Control A2: guide-context action executor. Wrappers over
+        // the SAME plumbing the Back ladder / hold gestures use, so a
+        // remapped button behaves identically to the built-in path.
+        // Returns false for actions the guide cannot run here (caller
+        // falls through). PROGRAM_INFO / OPEN_SEARCH land with the
+        // channel-list overlay pass.
+        val dispatchGuideAction: (com.aeriotv.android.core.remote.GuideRemoteAction) -> Boolean = act@{ action ->
+            when (action) {
+                com.aeriotv.android.core.remote.GuideRemoteAction.JUMP_TO_NOW -> {
+                    val nowOffsetPx =
+                        ((System.currentTimeMillis() - windowStart).toFloat() / 3_600_000f) * hourWidthPx
+                    val anchorPx = (nowOffsetPx - stripViewportPx * 0.20f).toInt()
+                        .coerceIn(0, horizontalScrollState.maxValue)
+                    backScope.launch {
+                        horizontalScrollState.animateScrollTo(anchorPx)
+                        autoAnchorPx = anchorPx
+                        if (isTv) {
+                            guideNav.focusChannelAtNow(
+                                guideNav.lastFocusedChannelIndex.coerceAtLeast(0),
+                                nowMillis,
+                                listState,
+                            )
+                        }
+                    }
+                    true
+                }
+                com.aeriotv.android.core.remote.GuideRemoteAction.JUMP_TO_TOP -> {
+                    backScope.launch {
+                        listState.animateScrollToItem(0)
+                        if (isTv) guideNav.focusChannelAtNow(0, nowMillis, listState)
+                    }
+                    true
+                }
+                com.aeriotv.android.core.remote.GuideRemoteAction.FOCUS_GROUP_PILLS -> {
+                    runCatching { allPillFocus.requestFocus() }.isSuccess
+                }
+                com.aeriotv.android.core.remote.GuideRemoteAction.PAGE_UP -> {
+                    navScope.launch { guideNav.pageVertical(-1, filteredChannels.lastIndex, listState) }
+                    true
+                }
+                com.aeriotv.android.core.remote.GuideRemoteAction.PAGE_DOWN -> {
+                    navScope.launch { guideNav.pageVertical(+1, filteredChannels.lastIndex, listState) }
+                    true
+                }
+                com.aeriotv.android.core.remote.GuideRemoteAction.RESUME_PLAYER -> {
+                    if (miniActive) miniPlayerVm.session.requestResume()
+                    true
+                }
+                com.aeriotv.android.core.remote.GuideRemoteAction.NONE -> true
+                else -> false
+            }
+        }
+        androidx.compose.runtime.SideEffect { guideActionDispatcher.value = dispatchGuideAction }
+
         androidx.activity.compose.BackHandler(enabled = !miniActive) {
             val atTop = listState.firstVisibleItemIndex == 0 &&
                 listState.firstVisibleItemScrollOffset == 0
@@ -1778,6 +1857,26 @@ fun GuideScreen(
                 // horizontal timeline nav + OK-to-play.
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    // Remote Control A2: extended keys in the guide (FF/RW,
+                    // Ch+/Ch-, Play/Pause on remotes that have them) route
+                    // through the guide-context map. Non-repeat only so a held
+                    // key doesn't machine-gun page turns.
+                    if (isTv && event.nativeKeyEvent.repeatCount == 0) {
+                        val mediaSlot = when (event.key) {
+                            Key.MediaFastForward -> com.aeriotv.android.core.remote.RemoteSlot.FFWD
+                            Key.MediaRewind -> com.aeriotv.android.core.remote.RemoteSlot.REWIND
+                            Key.ChannelUp -> com.aeriotv.android.core.remote.RemoteSlot.CHANNEL_UP
+                            Key.ChannelDown -> com.aeriotv.android.core.remote.RemoteSlot.CHANNEL_DOWN
+                            Key.MediaPlayPause, Key.MediaPlay -> com.aeriotv.android.core.remote.RemoteSlot.PLAY_PAUSE
+                            else -> null
+                        }
+                        if (mediaSlot != null) {
+                            val action = remoteMap.guideAction(mediaSlot)
+                            if (action != com.aeriotv.android.core.remote.GuideRemoteAction.NONE &&
+                                dispatchGuideAction(action)
+                            ) return@onPreviewKeyEvent true
+                        }
+                    }
                     // LEFT/RIGHT: the user IS navigating the timeline, so release
                     // the shared scroll lock. Then, if the FOCUSED program is wider
                     // than the viewport and still has content off-screen in the
@@ -3678,6 +3777,24 @@ private class GuideVerticalNavState {
      * 'now' column and retry [moveFocusToChannel] until [focusedChannelIndex]
      * actually equals the target.
      */
+    /** Remote Control A2: page the focused channel up/down by one
+     *  viewport of rows (TiviMate FF/RW guide paging). Reuses the
+     *  standard vertical move so the lane model + anchor landing hold. */
+    suspend fun pageVertical(direction: Int, lastChannelIndex: Int, listState: LazyListState) {
+        if (lastChannelIndex < 0) return
+        val visible = (listState.layoutInfo.visibleItemsInfo.size - 1).coerceAtLeast(1)
+        val cur = when {
+            verticalMoveInFlight && pendingTargetIndex >= 0 -> pendingTargetIndex
+            focusedChannelIndex >= 0 -> focusedChannelIndex
+            else -> lastFocusedChannelIndex
+        }.coerceAtLeast(0)
+        val target = (cur + direction * visible).coerceIn(0, lastChannelIndex)
+        if (target != cur) {
+            beginVerticalMove()
+            moveFocusToChannel(target, listState)
+        }
+    }
+
     suspend fun focusChannelAtNow(targetIndex: Int, nowMs: Long, listState: LazyListState) {
         focusChannelAt(targetIndex, nowMs, listState)
     }

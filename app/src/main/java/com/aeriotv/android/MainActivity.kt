@@ -91,6 +91,10 @@ class MainActivity : ComponentActivity() {
     @Volatile private var remoteMap: com.aeriotv.android.core.remote.RemoteControlMap =
         com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT
 
+    /** Remote Control A2: true once a deferred long Up/Down fired, so the
+     *  release doesn't also fire the short action. */
+    private var dpadVertLongFired = false
+
     /**
      * Audit task #22 mini-player resume. The Google TV Streamer remote has
      * no dedicated play/pause key, so we repurpose a double-press of D-pad
@@ -199,29 +203,86 @@ class MainActivity : ComponentActivity() {
         // own debounce paces them so a held key surfs one channel at a time. If
         // the hook is null / declines (menu open, setting off, single channel) we
         // fall through so nothing else breaks.
-        if (event.action == KeyEvent.ACTION_DOWN && isTelevisionDevice() &&
+        if (isTelevisionDevice() &&
             (event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
                 event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) &&
             exoWindowState.mode.value == ExoWindowState.Mode.Fullscreen
         ) {
-            // Remote Control map: player upShort/downShort slots. Default =
-            // channelUp/channelDown (today's behavior, delta +1 for UP). A
-            // NONE mapping falls through so the keys keep operating the
-            // chrome exactly like the legacy flip-off setting did; other
-            // actions are wired in Phase A2 and fall through until then.
-            val slot = if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                com.aeriotv.android.core.remote.RemoteSlot.UP_SHORT
+            // Remote Control map: player upShort/downShort + (A2) upLong/
+            // downLong. With NO long assignment (the default map), short
+            // presses act immediately on every ACTION_DOWN, exactly the
+            // legacy auto-repeat surf. With a long assignment (e.g. the
+            // TiviMate preset's hold-Up = lastChannel), the short action is
+            // DEFERRED to key release so a hold can fire the long action at
+            // the standard threshold instead.
+            val isUp = event.keyCode == KeyEvent.KEYCODE_DPAD_UP
+            val shortAction = remoteMap.playerAction(
+                if (isUp) com.aeriotv.android.core.remote.RemoteSlot.UP_SHORT
+                else com.aeriotv.android.core.remote.RemoteSlot.DOWN_SHORT,
+            )
+            val longAction = remoteMap.playerAction(
+                if (isUp) com.aeriotv.android.core.remote.RemoteSlot.UP_LONG
+                else com.aeriotv.android.core.remote.RemoteSlot.DOWN_LONG,
+            )
+            if (longAction == com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+                if (event.action == KeyEvent.ACTION_DOWN &&
+                    dispatchPlayerAction(shortAction)
+                ) return true
+                // NONE / unconsumed falls through (legacy flip-off chrome nav).
             } else {
-                com.aeriotv.android.core.remote.RemoteSlot.DOWN_SHORT
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> {
+                        if (event.repeatCount == 0) {
+                            dpadVertLongFired = false
+                        } else if (!dpadVertLongFired &&
+                            (event.isLongPress || event.repeatCount >= MINI_CLOSE_HOLD_REPEAT)
+                        ) {
+                            dpadVertLongFired = true
+                            dispatchPlayerAction(longAction)
+                        }
+                        return true
+                    }
+                    KeyEvent.ACTION_UP -> {
+                        if (!dpadVertLongFired) dispatchPlayerAction(shortAction)
+                        dpadVertLongFired = false
+                        return true
+                    }
+                }
             }
-            val delta = when (remoteMap.playerAction(slot)) {
-                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_UP -> 1
-                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_DOWN -> -1
-                else -> 0
+        }
+        // Remote Control A2: extended media keys while the fullscreen live
+        // player is frontmost (BT/Shield/Onn remotes; the stock Google TV
+        // remote lacks them). Slots per the plan's default map: FF/RW =
+        // seek, Ch+/Ch- = channel flip.
+        if (event.action == KeyEvent.ACTION_DOWN && isTelevisionDevice() &&
+            exoWindowState.mode.value == ExoWindowState.Mode.Fullscreen
+        ) {
+            val mediaSlot = when (event.keyCode) {
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> com.aeriotv.android.core.remote.RemoteSlot.FFWD
+                KeyEvent.KEYCODE_MEDIA_REWIND -> com.aeriotv.android.core.remote.RemoteSlot.REWIND
+                KeyEvent.KEYCODE_CHANNEL_UP -> com.aeriotv.android.core.remote.RemoteSlot.CHANNEL_UP
+                KeyEvent.KEYCODE_CHANNEL_DOWN -> com.aeriotv.android.core.remote.RemoteSlot.CHANNEL_DOWN
+                else -> null
             }
-            if (delta != 0 && exoWindowState.onLiveChannelFlip?.invoke(delta) == true) return true
+            if (mediaSlot != null &&
+                dispatchPlayerAction(remoteMap.playerAction(mediaSlot))
+            ) return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /** Remote Control A2: run a mapped player action. Channel flips go
+     *  through the dedicated debounced hook; everything else through the
+     *  PlayerScreen executor. Returns true when consumed. */
+    private fun dispatchPlayerAction(
+        action: com.aeriotv.android.core.remote.PlayerRemoteAction,
+    ): Boolean = when (action) {
+        com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_UP ->
+            exoWindowState.onLiveChannelFlip?.invoke(1) == true
+        com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_DOWN ->
+            exoWindowState.onLiveChannelFlip?.invoke(-1) == true
+        com.aeriotv.android.core.remote.PlayerRemoteAction.NONE -> false
+        else -> exoWindowState.onPlayerRemoteAction?.invoke(action) == true
     }
 
     /**

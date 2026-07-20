@@ -689,8 +689,15 @@ fun PlayerScreen(
     // first auto-hide the pill follows chromeVisible (i.e. the Back-press
     // path surfaces it alongside the full chrome).
     var launchHintActive by remember { mutableStateOf(true) }
-    LaunchedEffect(currentChannel?.id) {
-        // Re-arm whenever the user channel-flips to a new id.
+    // Remote Control A2: showProgramInfo action re-arms the same card
+    // without a channel change (TiviMate OK = info panel).
+    var programInfoPulse by remember { mutableStateOf(0) }
+    LaunchedEffect(currentChannel?.id, programInfoPulse) {
+        // Re-arm whenever the user channel-flips to a new id (or the
+        // showProgramInfo remote action pulses).
+        // Remote Control A2: every successful tune also feeds the
+        // session-scoped last-channel zap memory.
+        currentChannel?.id?.let { exoWindowState.recordTune(it) }
         launchHintActive = true
         kotlinx.coroutines.delay(AUTO_HIDE_MS)
         launchHintActive = false
@@ -1845,6 +1852,63 @@ fun PlayerScreen(
             true
         }
         onDispose { exoWindowState.onLiveChannelFlip = null }
+    }
+
+    // Remote Control A2: generic player-action executor for mapped slots.
+    // Registered like the flip hook; MainActivity dispatches activity-level
+    // keys (long Up/Down, media keys) here, and PlayerScreen's own key
+    // sites call it for non-default slot assignments. All state reads go
+    // through Compose State delegates, so the lambda always sees fresh
+    // values. Returns false for actions this screen can't run (caller
+    // falls through).
+    DisposableEffect(exoWindowState) {
+        exoWindowState.onPlayerRemoteAction = act@{ action ->
+            when (action) {
+                com.aeriotv.android.core.remote.PlayerRemoteAction.TOGGLE_CONTROLS -> {
+                    chromeVisible = !chromeVisible
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.SHOW_PROGRAM_INFO -> {
+                    programInfoPulse += 1
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.OPTIONS_MENU -> {
+                    chromeVisible = true
+                    chromeMenuOpen = true
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.MINIMIZE_TO_GUIDE -> {
+                    exoWindowState.requestMini()
+                    miniPlayerVm.showMiniPlayer()
+                    onClose()
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.LAST_CHANNEL -> {
+                    val zapId = exoWindowState.lastChannelId ?: return@act true
+                    val list = flipChannels
+                    val idx = list.indexOfFirst { it.id == zapId }
+                    if (idx >= 0 && idx != flipIndex && !flipLocked) {
+                        currentIndex = idx
+                    }
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.SEEK_FORWARD -> {
+                    scrubStep(+1, false)
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.SEEK_BACKWARD -> {
+                    scrubStep(-1, false)
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_UP ->
+                    exoWindowState.onLiveChannelFlip?.invoke(+1) ?: false
+                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_DOWN ->
+                    exoWindowState.onLiveChannelFlip?.invoke(-1) ?: false
+                com.aeriotv.android.core.remote.PlayerRemoteAction.NONE -> true
+                else -> false
+            }
+        }
+        onDispose { exoWindowState.onPlayerRemoteAction = null }
     }
 
     // On TV, when the chrome hides (fullscreen video), pull D-pad focus to the

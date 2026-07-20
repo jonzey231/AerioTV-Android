@@ -51,4 +51,33 @@ class ExoWindowState @Inject constructor() {
      * PipState.onPipDismissed shared-hook pattern.
      */
     @Volatile var onLiveChannelFlip: ((Int) -> Boolean)? = null
+
+    /**
+     * Remote Control phase A2: generic player-action hook, same lifecycle
+     * as [onLiveChannelFlip] (registered by the fullscreen live
+     * PlayerScreen, cleared on dispose). MainActivity dispatches mapped
+     * actions that arrive on ACTIVITY-level keys (long Up/Down, media
+     * keys) through this so PlayerScreen state (chrome, menus, info card,
+     * last-channel zap) can execute them. Returns true when consumed.
+     */
+    @Volatile var onPlayerRemoteAction:
+        ((com.aeriotv.android.core.remote.PlayerRemoteAction) -> Boolean)? = null
+
+    /**
+     * Remote Control phase A2: session-scoped last-channel zap memory
+     * (TiviMate `lastChannel`, 1-deep like theirs). [recordTune] is called
+     * on every successful live tune with the channel's stable id; it
+     * shifts the previous current into [lastChannelId]. In-memory only,
+     * deliberately not persisted or synced.
+     */
+    @Volatile var currentChannelId: String? = null
+        private set
+    @Volatile var lastChannelId: String? = null
+        private set
+
+    fun recordTune(channelId: String) {
+        if (channelId == currentChannelId) return
+        lastChannelId = currentChannelId
+        currentChannelId = channelId
+    }
 }
