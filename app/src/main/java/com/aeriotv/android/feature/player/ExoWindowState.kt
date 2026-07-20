@@ -65,7 +65,7 @@ class ExoWindowState @Inject constructor() {
 
     /**
      * Remote Control phase A2: session-scoped last-channel zap memory
-     * (TiviMate `lastChannel`, 1-deep like theirs). [recordTune] is called
+     * (`lastChannel` zap-back, a 1-deep stack). [recordTune] is called
      * on every successful live tune with the channel's stable id; it
      * shifts the previous current into [lastChannelId]. In-memory only,
      * deliberately not persisted or synced.

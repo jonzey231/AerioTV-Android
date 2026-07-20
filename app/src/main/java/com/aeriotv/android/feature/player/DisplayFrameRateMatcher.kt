@@ -27,7 +27,7 @@ import kotlin.math.abs
  * rate). Seamless-only users get exactly the old behavior (seamless when the
  * panel can, no-op when it can't); users who chose "Always" get the real
  * non-seamless 60->50 switch they explicitly opted into - the short black
- * resync TiviMate/Plex/Emby do. The previous ONLY_IF_SEAMLESS request capped
+ * resync other players do. The previous ONLY_IF_SEAMLESS request capped
  * everyone at seamless and made the OS-level "Always" opt-in dead weight:
  * 60->50 is a different mode group on virtually every panel, so European
  * 50fps streams never matched (field report alturismo 2026-07-18, Google TV

@@ -10,7 +10,7 @@ import kotlinx.serialization.json.put
 /**
  * TV remote button mapping (task #190 initiative, plan:
  * ~/Desktop/AerioTV-Remote-Control-Plan.md). One map per CONTEXT
- * (player vs guide), TiviMate-style, shared JSON schema with the
+ * (player vs guide), shared JSON schema with the
  * Apple platforms:
  *
  * ```json
@@ -83,16 +83,19 @@ enum class GuideRemoteAction(val wire: String) {
 }
 
 enum class RemotePreset(val wire: String) {
-    AERIO_DEFAULT("aerioDefault"), TIVIMATE("tivimate"), CUSTOM("custom");
+    DEFAULT("default"), CUSTOM("custom");
 
     companion object {
+        /** Unknown wires (including anything written by pre-release
+         *  builds) decode as CUSTOM; the slot maps themselves stay
+         *  valid either way. */
         fun fromWire(s: String): RemotePreset =
             entries.firstOrNull { it.wire == s } ?: CUSTOM
     }
 }
 
 data class RemoteControlMap(
-    val preset: RemotePreset = RemotePreset.AERIO_DEFAULT,
+    val preset: RemotePreset = RemotePreset.DEFAULT,
     val player: Map<RemoteSlot, PlayerRemoteAction> = emptyMap(),
     val guide: Map<RemoteSlot, GuideRemoteAction> = emptyMap(),
 ) {
@@ -128,14 +131,12 @@ data class RemoteControlMap(
     companion object {
         const val SCHEMA_VERSION = 1
 
-        /** Today's shipped behavior, byte-for-byte (plan section 7).
-         *  This preset is the regression bar: with it active every
-         *  existing gesture must behave exactly as before the mapping
-         *  layer existed. upShort/downShort default to the channel
-         *  flip because KEY_APPLE_TV_CHANNEL_FLIP defaults true; the
-         *  migration seeds NONE for users who had turned it off. */
-        val DEFAULT = RemoteControlMap(
-            preset = RemotePreset.AERIO_DEFAULT,
+        /** The PRE-initiative control scheme, kept verbatim so any
+         *  regression can be reverted by pointing DEFAULT back at it.
+         *  NOT user-selectable (Logan 2026-07-20): the redesigned
+         *  scheme below is the app's one standard layout now. */
+        val LEGACY_SCHEME = RemoteControlMap(
+            preset = RemotePreset.DEFAULT,
             player = mapOf(
                 RemoteSlot.UP_SHORT to PlayerRemoteAction.CHANNEL_UP,
                 RemoteSlot.DOWN_SHORT to PlayerRemoteAction.CHANNEL_DOWN,
@@ -150,11 +151,6 @@ data class RemoteControlMap(
                 RemoteSlot.CHANNEL_DOWN to PlayerRemoteAction.CHANNEL_DOWN,
             ),
             guide = mapOf(
-                // Logan 2026-07-20: hold-Left pages the timeline into
-                // already-aired (catch-up) programmes, TiviMate-style. The
-                // old All-pill jump stays available as an assignable action
-                // (the pills remain reachable by navigating up from the
-                // grid).
                 RemoteSlot.LEFT_LONG to GuideRemoteAction.TIMELINE_BACK,
                 RemoteSlot.RIGHT_LONG to GuideRemoteAction.CLOSE_MINI_PLAYER,
                 RemoteSlot.OK_LONG to GuideRemoteAction.PROGRAM_INFO,
@@ -162,9 +158,12 @@ data class RemoteControlMap(
             ),
         )
 
-        /** Feasible subset of TiviMate's defaults (plan section 7). */
-        val TIVIMATE_PRESET = RemoteControlMap(
-            preset = RemotePreset.TIVIMATE,
+        /** The app's standard control scheme: OK = program info, hold
+         *  OK = options, Up/Down = channel surf with hold-Up zap-back,
+         *  Right = previous-channel zap, hold-Left in the guide pages
+         *  into already-aired programmes. */
+        val DEFAULT = RemoteControlMap(
+            preset = RemotePreset.DEFAULT,
             player = mapOf(
                 RemoteSlot.OK_SHORT to PlayerRemoteAction.SHOW_PROGRAM_INFO,
                 RemoteSlot.OK_LONG to PlayerRemoteAction.OPTIONS_MENU,
@@ -205,7 +204,7 @@ data class RemoteControlMap(
             return runCatching {
                 val obj = json.parseToJsonElement(raw).jsonObject
                 val preset = RemotePreset.fromWire(
-                    obj["preset"]?.jsonPrimitive?.content ?: RemotePreset.AERIO_DEFAULT.wire,
+                    obj["preset"]?.jsonPrimitive?.content ?: RemotePreset.DEFAULT.wire,
                 )
                 RemoteControlMap(
                     preset = preset,

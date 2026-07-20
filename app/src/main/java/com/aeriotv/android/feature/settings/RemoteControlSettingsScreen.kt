@@ -33,10 +33,8 @@ import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 
 /**
  * Settings > App Settings > Remote Control (TV only). Customizable
- * per-context button maps (Remote Control initiative phase A3; plan
- * section 10). Presets overwrite the working map; any per-slot edit
- * flips the preset to Custom. Reset restores AerioTV Default behind a
- * TvMenuGuard-protected confirm.
+ * per-context button maps. Reset restores the standard scheme behind
+ * a TvMenuGuard-protected confirm.
  */
 
 /** Slots offered per context on Android TV (plan section 5). Guide
@@ -180,32 +178,8 @@ fun RemoteControlSettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 SettingsSection(
-                    header = "Preset",
-                    footer = "Customize what each remote button does. Changes apply immediately. Back always navigates and cannot be reassigned.",
-                ) {
-                    SettingsSelectionRow(
-                        label = "AerioTV Default",
-                        subtitle = "The classic AerioTV control scheme",
-                        selected = map.preset == RemotePreset.AERIO_DEFAULT,
-                        onClick = { viewModel.setRemoteControlMap(RemoteControlMap.DEFAULT) },
-                    )
-                    SettingsSelectionRow(
-                        label = "TiviMate Style",
-                        subtitle = "OK shows info, hold OK for options, Right returns to the previous channel",
-                        selected = map.preset == RemotePreset.TIVIMATE,
-                        onClick = { viewModel.setRemoteControlMap(RemoteControlMap.TIVIMATE_PRESET) },
-                    )
-                    SettingsSelectionRow(
-                        label = "Custom",
-                        subtitle = "Set automatically when you change any button below",
-                        selected = map.preset == RemotePreset.CUSTOM,
-                        onClick = { /* informational; editing any slot selects it */ },
-                    )
-                }
-
-                SettingsSection(
                     header = "While Watching",
-                    footer = "What each button does while a channel is playing fullscreen.",
+                    footer = "What each button does while a channel is playing fullscreen. Changes apply immediately. Back always navigates and cannot be reassigned.",
                 ) {
                     PLAYER_SLOTS.forEach { slot ->
                         SlotRow(
@@ -251,7 +225,7 @@ fun RemoteControlSettingsScreen(
 
                 SettingsSection(
                     header = "Reset",
-                    footer = "Restore every button to the AerioTV Default scheme.",
+                    footer = "Restore every button to the standard AerioTV scheme.",
                 ) {
                     SlotRow(
                         slotName = "Reset to Defaults",

@@ -25,7 +25,7 @@ data class M3UChannel(
     val rawAttributes: Map<String, String> = emptyMap(),
     /**
      * GH #27: DRM signalling from `#KODIPROP:inputstream.adaptive.*` lines
-     * preceding this channel's URL (the Kodi/TiviMate convention for
+     * preceding this channel's URL (the common IPTV-client convention for
      * encrypted DASH). `drmLicenseType` is "clearkey" / "com.widevine.alpha"
      * etc.; `drmLicenseKey` is either a license-server URL or a ClearKey
      * "kid:key" hex pair. Null for the (vast) majority of channels.

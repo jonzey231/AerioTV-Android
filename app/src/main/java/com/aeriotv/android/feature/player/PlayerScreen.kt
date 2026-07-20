@@ -693,7 +693,7 @@ fun PlayerScreen(
     // path surfaces it alongside the full chrome).
     var launchHintActive by remember { mutableStateOf(true) }
     // Remote Control A2: showProgramInfo action re-arms the same card
-    // without a channel change (TiviMate OK = info panel).
+    // without a channel change (OK = info panel in the standard scheme).
     var programInfoPulse by remember { mutableStateOf(0) }
     LaunchedEffect(currentChannel?.id, programInfoPulse) {
         // Re-arm whenever the user channel-flips to a new id (or the
@@ -1194,7 +1194,7 @@ fun PlayerScreen(
                 // actions so the release can't click anything behind.
                 val native = event.nativeKeyEvent
                 // Remote Control A2: OK short/long split. Only engaged when
-                // an okLong action is mapped (e.g. TiviMate preset long-OK =
+                // an okLong action is mapped (e.g. the standard scheme's long-OK =
                 // options menu) AND the chrome is hidden (visible chrome
                 // keeps OK operating the focused control). Short fires on
                 // RELEASE so a hold can fire the long action at the standard

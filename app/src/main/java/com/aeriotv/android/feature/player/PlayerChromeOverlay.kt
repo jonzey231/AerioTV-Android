@@ -701,7 +701,7 @@ fun PlayerChromeOverlay(
                     // verbatim from HomeView.playerHint (tvOS single-stream live).
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         PlayerHintChip("Press Menu/Back to return to TV Guide.")
-                        PlayerHintChip("Press Select to show player controls.")
+                        PlayerHintChip("Press Select for program info. Hold Select for options.")
                         if (showChannelFlipHint) {
                             PlayerHintChip("Press Up/Down to change channels.")
                         }

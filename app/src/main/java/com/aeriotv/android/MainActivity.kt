@@ -212,7 +212,7 @@ class MainActivity : ComponentActivity() {
             // downLong. With NO long assignment (the default map), short
             // presses act immediately on every ACTION_DOWN, exactly the
             // legacy auto-repeat surf. With a long assignment (e.g. the
-            // TiviMate preset's hold-Up = lastChannel), the short action is
+            // hold-Up = previous-channel zap), the short action is
             // DEFERRED to key release so a hold can fire the long action at
             // the standard threshold instead.
             val isUp = event.keyCode == KeyEvent.KEYCODE_DPAD_UP

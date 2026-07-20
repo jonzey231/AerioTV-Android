@@ -25,7 +25,7 @@ import kotlin.math.ceil
  * pins its zone to UTC and serves UTC EPG, so for a Dispatcharr source we render
  * the (UTC-epoch) programme start in UTC. For a raw XC provider we render in the
  * zone captured from its player_api handshake, plus an optional manual
- * correction offset for misconfigured panels (TiviMate and Kodi both ship one).
+ * correction offset for misconfigured panels (several IPTV clients ship one).
  */
 object CatchupUrlBuilder {
 
@@ -64,7 +64,7 @@ object CatchupUrlBuilder {
     }
 
     /**
-     * The canonical XC start shape `YYYY-MM-DD:HH-MM` (iPlayTV / TiviMate
+     * The canonical XC start shape `YYYY-MM-DD:HH-MM` (the shape other IPTV clients
      * colon-dash, minute precision), rendered in the panel's timezone.
      */
     private fun formatStart(epochMillis: Long, zoneId: String): String {

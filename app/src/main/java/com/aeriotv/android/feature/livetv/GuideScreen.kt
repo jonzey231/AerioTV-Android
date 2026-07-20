@@ -3795,7 +3795,7 @@ private class GuideVerticalNavState {
      * actually equals the target.
      */
     /** Remote Control A2: page the focused channel up/down by one
-     *  viewport of rows (TiviMate FF/RW guide paging). Reuses the
+     *  viewport of rows (FF/RW guide paging). Reuses the
      *  standard vertical move so the lane model + anchor landing hold. */
     suspend fun pageVertical(direction: Int, lastChannelIndex: Int, listState: LazyListState) {
         if (lastChannelIndex < 0) return
