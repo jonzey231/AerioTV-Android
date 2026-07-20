@@ -626,6 +626,9 @@ fun PlayerScreen(
     // chrome is visible so the auto-hide timer re-arms instead of firing
     // mid-traversal. Phase 172.
     var lastInteractionAt by remember { mutableStateOf(0L) }
+    // Remote Control A2: OK short/long split latch (engaged only when an
+    // okLong action is mapped; the default map keeps the plain clickable).
+    var okLongFired by remember { mutableStateOf(false) }
     androidx.activity.compose.BackHandler {
         if (isCatchupMode) {
             // Task #148 milestone B: Back on a catch-up replay exits to where
@@ -1190,6 +1193,44 @@ fun PlayerScreen(
                 // seek commits after the presses stop). Consume both
                 // actions so the release can't click anything behind.
                 val native = event.nativeKeyEvent
+                // Remote Control A2: OK short/long split. Only engaged when
+                // an okLong action is mapped (e.g. TiviMate preset long-OK =
+                // options menu) AND the chrome is hidden (visible chrome
+                // keeps OK operating the focused control). Short fires on
+                // RELEASE so a hold can fire the long action at the standard
+                // threshold instead; with okLong unmapped (the default map)
+                // this whole branch is skipped and the plain clickable
+                // handles OK exactly as before.
+                if (isTvForm && !chromeVisible &&
+                    (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                        native.keyCode == android.view.KeyEvent.KEYCODE_ENTER)
+                ) {
+                    val okLongAction = remoteMap.playerAction(com.aeriotv.android.core.remote.RemoteSlot.OK_LONG)
+                    if (okLongAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+                        when (native.action) {
+                            android.view.KeyEvent.ACTION_DOWN -> {
+                                if (native.repeatCount == 0) {
+                                    okLongFired = false
+                                } else if (!okLongFired &&
+                                    (native.isLongPress || native.repeatCount >= 4)
+                                ) {
+                                    okLongFired = true
+                                    exoWindowState.onPlayerRemoteAction?.invoke(okLongAction)
+                                }
+                                return@onPreviewKeyEvent true
+                            }
+                            android.view.KeyEvent.ACTION_UP -> {
+                                if (!okLongFired) {
+                                    exoWindowState.onPlayerRemoteAction?.invoke(
+                                        remoteMap.playerAction(com.aeriotv.android.core.remote.RemoteSlot.OK_SHORT),
+                                    )
+                                }
+                                okLongFired = false
+                                return@onPreviewKeyEvent true
+                            }
+                        }
+                    }
+                }
                 if (isTvForm && !chromeVisible && (tsState.buffering || isCatchupMode) &&
                     (
                         native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||

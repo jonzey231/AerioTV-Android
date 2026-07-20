@@ -1614,6 +1614,23 @@ fun GuideScreen(
                 com.aeriotv.android.core.remote.GuideRemoteAction.FOCUS_GROUP_PILLS -> {
                     runCatching { allPillFocus.requestFocus() }.isSuccess
                 }
+                com.aeriotv.android.core.remote.GuideRemoteAction.TIMELINE_BACK,
+                com.aeriotv.android.core.remote.GuideRemoteAction.TIMELINE_FORWARD,
+                -> {
+                    // Logan 2026-07-20: hold-Left default. Pages the shared
+                    // timeline ~0.85 viewport (same stride as the oversized-
+                    // cell paging) into the past for catch-up browsing, or
+                    // forward. Back-to-now stays one Back press away (the
+                    // ladder's snap branch).
+                    val dir = if (action == com.aeriotv.android.core.remote.GuideRemoteAction.TIMELINE_BACK) -1 else +1
+                    val page = (stripViewportPx * 0.85f).toInt()
+                    val target = (horizontalScrollState.value + dir * page)
+                        .coerceIn(0, horizontalScrollState.maxValue)
+                    if (target != horizontalScrollState.value) {
+                        backScope.launch { horizontalScrollState.animateScrollTo(target) }
+                    }
+                    true
+                }
                 com.aeriotv.android.core.remote.GuideRemoteAction.PAGE_UP -> {
                     navScope.launch { guideNav.pageVertical(-1, filteredChannels.lastIndex, listState) }
                     true

@@ -150,7 +150,12 @@ data class RemoteControlMap(
                 RemoteSlot.CHANNEL_DOWN to PlayerRemoteAction.CHANNEL_DOWN,
             ),
             guide = mapOf(
-                RemoteSlot.LEFT_LONG to GuideRemoteAction.FOCUS_GROUP_PILLS,
+                // Logan 2026-07-20: hold-Left pages the timeline into
+                // already-aired (catch-up) programmes, TiviMate-style. The
+                // old All-pill jump stays available as an assignable action
+                // (the pills remain reachable by navigating up from the
+                // grid).
+                RemoteSlot.LEFT_LONG to GuideRemoteAction.TIMELINE_BACK,
                 RemoteSlot.RIGHT_LONG to GuideRemoteAction.CLOSE_MINI_PLAYER,
                 RemoteSlot.OK_LONG to GuideRemoteAction.PROGRAM_INFO,
                 RemoteSlot.PLAY_PAUSE to GuideRemoteAction.RESUME_PLAYER,
@@ -185,7 +190,7 @@ data class RemoteControlMap(
                 RemoteSlot.CHANNEL_UP to GuideRemoteAction.PAGE_UP,
                 RemoteSlot.CHANNEL_DOWN to GuideRemoteAction.PAGE_DOWN,
                 RemoteSlot.OK_LONG to GuideRemoteAction.PROGRAM_INFO,
-                RemoteSlot.LEFT_LONG to GuideRemoteAction.FOCUS_GROUP_PILLS,
+                RemoteSlot.LEFT_LONG to GuideRemoteAction.TIMELINE_BACK,
                 RemoteSlot.RIGHT_LONG to GuideRemoteAction.CLOSE_MINI_PLAYER,
                 RemoteSlot.PLAY_PAUSE to GuideRemoteAction.RESUME_PLAYER,
             ),

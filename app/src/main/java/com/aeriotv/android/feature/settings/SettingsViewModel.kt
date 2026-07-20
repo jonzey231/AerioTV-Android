@@ -159,7 +159,7 @@ class SettingsViewModel @Inject constructor(
     /** Remote Control initiative: decoded button map (tolerant of unknown
      *  slots/actions; defaults when unset). */
     val remoteControlMap: Flow<com.aeriotv.android.core.remote.RemoteControlMap> =
-        prefs.remoteControlMap.map { com.aeriotv.android.core.remote.RemoteControlMap.fromJson(it) }
+        prefs.effectiveRemoteControlMap
     fun setRemoteControlMap(map: com.aeriotv.android.core.remote.RemoteControlMap) {
         viewModelScope.launch { prefs.setRemoteControlMap(map.toJson()) }
     }

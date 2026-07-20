@@ -532,7 +532,7 @@ fun MainScaffold(
                         TvGuideHintChip("Hold right on remote to close the mini player.")
                     }
                     TvGuideHintChip("Double press Menu/Back to return to top channel.")
-                    TvGuideHintChip("Hold left on remote to return to the All group pill.")
+                    TvGuideHintChip("Hold left on remote to browse earlier programs.")
                 }
             }
             }
@@ -1409,6 +1409,8 @@ private fun SettingsTabContent(
         section == SettingsSection.AppBehaviors -> AppBehaviorsSettingsScreen(onBack = { section = null })
         section == SettingsSection.Multiview -> MultiviewSettingsScreen(onBack = { section = null })
         section == SettingsSection.Network -> NetworkSettingsScreen(onBack = { section = null })
+        section == SettingsSection.RemoteControl ->
+            com.aeriotv.android.feature.settings.RemoteControlSettingsScreen(onBack = { section = null })
         section == SettingsSection.AppUpdates ->
             com.aeriotv.android.feature.settings.AppUpdatesScreen(onBack = { section = null })
         section == SettingsSection.Sync -> com.aeriotv.android.feature.settings.SyncSettingsScreen(

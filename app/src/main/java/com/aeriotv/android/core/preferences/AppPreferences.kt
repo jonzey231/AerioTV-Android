@@ -245,6 +245,31 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Decoded map with the LEGACY MIGRATION applied: a user who had
+     * turned "Apple TV Channel Flip" off and has never customized the
+     * new map gets upShort/downShort seeded to NONE so their Up/Down
+     * keep operating the chrome exactly as before the mapping layer.
+     */
+    val effectiveRemoteControlMap: Flow<com.aeriotv.android.core.remote.RemoteControlMap> =
+        store.data.map { data ->
+            val raw = data[KEY_REMOTE_CONTROL_MAP] ?: ""
+            val map = com.aeriotv.android.core.remote.RemoteControlMap.fromJson(raw)
+            if (raw.isBlank() && data[KEY_APPLE_TV_CHANNEL_FLIP] == false) {
+                map.copy(
+                    player = map.player +
+                        mapOf(
+                            com.aeriotv.android.core.remote.RemoteSlot.UP_SHORT to
+                                com.aeriotv.android.core.remote.PlayerRemoteAction.NONE,
+                            com.aeriotv.android.core.remote.RemoteSlot.DOWN_SHORT to
+                                com.aeriotv.android.core.remote.PlayerRemoteAction.NONE,
+                        ),
+                )
+            } else {
+                map
+            }
+        }
+
+    /**
      * iOS `appBehaviorsAutoRecoverFrozenStreams` parity (#37, commit fe93531c).
      * When false the live stall watchdogs (stale-position reload + black-screen
      * reload) are disabled so a channel that restarts/stutters at OTA commercial

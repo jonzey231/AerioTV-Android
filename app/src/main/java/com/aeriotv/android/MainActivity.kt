@@ -554,9 +554,7 @@ class MainActivity : ComponentActivity() {
         // Remote Control initiative: keep the button map hot for
         // dispatchKeyEvent (which cannot suspend).
         lifecycleScope.launch {
-            appPreferences.remoteControlMap.collect { raw ->
-                remoteMap = com.aeriotv.android.core.remote.RemoteControlMap.fromJson(raw)
-            }
+            appPreferences.effectiveRemoteControlMap.collect { remoteMap = it }
         }
         // TV soft-input mode history (GH #1 and two user reports):
         //  - RESIZE originally fed a per-frame recompose + bring-into-view

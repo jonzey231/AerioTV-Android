@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.OpenInNew
@@ -183,6 +184,8 @@ fun SettingsScreen(
                         add(SettingsSection.AppBehaviors)
                         add(SettingsSection.Multiview)
                         add(SettingsSection.Network)
+                        // Remote Control initiative: TV form factors only.
+                        if (rememberIsTvDevice()) add(SettingsSection.RemoteControl)
                         if (updaterEnabled) add(SettingsSection.AppUpdates)
                     },
                     onClick = onSectionClick,
@@ -769,6 +772,11 @@ enum class SettingsSection(
         title = "Network",
         subtitle = "Timeout, buffer & background refresh",
         icon = Icons.Filled.Wifi,
+    ),
+    RemoteControl(
+        title = "Remote Control",
+        subtitle = "Customize remote buttons",
+        icon = Icons.Filled.SettingsRemote,
     ),
     AppUpdates(
         title = "App Updates",
