@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapVert
@@ -1070,14 +1071,29 @@ internal fun ChannelRow(
                 // side, which iOS gets for free from its SwiftUI VStack
                 // layout pass.
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = channel.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = channel.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        // Catch-up badge (Logan 2026-07-20, parity with the
+                        // guide rail): a small history clock beside the name
+                        // whenever this channel has a replayable archive.
+                        if (channel.hasCatchup) {
+                            Spacer(Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Filled.History,
+                                contentDescription = "Catch-up available",
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = nowProgramme?.title ?: " ",
