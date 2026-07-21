@@ -142,6 +142,9 @@ fun PlayerChromeOverlay(
     pillVisible: Boolean = chromeVisible,
     isTv: Boolean = false,
     showChannelFlipHint: Boolean = false,
+    /** The "Press Select ... / Hold Select ..." hint line, derived from the
+     *  effective remote map by the caller; null hides the line. */
+    selectHint: String? = "Press Select for program info. Hold Select for options.",
     /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
      *  bar. Null on TV and on any Cast-disabled build. */
     castSlot: (@Composable () -> Unit)? = null,
@@ -701,7 +704,9 @@ fun PlayerChromeOverlay(
                     // verbatim from HomeView.playerHint (tvOS single-stream live).
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         PlayerHintChip("Press Menu/Back to return to TV Guide.")
-                        PlayerHintChip("Press Select for program info. Hold Select for options.")
+                        // Dynamic (Remote Control initiative): the Select line
+                        // follows the mapped OK actions; null = omitted.
+                        selectHint?.let { PlayerHintChip(it) }
                         if (showChannelFlipHint) {
                             PlayerHintChip("Press Up/Down to change channels.")
                         }

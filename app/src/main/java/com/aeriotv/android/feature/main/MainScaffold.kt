@@ -532,7 +532,22 @@ fun MainScaffold(
                         TvGuideHintChip("Hold right on remote to close the mini player.")
                     }
                     TvGuideHintChip("Double press Menu/Back to return to top channel.")
-                    TvGuideHintChip("Hold left on remote to browse earlier programs.")
+                    // Dynamic hints (Remote Control initiative): copy follows
+                    // the user's effective map + guide selector mode, so a
+                    // remapped button never advertises a stale gesture.
+                    val hintSettingsVm: com.aeriotv.android.feature.settings.SettingsViewModel =
+                        hiltViewModel()
+                    val hintMap by hintSettingsVm.remoteControlMap.collectAsStateWithLifecycle(
+                        initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
+                    )
+                    val hintGroupSelector by hintSettingsVm.guideGroupSelector
+                        .collectAsStateWithLifecycle(initialValue = "pills")
+                    if (hintGroupSelector == "sidebar") {
+                        TvGuideHintChip("Press left on the current program for channel groups.")
+                    }
+                    com.aeriotv.android.core.remote.RemoteControlHints
+                        .guideHoldLeftHint(hintMap)
+                        ?.let { TvGuideHintChip(it) }
                 }
             }
             }
