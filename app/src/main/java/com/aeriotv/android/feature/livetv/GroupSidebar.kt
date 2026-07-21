@@ -76,7 +76,28 @@ internal fun GroupSidebarPanel(
         runCatching { listState.scrollToItem(selectedIndex) }
         initialFocus?.let { runCatching { it.requestFocus() } }
     }
-    Column(modifier = modifier.width(280.dp)) {
+    // Size the panel to the LONGEST group label (Logan 2026-07-20: a fixed
+    // 280dp wasted space with short group names). Measure every label at the
+    // row's type scale, take the widest, add the row's horizontal chrome, and
+    // clamp to a sane min/max so one very long name can't dominate the guide
+    // and a single short group isn't cramped. A LazyColumn can't be intrinsic-
+    // measured, so this text-measure approach is the reliable way to fit.
+    val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val rowLabelStyle = MaterialTheme.typography.bodyLarge
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val panelWidth = remember(groups, rowLabelStyle) {
+        val widestPx = groups.maxOfOrNull { token ->
+            textMeasurer.measure(
+                text = groupSidebarLabel(token),
+                style = rowLabelStyle.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+            ).size.width
+        } ?: 0
+        // 16dp row padding each side + 2dp focus border each side + a little
+        // breathing room past the text.
+        with(density) { widestPx.toDp() } + 44.dp
+    }.coerceIn(160.dp, 340.dp)
+    Column(modifier = modifier.width(panelWidth)) {
         Text(
             text = "Groups",
             style = MaterialTheme.typography.titleMedium,

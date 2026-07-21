@@ -252,30 +252,41 @@ private fun ProgramInfoBody(
                 letterSpacing = 1.5.sp,
             )
             Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = target.title.ifBlank { "Untitled" },
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                // Feed-driven badges (LIVE / NEW / PREMIERE / FINALE / REPEAT),
-                // plus an "ON NOW" pill for a program airing right now that is
-                // not itself flagged a live broadcast (avoids a double LIVE).
-                // "ON NOW" is a live-airing status, not one of the toggleable feed
-                // pills, so it stays; the LIVE/NEW/etc feed flags follow the user's
-                // "Show program badges" preference.
-                val showEpgBadges = LocalShowEpgBadges.current
-                val badges = buildList {
-                    if (target.isLiveNow() && !target.isLiveBroadcast) {
-                        add(EpgFlag("ON NOW", EpgLiveRed))
-                    }
-                    if (showEpgBadges) addAll(target.epgFlags())
+            // Title spans the FULL text column and wraps on word boundaries
+            // (badges no longer share its row, which had squeezed a long
+            // single-word title into ugly mid-word breaks like "Somethi/ng").
+            Text(
+                text = target.title.ifBlank { "Untitled" },
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Bold,
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // Feed-driven badges (LIVE / NEW / PREMIERE / FINALE / REPEAT),
+            // plus an "ON NOW" pill for a program airing right now that is
+            // not itself flagged a live broadcast (avoids a double LIVE).
+            // "ON NOW" is a live-airing status, not one of the toggleable feed
+            // pills, so it stays; the LIVE/NEW/etc feed flags follow the user's
+            // "Show program badges" preference. Rendered UNDER the title in a
+            // wrapping row so several badges flow onto extra lines instead of
+            // stealing width from the title.
+            val showEpgBadges = LocalShowEpgBadges.current
+            val badges = buildList {
+                if (target.isLiveNow() && !target.isLiveBroadcast) {
+                    add(EpgFlag("ON NOW", EpgLiveRed))
                 }
-                if (badges.isNotEmpty()) {
-                    Spacer(Modifier.size(10.dp))
-                    EpgFlagsRow(badges)
+                if (showEpgBadges) addAll(target.epgFlags())
+            }
+            if (badges.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                ) {
+                    badges.forEach { flag ->
+                        com.aeriotv.android.core.ui.EpgFlagBadge(flag)
+                    }
                 }
             }
             target.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->

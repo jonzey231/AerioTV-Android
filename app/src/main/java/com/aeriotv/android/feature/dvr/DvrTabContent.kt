@@ -672,14 +672,16 @@ private fun RecordingRow(
                     // delivered as a click (to this row or to the menu's
                     // first item); arm/wrap swallows it.
                     // Single tap plays a finalized recording; an in-progress
-                    // server row with a server URL tap-plays at the live edge
-                    // (iOS playIfCompleted parity). Other rows no-op and use
-                    // the long-press menu.
+                    // server row with a server URL tap-plays FROM THE BEGINNING
+                    // (Logan 2026-07-20: a recording-in-progress is something
+                    // you started to watch from the start; the live edge is the
+                    // deliberate "Start at Live" menu choice). Other rows no-op
+                    // and use the long-press menu.
                     onClick = tvGuard.wrap {
                         when {
                             !rec.playbackUrl.isNullOrBlank() -> onPlay()
                             rec.status == DvrViewModel.Recording.Status.Recording &&
-                                rec.inProgressUrl != null -> onWatchLive()
+                                rec.inProgressUrl != null -> onWatchFromBeginning()
                         }
                     },
                     onLongClick = { menuOpen = true; tvGuard.arm() },
@@ -865,7 +867,10 @@ private fun RecordingActionMenu(
             // Beginning (window start). Gate on inProgressUrl, not the channel
             // id -- the recording carries its own playback URL.
             if (rec.inProgressUrl != null) {
-                add(TvMenuAction("Watch Live", Icons.Outlined.PlayArrow) { onWatchLive() })
+                // Tap already starts from the beginning (see the row's
+                // onClick), so the menu leads with the OTHER option, Start
+                // at Live, and keeps Watch from Beginning for discoverability.
+                add(TvMenuAction("Start at Live", Icons.Outlined.PlayArrow) { onWatchLive() })
                 add(TvMenuAction("Watch from Beginning", Icons.Outlined.SkipPrevious) { onWatchFromBeginning() })
             }
             add(TvMenuAction("Stop Recording", Icons.Outlined.Stop) { onStopRecording() })

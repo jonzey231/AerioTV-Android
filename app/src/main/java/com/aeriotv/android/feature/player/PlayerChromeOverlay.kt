@@ -703,13 +703,18 @@ fun PlayerChromeOverlay(
                     // appear/fade window, left-aligned with the info card. Copy
                     // verbatim from HomeView.playerHint (tvOS single-stream live).
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PlayerHintChip("Press Menu/Back to return to TV Guide.")
+                        // Compressed copy (Logan 2026-07-20). "Back = TV Guide"
+                        // merges with the Up/Down chip when flip is on so the
+                        // hint stack stays at most two short lines.
+                        val backHint = if (showChannelFlipHint) {
+                            "Back = TV Guide  ·  Up/Down = channels"
+                        } else {
+                            "Back = TV Guide"
+                        }
+                        PlayerHintChip(backHint)
                         // Dynamic (Remote Control initiative): the Select line
                         // follows the mapped OK actions; null = omitted.
                         selectHint?.let { PlayerHintChip(it) }
-                        if (showChannelFlipHint) {
-                            PlayerHintChip("Press Up/Down to change channels.")
-                        }
                     }
                 }
             }
@@ -832,7 +837,10 @@ private fun PlayerHintChip(text: String) {
         fontSize = 8.sp,
         fontWeight = FontWeight.Medium,
         color = Color.White.copy(alpha = 0.55f),
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         modifier = Modifier
+            .widthIn(max = 360.dp)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.72f))
             .padding(horizontal = 8.dp, vertical = 3.dp),

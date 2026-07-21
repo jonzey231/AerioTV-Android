@@ -450,6 +450,12 @@ fun GuideScreen(
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var gridLeftHoldFired by remember { mutableStateOf(false) }
     var gridLeftPendingSidebar by remember { mutableStateOf(false) }
+    // Timestamp of the Left key-down that armed the sidebar. A hold is ALWAYS
+    // longer than [SIDEBAR_TAP_MAX_MS], so gating the release on this makes a
+    // hold physically unable to open the sidebar even if the long-press flag /
+    // repeat threshold behaves differently across remotes (Logan 2026-07-20:
+    // hold-Left was browsing earlier programmes AND opening the sidebar).
+    var gridLeftDownAt by remember { mutableStateOf(0L) }
     // TV focus-on-dismiss for the Program Info / Record dialogs (user report:
     // Back from Program Info parked D-pad focus on the nav pills, not the
     // cell that opened it). The originating cell's row index + time column
@@ -1909,7 +1915,14 @@ fun GuideScreen(
                     // sidebar) armed below; a hold that fired the long action
                     // cancels it. Handled before the KeyDown-only early-out.
                     if (event.key == Key.DirectionLeft && event.type == KeyEventType.KeyUp) {
-                        val openSidebar = gridLeftPendingSidebar && !gridLeftHoldFired
+                        val heldMs = android.os.SystemClock.uptimeMillis() - gridLeftDownAt
+                        // Open the sidebar ONLY on a genuine short tap: armed,
+                        // the long action never fired, AND released quickly. A
+                        // hold that browsed earlier programmes exceeds the tap
+                        // window and is disqualified here, so it can never also
+                        // open the sidebar.
+                        val openSidebar = gridLeftPendingSidebar && !gridLeftHoldFired &&
+                            heldMs in 1..SIDEBAR_TAP_MAX_MS
                         gridLeftPendingSidebar = false
                         gridLeftHoldFired = false
                         if (openSidebar) {
@@ -2004,6 +2017,7 @@ fun GuideScreen(
                                 nowPx >= cellS && nowPx < cellE + remnantPad
                             ) {
                                 gridLeftPendingSidebar = true
+                                gridLeftDownAt = android.os.SystemClock.uptimeMillis()
                                 return@onPreviewKeyEvent true
                             }
                         } else if (gridLeftPendingSidebar) {
@@ -3583,6 +3597,9 @@ private const val HOLD_SCROLL_TURBO_INTERVAL_MS = 40L
  *  tvOS's 0.5s UILongPressGestureRecognizer. A tap only ever sends count 0, so
  *  the short-Left timeline scroll never trips it. */
 private const val HOLD_LEFT_ALL_PILL_REPEAT = 4
+/** Max hold duration (ms) that still counts as a short-tap for the guide
+ *  group sidebar. A hold that browses earlier programmes always exceeds it. */
+private const val SIDEBAR_TAP_MAX_MS = 350L
 
 /** Off-screen pre-render pad (each side) for the horizontal viewport clip. Cells
  *  whose visible span lies entirely within this pad are composed but not actually

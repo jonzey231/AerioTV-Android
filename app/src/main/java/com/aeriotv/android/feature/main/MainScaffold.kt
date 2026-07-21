@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Text
@@ -527,11 +528,13 @@ fun MainScaffold(
                         .padding(start = 24.dp, top = if (anyBackgroundWork) 60.dp else 18.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
                 ) {
+                    // Compressed copy (Logan 2026-07-20: the chips were
+                    // bleeding into the grid). Terse "gesture -> result"
+                    // phrasing, capped to a couple of lines total.
                     if (miniPlayerState is MiniPlayerSession.State.Active) {
-                        TvGuideHintChip("Press Menu/Back or Play/Pause to resume playback.")
-                        TvGuideHintChip("Hold right on remote to close the mini player.")
+                        TvGuideHintChip("Play/Pause resumes  ·  Hold Right closes mini")
                     }
-                    TvGuideHintChip("Double press Menu/Back to return to top channel.")
+                    TvGuideHintChip("Double Back returns to top channel")
                     // Dynamic hints (Remote Control initiative): copy follows
                     // the user's effective map + guide selector mode, so a
                     // remapped button never advertises a stale gesture.
@@ -542,12 +545,17 @@ fun MainScaffold(
                     )
                     val hintGroupSelector by hintSettingsVm.guideGroupSelector
                         .collectAsStateWithLifecycle(initialValue = "pills")
-                    if (hintGroupSelector == "sidebar") {
-                        TvGuideHintChip("Press left on the current program for channel groups.")
+                    // One combined nav chip: sidebar mode's Left-for-groups and
+                    // the mapped hold-Left action, joined so they don't stack
+                    // into two more rows.
+                    val navHints = buildList {
+                        if (hintGroupSelector == "sidebar") add("Left = groups")
+                        com.aeriotv.android.core.remote.RemoteControlHints
+                            .guideHoldLeftShort(hintMap)?.let { add(it) }
                     }
-                    com.aeriotv.android.core.remote.RemoteControlHints
-                        .guideHoldLeftHint(hintMap)
-                        ?.let { TvGuideHintChip(it) }
+                    if (navHints.isNotEmpty()) {
+                        TvGuideHintChip(navHints.joinToString("  ·  "))
+                    }
                 }
             }
             }
@@ -1030,7 +1038,10 @@ private fun TvGuideHintChip(text: String) {
         fontSize = 8.sp,
         fontWeight = FontWeight.Medium,
         color = Color.White.copy(alpha = 0.9f),
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         modifier = Modifier
+            .widthIn(max = 320.dp)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.4f))
             .padding(horizontal = 6.dp, vertical = 2.dp),

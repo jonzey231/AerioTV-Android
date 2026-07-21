@@ -23,16 +23,16 @@ object RemoteControlHints {
         else -> null
     }
 
-    /** The player's Select line: "Press Select for X. Hold Select for Y."
+    /** The player's Select line, compressed: "Select: X  ·  Hold: Y".
      *  Null when neither OK slot maps to a phrasable action. */
     fun selectHint(map: RemoteControlMap): String? {
         val short = playerPhrase(map.playerAction(RemoteSlot.OK_SHORT))
         val long = playerPhrase(map.playerAction(RemoteSlot.OK_LONG))
         val parts = buildList {
-            short?.let { add("Press Select for $it.") }
-            long?.let { add("Hold Select for $it.") }
+            short?.let { add("Select: $it") }
+            long?.let { add("Hold Select: $it") }
         }
-        return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("  ·  ")
     }
 
     /** Whether Up/Down still channel-surf (gates the flip hint chip). */
@@ -56,4 +56,9 @@ object RemoteControlHints {
     fun guideHoldLeftHint(map: RemoteControlMap): String? =
         guidePhrase(map.guideAction(RemoteSlot.LEFT_LONG))
             ?.let { "Hold left on remote to $it." }
+
+    /** Terse form for the compact combined guide nav chip: "Hold Left = X". */
+    fun guideHoldLeftShort(map: RemoteControlMap): String? =
+        guidePhrase(map.guideAction(RemoteSlot.LEFT_LONG))
+            ?.let { "Hold Left = $it" }
 }
