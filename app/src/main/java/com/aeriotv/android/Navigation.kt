@@ -83,7 +83,7 @@ object Routes {
     // catch-up mode on TV (phone keeps the recording player, mirroring
     // iPhone vs the tvOS unified player). csEnd <= csStart = not catch-up.
     const val PLAYER = "player/{channelId}?csUrl={csUrl}&csTitle={csTitle}" +
-        "&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
+        "&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}&mini={mini}"
     const val VOD_PLAYER = "vod_player/{movieUuid}"
     const val MOVIE_DETAIL = "movie_detail/{movieUuid}"
     const val SERIES_DETAIL = "series_detail/{seriesId}"
@@ -97,7 +97,13 @@ object Routes {
     const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
-    fun player(channelId: String) = "player/${Uri.encode(channelId)}"
+    // mini=true (Remote Control, Logan spec): the player mounts, primes
+    // playback as usual, then immediately drops to the corner mini - the
+    // optional "start channels in the mini player" tune mode. Only the
+    // Live TV tab's tune path passes it; resume/deep-link/cast callers
+    // keep the fullscreen default.
+    fun player(channelId: String, mini: Boolean = false) =
+        "player/${Uri.encode(channelId)}" + if (mini) "?mini=true" else ""
     /** Task #148 milestone B: the unified TV path - catch-up plays inside
      *  the live PlayerScreen with its shared d-pad scrub. */
     fun playerCatchup(
@@ -616,6 +622,12 @@ fun AerioTVNavHost(
                 val vm: PlaylistViewModel = hiltViewModel(parent)
                 val state by vm.state.collectAsStateWithLifecycle()
                 val context = androidx.compose.ui.platform.LocalContext.current
+                // Remote Control: optional start-in-mini tune target for the
+                // Live TV tab's channel taps (Settings > Remote Control).
+                val tuneSettingsVm: com.aeriotv.android.feature.settings.SettingsViewModel =
+                    hiltViewModel()
+                val tuneStartsInMini by tuneSettingsVm.guideTuneInMini
+                    .collectAsStateWithLifecycle(initialValue = false)
 
                 LaunchedEffect(state.phase) {
                     // Skipped onboarding stays in the (empty) app; see
@@ -648,7 +660,9 @@ fun AerioTVNavHost(
                         // launchSingleTop: a rapid double-tap (e.g. of a mini
                         // controller card) can't stack two identical player
                         // destinations on the back stack.
-                        navController.navigate(Routes.player(channel.id)) {
+                        navController.navigate(
+                            Routes.player(channel.id, mini = tuneStartsInMini),
+                        ) {
                             launchSingleTop = true
                         }
                     },
@@ -760,6 +774,8 @@ fun AerioTVNavHost(
                     navArgument("csEnd") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csTz") { type = NavType.StringType; defaultValue = "" },
                     navArgument("csUuid") { type = NavType.StringType; defaultValue = "" },
+                    // Remote Control: start-in-mini tune target (see Routes.player).
+                    navArgument("mini") { type = NavType.BoolType; defaultValue = false },
                 ),
             ) { entry ->
                 val parent = remember(entry) {
@@ -840,6 +856,7 @@ fun AerioTVNavHost(
                     // Left-press Channels overlay seeds from the guide's active
                     // group ("previously selected group").
                     initialGroup = state.selectedGroup,
+                    startInMini = entry.arguments?.getBoolean("mini") == true,
                     // Player Options > Switch Stream (Dispatcharr Direct Connect):
                     // list the channel's member streams + their quality, then ask
                     // Dispatcharr to switch the active upstream.

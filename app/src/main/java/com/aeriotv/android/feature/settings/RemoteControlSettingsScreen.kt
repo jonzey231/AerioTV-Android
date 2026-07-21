@@ -171,6 +171,10 @@ fun RemoteControlSettingsScreen(
         initialValue = "pills",
     )
     var editingGroupSelector by remember { mutableStateOf(false) }
+    val tuneInMini by viewModel.guideTuneInMini.collectAsStateWithLifecycle(
+        initialValue = false,
+    )
+    var editingTuneTarget by remember { mutableStateOf(false) }
     val menuGuard = rememberTvMenuGuard()
 
     fun saveEdited(newMap: RemoteControlMap) {
@@ -235,6 +239,17 @@ fun RemoteControlSettingsScreen(
                 }
 
                 SettingsSection(
+                    header = "Tuning",
+                    footer = "Where a channel starts playing when you press OK on it in Live TV. Mini player keeps you browsing with the channel in the corner; press OK on it again (or hold Right) to go fullscreen.",
+                ) {
+                    SlotRow(
+                        slotName = "Play Channels In",
+                        valueName = if (tuneInMini) "Mini player" else "Full screen",
+                        onClick = { editingTuneTarget = true },
+                    )
+                }
+
+                SettingsSection(
                     header = "TV Guide Groups",
                     footer = "How channel groups are picked in the guide. Top pills keep the group row above the grid; the sidebar menu hides that row and opens with a Left press from the currently airing column. Only one is active at a time.",
                 ) {
@@ -257,6 +272,28 @@ fun RemoteControlSettingsScreen(
                 }
             }
         }
+    }
+
+    if (editingTuneTarget) {
+        TvActionMenuDialog(
+            title = "Play Channels In",
+            actions = listOf(
+                TvMenuAction(
+                    label = if (!tuneInMini) "Full screen  (current)" else "Full screen",
+                ) {
+                    viewModel.setGuideTuneInMini(false)
+                    editingTuneTarget = false
+                },
+                TvMenuAction(
+                    label = if (tuneInMini) "Mini player  (current)" else "Mini player",
+                ) {
+                    viewModel.setGuideTuneInMini(true)
+                    editingTuneTarget = false
+                },
+            ),
+            onDismiss = { editingTuneTarget = false },
+            guard = menuGuard,
+        )
     }
 
     if (editingGroupSelector) {

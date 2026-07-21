@@ -166,6 +166,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setGuideGroupSelector(mode) }
     }
 
+    /** Live TV tune target: false = fullscreen (default), true = corner mini. */
+    val guideTuneInMini: Flow<Boolean> = prefs.guideTuneInMini
+    fun setGuideTuneInMini(value: Boolean) {
+        viewModelScope.launch { prefs.setGuideTuneInMini(value) }
+    }
+
     fun setRemoteControlMap(map: com.aeriotv.android.core.remote.RemoteControlMap) {
         viewModelScope.launch { prefs.setRemoteControlMap(map.toJson()) }
     }

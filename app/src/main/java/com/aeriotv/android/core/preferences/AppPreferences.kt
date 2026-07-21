@@ -257,6 +257,18 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Remote Control (Logan spec 2026-07-20): when true, tuning a channel
+     * from the Live TV tab starts it in the corner MINI player (the common
+     * IPTV-client two-stage tune) instead of fullscreen. Default false =
+     * the original straight-to-fullscreen behavior.
+     */
+    val guideTuneInMini: Flow<Boolean> =
+        store.data.map { it[KEY_GUIDE_TUNE_IN_MINI] ?: false }
+    suspend fun setGuideTuneInMini(value: Boolean) {
+        store.edit { it[KEY_GUIDE_TUNE_IN_MINI] = value }
+    }
+
+    /**
      * Decoded map with the LEGACY MIGRATION applied: a user who had
      * turned "Apple TV Channel Flip" off and has never customized the
      * new map gets upShort/downShort seeded to NONE so their Up/Down
@@ -906,6 +918,7 @@ class AppPreferences @Inject constructor(
         data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
         data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
         data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
+        data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
         data[KEY_SHOW_EPG_BADGES_TV]?.let { out["showEpgBadgesTv"] = it.toString() }
@@ -952,6 +965,7 @@ class AppPreferences @Inject constructor(
             keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
             keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
             keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
+            keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
             keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
             keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
@@ -1184,6 +1198,7 @@ class AppPreferences @Inject constructor(
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
         val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
+        val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
         val KEY_AUTO_RECOVER_FROZEN_STREAMS =
             booleanPreferencesKey("app_behaviors_auto_recover_frozen_streams")
         // Synced via Drive (snapshotSyncablePreferences) -- the user's own key.

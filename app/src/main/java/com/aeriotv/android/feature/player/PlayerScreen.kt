@@ -121,6 +121,11 @@ fun PlayerScreen(
      *  group"). Overlay-local after that - browsing here never re-filters
      *  the guide. */
     initialGroup: String = com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS,
+    /** Remote Control (Logan spec 2026-07-20): true = prime playback as
+     *  usual, then immediately drop to the corner mini and pop back to the
+     *  tabs - the optional "start channels in the mini player" tune mode.
+     *  TV live tunes only; catch-up and remote sessions ignore it. */
+    startInMini: Boolean = false,
     onLoadChannelStreams: suspend (Int) -> List<StreamOption> = { emptyList() },
     onSwitchChannelStream: suspend (String, Int) -> String? = { _, _ -> null },
     onLoadCurrentStreamId: suspend (String) -> Int? = { null },
@@ -356,6 +361,13 @@ fun PlayerScreen(
     // Phase 165: also request the PersistentMpvWindow into Fullscreen mode
     // so the SurfaceView (mounted at MainActivity root) fills the screen
     // beneath our chrome overlays.
+    // Start-in-mini eligibility, resolved once (TV live tunes only; declared
+    // here because isTvForm's canonical val sits further down the file).
+    val startMiniEligible = startInMini && !isCatchupMode && !isRemote &&
+        (
+            context.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_TYPE_MASK
+            ) == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
     LaunchedEffect(Unit) {
         // Apply Dispatcharr / Xtream auth headers + custom User-Agent
         // before the first setMediaSource so the DataSource picks them
@@ -363,7 +375,13 @@ fun PlayerScreen(
         // settings change (e.g. swapping API key) takes effect on the
         // next channel tap.
         exoHolder.httpHeaders = httpHeaders
-        exoWindowState.requestFullscreen()
+        // Start-in-mini tunes go straight to the corner rect: requesting
+        // Fullscreen first would flash a full-size frame before the drop.
+        if (startMiniEligible) {
+            exoWindowState.requestMini()
+        } else {
+            exoWindowState.requestFullscreen()
+        }
         // LAN/WAN terminal-error failover hook (iOS PlayerSession.failoverRetryCurrent):
         // on a terminal player error the holder asks this to re-probe LAN/WAN and
         // hand back a fresh /proxy/ts/stream/<uuid> URL instead of replaying a
@@ -388,6 +406,21 @@ fun PlayerScreen(
     // Auto session never re-tunes through this screen's closed-over state.
     DisposableEffect(Unit) {
         onDispose { exoHolder.onTerminalErrorRebuildUrl = null }
+    }
+
+    // Start-in-mini: once the tune effect has seeded the channel + issued
+    // play (the app-scoped holder keeps decoding after this screen pops),
+    // promote the mini session and hand the user back to the tabs. The
+    // short delay lets the channel-switch LaunchedEffect above run first;
+    // keying on currentChannel?.id ensures the session has a channel to
+    // show before we promote it.
+    LaunchedEffect(startMiniEligible, currentChannel?.id) {
+        if (startMiniEligible && currentChannel != null) {
+            delay(400)
+            exoWindowState.requestMini()
+            miniPlayerVm.showMiniPlayer()
+            onClose()
+        }
     }
 
     // Cast Connect (GH #33): free/restore the LOCAL codec + surface as the cast
