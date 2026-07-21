@@ -49,6 +49,18 @@ fun aerioRenderersFactory(
     context: Context,
     audioPassthrough: Boolean,
     forceVideoCodecReinit: Boolean = false,
+    // On-demand path only (VOD + DVR recordings): prefer the bundled FFmpeg
+    // audio decoder over the platform MediaCodec one. GH #45 - some devices'
+    // hardware AAC decoder (Hisense/MediaTek c2.android.aac.decoder) throws a
+    // RUNTIME CodecException 0xe on HE-AAC (AAC+SBR) recordings that ffmpeg
+    // decodes fine. enableDecoderFallback can't rescue a post-STARTED runtime
+    // failure and never crosses to the separate FFmpeg renderer, so the player
+    // fatals + retries the same broken decoder. PREFER routes AAC (and AC-3/
+    // E-AC-3/DTS, which this path already PCM-decodes with passthrough off) to
+    // FFmpeg first. Scoped to on-demand so live TV's 24/7 hardware-first audio
+    // is untouched; a single finite VOD stream is a few % of one core, video
+    // stays hardware-decoded. MUST stay false for the live holder + multiview.
+    preferSoftwareAudio: Boolean = false,
 ): DefaultRenderersFactory {
     val factory = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
@@ -107,17 +119,27 @@ fun aerioRenderersFactory(
     }
     return factory
         .setEnableDecoderFallback(true)
-        // EXTENSION_RENDERER_MODE_ON places the bundled FFmpeg audio renderer
-        // AFTER the platform MediaCodec renderers, so hardware decoders stay
-        // primary and FFmpeg is used only as a fallback for formats the device
-        // can't decode in hardware -- notably AC-3 / E-AC-3 / DTS on broadcast
-        // (ATSC) channels, which cheaper boxes like the Chromecast with Google
-        // TV have no MediaCodec decoder for. Before the FFmpeg extension was
-        // bundled those channels reported "no audio track" and played silent;
-        // the software decoder restores the AC-3 capability libmpv used to give.
-        // (PREFER would route ALL audio through the software decoder, wasting
-        // CPU on formats the hardware handles fine.)
-        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        // EXTENSION_RENDERER_MODE_ON (live + multiview default): the bundled
+        // FFmpeg audio renderer sits AFTER the platform MediaCodec renderers, so
+        // hardware decoders stay primary and FFmpeg is used only as a fallback
+        // for formats the device can't decode in hardware -- notably AC-3 /
+        // E-AC-3 / DTS on broadcast (ATSC) channels, which cheaper boxes like the
+        // Chromecast with Google TV have no MediaCodec decoder for. Routing ALL
+        // audio through the software decoder 24/7 would waste CPU on formats the
+        // hardware handles fine, so live stays hardware-first.
+        //
+        // EXTENSION_RENDERER_MODE_PREFER (on-demand only, preferSoftwareAudio):
+        // FFmpeg audio renderer goes FIRST, so it claims AAC (incl. HE-AAC/SBR)
+        // and the quirky-hardware-AAC decode failure in GH #45 can't happen. It
+        // changes ORDERING, not membership -- the platform renderer is still in
+        // the list, so any MIME FFmpeg doesn't advertise (Opus/FLAC/Vorbis/ALAC)
+        // still falls through to hardware. No passthrough regression because the
+        // on-demand path already forces a PCM sink (audioPassthrough=false); if
+        // a "bitstream to receiver" option is ever added to VOD, revisit this.
+        .setExtensionRendererMode(
+            if (preferSoftwareAudio) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+            else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON,
+        )
 }
 
 /**

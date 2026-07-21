@@ -751,7 +751,16 @@ fun VODPlayerScreen(
                 }
 
                 val renderersFactory =
-                    com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough)
+                    com.aeriotv.android.core.playback.aerioRenderersFactory(
+                        ctx,
+                        audioPassthrough,
+                        // GH #45: on-demand (VOD + DVR recordings) prefers the
+                        // FFmpeg audio decoder so HE-AAC/SBR recordings that the
+                        // platform hardware AAC decoder fails on (Hisense/MediaTek
+                        // c2.android.aac.decoder err 0xe) decode reliably. Live +
+                        // multiview keep hardware-first (default false).
+                        preferSoftwareAudio = true,
+                    )
 
                 // Wrap the header-aware HTTP factory in DefaultDataSource.Factory
                 // so a local DVR recording's file:// URL resolves through
@@ -924,7 +933,14 @@ fun VODPlayerScreen(
                 delay(200L)
                 waited += 200L
             }
-            if (player.contentDuration > 0L) {
+            // Defensive (GH #45): never seek into a player that has already
+            // errored. A seekTo triggers a codec flush; flushing an
+            // already-errored MediaCodec throws IllegalStateException and turns
+            // a recoverable decode error into a fatal native crash cascade
+            // (seen in the #45 logcat: "Resumed from 10000ms" -> native_flush
+            // IllegalStateException). The HE-AAC decode fix makes this path
+            // healthy, but the guard is cheap insurance for any future error.
+            if (player.contentDuration > 0L && player.playerError == null) {
                 player.seekTo(pos)
                 Log.i(TAG, "Resumed from ${pos}ms")
             }
