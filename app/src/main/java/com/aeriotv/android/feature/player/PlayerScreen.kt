@@ -116,6 +116,11 @@ fun PlayerScreen(
     /** Remote Control: hold-Down (openSearch action) hands off to the global
      *  search screen; the caller navigates AFTER this screen minimizes. */
     onOpenSearch: () -> Unit = {},
+    /** Remote Control: the guide's active group pill token, seeding the
+     *  Left-press Channels overlay ("channels of the previously selected
+     *  group"). Overlay-local after that - browsing here never re-filters
+     *  the guide. */
+    initialGroup: String = com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS,
     onLoadChannelStreams: suspend (Int) -> List<StreamOption> = { emptyList() },
     onSwitchChannelStream: suspend (String, Int) -> String? = { _, _ -> null },
     onLoadCurrentStreamId: suspend (String) -> Int? = { null },
@@ -632,6 +637,10 @@ fun PlayerScreen(
     // Remote Control A2: OK short/long split latch (engaged only when an
     // okLong action is mapped; the default map keeps the plain clickable).
     var okLongFired by remember { mutableStateOf(false) }
+    // Left/Right short-vs-long split latch (chrome hidden): same deferral
+    // shape as the OK split. One latch serves both keys - the D-pad can
+    // only repeat one direction at a time.
+    var horizLongFired by remember { mutableStateOf(false) }
     // Remote Control (Logan spec 2026-07-20): hold-Up "Recently Watched"
     // overlay. While open, Back dismisses it (guard below) and channel-flip
     // keys are blocked so Up/Down walk the overlay list instead.
@@ -639,8 +648,40 @@ fun PlayerScreen(
     val recentChannelIds by settingsVm.recentChannelIds.collectAsStateWithLifecycle(
         initialValue = emptyList(),
     )
+    // Remote Control (Logan spec 2026-07-20 / GH #54): Left-press Channels
+    // overlay + its group sidebar stage. Group choice is overlay-local,
+    // seeded from the guide's active group (initialGroup) on first open.
+    var channelListVisible by remember { mutableStateOf(false) }
+    var channelListSidebarOpen by remember { mutableStateOf(false) }
+    var channelListGroup by remember { mutableStateOf<String?>(null) }
+    // Same visible-group derivation as the guide pills (source order ->
+    // Manage Groups sort -> hidden filter), so both surfaces always agree.
+    val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
+    val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
+    val groupOrderPref by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
+    val overlayGroups = remember(channels, hiddenGroups, groupSortModeRaw, groupOrderPref) {
+        val source = channels.asSequence()
+            .map { it.groupTitle }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+        val ordered = com.aeriotv.android.feature.livetv.orderGroups(
+            source,
+            com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw),
+            groupOrderPref,
+        )
+        listOf(com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS) +
+            ordered.filter {
+                it !in hiddenGroups &&
+                    !it.equals(com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
+            }
+    }
     androidx.activity.compose.BackHandler {
-        if (recentsOverlayVisible) {
+        if (channelListSidebarOpen) {
+            channelListSidebarOpen = false
+        } else if (channelListVisible) {
+            channelListVisible = false
+        } else if (recentsOverlayVisible) {
             recentsOverlayVisible = false
         } else if (isCatchupMode) {
             // Task #148 milestone B: Back on a catch-up replay exits to where
@@ -1213,7 +1254,7 @@ fun PlayerScreen(
                 // threshold instead; with okLong unmapped (the default map)
                 // this whole branch is skipped and the plain clickable
                 // handles OK exactly as before.
-                if (isTvForm && !chromeVisible && !recentsOverlayVisible &&
+                if (isTvForm && !chromeVisible && !recentsOverlayVisible && !channelListVisible &&
                     (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
                         native.keyCode == android.view.KeyEvent.KEYCODE_ENTER)
                 ) {
@@ -1243,32 +1284,85 @@ fun PlayerScreen(
                         }
                     }
                 }
-                if (isTvForm && !chromeVisible && !recentsOverlayVisible &&
-                    (tsState.buffering || isCatchupMode) &&
-                    (
-                        native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
-                            native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
-                        )
+                // Remote Control: LEFT/RIGHT on bare fullscreen video
+                // (chrome hidden, no overlay). One unified block, two modes:
+                //  - transport (rewind buffering with a SEEK-mapped slot, or
+                //    ANY catch-up replay): every ACTION_DOWN scrubs, exactly
+                //    the pre-initiative behavior - held keys auto-repeat the
+                //    scrub, the band-only HUD renders, the single seek
+                //    commits after the presses stop;
+                //  - otherwise: short-vs-long split (short fires on RELEASE
+                //    so a hold can fire the long action) - default map:
+                //    Left = channel list, hold-Left = minimize to guide,
+                //    Right = previous-channel zap, hold-Right = program
+                //    info. Was two blocks; the scrub branch's early returns
+                //    (false on DOWN, consume on UP) starved the split of
+                //    every event whenever the live-rewind buffer was warm.
+                if (isTvForm && !chromeVisible && !recentsOverlayVisible && !channelListVisible &&
+                    (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
+                        native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
                 ) {
-                    if (native.action == android.view.KeyEvent.ACTION_DOWN) {
-                        // Remote Control map: player leftShort/rightShort.
-                        // Default = seekBackward/seekForward (today's
-                        // behavior). NONE or a not-yet-wired action falls
-                        // through so the key keeps operating the chrome.
-                        val slot = if (native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) {
-                            com.aeriotv.android.core.remote.RemoteSlot.LEFT_SHORT
-                        } else {
-                            com.aeriotv.android.core.remote.RemoteSlot.RIGHT_SHORT
-                        }
-                        val dir = when (remoteMap.playerAction(slot)) {
+                    val isLeft = native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT
+                    val shortAction = remoteMap.playerAction(
+                        if (isLeft) com.aeriotv.android.core.remote.RemoteSlot.LEFT_SHORT
+                        else com.aeriotv.android.core.remote.RemoteSlot.RIGHT_SHORT,
+                    )
+                    val longAction = remoteMap.playerAction(
+                        if (isLeft) com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG
+                        else com.aeriotv.android.core.remote.RemoteSlot.RIGHT_LONG,
+                    )
+                    if (tsState.buffering || isCatchupMode) {
+                        val mappedDir = when (shortAction) {
                             com.aeriotv.android.core.remote.PlayerRemoteAction.SEEK_BACKWARD -> -1
                             com.aeriotv.android.core.remote.PlayerRemoteAction.SEEK_FORWARD -> +1
                             else -> 0
                         }
-                        if (dir == 0) return@onPreviewKeyEvent false
-                        scrubStep(dir, native.repeatCount > 0)
+                        // Catch-up replay: LEFT/RIGHT ALWAYS scrub the
+                        // programme, whatever the map says - it's a transport
+                        // context, and the standard scheme maps these slots
+                        // to live-only actions (channel list / zap-back).
+                        val dir = if (mappedDir == 0 && isCatchupMode) {
+                            if (isLeft) -1 else +1
+                        } else {
+                            mappedDir
+                        }
+                        if (dir != 0) {
+                            if (native.action == android.view.KeyEvent.ACTION_DOWN) {
+                                scrubStep(dir, native.repeatCount > 0)
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        // Rewind buffer warm but the slot maps to a non-seek
+                        // action (the standard scheme): use the split below.
                     }
-                    return@onPreviewKeyEvent true
+                    if (shortAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE ||
+                        longAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE
+                    ) {
+                        when (native.action) {
+                            android.view.KeyEvent.ACTION_DOWN -> {
+                                if (native.repeatCount == 0) {
+                                    horizLongFired = false
+                                } else if (!horizLongFired &&
+                                    (native.isLongPress || native.repeatCount >= 4)
+                                ) {
+                                    horizLongFired = true
+                                    if (longAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+                                        exoWindowState.onPlayerRemoteAction?.invoke(longAction)
+                                    }
+                                }
+                                return@onPreviewKeyEvent true
+                            }
+                            android.view.KeyEvent.ACTION_UP -> {
+                                if (!horizLongFired &&
+                                    shortAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE
+                                ) {
+                                    exoWindowState.onPlayerRemoteAction?.invoke(shortAction)
+                                }
+                                horizLongFired = false
+                                return@onPreviewKeyEvent true
+                            }
+                        }
+                    }
                 }
                 // TV D-pad UP/DOWN channel-flip is handled by MainActivity
                 // .dispatchKeyEvent via exoWindowState.onLiveChannelFlip (see the
@@ -1824,6 +1918,40 @@ fun PlayerScreen(
             )
         }
 
+        // Remote Control: Left-press Channels overlay (GH #54), drawn above
+        // the video and all chrome.
+        if (channelListVisible) {
+            val active = channelListGroup
+                ?: initialGroup.takeIf { it in overlayGroups }
+                ?: com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS
+            ChannelListOverlay(
+                groups = overlayGroups,
+                activeGroup = active,
+                channelsFor = { token ->
+                    if (token == com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS) {
+                        channels.filter { it.groupTitle !in hiddenGroups }
+                    } else {
+                        channels.filter { it.groupTitle.equals(token, ignoreCase = true) }
+                    }
+                },
+                currentChannelId = currentChannel?.id,
+                nowTitleFor = { ch -> epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title },
+                sidebarOpen = channelListSidebarOpen,
+                onSidebarOpenChange = { channelListSidebarOpen = it },
+                onGroupChange = { channelListGroup = it },
+                onSelect = { ch ->
+                    channelListVisible = false
+                    channelListSidebarOpen = false
+                    val idx = channels.indexOfFirst { it.id == ch.id }
+                    if (idx >= 0 && idx != currentIndex) currentIndex = idx
+                },
+                onDismiss = {
+                    channelListVisible = false
+                    channelListSidebarOpen = false
+                },
+            )
+        }
+
         // Remote Control: hold-Up Recently Watched overlay, drawn above the
         // video and all chrome (last child of the root Box).
         if (recentsOverlayVisible) {
@@ -1858,7 +1986,8 @@ fun PlayerScreen(
     // and the Recently Watched overlay all release UP/DOWN to Compose focus.
     androidx.compose.runtime.SideEffect {
         exoWindowState.dpadVerticalCaptured = !chromeVisible && !scrubHudVisible &&
-            scrubTargetWallMs == null && !recentsOverlayVisible && !interactionLocked
+            scrubTargetWallMs == null && !recentsOverlayVisible &&
+            !channelListVisible && !interactionLocked
     }
     DisposableEffect(exoWindowState) {
         onDispose { exoWindowState.dpadVerticalCaptured = true }
@@ -1908,7 +2037,7 @@ fun PlayerScreen(
     // out from under the user.
     val flipBlockedByChrome by rememberUpdatedState(
         chromeVisible || scrubHudVisible || scrubTargetWallMs != null ||
-            recentsOverlayVisible,
+            recentsOverlayVisible || channelListVisible,
     )
     var lastFlipAt by remember { mutableStateOf(0L) }
     DisposableEffect(exoWindowState) {
@@ -1963,6 +2092,12 @@ fun PlayerScreen(
                     exoWindowState.requestMini()
                     miniPlayerVm.showMiniPlayer()
                     onClose()
+                    true
+                }
+                com.aeriotv.android.core.remote.PlayerRemoteAction.CHANNEL_LIST -> {
+                    // Left press: Channels overlay (GH #54). A repeat press
+                    // while open just keeps it open; Back dismisses.
+                    if (!isCatchupMode) channelListVisible = true
                     true
                 }
                 com.aeriotv.android.core.remote.PlayerRemoteAction.RECENT_CHANNELS -> {

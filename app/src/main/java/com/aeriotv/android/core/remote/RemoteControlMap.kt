@@ -178,9 +178,7 @@ data class RemoteControlMap(
                 RemoteSlot.DOWN_SHORT to PlayerRemoteAction.CHANNEL_DOWN,
                 RemoteSlot.UP_LONG to PlayerRemoteAction.RECENT_CHANNELS,
                 RemoteSlot.DOWN_LONG to PlayerRemoteAction.OPEN_SEARCH,
-                // channelList once the overlay ships (plan 1.1); until then
-                // the preset builder swaps in MINIMIZE_TO_GUIDE.
-                RemoteSlot.LEFT_SHORT to PlayerRemoteAction.MINIMIZE_TO_GUIDE,
+                RemoteSlot.LEFT_SHORT to PlayerRemoteAction.CHANNEL_LIST,
                 RemoteSlot.LEFT_LONG to PlayerRemoteAction.MINIMIZE_TO_GUIDE,
                 RemoteSlot.RIGHT_SHORT to PlayerRemoteAction.LAST_CHANNEL,
                 RemoteSlot.RIGHT_LONG to PlayerRemoteAction.SHOW_PROGRAM_INFO,

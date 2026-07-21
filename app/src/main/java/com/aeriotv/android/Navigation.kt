@@ -837,6 +837,9 @@ fun AerioTVNavHost(
                             launchSingleTop = true
                         }
                     },
+                    // Left-press Channels overlay seeds from the guide's active
+                    // group ("previously selected group").
+                    initialGroup = state.selectedGroup,
                     // Player Options > Switch Stream (Dispatcharr Direct Connect):
                     // list the channel's member streams + their quality, then ask
                     // Dispatcharr to switch the active upstream.

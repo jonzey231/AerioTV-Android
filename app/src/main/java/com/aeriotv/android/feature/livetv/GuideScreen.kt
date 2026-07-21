@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TravelExplore
@@ -341,6 +342,12 @@ fun GuideScreen(
     val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
     val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
     val groupSortMode = GroupSortMode.from(groupSortModeRaw)
+    // Group-selector style (Logan 2026-07-20): "pills" keeps the top row,
+    // "sidebar" hides it and arms the short-Left docked menu instead.
+    // Mutually exclusive by construction - each render/handler checks this.
+    val guideGroupSelectorRaw by settingsVm.guideGroupSelector
+        .collectAsStateWithLifecycle(initialValue = "pills")
+    val sidebarGroupMode = guideGroupSelectorRaw == "sidebar"
     var searchActive by remember { mutableStateOf(false) }
     var showManageGroups by remember { mutableStateOf(false) }
 
@@ -435,6 +442,14 @@ fun GuideScreen(
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
+    // Remote Control (Logan spec 2026-07-20): group sidebar overlay, opened
+    // by a SHORT Left on a currently-airing cell (there is nothing to the
+    // left of "now" - earlier programmes are the HOLD-Left gesture). The
+    // short press is deferred to key RELEASE so a hold can fire the mapped
+    // leftLong action (default: browse earlier programs) instead.
+    var groupSidebarOpen by remember { mutableStateOf(false) }
+    var gridLeftHoldFired by remember { mutableStateOf(false) }
+    var gridLeftPendingSidebar by remember { mutableStateOf(false) }
     // TV focus-on-dismiss for the Program Info / Record dialogs (user report:
     // Back from Program Info parked D-pad focus on the nav pills, not the
     // cell that opened it). The originating cell's row index + time column
@@ -812,7 +827,24 @@ fun GuideScreen(
         )
     }
 
-    Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
+    Row(modifier = modifier.fillMaxSize()) {
+    // Sidebar group-selector mode (Logan 2026-07-20): a DOCKED, opaque menu -
+    // no scrim, no overlay. The whole guide sits beside it in this Row and
+    // shifts right while it is open, so the channel rail stays fully
+    // readable. Selecting a group drives the same filter as the pills row
+    // (which is hidden in this mode - never both selectors at once).
+    if (groupSidebarOpen) {
+        GuideGroupSidebarPane(
+            groups = groups,
+            selectedToken = state.selectedGroup,
+            onSelect = { token ->
+                groupSidebarOpen = false
+                viewModel.onGroupSelected(token)
+            },
+            onDismiss = { groupSidebarOpen = false },
+        )
+    }
+    Column(modifier = Modifier.weight(1f).fillMaxHeight().statusBarsPadding()) {
         // Audit task #22: multiview staging banner. Visible only when at
         // least one channel has been added to Multiview. Tapping the Play
         // button launches the dedicated Multiview screen; tapping the chip
@@ -1294,7 +1326,7 @@ fun GuideScreen(
                     },
                     modifier = Modifier.weight(1f),
                 )
-            } else if (groups.size > 1 || collections.isNotEmpty()) {
+            } else if (!sidebarGroupMode && (groups.size > 1 || collections.isNotEmpty())) {
                 LazyRow(
                     modifier = Modifier
                         .weight(1f)
@@ -1873,6 +1905,19 @@ fun GuideScreen(
                 // ourselves. LEFT/RIGHT/CENTER fall through untouched, preserving
                 // horizontal timeline nav + OK-to-play.
                 .onPreviewKeyEvent { event ->
+                    // Left RELEASE completes the deferred short-Left (group
+                    // sidebar) armed below; a hold that fired the long action
+                    // cancels it. Handled before the KeyDown-only early-out.
+                    if (event.key == Key.DirectionLeft && event.type == KeyEventType.KeyUp) {
+                        val openSidebar = gridLeftPendingSidebar && !gridLeftHoldFired
+                        gridLeftPendingSidebar = false
+                        gridLeftHoldFired = false
+                        if (openSidebar) {
+                            groupSidebarOpen = true
+                            return@onPreviewKeyEvent true
+                        }
+                        return@onPreviewKeyEvent false
+                    }
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     // Remote Control A2: extended keys in the guide (FF/RW,
                     // Ch+/Ch-, Play/Pause on remotes that have them) route
@@ -1903,20 +1948,68 @@ fun GuideScreen(
                     // next program in one press. Once the program's edge is on
                     // screen, fall through so focus moves to the adjacent cell as
                     // usual. Normal-length programs always fall straight through.
-                    // #10 tvOS parity: HOLD Left ~0.5s -> jump focus to the
-                    // "All" group pill. The framework flags FLAG_LONG_PRESS on
-                    // the auto-repeat event at the long-press timeout (~500ms,
-                    // matching tvOS's 0.5s recognizer); repeatCount >= 4 is the
-                    // same threshold as a belt-and-suspenders fallback. A tap
-                    // sends neither (repeatCount 0, no long-press flag), so this
-                    // never fires on the short-Left timeline scroll. Firing moves
-                    // focus out of the grid, so it only fires once per hold.
-                    if (event.key == Key.DirectionLeft &&
-                        (event.nativeKeyEvent.isLongPress ||
-                            event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT)
-                    ) {
-                        runCatching { allPillFocus.requestFocus() }
-                        return@onPreviewKeyEvent true
+                    // HOLD Left in the grid: routed through the guide map's
+                    // leftLong slot (default: browse earlier programs /
+                    // timelineBack; focusGroupPills keeps the old All-pill
+                    // jump for users who map it back). Fires ONCE at the
+                    // long-press threshold (~500ms, matching tvOS's 0.5s
+                    // recognizer; repeatCount >= 4 is the belt-and-suspenders
+                    // fallback) and swallows further repeats until release.
+                    if (event.key == Key.DirectionLeft) {
+                        val isLongNow = event.nativeKeyEvent.isLongPress ||
+                            event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT
+                        if (isLongNow || gridLeftHoldFired) {
+                            if (!gridLeftHoldFired) {
+                                gridLeftHoldFired = true
+                                gridLeftPendingSidebar = false
+                                when (
+                                    val action = remoteMap.guideAction(
+                                        com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG,
+                                    )
+                                ) {
+                                    com.aeriotv.android.core.remote.GuideRemoteAction.NONE -> {}
+                                    com.aeriotv.android.core.remote.GuideRemoteAction.FOCUS_GROUP_PILLS ->
+                                        runCatching { allPillFocus.requestFocus() }
+                                    else -> guideActionDispatcher.value?.invoke(action)
+                                }
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        // SHORT Left on a currently-airing cell: arm the
+                        // deferred group-sidebar open (completed on release
+                        // above). Earlier programmes sit left of "now", so a
+                        // step-left has nothing sensible to do here; hold
+                        // still browses them via the long action.
+                        if (sidebarGroupMode &&
+                            event.nativeKeyEvent.repeatCount == 0 && !gridLeftPendingSidebar
+                        ) {
+                            val nowPx = ((nowMillis - windowStart).toFloat() / 3_600_000f) * hourWidthPx
+                            val cellS = guideNav.focusedCellStartPx
+                            val cellE = guideNav.focusedCellEndPx
+                            // lastFocusedChannelIndex fallback mirrors the
+                            // paging recovery below: the focused row can read
+                            // -1 mid-browse while the cell px stay valid.
+                            val rowKnown = guideNav.focusedChannelIndex >= 0 ||
+                                guideNav.lastFocusedChannelIndex >= 0
+                            // "Currently playing program" = the cell under the
+                            // now line - OR one that ended within the last 30
+                            // minutes: at the live anchor the entry focus can
+                            // land on a just-ended remnant cell (guide rows
+                            // refresh on their own cadence), and that is
+                            // exactly where the user presses Left expecting
+                            // groups. Cells further in the past keep normal
+                            // step-left browsing.
+                            val remnantPad = hourWidthPx * 0.5f
+                            if (rowKnown && cellE > cellS &&
+                                nowPx >= cellS && nowPx < cellE + remnantPad
+                            ) {
+                                gridLeftPendingSidebar = true
+                                return@onPreviewKeyEvent true
+                            }
+                        } else if (gridLeftPendingSidebar) {
+                            // Sub-threshold auto-repeats while armed: swallow.
+                            return@onPreviewKeyEvent true
+                        }
                     }
                     if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
                         guideNav.allowHorizontalScroll()
@@ -2193,6 +2286,14 @@ fun GuideScreen(
                 modifier = Modifier.fillMaxSize(),
             ) { guideGrid() }
         }
+    }
+    }
+
+    // Sidebar-mode Back: close the docked menu. Composed AFTER the grid's
+    // Back ladder (which registers inside the Column above) so this handler
+    // wins while the sidebar is open.
+    androidx.activity.compose.BackHandler(enabled = groupSidebarOpen) {
+        groupSidebarOpen = false
     }
 
     programInfoTarget?.let { target ->
@@ -2583,6 +2684,22 @@ private fun ChannelGuideRow(
                 }
             }
         }
+            // Catch-up badge (Logan 2026-07-20): a small history clock in the
+            // rail's top-right corner whenever this channel has a replayable
+            // archive, so users can tell at a glance without scrolling the
+            // timeline into the past. The common IPTV-client rail convention.
+            // Dim tertiary tint keeps it read-only chrome, not a control.
+            if (channel.hasCatchup) {
+                Icon(
+                    imageVector = Icons.Filled.History,
+                    contentDescription = "Catch-up available",
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 3.dp, end = if (isTv) 5.dp else 3.dp)
+                        .size(if (isTv) 11.dp else 12.dp),
+                )
+            }
             // tvOS trailing rail separator (accentPrimary.opacity(0.2)) so the
             // sticky channel column reads as a distinct surface from the grid.
             if (isTv) {

@@ -109,7 +109,7 @@ internal fun RecentChannelsOverlay(
                 modifier = Modifier.fillMaxHeight(),
             ) {
                 itemsIndexed(entries, key = { _, ch -> ch.id }) { index, ch ->
-                    RecentChannelRow(
+                    ChannelPickRow(
                         channel = ch,
                         nowTitle = nowTitleFor(ch),
                         isPlaying = ch.id == currentChannelId,
@@ -139,8 +139,10 @@ internal fun RecentChannelsOverlay(
     }
 }
 
+/** Focusable channel row shared by the Recently Watched and Channels
+ *  overlays (logo, number, name, now-playing line, Watching badge). */
 @Composable
-private fun RecentChannelRow(
+internal fun ChannelPickRow(
     channel: M3UChannel,
     nowTitle: String?,
     isPlaying: Boolean,

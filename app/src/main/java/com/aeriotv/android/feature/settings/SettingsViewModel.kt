@@ -160,6 +160,12 @@ class SettingsViewModel @Inject constructor(
      *  slots/actions; defaults when unset). */
     val remoteControlMap: Flow<com.aeriotv.android.core.remote.RemoteControlMap> =
         prefs.effectiveRemoteControlMap
+    /** TV guide group-selector style: "pills" (top row) or "sidebar". */
+    val guideGroupSelector: Flow<String> = prefs.guideGroupSelector
+    fun setGuideGroupSelector(mode: String) {
+        viewModelScope.launch { prefs.setGuideGroupSelector(mode) }
+    }
+
     fun setRemoteControlMap(map: com.aeriotv.android.core.remote.RemoteControlMap) {
         viewModelScope.launch { prefs.setRemoteControlMap(map.toJson()) }
     }

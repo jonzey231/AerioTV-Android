@@ -73,6 +73,7 @@ private val PLAYER_ACTION_CHOICES = listOf(
     PlayerRemoteAction.SEEK_FORWARD,
     PlayerRemoteAction.SEEK_BACKWARD,
     PlayerRemoteAction.MINIMIZE_TO_GUIDE,
+    PlayerRemoteAction.CHANNEL_LIST,
     PlayerRemoteAction.NONE,
 )
 
@@ -166,6 +167,10 @@ fun RemoteControlSettingsScreen(
     var editingPlayerSlot by remember { mutableStateOf<RemoteSlot?>(null) }
     var editingGuideSlot by remember { mutableStateOf<RemoteSlot?>(null) }
     var showResetConfirm by remember { mutableStateOf(false) }
+    val groupSelector by viewModel.guideGroupSelector.collectAsStateWithLifecycle(
+        initialValue = "pills",
+    )
+    var editingGroupSelector by remember { mutableStateOf(false) }
     val menuGuard = rememberTvMenuGuard()
 
     fun saveEdited(newMap: RemoteControlMap) {
@@ -230,6 +235,17 @@ fun RemoteControlSettingsScreen(
                 }
 
                 SettingsSection(
+                    header = "TV Guide Groups",
+                    footer = "How channel groups are picked in the guide. Top pills keep the group row above the grid; the sidebar menu hides that row and opens with a Left press from the currently airing column. Only one is active at a time.",
+                ) {
+                    SlotRow(
+                        slotName = "Group Selection",
+                        valueName = if (groupSelector == "sidebar") "Sidebar menu" else "Top group pills",
+                        onClick = { editingGroupSelector = true },
+                    )
+                }
+
+                SettingsSection(
                     header = "Reset",
                     footer = "Restore every button to the standard AerioTV scheme.",
                 ) {
@@ -241,6 +257,28 @@ fun RemoteControlSettingsScreen(
                 }
             }
         }
+    }
+
+    if (editingGroupSelector) {
+        TvActionMenuDialog(
+            title = "Group Selection",
+            actions = listOf(
+                TvMenuAction(
+                    label = if (groupSelector != "sidebar") "Top group pills  (current)" else "Top group pills",
+                ) {
+                    viewModel.setGuideGroupSelector("pills")
+                    editingGroupSelector = false
+                },
+                TvMenuAction(
+                    label = if (groupSelector == "sidebar") "Sidebar menu  (current)" else "Sidebar menu",
+                ) {
+                    viewModel.setGuideGroupSelector("sidebar")
+                    editingGroupSelector = false
+                },
+            ),
+            onDismiss = { editingGroupSelector = false },
+            guard = menuGuard,
+        )
     }
 
     editingPlayerSlot?.let { slot ->
