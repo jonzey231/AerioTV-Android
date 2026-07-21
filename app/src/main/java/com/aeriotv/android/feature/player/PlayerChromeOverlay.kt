@@ -144,7 +144,7 @@ fun PlayerChromeOverlay(
     showChannelFlipHint: Boolean = false,
     /** The "Press Select ... / Hold Select ..." hint line, derived from the
      *  effective remote map by the caller; null hides the line. */
-    selectHint: String? = "Press Select for program info. Hold Select for options.",
+    selectHint: String? = "Press Select for player controls.",
     /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
      *  bar. Null on TV and on any Cast-disabled build. */
     castSlot: (@Composable () -> Unit)? = null,

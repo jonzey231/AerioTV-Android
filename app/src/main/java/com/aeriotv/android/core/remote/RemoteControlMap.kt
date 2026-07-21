@@ -165,15 +165,18 @@ data class RemoteControlMap(
             ),
         )
 
-        /** The app's standard control scheme: OK = program info, hold
-         *  OK = options, Up/Down = channel surf, hold-Up = recently
+        /** The app's standard control scheme (Logan 2026-07-20 revision:
+         *  OK went back to surfacing the player controls, and hold-OK is
+         *  unmapped - options live on the chrome's Options button): OK =
+         *  show controls, Up/Down = channel surf, hold-Up = recently
          *  watched, hold-Down = search, Right = previous-channel zap,
-         *  hold-Left in the guide pages into already-aired programmes. */
+         *  hold-Right = program info, hold-Left in the guide pages into
+         *  already-aired programmes. */
         val DEFAULT = RemoteControlMap(
             preset = RemotePreset.DEFAULT,
             player = mapOf(
-                RemoteSlot.OK_SHORT to PlayerRemoteAction.SHOW_PROGRAM_INFO,
-                RemoteSlot.OK_LONG to PlayerRemoteAction.OPTIONS_MENU,
+                RemoteSlot.OK_SHORT to PlayerRemoteAction.TOGGLE_CONTROLS,
+                RemoteSlot.OK_LONG to PlayerRemoteAction.NONE,
                 RemoteSlot.UP_SHORT to PlayerRemoteAction.CHANNEL_UP,
                 RemoteSlot.DOWN_SHORT to PlayerRemoteAction.CHANNEL_DOWN,
                 RemoteSlot.UP_LONG to PlayerRemoteAction.RECENT_CHANNELS,

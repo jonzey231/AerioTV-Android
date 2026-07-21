@@ -1419,12 +1419,12 @@ fun PlayerScreen(
                     indication = null,
                 ) {
                     // Remote Control map: player okShort. Default =
-                    // toggleControls (today's behavior); other actions are
-                    // wired in Phase A2, NONE is a deliberate no-op.
-                    when (remoteMap.playerAction(com.aeriotv.android.core.remote.RemoteSlot.OK_SHORT)) {
+                    // toggleControls; any other mapping routes through the
+                    // executor (NONE is a deliberate no-op there).
+                    when (val a = remoteMap.playerAction(com.aeriotv.android.core.remote.RemoteSlot.OK_SHORT)) {
                         com.aeriotv.android.core.remote.PlayerRemoteAction.TOGGLE_CONTROLS ->
                             chromeVisible = !chromeVisible
-                        else -> { /* Phase A2 */ }
+                        else -> exoWindowState.onPlayerRemoteAction?.invoke(a)
                     }
                 }
                 .pointerInput(channels.size, chromeVisible, appleTVChannelFlip) {
