@@ -628,6 +628,17 @@ fun AerioTVNavHost(
                     hiltViewModel()
                 val tuneStartsInMini by tuneSettingsVm.guideTuneInMini
                     .collectAsStateWithLifecycle(initialValue = false)
+                // GH #47: while casting, a channel tap re-tunes the TV in place
+                // and stays on the list (no cast-controls screen). Toggleable.
+                val castTapStaysOnList by tuneSettingsVm.castTapStaysOnList
+                    .collectAsStateWithLifecycle(initialValue = true)
+                val castSenderNav = remember {
+                    dagger.hilt.android.EntryPointAccessors.fromApplication(
+                        context.applicationContext,
+                        com.aeriotv.android.feature.player.PlayerScreenEntryPoint::class.java,
+                    ).castSender()
+                }
+                val castStateNav by castSenderNav.state.collectAsStateWithLifecycle()
 
                 LaunchedEffect(state.phase) {
                     // Skipped onboarding stays in the (empty) app; see
@@ -653,6 +664,28 @@ fun AerioTVNavHost(
                 ) {
                 MainScaffold(
                     onChannelClick = { channel ->
+                        // GH #47: while casting with stay-on-list enabled, flip
+                        // the TV in place (same dedup + control-channel path as
+                        // PlayerScreen's cast mode) and DON'T open the player
+                        // (cast-controls) screen. Controls stay reachable via
+                        // the Now-Casting mini controller card.
+                        val castDevice = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
+                            ?.deviceName
+                        if (castTapStaysOnList && castDevice != null &&
+                            castSenderNav.tuneLiveChannel(
+                                channelId = channel.id,
+                                title = channel.name,
+                                artUri = channel.tvgLogo.takeIf { it.isNotBlank() },
+                                localUrl = channel.url,
+                            )
+                        ) {
+                            android.widget.Toast.makeText(
+                                navHostContext,
+                                "Playing on $castDevice",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                            return@MainScaffold
+                        }
                         // GH #33: while companion-connected or casting, this route
                         // IS the remote -- PlayerScreen's remote mode mirrors the
                         // channel to the TV (no local playback) and renders the

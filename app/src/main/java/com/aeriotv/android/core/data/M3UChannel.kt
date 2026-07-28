@@ -1,11 +1,18 @@
 package com.aeriotv.android.core.data
 
+import androidx.compose.runtime.Immutable
 import java.util.UUID
 
 /**
  * Mirrors iOS Aerio/Networking/PlaylistParsers.swift M3UChannel (lines 4-14).
  * Pure data class with no Room annotations yet — Phase 2b will add @Entity.
+ *
+ * Task #190: @Immutable. Every field is a val and the lone otherwise-unstable
+ * field (rawAttributes: Map) is never mutated after build, so this promise is
+ * truthful and lets the Compose compiler prove the guide's ChannelGuideRow /
+ * ProgrammeCell skippable by value equality instead of fragile === identity.
  */
+@Immutable
 data class M3UChannel(
     val id: String = UUID.randomUUID().toString(),
     val name: String,

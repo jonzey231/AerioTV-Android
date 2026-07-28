@@ -145,6 +145,7 @@ class CollectionsViewModel @Inject constructor(
  * channel is in at least one -> "Remove from All Collections"; viewing X but
  * the channel is not in X -> no remove row at all.
  */
+@androidx.compose.runtime.Immutable
 data class CollectionsMenuContext(
     val collections: List<ChannelCollection>,
     /** Collection currently filtering Live TV (from the selectedGroup token). */

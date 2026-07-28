@@ -464,6 +464,12 @@ fun GuideScreen(
     // listState are in scope.
     var dialogFocusOrigin by remember { mutableStateOf<Pair<Int, Long>?>(null) }
     var dialogFocusRestoreTick by remember { mutableStateOf(0) }
+    // Same machinery for the docked group sidebar: Right/Back closing it must
+    // return D-pad focus to the grid cell it opened from, or the top-nav
+    // focusRestorer steals focus onto the selected group pill (= Live TV tab).
+    // Captured when the sidebar opens; the tick drives the refocus effect.
+    var sidebarReturnOrigin by remember { mutableStateOf<Pair<Int, Long>?>(null) }
+    var sidebarFocusRestoreTick by remember { mutableStateOf(0) }
 
     // Tick "now" forward every 30s so the indicator + currently-airing tinting stay
     // accurate without forcing the whole tree to recompose on every frame.
@@ -844,10 +850,18 @@ fun GuideScreen(
             groups = groups,
             selectedToken = state.selectedGroup,
             onSelect = { token ->
+                // Group CHANGES re-filter the channel list, so the captured row
+                // index would be stale - do NOT restore focus by it here (that
+                // path lands focus fresh via the normal group-select flow).
                 groupSidebarOpen = false
                 viewModel.onGroupSelected(token)
             },
-            onDismiss = { groupSidebarOpen = false },
+            // Right/Back with the group unchanged: restore focus to the origin
+            // cell so it doesn't orphan onto the Live TV nav pill.
+            onDismiss = {
+                groupSidebarOpen = false
+                if (isTv) sidebarFocusRestoreTick++
+            },
         )
     }
     Column(modifier = Modifier.weight(1f).fillMaxHeight().statusBarsPadding()) {
@@ -1801,6 +1815,14 @@ fun GuideScreen(
                 val (rowIndex, anchorMs) = dialogFocusOrigin ?: return@LaunchedEffect
                 guideNav.focusChannelAt(rowIndex, anchorMs, listState)
             }
+            // Same restore for the docked group sidebar (Right/Back close with
+            // the group unchanged): re-land focus on the origin cell so the
+            // top-nav focusRestorer can't steal it onto the Live TV pill.
+            LaunchedEffect(sidebarFocusRestoreTick) {
+                if (sidebarFocusRestoreTick == 0) return@LaunchedEffect
+                val (rowIndex, anchorMs) = sidebarReturnOrigin ?: return@LaunchedEffect
+                guideNav.focusChannelAt(rowIndex, anchorMs, listState)
+            }
             // GH #15: focus restore after PlayerScreen's hidden-window self-pop
             // (HOME -> resume). MainActivity.onStop dismissed the mini, so the
             // miniState effect above bails and nothing re-focuses the guide --
@@ -1926,6 +1948,13 @@ fun GuideScreen(
                         gridLeftPendingSidebar = false
                         gridLeftHoldFired = false
                         if (openSidebar) {
+                            // Capture the origin cell so Right/Back closing the
+                            // sidebar restores focus here (else it orphans onto
+                            // the Live TV nav pill). The sidebar-open gate above
+                            // guarantees lastFocusedChannelIndex >= 0.
+                            val anchor = if (guideNav.focusedCellAnchorMs != Long.MIN_VALUE)
+                                guideNav.focusedCellAnchorMs else nowMillis
+                            sidebarReturnOrigin = guideNav.lastFocusedChannelIndex to anchor
                             groupSidebarOpen = true
                             return@onPreviewKeyEvent true
                         }
@@ -2041,24 +2070,26 @@ fun GuideScreen(
                             if (right && cellEndPx > scroll + viewportPx + epsilon && scroll < maxScroll) {
                                 val target = (scroll + page).toInt().coerceIn(0, maxScroll)
                                 navScope.launch {
-                                    // Task #188: short page animation (layout-based scroll,
-                                    // see GuideLeadingEdgeBringIntoViewSpec.scrollAnimationSpec).
-                                    horizontalScrollState.animateScrollTo(
-                                        target,
-                                        androidx.compose.animation.core.tween(durationMillis = 100),
-                                    )
+                                    // Task #190: SNAP the page jump (was tween 100ms). A page
+                                    // moves 0.85*viewport = well over 30 min of wall-clock, so
+                                    // an animated jump crosses multiple 30-min buckets and
+                                    // re-emits visibleWindow several times mid-animation, each a
+                                    // full-grid re-filter. scrollTo collapses that to one, and a
+                                    // deliberate large jump reads as more responsive snapped.
+                                    horizontalScrollState.scrollTo(target)
                                 }
                                 return@onPreviewKeyEvent true
                             }
                             if (!right && cellStartPx < scroll - epsilon && scroll > 0) {
                                 val target = (scroll - page).toInt().coerceIn(0, maxScroll)
                                 navScope.launch {
-                                    // Task #188: short page animation (layout-based scroll,
-                                    // see GuideLeadingEdgeBringIntoViewSpec.scrollAnimationSpec).
-                                    horizontalScrollState.animateScrollTo(
-                                        target,
-                                        androidx.compose.animation.core.tween(durationMillis = 100),
-                                    )
+                                    // Task #190: SNAP the page jump (was tween 100ms). A page
+                                    // moves 0.85*viewport = well over 30 min of wall-clock, so
+                                    // an animated jump crosses multiple 30-min buckets and
+                                    // re-emits visibleWindow several times mid-animation, each a
+                                    // full-grid re-filter. scrollTo collapses that to one, and a
+                                    // deliberate large jump reads as more responsive snapped.
+                                    horizontalScrollState.scrollTo(target)
                                 }
                                 return@onPreviewKeyEvent true
                             }
@@ -2308,6 +2339,7 @@ fun GuideScreen(
     // wins while the sidebar is open.
     androidx.activity.compose.BackHandler(enabled = groupSidebarOpen) {
         groupSidebarOpen = false
+        if (isTv) sidebarFocusRestoreTick++
     }
 
     programInfoTarget?.let { target ->
@@ -2932,7 +2964,11 @@ private fun ChannelGuideRow(
                         // to the channel's group title so guide cells still
                         // tint even before any per-program lazy enrichment
                         // hits. Mirrors the same fallback in ChannelRow.
-                        categoryTint = palette.tintFor(
+                        // Task #190: on TV the tint is provably discarded (the
+                        // isTv cellBg branch uses only the white-opacity ramp,
+                        // never phoneBaseBg), so skip the per-cell string
+                        // tokenization + parseHex + Color.copy entirely.
+                        categoryTint = if (isTv) null else palette.tintFor(
                             rawCategory = programme.category,
                             isLive = isLive,
                             fallback = channel.groupTitle,
@@ -4039,14 +4075,18 @@ private class GuideLeadingEdgeBringIntoViewSpec(
     private val verticalMoveLeadingEdgeTargetPx: () -> Float?,
     private val horizontalNavActive: () -> Boolean,
 ) : BringIntoViewSpec {
-    // Task #188: short reveal animation. Compose's horizontalScroll is
-    // LAYOUT-based (unlike SwiftUI's GPU offset transform on tvOS), so every
-    // animation frame re-lays-out every visible row's 240k-px strip; the
-    // default spec's ~300ms glide = ~18 such frames per D-pad step and was
-    // the largest slice of the measured 69-85ms median horizontal frames.
-    // ~100ms keeps a readable hint of motion at a third of the layout passes.
+    // Task #190: SNAP the reveal (was tween 100ms). Compose's horizontalScroll
+    // is LAYOUT-based (unlike SwiftUI's GPU offset transform on tvOS), so every
+    // animation frame re-lays-out every visible row's 240k-px strip AND each
+    // frame that crosses a 30-min bucket boundary re-emits the visibleWindow,
+    // fanning a full-grid recompose out to every visible row. Even the 100ms
+    // tween ran ~6 such passes per D-pad step = every median step dropped a
+    // frame (p50 32ms/57% janky on the Streamer). snap() collapses a step to a
+    // single layout pass + at most one bucket-cross recompose. Back-to-now /
+    // jump-to-now animate via horizontalScrollState.animateScrollTo directly,
+    // so they keep their glide; only the per-focus-step reveal snaps.
     override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float> =
-        androidx.compose.animation.core.tween(durationMillis = 100)
+        androidx.compose.animation.core.snap()
 
     override fun calculateScrollDistance(
         offset: Float,

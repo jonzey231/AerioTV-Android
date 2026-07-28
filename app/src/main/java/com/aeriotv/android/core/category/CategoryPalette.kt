@@ -1,5 +1,6 @@
 package com.aeriotv.android.core.category
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -12,6 +13,7 @@ import androidx.compose.ui.graphics.Color
  * UserDefaults reads on iOS are reactive because SwiftUI rebinds @AppStorage
  * keys; on Android we collect the snapshot once and re-resolve inline.
  */
+@Immutable
 data class CategoryPaletteState(
     val masterEnabled: Boolean,
     /** suffix → 6-char uppercase hex override (without leading '#'). */

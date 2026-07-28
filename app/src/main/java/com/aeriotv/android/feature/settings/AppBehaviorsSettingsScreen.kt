@@ -86,6 +86,11 @@ fun AppBehaviorsSettingsScreen(
 
     val isTv = rememberIsTvDevice()
     val showEpgBadges by viewModel.showEpgBadges(isTv).collectAsStateWithLifecycle(initialValue = true)
+    // GH #47: phone-only cast behavior toggle.
+    val castTapStaysOnList by viewModel.castTapStaysOnList.collectAsStateWithLifecycle(initialValue = true)
+    // GH #38/#40: TV-only display-mode controls.
+    val startupRefreshRate by viewModel.startupRefreshRate.collectAsStateWithLifecycle(initialValue = "off")
+    val matchContentResolution by viewModel.matchContentResolution.collectAsStateWithLifecycle(initialValue = false)
     TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "App Behaviors", onBack = onBack)
@@ -236,6 +241,53 @@ fun AppBehaviorsSettingsScreen(
                     checked = appleTVChannelFlip,
                     onCheckedChange = viewModel::setAppleTVChannelFlip,
                 )
+            }
+
+            // GH #38 + #40: display-mode controls, TV boxes only. Each switch
+            // is a real HDMI mode change (brief black screen) - deliberate,
+            // user-opted behavior, unlike playback frame-rate matching which
+            // stays on the seamless framework-arbitrated path.
+            if (isTv) {
+                SettingsSection(
+                    header = "Display",
+                    footer = "Startup Refresh Rate switches the display once at app launch so it is already on your main content rate before the first channel (changes apply on next launch). Match Content Resolution outputs at the stream's resolution so your TV does the upscaling; the screen blinks briefly on each switch.",
+                ) {
+                    SettingsToggleRow(
+                        title = "Match content resolution",
+                        subtitle = "Output 1080p streams at 1080p and let the TV upscale. Off keeps the display at its native mode.",
+                        checked = matchContentResolution,
+                        onCheckedChange = viewModel::setMatchContentResolution,
+                    )
+                }
+                SettingsSection(header = "Startup Refresh Rate") {
+                    listOf(
+                        "off" to "Off (system default)",
+                        "50" to "50 Hz",
+                        "59.94" to "59.94 Hz",
+                        "60" to "60 Hz",
+                    ).forEach { (wire, label) ->
+                        SettingsSelectionRow(
+                            label = label,
+                            selected = startupRefreshRate == wire,
+                            onClick = { viewModel.setStartupRefreshRate(wire) },
+                        )
+                    }
+                }
+            }
+
+            // GH #47: casting flow is phone/tablet-only (the TV IS the receiver).
+            if (!isTv) {
+                SettingsSection(
+                    header = "Casting",
+                    footer = "While casting, tapping a channel changes it on the TV and keeps you on the channel list. Turn off to open the playback controls screen on every tap instead; the Now Casting bar always opens the controls either way.",
+                ) {
+                    SettingsToggleRow(
+                        title = "Stay on channel list",
+                        subtitle = "Channel taps switch the TV without opening the controls screen.",
+                        checked = castTapStaysOnList,
+                        onCheckedChange = viewModel::setCastTapStaysOnList,
+                    )
+                }
             }
 
             SettingsSection(

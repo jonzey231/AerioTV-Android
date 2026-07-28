@@ -128,6 +128,16 @@ object M3UParser {
     private fun parseLinesStreaming(lines: Sequence<String>, onChannel: (M3UChannel) -> Unit) {
         var pendingExtInf: String? = null
         var pendingKodiProps: MutableMap<String, String>? = null
+        // GH #48: quality variants of one channel (Canal+ Sport FHD / HD)
+        // share a tvg-id, so the tvg-id-first stable id COLLIDED - every
+        // id lookup (tune, navigation singleTop, favorites) resolved to
+        // the first variant and the others were untappable. Track ids
+        // seen this parse; the FIRST occurrence keeps the historical id
+        // (existing favorites/recents survive), later occurrences get the
+        // stream URL appended - unique, and stable across refreshes. The
+        // colliding channels never had a working id to persist, so no
+        // saved state is lost by re-keying them.
+        val seenIds = HashSet<String>()
         for (raw in lines) {
             val line = raw.trim()
             when {
@@ -153,7 +163,12 @@ object M3UParser {
                 line.isEmpty() || line.startsWith("#") -> Unit
                 else -> {
                     pendingExtInf?.let { ext ->
-                        onChannel(buildChannel(ext, line, pendingKodiProps))
+                        var ch = buildChannel(ext, line, pendingKodiProps)
+                        if (!seenIds.add(ch.id)) {
+                            ch = ch.copy(id = "${ch.id}|${ch.url}")
+                            seenIds.add(ch.id)
+                        }
+                        onChannel(ch)
                     }
                     pendingExtInf = null
                     pendingKodiProps = null

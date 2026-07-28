@@ -292,6 +292,52 @@ class AerioCastSender @Inject constructor() {
     fun setRemoteChannel(channelId: String) =
         sendControl(CastControl.command(CastControl.CMD_SET_CHANNEL) { put(CastControl.KEY_CHANNEL_ID, channelId) })
 
+    /** GH #47: mirror a LIVE channel to the active cast session in place.
+     *
+     *  The single shared tune path for "the TV should now show [channelId]"
+     *  while casting - used both by PlayerScreen's cast mode and by the channel
+     *  list's tap handler (which stays on the list instead of opening the
+     *  player). Applies the same dedup guard as PlayerScreen historically did:
+     *  re-selecting the channel the TV is already on must NOT re-issue a load
+     *  (needless receiver reload/flicker), including the resumed-cast case
+     *  where the receiver only recovered the channel TITLE as mediaId.
+     *
+     *  Returns false when no session is connected (caller should fall back to
+     *  local playback / navigation); true when the cast now owns the tune.
+     */
+    fun tuneLiveChannel(
+        channelId: String,
+        title: String,
+        subtitle: String? = null,
+        artUri: String? = null,
+        localUrl: String = "",
+    ): Boolean {
+        if (state.value !is State.Connected) return false
+        val cc = content.value
+        val alreadyCastingThisChannel = cc?.mediaId == channelId || cc?.mediaId == title
+        if (!alreadyCastingThisChannel) {
+            setContent(
+                Content(
+                    mediaId = channelId,
+                    kind = AerioCastReceiverController.Kind.LIVE,
+                    title = title,
+                    subtitle = subtitle,
+                    artUri = artUri,
+                    // Web/Styled-receiver path (GH #33): non-Android-TV Cast
+                    // targets get a directly-playable fMP4 URL; the ATV receiver
+                    // ignores it and rebuilds its own raw-TS URL.
+                    webCastUrl = localUrl.takeIf { it.isNotBlank() }?.let { webReceiverCastUrl(it) },
+                ),
+            )
+            // The initial load launches the receiver via the entity deep link, but
+            // Cast Connect won't re-deliver a second load() to an already-running
+            // receiver -- so also push the channel over the reliable control
+            // channel, which re-tunes the TV in place on every flip.
+            setRemoteChannel(channelId)
+        }
+        return true
+    }
+
     fun setRemoteAudioTrack(id: String) =
         sendControl(CastControl.command(CastControl.CMD_SET_AUDIO) { put(CastControl.KEY_TRACK_ID, id) })
 

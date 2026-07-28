@@ -1,5 +1,6 @@
 package com.aeriotv.android.core.data
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
 /**
@@ -15,6 +16,7 @@ import kotlinx.serialization.Serializable
  * silently dropped at filter time but stay persisted, so they resurrect if
  * the channel comes back -- iOS behavior, no garbage collection.
  */
+@Immutable
 @Serializable
 data class ChannelCollection(
     val id: String,

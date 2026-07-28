@@ -1426,7 +1426,17 @@ class AerioExoPlayerHolder @Inject constructor(
                     continue
                 }
                 val pos = p.currentPosition
-                if (pos > lastKnownPositionMs) {
+                // GH #43: CHANGE-detection, not a monotonic watermark. Media3
+                // positions for sliding-window live HLS (plain public playlists
+                // like TDTChannels) are window-relative and sawtooth around a
+                // constant as the window trims, so healthy playback never beats
+                // the recorded MAXIMUM - the old `pos > lastKnown` comparison
+                // let both staleness clocks accrue on a perfectly playing
+                // stream and reload-cycled every channel switch (cut + resume).
+                // A truly wedged player reports a bit-identical frozen position
+                // on every 1s poll (its media clock stopped), so `!=` keeps the
+                // Shield raw-TS wedge true-positive while curing the HLS one.
+                if (pos != lastKnownPositionMs) {
                     lastKnownPositionMs = pos
                     lastPositionAdvanceAtMs = now
                     consecutiveReloads = 0
@@ -1442,7 +1452,9 @@ class AerioExoPlayerHolder @Inject constructor(
                 // the stale reload; that is the Shield 2026-07-15 wedge this
                 // check exists for.
                 val buffered = p.bufferedPosition
-                if (buffered > lastKnownBufferedPositionMs) {
+                // GH #43: same change-detection rationale as the render
+                // position above - bufferedPosition is window-relative too.
+                if (buffered != lastKnownBufferedPositionMs) {
                     lastKnownBufferedPositionMs = buffered
                     lastBufferAdvanceAtMs = now
                 }

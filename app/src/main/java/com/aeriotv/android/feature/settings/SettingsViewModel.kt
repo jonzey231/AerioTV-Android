@@ -172,6 +172,25 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setGuideTuneInMini(value) }
     }
 
+    /** GH #47: while casting, a channel tap re-tunes the TV and stays on the
+     *  list (true, default) instead of opening the cast-controls screen. */
+    val castTapStaysOnList: Flow<Boolean> = prefs.castTapStaysOnList
+    fun setCastTapStaysOnList(value: Boolean) {
+        viewModelScope.launch { prefs.setCastTapStaysOnList(value) }
+    }
+
+    /** GH #38: refresh rate requested at app startup ("off"/"50"/"59.94"/"60"). */
+    val startupRefreshRate: Flow<String> = prefs.startupRefreshRate
+    fun setStartupRefreshRate(value: String) {
+        viewModelScope.launch { prefs.setStartupRefreshRate(value) }
+    }
+
+    /** GH #40: opt-in output-resolution matching on TV boxes. */
+    val matchContentResolution: Flow<Boolean> = prefs.matchContentResolution
+    fun setMatchContentResolution(value: Boolean) {
+        viewModelScope.launch { prefs.setMatchContentResolution(value) }
+    }
+
     fun setRemoteControlMap(map: com.aeriotv.android.core.remote.RemoteControlMap) {
         viewModelScope.launch { prefs.setRemoteControlMap(map.toJson()) }
     }

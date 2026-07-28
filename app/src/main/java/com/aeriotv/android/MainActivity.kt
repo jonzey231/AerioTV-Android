@@ -47,6 +47,7 @@ import com.aeriotv.android.ui.theme.AppTheme
 import com.aeriotv.android.ui.theme.AppearanceMode
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.flow.first
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -382,6 +383,11 @@ class MainActivity : ComponentActivity() {
         // Re-pin on resume so a fold/unfold display switch (the cover and inner
         // panels expose different display-mode ids) keeps the highest rate.
         requestHighestRefreshRate()
+        // GH #40: re-match the output resolution when returning to a live
+        // player that is still up (onStop restored native for the home screen).
+        resMatchPlayer?.videoSize?.let { vs ->
+            if (vs.height > 0) applyContentResolutionMode(vs.width, vs.height)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -440,6 +446,9 @@ class MainActivity : ComponentActivity() {
             runCatching { exoHolder.stop() }
             AerioMediaPlaybackService.stop(this)
         }
+        // GH #40: never leave the launcher/home screen on a content-matched
+        // resolution; onResume re-applies if a live player is still up.
+        restoreDisplayMode()
         super.onStop()
     }
 
@@ -567,6 +576,93 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // GH #38 / #40: user-opted display-mode control (TV boxes).
+    //
+    // Both features deliberately pin `preferredDisplayModeId`, which on a TV
+    // box is a real HDMI mode change (brief black flash). That is exactly what
+    // the user opted into: #38 does ONE switch at launch so the display is
+    // already on their content rate before the first tune; #40 switches to the
+    // content's resolution class so the TV does the upscaling. Distinct from
+    // the FORBIDDEN frame-rate-matching pin (25Hz-override regression): these
+    // are explicit user choices, default off, and never driven by content
+    // frame rate. Playback-time refresh matching stays with the
+    // framework-arbitrated Surface.setFrameRate path.
+    // ------------------------------------------------------------------
+
+    /** True while GH #40 matching is enabled in Settings. */
+    private var matchContentResolutionEnabled = false
+    /** Non-zero once #40 switched the mode; cleared on restore. */
+    private var resolutionModeApplied = false
+    private var resMatchListener: androidx.media3.common.Player.Listener? = null
+    private var resMatchPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+
+    private fun currentDisplay(): android.view.Display? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display
+        else @Suppress("DEPRECATION") windowManager.defaultDisplay
+
+    /** GH #38: pin the startup refresh rate (current resolution preserved).
+     *  Once per PROCESS, not per Activity: a display-mode switch can still
+     *  recreate the Activity (density is in configChanges, but OEMs vary),
+     *  and re-pinning mid-session would fight the GH #40 restore. */
+    private fun applyStartupRefreshRate(wire: String) {
+        if (startupRefreshApplied) return
+        startupRefreshApplied = true
+        if (!isTelevisionDevice() || wire == "off") return
+        val target = wire.toFloatOrNull() ?: return
+        val disp = currentDisplay() ?: return
+        val current = disp.mode ?: return
+        val best = disp.supportedModes
+            .filter {
+                it.physicalWidth == current.physicalWidth &&
+                    it.physicalHeight == current.physicalHeight
+            }
+            // 59.94 vs 60 need tolerance; pick the closest within half a hertz.
+            .filter { kotlin.math.abs(it.refreshRate - target) < 0.5f }
+            .minByOrNull { kotlin.math.abs(it.refreshRate - target) } ?: return
+        if (current.modeId == best.modeId) return
+        Log.i(TAG, "GH#38 startup refresh: ${current.refreshRate} -> ${best.refreshRate}")
+        window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
+    }
+
+    /** GH #40: switch the display to the content's resolution class. */
+    private fun applyContentResolutionMode(videoW: Int, videoH: Int) {
+        if (!matchContentResolutionEnabled || !isTelevisionDevice()) return
+        if (videoH <= 0) return
+        val disp = currentDisplay() ?: return
+        val current = disp.mode ?: return
+        // Content -> output class. Anything below 720p still outputs 720p
+        // (the issue's "min" rule: never output below the smallest class).
+        val targetH = when {
+            videoH >= 1600 -> 2160
+            videoH >= 900 -> 1080
+            else -> 720
+        }
+        if (current.physicalHeight == targetH) return
+        val best = disp.supportedModes
+            .filter { it.physicalHeight == targetH }
+            // Keep the CURRENT refresh class so this never doubles as a rate
+            // switch; fall back to the highest rate at that resolution.
+            .sortedWith(
+                compareBy(
+                    { kotlin.math.abs(it.refreshRate - current.refreshRate) > 0.5f },
+                    { -it.refreshRate },
+                ),
+            )
+            .firstOrNull() ?: return
+        Log.i(TAG, "GH#40 content res match: ${videoW}x$videoH -> mode ${best.physicalWidth}x${best.physicalHeight}@${best.refreshRate}")
+        window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
+        resolutionModeApplied = true
+    }
+
+    /** GH #40: hand the mode choice back to the system (native/UI mode). */
+    private fun restoreDisplayMode() {
+        if (!resolutionModeApplied) return
+        Log.i(TAG, "GH#40 restore display mode")
+        window.attributes = window.attributes.apply { preferredDisplayModeId = 0 }
+        resolutionModeApplied = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -574,6 +670,76 @@ class MainActivity : ComponentActivity() {
         // dispatchKeyEvent (which cannot suspend).
         lifecycleScope.launch {
             appPreferences.effectiveRemoteControlMap.collect { remoteMap = it }
+        }
+        // GH #38: one-shot startup refresh-rate pin (first emitted value only -
+        // changing the setting later applies on next launch, avoiding a live
+        // HDMI re-handshake underneath a playing stream).
+        lifecycleScope.launch {
+            applyStartupRefreshRate(appPreferences.startupRefreshRate.first())
+        }
+        // GH #40: watch the live player for video-size changes and match the
+        // output resolution while enabled. Restores on player teardown, on
+        // disable, and in onStop (don't leave the home screen at 1080p).
+        lifecycleScope.launch {
+            appPreferences.matchContentResolution.collect { enabled ->
+                matchContentResolutionEnabled = enabled
+                if (!enabled) restoreDisplayMode()
+                else resMatchPlayer?.videoSize?.let { vs ->
+                    if (vs.height > 0) applyContentResolutionMode(vs.width, vs.height)
+                }
+            }
+        }
+        lifecycleScope.launch {
+            exoHolder.playerInstance.collect { p ->
+                resMatchPlayer?.let { old -> resMatchListener?.let(old::removeListener) }
+                resMatchListener = null
+                resMatchPlayer = p
+                if (p == null) {
+                    restoreDisplayMode()
+                    return@collect
+                }
+                val listener = object : androidx.media3.common.Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                        if (videoSize.height > 0) {
+                            applyContentResolutionMode(videoSize.width, videoSize.height)
+                        }
+                    }
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        // The holder's stop() (mini-close, 3rd-Back dismiss) keeps
+                        // the player instance for reuse, so the null-instance
+                        // restore above never sees it. A deliberate stop is
+                        // IDLE + cleared media items — but ExoPlayer delivers this
+                        // callback synchronously INSIDE stop(), before the holder's
+                        // clearMediaItems() has run (observed items=1 here). Defer
+                        // one main-loop hop so the playlist state has settled;
+                        // reloads re-set an item before/at prepare, so they still
+                        // never match idle-with-no-items.
+                        if (playbackState == androidx.media3.common.Player.STATE_IDLE) {
+                            window.decorView.post {
+                                val pl = resMatchPlayer ?: return@post
+                                if (pl.playbackState == androidx.media3.common.Player.STATE_IDLE &&
+                                    pl.mediaItemCount == 0
+                                ) {
+                                    restoreDisplayMode()
+                                }
+                            }
+                        }
+                    }
+                }
+                p.addListener(listener)
+                resMatchListener = listener
+                // Initial-size catch-up ONLY for a player that is actually
+                // playing something. A stopped holder player retains its last
+                // videoSize; re-applying it on Activity recreate re-pinned the
+                // content mode with nothing on screen (00:29 recreate loop).
+                if (p.mediaItemCount > 0 &&
+                    p.playbackState != androidx.media3.common.Player.STATE_IDLE
+                ) {
+                    p.videoSize.let { vs ->
+                        if (vs.height > 0) applyContentResolutionMode(vs.width, vs.height)
+                    }
+                }
+            }
         }
         // TV soft-input mode history (GH #1 and two user reports):
         //  - RESIZE originally fed a per-frame recompose + bring-into-view
@@ -760,6 +926,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        const val TAG = "MainActivity"
+
+        /** GH #38 pin fired this process (survives Activity recreation). */
+        var startupRefreshApplied = false
+
         /** D-pad Right auto-repeat count that counts as a deliberate "hold" to
          *  close the corner mini-player. Mirrors the guide's
          *  HOLD_LEFT_ALL_PILL_REPEAT (Android starts auto-repeating ~400ms after

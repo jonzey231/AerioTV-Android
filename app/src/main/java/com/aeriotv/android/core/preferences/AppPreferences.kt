@@ -269,6 +269,46 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * GH #38: refresh rate to request at app STARTUP (TV boxes), so the
+     * display is already on the user's main content rate before the first
+     * tune (one HDMI handshake at launch instead of at first playback).
+     * Wire values: "off" (default) | "50" | "59.94" | "60". Device-local -
+     * display hardware differs per box, so this never syncs.
+     */
+    val startupRefreshRate: Flow<String> =
+        store.data.map { it[KEY_STARTUP_REFRESH_RATE] ?: "off" }
+    suspend fun setStartupRefreshRate(value: String) {
+        store.edit { it[KEY_STARTUP_REFRESH_RATE] = value }
+    }
+
+    /**
+     * GH #40: opt-in output-resolution passthrough (TV boxes). When true,
+     * playback switches the display mode to the content's resolution class
+     * (1080p stream on a 4K panel -> 1080p output) so the TV does the
+     * upscaling. Each switch is a real HDMI mode change (brief black flash),
+     * which is why this is default OFF. Device-local.
+     */
+    val matchContentResolution: Flow<Boolean> =
+        store.data.map { it[KEY_MATCH_CONTENT_RESOLUTION] ?: false }
+    suspend fun setMatchContentResolution(value: Boolean) {
+        store.edit { it[KEY_MATCH_CONTENT_RESOLUTION] = value }
+    }
+
+    /**
+     * GH #47: while a cast session is active, tapping a channel in the list
+     * re-tunes the TV in place and STAYS on the list instead of opening the
+     * player (cast-controls) screen. Controls stay one tap away on the
+     * Now-Casting mini controller. Default true - the navigate-to-controls
+     * behavior is what the issue asked to escape; the toggle keeps it
+     * available for users who prefer it.
+     */
+    val castTapStaysOnList: Flow<Boolean> =
+        store.data.map { it[KEY_CAST_TAP_STAYS_ON_LIST] ?: true }
+    suspend fun setCastTapStaysOnList(value: Boolean) {
+        store.edit { it[KEY_CAST_TAP_STAYS_ON_LIST] = value }
+    }
+
+    /**
      * Decoded map with the LEGACY MIGRATION applied: a user who had
      * turned "Apple TV Channel Flip" off and has never customized the
      * new map gets upShort/downShort seeded to NONE so their Up/Down
@@ -919,6 +959,7 @@ class AppPreferences @Inject constructor(
         data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
         data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
+        data[KEY_CAST_TAP_STAYS_ON_LIST]?.let { out["castTapStaysOnList"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
         data[KEY_SHOW_EPG_BADGES_TV]?.let { out["showEpgBadgesTv"] = it.toString() }
@@ -966,6 +1007,7 @@ class AppPreferences @Inject constructor(
             keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
             keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
+            keys["castTapStaysOnList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CAST_TAP_STAYS_ON_LIST] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
             keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
             keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
@@ -1199,6 +1241,9 @@ class AppPreferences @Inject constructor(
         val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
+        val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
+        val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
+        val KEY_MATCH_CONTENT_RESOLUTION = booleanPreferencesKey("match_content_resolution")
         val KEY_AUTO_RECOVER_FROZEN_STREAMS =
             booleanPreferencesKey("app_behaviors_auto_recover_frozen_streams")
         // Synced via Drive (snapshotSyncablePreferences) -- the user's own key.

@@ -505,30 +505,17 @@ fun PlayerScreen(
             // covers that case. (Do NOT also match cc.title==ch.name: on a normal
             // cast that would wrongly suppress a real switch between two channels
             // sharing a name.)
-            val cc = castSender.content.value
-            val alreadyCastingThisChannel = cc?.mediaId == ch.id || cc?.mediaId == ch.name
-            if (!alreadyCastingThisChannel) {
-                castSender.setContent(
-                    com.aeriotv.android.core.cast.AerioCastSender.Content(
-                        mediaId = ch.id,
-                        kind = com.aeriotv.android.core.cast.AerioCastReceiverController.Kind.LIVE,
-                        title = ch.name,
-                        subtitle = nowProgramme?.title,
-                        artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
-                        // Web/Styled-receiver path (GH #33): non-Android-TV Cast
-                        // targets can't launch Cast Connect, so hand them a directly-
-                        // playable Dispatcharr fMP4 (H.264+AAC) URL. The ATV receiver
-                        // ignores it and rebuilds its own raw-TS URL. Null for non-
-                        // proxy channels (Cast Connect stays the only path there).
-                        webCastUrl = com.aeriotv.android.core.cast.webReceiverCastUrl(url),
-                    ),
-                )
-                // The initial load launches the receiver via the entity deep link,
-                // but Cast Connect won't re-deliver a second load() to an already-
-                // running receiver -- so also push the channel over the reliable
-                // control channel, which re-tunes the TV in place on every flip.
-                castSender.setRemoteChannel(ch.id)
-            }
+            // GH #47: shared in-place cast tune (same dedup guard as before -
+            // see AerioCastSender.tuneLiveChannel). The channel list's tap
+            // handler uses the same path to flip the TV without opening this
+            // screen.
+            castSender.tuneLiveChannel(
+                channelId = ch.id,
+                title = ch.name,
+                subtitle = nowProgramme?.title,
+                artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
+                localUrl = url,
+            )
             return@LaunchedEffect
         }
         // GH #22: also re-prime when the holder claims this channel but is
