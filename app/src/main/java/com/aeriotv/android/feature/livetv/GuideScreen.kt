@@ -2584,12 +2584,19 @@ private fun ChannelGuideRow(
                                 .size(128, 128)
                                 .build(),
                             contentDescription = null,
-                            modifier = Modifier.size(width = 36.dp, height = 24.dp),
+                            // GH #25: logos grow with the TV comfort scale like
+                            // the row text does - a bigger display scale was
+                            // enlarging rows and labels around a fixed 36x24
+                            // logo, which is the thing old-eyes users squint at.
+                            modifier = Modifier.size(
+                                width = 36.dp * textScale,
+                                height = 24.dp * textScale,
+                            ),
                         )
                     } else {
                         Box(
                             modifier = Modifier
-                                .size(width = 36.dp, height = 24.dp)
+                                .size(width = 36.dp * textScale, height = 24.dp * textScale)
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center,
@@ -2608,7 +2615,11 @@ private fun ChannelGuideRow(
                         text = channel.name,
                         style = nameStyle,
                         color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
+                        // GH #25: at comfort scales the taller row has room for
+                        // a second line, so long channel names wrap instead of
+                        // truncating ("NBC Sports ..." -> full name). Base
+                        // scale keeps the tvOS single-line parity.
+                        maxLines = if (textScale >= 1.25f) 2 else 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),

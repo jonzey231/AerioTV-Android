@@ -313,6 +313,22 @@ class AerioMediaPlaybackService : MediaLibraryService() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // Discord report (praveen12bnitt): live playback surfaced this
+            // plain notification instead of the system media card. The rich
+            // Media3 provider replaces it once the session player reports
+            // media + state, but until then (and on any path where that swap
+            // never fires) a NON-MediaStyle foreground notification is what
+            // the OS shows - and it is not eligible for the Quick Settings
+            // media carousel. Binding MediaStyle to the session token makes
+            // even the placeholder render as a proper media card.
+            .apply {
+                mediaSession?.let {
+                    setStyle(
+                        androidx.media.app.NotificationCompat.MediaStyle()
+                            .setMediaSession(it.sessionCompatToken),
+                    )
+                }
+            }
             .build()
     }
 
