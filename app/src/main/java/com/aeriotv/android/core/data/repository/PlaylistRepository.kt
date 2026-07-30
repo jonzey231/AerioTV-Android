@@ -935,9 +935,16 @@ class PlaylistRepository @Inject constructor(
         url: String,
         suffix: String,
         parse: (java.io.File) -> T,
-    ): T {
+    ): T = withContext(Dispatchers.IO) {
+        // Off the main thread: Ktor's execute{} block (the file copy) and the
+        // parse both run on the CALLER'S dispatcher, and the add/refresh flows
+        // call in from viewModelScope (Main). A small Dispatcharr payload froze
+        // the UI imperceptibly, but a full XC-panel m3u_plus (Discord report
+        // 2026-07-30: 385k rows / 31k live on an Onn box) blocked Main for the
+        // ENTIRE download + parse - Choreographer logged 4359 skipped frames /
+        // a 72.8s Davey, which the reporter experienced as "locked up".
         val tmp = java.io.File.createTempFile("aerio_dl", suffix, context.cacheDir)
-        return try {
+        try {
             fetcher.fetchToFile(url, tmp)
             parse(tmp)
         } finally {
@@ -957,7 +964,10 @@ class PlaylistRepository @Inject constructor(
         accountProfileIds: List<Int> = emptyList(),
         username: String? = null,
         password: String? = null,
-    ): List<M3UChannel> = when (sourceType) {
+        // Dispatchers.IO for the same main-thread reason as fetchViaTempFile:
+        // the Dispatcharr branch decodes multi-MB JSON bodies and sorts/maps
+        // the full channel list, and callers arrive on Main.
+    ): List<M3UChannel> = withContext(Dispatchers.IO) { when (sourceType) {
         SourceType.M3uUrl -> {
             // GH #26: stream the download to a temp file + line-parse it.
             // A full XC-panel M3U runs 100-200MB; fetchBytes materialized
@@ -1158,7 +1168,7 @@ class PlaylistRepository @Inject constructor(
                 out
             }
         }
-    }
+    } }
 }
 
 /**
