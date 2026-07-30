@@ -1205,6 +1205,36 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Last authoritative "has any DVR recordings" verdict per playlist id
+     * (JSON list of ids that had recordings). The dynamic DVR tab reads this
+     * at launch and on playlist switch so it can render IMMEDIATELY instead
+     * of popping in seconds later when the server list arrives; the next
+     * completed refresh overwrites the hint with fresh truth. Membership in
+     * the set means "show the tab optimistically".
+     */
+    suspend fun dvrTabHintOnce(playlistId: String): Boolean =
+        decodeDvrTabHint(store.data.first()[KEY_DVR_TAB_HINT]).contains(playlistId)
+
+    /** No-op when the stored verdict already matches, so the 30s DVR refresh
+     *  loop doesn't churn the DataStore. */
+    suspend fun setDvrTabHint(playlistId: String, hasRecordings: Boolean) {
+        if (playlistId.isBlank()) return
+        store.edit { prefs ->
+            val current = decodeDvrTabHint(prefs[KEY_DVR_TAB_HINT])
+            val updated = if (hasRecordings) current + playlistId else current - playlistId
+            if (updated == current) return@edit
+            prefs[KEY_DVR_TAB_HINT] = Json.encodeToString(updated.toList())
+        }
+    }
+
+    private fun decodeDvrTabHint(raw: String?): Set<String> {
+        if (raw.isNullOrBlank()) return emptySet()
+        return runCatching { Json.decodeFromString<List<String>>(raw) }
+            .getOrDefault(emptyList())
+            .toSet()
+    }
+
+    /**
      * iOS DVR Settings "Keep device awake during recording" toggle. Default
      * ON (iOS parity). When on, LocalRecordingService holds a partial
      * WakeLock for the duration of an active local recording so the CPU
@@ -1299,6 +1329,7 @@ class AppPreferences @Inject constructor(
         // recordings keep their genre pill after the programme leaves the EPG
         // window; deliberately NOT in snapshotSyncablePreferences.
         val KEY_DVR_RECORDING_CATEGORIES = stringPreferencesKey("dvr_recording_categories")
+        val KEY_DVR_TAB_HINT = stringPreferencesKey("dvr_tab_hint_playlists")
         val KEY_CATEGORY_MASTER_ENABLE = booleanPreferencesKey(CategoryPaletteState.MASTER_ENABLED_KEY)
         val KEY_CATEGORY_CUSTOM_JSON = stringPreferencesKey(CategoryPaletteState.CUSTOM_KEY)
         val KEY_SYNC_MASTER = booleanPreferencesKey("sync_master_enabled")

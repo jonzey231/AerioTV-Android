@@ -754,6 +754,13 @@ fun GuideScreen(
     // a nav return, where rememberScrollState restored the user's spot and we
     // must not touch it). Deliberately NOT saveable.
     var autoAnchorPx by remember { mutableStateOf(-1) }
+    // The tvComfortScale the saved horizontal offset is valid under. Saveable
+    // so it survives the guide being DISPOSED (Settings is a separate tab): if
+    // the user changes Live TV Display Scale over there and comes back, the
+    // rememberScrollState px restore is in the OLD hourWidthPx coordinate
+    // space - always stale, never a user position worth preserving - but the
+    // effect below can't tell from the px alone. 0f = not yet recorded.
+    var anchoredAtScale by rememberSaveable { mutableStateOf(0f) }
     // Re-keyed on windowStart (2026-07-12 Streamer field report): on a slow
     // first-post-install launch the deferred history merge publishes a wider
     // epgHistoryHours AFTER the initial anchor, windowStart leaps back, and
@@ -773,6 +780,19 @@ fun GuideScreen(
     // and never fights a live pinch (guideScale is deliberately NOT a key).
     LaunchedEffect(filteredChannels.isNotEmpty(), windowStart, tvComfortScale) {
         if (filteredChannels.isEmpty()) return@LaunchedEffect
+        // Scale changed while the guide was disposed (changed from the
+        // Settings tab, Streamer-reproduced 2026-07-30): the restored px
+        // offset maps to a different wall-clock under the new hourWidthPx -
+        // the grid sat on an empty faraway window and, because the logical
+        // state still read "at now", Back fell through and exited the app.
+        // Invalidate the session anchor so the block below re-anchors to now.
+        // The in-composition scale change (guide alive) is already handled by
+        // this effect's tvComfortScale key + the at-our-anchor guard.
+        if (anchoredAtScale != 0f && anchoredAtScale != tvComfortScale) {
+            didScrollToNow = false
+            autoAnchorPx = -1
+        }
+        anchoredAtScale = tvComfortScale
         if (didScrollToNow &&
             (autoAnchorPx < 0 || horizontalScrollState.value != autoAnchorPx)
         ) {

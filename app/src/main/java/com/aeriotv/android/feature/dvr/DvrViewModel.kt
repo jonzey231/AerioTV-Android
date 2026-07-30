@@ -24,6 +24,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -171,6 +172,12 @@ class DvrViewModel @Inject constructor(
          *  stored user level is admin (>=10), so recordings can be scheduled on
          *  the server. Gates RecordProgramSheet's destination toggle. */
         val canRecordToServer: Boolean = false,
+        /** Optimistic "this source had recordings last time" verdict from the
+         *  persisted per-playlist hint. Keeps the dynamic DVR tab visible from
+         *  the first frame after launch / playlist switch instead of popping
+         *  in when the server list lands; cleared the moment an authoritative
+         *  refresh completes (the real list takes over). */
+        val hasRecordingsHint: Boolean = false,
     ) {
         val scheduledCount: Int get() = recordings.count { it.effectiveStatus() == Recording.Status.Scheduled }
         val recordingCount: Int get() = recordings.count { it.effectiveStatus() == Recording.Status.Recording }
@@ -213,8 +220,46 @@ class DvrViewModel @Inject constructor(
      */
     private val categoryCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /** Set once the first refresh() has produced an authoritative verdict
+     *  (success or unsupported source). Gates the launch hint seed below so a
+     *  slow DataStore read can't resurrect the optimistic tab AFTER the real
+     *  list already said "empty". */
+    @Volatile
+    private var authoritativeLoaded = false
+
     init {
         refresh()
+        // Seed the optimistic DVR-tab hint from the last session's verdict so
+        // the tab doesn't pop in seconds after launch while listRecordings is
+        // still in flight.
+        viewModelScope.launch {
+            val playlist = playlistRepository.activePlaylist() ?: return@launch
+            val hint = runCatching { appPreferences.dvrTabHintOnce(playlist.id) }
+                .getOrDefault(false)
+            if (hint && !authoritativeLoaded) {
+                _state.update { it.copy(hasRecordingsHint = true) }
+            }
+        }
+        // Playlist switch: the server rows on screen belong to the OLD source.
+        // Drop them immediately (no stale flash while the new list loads),
+        // seed the new source's hint, and reload. drop(1) skips the initial
+        // emission, which the refresh() above already covers.
+        viewModelScope.launch {
+            playlistRepository.observeActiveId()
+                .drop(1)
+                .collect { newId ->
+                    authoritativeLoaded = false
+                    val hint = newId != null &&
+                        runCatching { appPreferences.dvrTabHintOnce(newId) }.getOrDefault(false)
+                    _state.update { st ->
+                        st.copy(
+                            recordings = st.recordings.filter { it.source == Source.Local },
+                            hasRecordingsHint = hint,
+                        )
+                    }
+                    refresh()
+                }
+        }
         viewModelScope.launch {
             localRecordingDao.observeAll().collect { rows ->
                 val mapped = rows.map { it.toRecording() }
@@ -245,11 +290,16 @@ class DvrViewModel @Inject constructor(
             val isDispatcharrDirect = playlist?.isDispatcharrDirectConnect() == true
             val canRecordToServer = playlist?.canRecordToServer() == true
             if (playlist == null || !isDispatcharr || playlist.apiKey.isNullOrBlank()) {
+                authoritativeLoaded = true
                 _state.update {
                     it.copy(
                         unsupportedSource = true, recordings = emptyList(), isLoading = false, error = null,
                         isDispatcharrDirect = isDispatcharrDirect, canRecordToServer = canRecordToServer,
+                        hasRecordingsHint = false,
                     )
+                }
+                playlist?.id?.let { id ->
+                    runCatching { appPreferences.setDvrTabHint(id, false) }
                 }
                 return@launch
             }
@@ -302,6 +352,7 @@ class DvrViewModel @Inject constructor(
                     // the main thread, fire-and-forget; setRecordingCategory
                     // de-dups so an unchanged value won't churn the DataStore.
                     persistResolvedCategories(fromCache, persistedCategories)
+                    authoritativeLoaded = true
                     _state.update { st ->
                         val local = st.recordings.filter { it.source == Source.Local }
                         // Authoritative server list wins by id, so an
@@ -312,7 +363,15 @@ class DvrViewModel @Inject constructor(
                             isLoading = false,
                             recordings = (serverById.values + local).sortedBy { it.startMillis },
                             error = null,
+                            // The real list is in - the optimistic tab hint retires.
+                            hasRecordingsHint = false,
                         )
+                    }
+                    // Persist this session's verdict so the next launch (or a
+                    // switch back to this source) shows the DVR tab from the
+                    // first frame instead of popping it in after this fetch.
+                    runCatching {
+                        appPreferences.setDvrTabHint(playlist.id, _state.value.recordings.isNotEmpty())
                     }
                     // Completed recordings whose programme already aged out of the
                     // on-disk EPG window still have a blank category. Resolve those
