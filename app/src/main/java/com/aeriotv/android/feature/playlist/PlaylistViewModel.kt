@@ -547,13 +547,29 @@ class PlaylistViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             channels = emptyList(),
-                            error = "Failed to load: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
+                            error = loadFailureMessage("Failed to load", t),
                         )
                     }
                 },
             )
         }
     }
+
+    /**
+     * User-facing message for a failed load/save. OutOfMemoryError gets a
+     * plain-language message instead of the raw ART allocation string: a
+     * giant playlist (an XC panel's get.php m3u_plus dumping its whole VOD
+     * catalog) can exhaust a 256MB-heap TV box during parse, and "Failed to
+     * allocate a 103877413 byte allocation..." reads like a crash, not
+     * guidance (Discord report, Onn 4K, 2026-07-29).
+     */
+    private fun loadFailureMessage(prefix: String, t: Throwable): String =
+        if (t is OutOfMemoryError) {
+            "$prefix: playlist is too large for this device's memory. If this is an " +
+                "Xtream Codes get.php link, add it with the Xtream Codes source type instead."
+        } else {
+            "$prefix: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}"
+        }
 
     private fun loadEpgIfConfigured(playlist: PlaylistEntity, forceRefresh: Boolean = false) {
         viewModelScope.launch {
@@ -1292,7 +1308,7 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            error = "Save failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
+                            error = loadFailureMessage("Save failed", t),
                         )
                     }
                 },

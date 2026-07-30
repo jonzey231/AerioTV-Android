@@ -962,7 +962,41 @@ class PlaylistRepository @Inject constructor(
             // GH #26: stream the download to a temp file + line-parse it.
             // A full XC-panel M3U runs 100-200MB; fetchBytes materialized
             // it as one allocation and OOM'd 256MB-heap phones on Add.
-            fetchViaTempFile(base, ".m3u") { M3UParser.parseFile(it) }
+            //
+            // Discord report (Onn 4K box, 2026-07-29): users also paste an XC
+            // panel's get.php?type=m3u_plus URL directly as a plain M3U source.
+            // Those panels dump their whole VOD + series catalog into the
+            // "live" m3u (~80% of a ~1M-row, 100MB+ file), and while the
+            // DOWNLOAD streams in constant memory, the parse-to-List
+            // materialization alone holds ~2.2x the file size in live objects
+            // (emulator-measured) -- fatal on a 256MB largeHeap TV box. The
+            // XtreamCodes source type already guards this (GH #31) by
+            // stream-parsing and dropping VOD/series rows; give the plain-M3U
+            // path the SAME guard when the URL is actually an XC get.php
+            // fetch. A normal M3U playlist (no get.php) keeps its VOD groups.
+            // The streaming parseFile overload also detects charset up front
+            // instead of the parse-then-retry double read.
+            val isXtreamGetPhp = base.contains("get.php", ignoreCase = true)
+            fetchViaTempFile(base, ".m3u") { file ->
+                val out = ArrayList<M3UChannel>()
+                var droppedVodSeries = 0
+                M3UParser.parseFile(file) { ch ->
+                    if (isXtreamGetPhp && isXtreamVodOrSeriesUrl(ch.url)) {
+                        droppedVodSeries++
+                        return@parseFile
+                    }
+                    out.add(ch)
+                }
+                if (droppedVodSeries > 0) {
+                    android.util.Log.i(
+                        "PlaylistRepository",
+                        "M3U (XC get.php): dropped $droppedVodSeries VOD/series entries from " +
+                            "the live list (add the panel as an Xtream Codes source for On " +
+                            "Demand); kept ${out.size} live channels",
+                    )
+                }
+                out
+            }
         }
         // Both Dispatcharr modes converge here. UserPass calls in with a key
         // that was resolved via JWT login + /api/accounts/users/me/ earlier in
