@@ -570,21 +570,57 @@ class PlaylistRepository @Inject constructor(
                 // collapses any pair that overlaps > 80% or shares a title
                 // within 60s, so the same programme never appears twice.
                 val customXmltv = playlist.epgUrl?.takeIf { it.isNotBlank() }
-                if (customXmltv != null) {
+                // Catch-up depth (task #210): Dispatcharr's grid only retains a
+                // couple of days of history, so Direct Connect users could not
+                // browse catch-up content older than that even when the playlist's
+                // Guide History setting allows more. The server knows where its
+                // guide comes from, though: /api/epg/sources/ lists the XMLTV
+                // feeds assigned to channels, and those upstream feeds usually
+                // carry a much deeper past window. Fetch each active xmltv source
+                // directly and layer it on the grid exactly like the manual EPG
+                // URL override below; saveEpgToCache retention + dedupSameAiring
+                // handle accumulation and overlap downstream. Sources that are
+                // unreachable from the app (LAN-only paths, file:// mounts on the
+                // server) fail silently per-source; the grid is never at risk.
+                val upstreamSourceUrls = runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                        dispatcharrClient.listEpgSources(base, key)
+                    }
+                }.getOrDefault(emptyList())
+                    .asSequence()
+                    .filter { it.isActive && it.sourceType == "xmltv" && it.hasChannels != false }
+                    .mapNotNull { src ->
+                        src.url?.trim()?.takeIf { u ->
+                            u.startsWith("http://", ignoreCase = true) ||
+                                u.startsWith("https://", ignoreCase = true)
+                        }
+                    }
+                    .distinct()
+                    .filter { it != customXmltv }
+                    .take(8)
+                    .toList()
+                val layerUrls = listOfNotNull(customXmltv) + upstreamSourceUrls
+                var layered = grid
+                for (layerUrl in layerUrls) {
                     val xmltv = runCatching {
                         // GH #26: constant-memory download + parse.
-                        fetchViaTempFile(customXmltv, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                        fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
                     }.getOrElse {
-                        // Don't fail the whole EPG load just because the user's
-                        // custom XMLTV URL is unreachable; surface a warning
-                        // and keep the grid the user already paid the auth-
-                        // retry roundtrip for.
+                        // Don't fail the whole EPG load just because one XMLTV
+                        // URL is unreachable; keep the grid the user already
+                        // paid the auth-retry roundtrip for.
                         emptyList()
                     }
-                    if (xmltv.isNotEmpty()) grid + xmltv else grid
-                } else {
-                    grid
+                    if (xmltv.isNotEmpty()) layered = layered + xmltv
                 }
+                if (upstreamSourceUrls.isNotEmpty()) {
+                    Log.i(
+                        "PlaylistRepo",
+                        "Layered ${upstreamSourceUrls.size} upstream Dispatcharr EPG source(s); " +
+                            "programmes now ${layered.size} (grid ${grid.size})",
+                    )
+                }
+                layered
             }
             SourceType.XtreamCodes -> {
                 // Xtream EPG is a standard XMLTV feed at xmltv.php. Reuse the

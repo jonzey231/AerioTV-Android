@@ -399,6 +399,16 @@ class DispatcharrClient @Inject constructor() {
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/epg/epgdata/", apiKey)
 
     /**
+     * GET /api/epg/sources/ - the EPG sources configured on the Dispatcharr
+     * server (list permission is IsStandardUser, so any API key works). Used
+     * for catch-up depth: Dispatcharr's own grid only retains a couple of
+     * days of history, but the upstream XMLTV feeds it ingests usually carry
+     * a much deeper past window, so the app fetches those URLs directly.
+     */
+    suspend fun listEpgSources(baseUrl: String, apiKey: String): List<DispatcharrEpgSource> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/epg/sources/", apiKey)
+
+    /**
      * GET /api/epg/grid/ - bulk EPG window covering roughly -1h to +24h. iOS uses
      * this as the universal EPG source for Dispatcharr-backed playlists; the
      * `/output/epg` XMLTV path is gated by Dispatcharr 0.23+ LAN-only policy and
@@ -1583,6 +1593,26 @@ data class DispatcharrEpgData(
     val id: Int,
     @SerialName("tvg_id")
     val tvgId: String? = null,
+)
+
+/**
+ * One EPG source from /api/epg/sources/. `sourceType` is 'xmltv',
+ * 'schedules_direct', or 'dummy'; only active xmltv sources with an
+ * http(s) URL are fetchable by the app. `hasChannels` is a server-side
+ * annotation (does any channel's EPGData point at this source); it is
+ * nullable because older Dispatcharr builds may not include it.
+ */
+@Serializable
+data class DispatcharrEpgSource(
+    val id: Int,
+    val name: String? = null,
+    @SerialName("source_type")
+    val sourceType: String? = null,
+    val url: String? = null,
+    @SerialName("is_active")
+    val isActive: Boolean = true,
+    @SerialName("has_channels")
+    val hasChannels: Boolean? = null,
 )
 
 @Serializable
