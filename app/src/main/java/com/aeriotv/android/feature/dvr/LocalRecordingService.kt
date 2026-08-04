@@ -32,6 +32,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -163,7 +166,16 @@ class LocalRecordingService : Service() {
         // refuses to install while this is true: a self-update kills the
         // process mid-write and the recording's MediaStore row would stay
         // IS_PENDING (invisible) and be reaped -- total recording loss.
-        isActive = true
+        val startedAt0 = System.currentTimeMillis()
+        setActive(
+            true,
+            Active(
+                title = title,
+                channelName = channelName,
+                startedAt = startedAt0,
+                endsAt = startedAt0 + durationMs,
+            ),
+        )
         activeTitle = title
         ensureNotificationChannel()
         val notif = buildNotification(title, "Recording…")
@@ -295,7 +307,7 @@ class LocalRecordingService : Service() {
         // truncates the file and leaves a discarded partial. The download is
         // recoverable (re-fetch) but there's no reason to let an update clobber
         // it; keep the flag consistent across both in-flight paths.
-        isActive = true
+        setActive(true)
         activeTitle = title
         ensureNotificationChannel()
         startForegroundCompat(buildNotification(title, "Saving to device…"))
@@ -551,7 +563,7 @@ class LocalRecordingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        isActive = false
+        setActive(false)
         releaseWakeLock()
         scope.cancel()
     }
@@ -631,10 +643,49 @@ class LocalRecordingService : Service() {
     companion object {
         /** True while a local recording is in flight (set in startRecording,
          *  cleared in onDestroy). Read by the in-app updater's install
-         *  interlock; volatile because the updater reads it off-main. */
+         *  interlock; volatile because the updater reads it off-main.
+         *
+         *  Writes go through [setActive] so the reactive [activeFlow] below
+         *  stays in lockstep with this flag. */
         @Volatile
         var isActive: Boolean = false
             private set
+
+        /** Details of the in-flight capture, so the DVR tab can list it as a
+         *  Recording row before the Room row exists (that is only written
+         *  when the file finalizes). */
+        data class Active(
+            val title: String,
+            val channelName: String,
+            val startedAt: Long,
+            val endsAt: Long,
+        )
+
+        private val _active = MutableStateFlow<Active?>(null)
+
+        /** The in-flight capture, or null when idle. */
+        val activeRecording: StateFlow<Active?> = _active.asStateFlow()
+
+        private val _activeFlow = MutableStateFlow(false)
+
+        /**
+         * Reactive mirror of [isActive]. The DVR tab is dynamic (it only
+         * shows when the source has recordings), and a just-started on-device
+         * recording is not in any list yet: the local row is written when the
+         * file finalizes, and an M3U source has no server rows to fall back
+         * on. Without this the user starts a recording and the tab that would
+         * let them watch or stop it simply is not there until the recording
+         * ends. DvrViewModel collects this so the tab appears the moment
+         * recording starts and drops back out when it stops (unless real
+         * recordings then exist).
+         */
+        val activeFlow: StateFlow<Boolean> = _activeFlow.asStateFlow()
+
+        private fun setActive(value: Boolean, details: Active? = null) {
+            isActive = value
+            _activeFlow.value = value
+            _active.value = if (value) details else null
+        }
 
         private const val TAG = "LocalRecordingService"
         private const val NOTIF_ID = 0xAE

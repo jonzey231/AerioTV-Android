@@ -150,7 +150,17 @@ fun DvrTabContent(
             ),
         )
 
-        if (state.unsupportedSource) {
+        // "Needs Dispatcharr" is about SERVER SCHEDULING only. On-device
+        // recording works on any source, so this dead-end must not swallow
+        // the tab when the user has local recordings or one is capturing
+        // right now -- otherwise starting a recording on an M3U playlist
+        // surfaces a DVR tab that says DVR is unavailable, with no way to
+        // reach or stop the recording. Fall through to the normal list in
+        // that case; the Record actions elsewhere already route M3U/Xtream
+        // sources to the on-device destination.
+        val hasLocalContent = state.isLocalRecordingActive ||
+            state.recordings.any { it.source == DvrViewModel.Source.Local }
+        if (state.unsupportedSource && !hasLocalContent) {
             EmptyState(
                 title = "DVR needs Dispatcharr",
                 body = "Switch to a Dispatcharr playlist in Settings to schedule recordings.",

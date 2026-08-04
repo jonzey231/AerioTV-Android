@@ -200,7 +200,9 @@ fun MainScaffold(
     // hasRecordingsHint: persisted last-session verdict so the tab shows from
     // the first frame after launch / playlist switch instead of popping in when
     // the server list arrives; retires as soon as the real list loads.
-    val hasRecordings = dvrState.recordings.isNotEmpty() || dvrState.hasRecordingsHint
+    val hasRecordings = dvrState.recordings.isNotEmpty() ||
+        dvrState.hasRecordingsHint ||
+        dvrState.isLocalRecordingActive
     val tabs = visibleTabs(
         hasFavorites = hasRenderableFavorites,
         hasVod = hasVodContent,

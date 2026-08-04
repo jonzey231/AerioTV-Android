@@ -178,6 +178,13 @@ class DvrViewModel @Inject constructor(
          *  in when the server list lands; cleared the moment an authoritative
          *  refresh completes (the real list takes over). */
         val hasRecordingsHint: Boolean = false,
+        /** True while LocalRecordingService is capturing on this device. The
+         *  local row only lands when the file finalizes, so without this a
+         *  just-started recording leaves the dynamic DVR tab hidden -- on an
+         *  M3U source with no server rows there is nothing else to keep it
+         *  visible, and the user has no in-app way to reach or stop the
+         *  recording they just started. */
+        val isLocalRecordingActive: Boolean = false,
     ) {
         val scheduledCount: Int get() = recordings.count { it.effectiveStatus() == Recording.Status.Scheduled }
         val recordingCount: Int get() = recordings.count { it.effectiveStatus() == Recording.Status.Recording }
@@ -229,6 +236,39 @@ class DvrViewModel @Inject constructor(
 
     init {
         refresh()
+        // Mirror the on-device recorder's live state into UiState so the
+        // dynamic DVR tab appears the instant a local recording starts and
+        // steps back out when it ends (real rows then decide). Also refresh
+        // on the falling edge so the finished recording's row is listed by
+        // the time the user opens the tab.
+        viewModelScope.launch {
+            LocalRecordingService.activeRecording.collect { active ->
+                _state.update { st ->
+                    // Drop any previous synthetic row, then add the current
+                    // one. The real Room row only lands when the file
+                    // finalizes, so without this the tab opens on an empty
+                    // list while a capture is plainly running.
+                    val withoutSynthetic = st.recordings.filterNot { it.id == LOCAL_IN_PROGRESS_ID }
+                    val rows = if (active == null) withoutSynthetic else {
+                        withoutSynthetic + Recording(
+                            id = LOCAL_IN_PROGRESS_ID,
+                            source = Source.Local,
+                            title = active.title,
+                            description = active.channelName,
+                            startMillis = active.startedAt,
+                            endMillis = active.endsAt,
+                            status = Recording.Status.Recording,
+                            fileSizeBytes = 0L,
+                        )
+                    }
+                    st.copy(
+                        isLocalRecordingActive = active != null,
+                        recordings = rows.sortedBy { it.startMillis },
+                    )
+                }
+                if (active == null) refresh()
+            }
+        }
         // Seed the optimistic DVR-tab hint from the last session's verdict so
         // the tab doesn't pop in seconds after launch while listRecordings is
         // still in flight.
@@ -264,7 +304,11 @@ class DvrViewModel @Inject constructor(
             localRecordingDao.observeAll().collect { rows ->
                 val mapped = rows.map { it.toRecording() }
                 _state.update { st ->
-                    val merged = (st.recordings.filter { it.source == Source.Server } + mapped)
+                    // Keep the synthetic in-progress row: it is not in Room
+                    // yet, and this observer would otherwise drop it on any
+                    // unrelated local-recording change.
+                    val inProgress = st.recordings.filter { it.id == LOCAL_IN_PROGRESS_ID }
+                    val merged = (st.recordings.filter { it.source == Source.Server } + mapped + inProgress)
                         .sortedBy { it.startMillis }
                     st.copy(recordings = merged)
                 }
@@ -293,7 +337,14 @@ class DvrViewModel @Inject constructor(
                 authoritativeLoaded = true
                 _state.update {
                     it.copy(
-                        unsupportedSource = true, recordings = emptyList(), isLoading = false, error = null,
+                        unsupportedSource = true,
+                        // Keep on-device rows. Only SERVER scheduling is
+                        // unsupported here; local recordings belong to the
+                        // device, not the playlist, and clearing them made
+                        // them vanish from the DVR tab on M3U / Xtream until
+                        // the next Room emission happened to re-add them.
+                        recordings = it.recordings.filter { r -> r.source == Source.Local },
+                        isLoading = false, error = null,
                         isDispatcharrDirect = isDispatcharrDirect, canRecordToServer = canRecordToServer,
                         hasRecordingsHint = false,
                     )
@@ -817,6 +868,11 @@ class DvrViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "DvrViewModel"
+
+        /** Stable id for the synthetic row that represents the capture
+         *  currently running in LocalRecordingService. Replaced by the real
+         *  Room row once the file finalizes. */
+        const val LOCAL_IN_PROGRESS_ID = "local-in-progress"
     }
 }
 
