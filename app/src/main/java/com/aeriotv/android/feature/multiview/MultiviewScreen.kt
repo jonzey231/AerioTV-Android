@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.TableRows
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material.icons.filled.VolumeUp
@@ -866,6 +867,7 @@ private fun MultiviewLayoutMode.menuIcon(): androidx.compose.ui.graphics.vector.
         MultiviewLayoutMode.EvenGrid -> Icons.Filled.Apps
         MultiviewLayoutMode.Spotlight -> Icons.Filled.ViewSidebar
         MultiviewLayoutMode.HeroCorner -> Icons.Filled.Dashboard
+        MultiviewLayoutMode.Stacked -> Icons.Filled.TableRows
     }
 
 @Composable

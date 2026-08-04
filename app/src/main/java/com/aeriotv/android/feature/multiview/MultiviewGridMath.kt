@@ -25,7 +25,18 @@ enum class MultiviewLayoutMode(val key: String, val displayName: String) {
     Spotlight("spotlight", "Spotlight"),
 
     /** 6 only: the 5-tile hero layout with the empty bottom-right cell filled. */
-    HeroCorner("heroCorner", "Hero + Corner");
+    HeroCorner("heroCorner", "Hero + Corner"),
+
+    /**
+     * One full-width column: every tile stacked top to bottom, equal heights.
+     *
+     * In portrait this is what Auto already picks for most counts, but on a TV
+     * (always landscape) nothing else produces a top/bottom split, so this is
+     * the only route to one there. Unlike the tables above it ignores container
+     * shape entirely: an explicit pick should stack in either orientation, not
+     * silently turn back into columns on rotation.
+     */
+    Stacked("stacked", "Stacked");
 
     companion object {
         fun from(key: String?): MultiviewLayoutMode =
@@ -37,12 +48,18 @@ enum class MultiviewLayoutMode(val key: String, val displayName: String) {
          * "Spotlight This Tile" action (which picks a specific hero), because a
          * grid-wide Spotlight was just "Spotlight on the first tile" and duplicated
          * that action. So the picker only appears where a real alternative shape
-         * exists: 3/5 (Even Grid) and 6 (Hero + Corner). Every other count (2, 4,
-         * 7, 8, 9 and <= 1) has only Default, so it returns empty and the picker
-         * hides.
+         * exists: 3/5 (Even Grid) and 6 (Hero + Corner).
+         *
+         * Stacked joins 2/3/4, which is why 2 and 4 now offer a picker at all:
+         * on a TV (always landscape) nothing else produces a top/bottom split.
+         * It stops at 4 because a 16:9 screen split 5+ ways vertically leaves
+         * each tile a sliver too short to letterbox video into. Counts 7/8/9
+         * and <= 1 still have only Default, so the picker stays hidden there.
          */
         fun available(forTileCount: Int): List<MultiviewLayoutMode> = when (forTileCount) {
-            3, 5 -> listOf(Auto, EvenGrid)
+            2, 4 -> listOf(Auto, Stacked)
+            3 -> listOf(Auto, EvenGrid, Stacked)
+            5 -> listOf(Auto, EvenGrid)
             6 -> listOf(Auto, HeroCorner)
             else -> emptyList()
         }
@@ -91,6 +108,17 @@ object MultiviewGridMath {
         MultiviewLayoutMode.HeroCorner ->
             if (count == 6) heroCornerRects(width, height, spacing)
             else autoRects(count, width, height, spacing)
+        MultiviewLayoutMode.Stacked -> stackedRects(count, width, height, spacing)
+    }
+
+    /**
+     * One full-width column, equal heights, in reading order. Orientation plays
+     * no part: the user asked for a stack, so it stacks either way.
+     */
+    fun stackedRects(count: Int, w: Float, h: Float, s: Float): List<Rect> {
+        if (count <= 0 || w <= 0f || h <= 0f) return emptyList()
+        val n = count.coerceAtMost(9)
+        return gridRects(cols = 1, rows = n, count = n, w = w, h = h, s = s)
     }
 
     /**

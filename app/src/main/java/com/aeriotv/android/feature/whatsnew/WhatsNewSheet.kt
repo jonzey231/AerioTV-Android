@@ -244,7 +244,9 @@ private object WhatsNewContent {
             title = "Multiview in portrait",
             body = "Multiview no longer needs a sideways phone. In portrait the " +
                 "tiles stack top to bottom, and rotating re-flows them side by " +
-                "side without interrupting playback.",
+                "side without interrupting playback. On TV, a new Stacked " +
+                "layout gives you the same top/bottom split from the layout " +
+                "picker.",
         ),
     )
 }
