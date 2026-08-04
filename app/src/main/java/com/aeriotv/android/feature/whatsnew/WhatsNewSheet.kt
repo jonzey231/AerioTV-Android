@@ -234,6 +234,11 @@ private object WhatsNewContent {
                 "paused catch-up sessions no longer expire mid-break.",
         ),
         WhatsNewItem(
+            title = "SVG channel logos",
+            body = "Channel logos and artwork supplied as SVG files now " +
+                "display instead of rendering blank.",
+        ),
+        WhatsNewItem(
             title = "Deeper catch-up history on Dispatcharr",
             body = "The guide now pulls past programming straight from your " +
                 "server's EPG sources, so catch-up reaches as far back as your " +

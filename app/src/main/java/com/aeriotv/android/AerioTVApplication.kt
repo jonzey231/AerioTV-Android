@@ -12,6 +12,7 @@ import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
+import coil3.svg.SvgDecoder
 import com.aeriotv.android.core.data.db.AerioDatabase
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.data.repository.PlaylistRepository
@@ -118,6 +119,13 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
                 // request, but the auth header arrives in time for the
                 // network call.
                 add(OkHttpNetworkFetcherFactory(callFactory = { imageHttp }))
+                // SVG channel logos / artwork (Apple GH #61 parity): providers
+                // ship tvg-logo values that are SVGs, which Coil cannot decode
+                // without this factory -- they silently rendered blank. The
+                // decoder sniffs for an "<svg" marker in the head of the body
+                // (not a prefix match), so a leading UTF-8 BOM or XML prolog
+                // still decodes.
+                add(SvgDecoder.Factory())
                 // Audit task #53: SSRF-style gate -- block image fetches
                 // whose source URL uses file:// / content:// / javascript:
                 // / etc. Playlist providers can put anything in `tvg-logo`
