@@ -604,7 +604,14 @@ class PlaylistViewModel @Inject constructor(
             _state.update { it.copy(epgHistoryHours = historyHours) }
             return
         }
-        val history = bridgeChannelIds(historyRaw, _state.value.channels)
+        // Off-main: this bridges the WHOLE retention window (up to 30 days).
+        // Catch-up depth multiplied that set by ~20x, and bridgeChannelIds is
+        // an O(rows) rebuild that was running on viewModelScope's Main
+        // dispatcher on every launch.
+        val channelsForHistory = _state.value.channels
+        val history = withContext(Dispatchers.Default) {
+            bridgeChannelIds(historyRaw, channelsForHistory)
+        }
         _state.update { st ->
             val merged = HashMap(st.epgByChannel)
             for ((channelId, rows) in groupByChannel(history)) {
@@ -674,13 +681,19 @@ class PlaylistViewModel @Inject constructor(
                 repository.loadCachedEpg(playlist.id, fromMillis, toMillis)
             }.getOrDefault(emptyList())
         }
-        val cached = bridgeChannelIds(cachedRaw, channelsForBridge)
+        // Off-main, same reason as the network path below: with epgWindowHours
+        // set to "All available" this is the entire cache, which catch-up depth
+        // grew to six figures.
+        val channelsNowCached = _state.value.channels
+        val cached = withContext(Dispatchers.Default) {
+            bridgeChannelIds(cachedRaw, channelsForBridge)
+        }
         val hasCache = cached.isNotEmpty()
         if (hasCache) {
             Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
-            val groupedCached = withChannelNamePlaceholders(
-                groupByChannel(cached), _state.value.channels,
-            )
+            val groupedCached = withContext(Dispatchers.Default) {
+                withChannelNamePlaceholders(groupByChannel(cached), channelsNowCached)
+            }
             _state.update { it.copy(epgByChannel = groupedCached, isEpgLoading = false) }
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
@@ -712,10 +725,24 @@ class PlaylistViewModel @Inject constructor(
                 // Channels may have arrived between the cache-paint above
                 // and the network fetch; re-read so we bridge against the
                 // freshest channel set.
-                val programmes = bridgeChannelIds(rawProgrammes, _state.value.channels)
-                val grouped = withChannelNamePlaceholders(
-                    groupByChannel(programmes), _state.value.channels,
-                )
+                //
+                // OFF-MAIN (0.4.3): loadEpg parses on Dispatchers.Default but
+                // RETURNS to this caller's context, which is viewModelScope =
+                // Main. Bridging + grouping + placeholder-filling a Dispatcharr
+                // grid (~6k rows) was survivable there; once catch-up depth
+                // layers the server's upstream XMLTV sources the same transform
+                // runs over ~139k rows, and a Google TV Streamer froze its UI
+                // for 30-35s at a time (Choreographer "Skipped 2111 frames",
+                // Davey duration=35250ms). None of this touches UI state, so
+                // it belongs on Default; only the _state.update stays here
+                // (MutableStateFlow.update is thread-safe either way).
+                val channelsNow = _state.value.channels
+                val (programmes, grouped) = withContext(Dispatchers.Default) {
+                    val bridged = bridgeChannelIds(rawProgrammes, channelsNow)
+                    bridged to withChannelNamePlaceholders(
+                        groupByChannel(bridged), channelsNow,
+                    )
+                }
                 // Cheap channel count off the already-bucketed map instead of
                 // `programmes.map { it.channelId }.toSet().size` which used to
                 // allocate a fresh List + a Set over 60K rows on every cold
