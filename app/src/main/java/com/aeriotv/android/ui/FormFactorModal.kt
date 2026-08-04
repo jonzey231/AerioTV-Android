@@ -13,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -67,7 +68,27 @@ fun FormFactorModal(
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = MaterialTheme.colorScheme.background,
         ) {
-            Column(content = content)
+            // Bound the content column to the window height.
+            //
+            // Without a max, this Column wraps its content, and a caller whose
+            // content scrolls (RecordProgramSheet wraps everything in a
+            // verticalScroll Column) gets measured with an unbounded height:
+            // the scroll viewport becomes exactly as tall as its content, so
+            // there is nothing left to scroll, and the sheet grows past the
+            // bottom of the screen. Anything below the fold -- Record from
+            // Now's Destination toggle and Remove Commercials rows -- was then
+            // unreachable, and dragging the sheet up did nothing because the
+            // sheet was already fully expanded (skipPartiallyExpanded).
+            //
+            // Capping at 88% of the window leaves the scrim tap-target at the
+            // top and gives the inner scroll a real viewport, so long sheets
+            // scroll to their last row. Short sheets are unaffected (they
+            // measure below the cap and still wrap).
+            val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * 0.88f
+            Column(
+                modifier = Modifier.heightIn(max = maxSheetHeight),
+                content = content,
+            )
         }
     }
 }

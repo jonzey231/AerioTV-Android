@@ -1232,7 +1232,15 @@ internal fun ChannelRow(
                             // Dispatcharr account (non-admin lands on-device via
                             // RecordProgramSheet). Server-side admin gating now
                             // lives in the sheet, not here.
-                            if (channel.url.isNotBlank() && channel.dispatcharrChannelId != null) {
+                            //
+                            // 0.4.3: no longer requires a Dispatcharr channel id.
+                            // On-device recording (LocalRecordingService) only
+                            // needs the stream URL, so M3U and Xtream channels
+                            // record locally exactly like the future-programme
+                            // rows in the expanded panel already did. The sheet
+                            // hides the Destination toggle when the source can't
+                            // schedule server-side, so there is no dead end.
+                            if (channel.url.isNotBlank()) {
                                 add(
                                     TvMenuAction(
                                         if (nowProgramme != null) "Record from Now" else "Record",
@@ -1325,15 +1333,17 @@ internal fun ChannelRow(
                         },
                     )
                 }
-                // Record row only surfaces for Dispatcharr-sourced channels
-                // (the only path that has server-side scheduling today).
-                // Showing-then-toasting on M3U / Xtream rows was bad UX --
-                // the user tapped, got a "DVR requires Dispatcharr" toast,
-                // then had no way to actually start a recording. Mirrors
-                // iOS canon: the channel long-press menu hides irrelevant
-                // actions instead of greying them out for context-free
-                // sources.
-                if (channel.url.isNotBlank() && channel.dispatcharrChannelId != null) {
+                // Record row needs only a playable URL. The old gate also
+                // required a Dispatcharr channel id, from back when server
+                // scheduling was the only DVR path and an M3U tap dead-ended
+                // in a "DVR requires Dispatcharr" toast. On-device recording
+                // (LocalRecordingService) removed that dead end: the sheet
+                // seeds destination=local whenever the source can't schedule
+                // server-side and hides the toggle, so M3U / Xtream users get
+                // a working recording instead of a missing menu row. The
+                // future-programme rows in the expanded panel never had this
+                // gate, which is why Record appeared there but not here.
+                if (channel.url.isNotBlank()) {
                     val recordLabel = if (nowProgramme != null) "Record from Now" else "Record"
                     DropdownMenuItem(
                         leadingIcon = {
