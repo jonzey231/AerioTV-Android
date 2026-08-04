@@ -233,5 +233,18 @@ private object WhatsNewContent {
             body = "Smarter programme windows (no more clipped endings) and " +
                 "paused catch-up sessions no longer expire mid-break.",
         ),
+        WhatsNewItem(
+            title = "Deeper catch-up history on Dispatcharr",
+            body = "The guide now pulls past programming straight from your " +
+                "server's EPG sources, so catch-up reaches as far back as your " +
+                "provider's guide data goes instead of the couple of days " +
+                "Dispatcharr keeps.",
+        ),
+        WhatsNewItem(
+            title = "Multiview in portrait",
+            body = "Multiview no longer needs a sideways phone. In portrait the " +
+                "tiles stack top to bottom, and rotating re-flows them side by " +
+                "side without interrupting playback.",
+        ),
     )
 }

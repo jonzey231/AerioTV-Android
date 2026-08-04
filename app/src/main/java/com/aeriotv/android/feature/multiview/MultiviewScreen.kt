@@ -939,9 +939,17 @@ private fun TileGrid(
     // D-pad neighbor topology runs against a fixed 16:9 reference so it is
     // size-independent (iOS physicalNeighbor uses a 1920x1080 default). Unlike
     // iOS it uses the ACTUAL displayed rects (mode + spotlight applied) so
-    // navigation always tracks what is on screen.
+    // navigation always tracks what is on screen. The reference must match the
+    // displayed ORIENTATION: portrait has its own rect tables (stacked, not
+    // side-by-side), so a fixed landscape reference would send Left/Right where
+    // the user sees Up/Down. Only the aspect matters, not the absolute size.
+    val refConfig = LocalConfiguration.current
+    val refPortrait = refConfig.screenHeightDp > refConfig.screenWidthDp
     val neighborRects = MultiviewGridMath.resolvedRects(
-        layoutMode, tiles.size, spotlightIndex, 1920f, 1080f, 0f,
+        layoutMode, tiles.size, spotlightIndex,
+        if (refPortrait) 1080f else 1920f,
+        if (refPortrait) 1920f else 1080f,
+        0f,
     )
     val pad = if (tilePadding) 4.dp else 0.dp
     val anyFullscreen = fullscreenIndex != null

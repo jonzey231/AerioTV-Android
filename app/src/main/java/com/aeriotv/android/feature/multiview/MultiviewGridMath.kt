@@ -62,6 +62,13 @@ enum class NeighborDirection { Left, Right, Up, Down }
  * so callers pass `spacing = 0` here; the layout SHAPES are identical either
  * way (spacing only shrinks tiles uniformly). The `spacing` parameter is kept
  * for a faithful 1:1 mapping to the Swift.
+ *
+ * The layout1..layout9 table describes a LANDSCAPE (or square) container. A
+ * container taller than it is wide takes the portrait path instead: the hero
+ * shapes transpose (big tile on top, followers underneath) and the uniform
+ * grids re-shape to stack, so a 2-up splits top/bottom rather than left/right.
+ * Rotation needs no extra plumbing -- MultiviewScreen already re-runs this from
+ * a BoxWithConstraints, so a new container size picks the matching table.
  */
 object MultiviewGridMath {
 
@@ -127,6 +134,7 @@ object MultiviewGridMath {
 
     private fun autoRects(count: Int, w: Float, h: Float, s: Float): List<Rect> {
         if (count <= 0 || w <= 0f || h <= 0f) return emptyList()
+        if (isPortrait(w, h)) return portraitRects(count.coerceAtMost(9), w, h, s)
         return when (count.coerceAtMost(9)) {
             1 -> layout1(w, h)
             2 -> layout2(w, h, s)
@@ -243,14 +251,33 @@ object MultiviewGridMath {
     fun evenGridRects(count: Int, w: Float, h: Float, s: Float): List<Rect> {
         if (count <= 0 || w <= 0f || h <= 0f) return emptyList()
         val n = count.coerceAtMost(9)
-        val rows = maxOf(1, sqrt(n.toDouble()).toInt())
-        val cols = ceil(n.toDouble() / rows).toInt()
+        val cols: Int
+        val rows: Int
+        if (isPortrait(w, h)) {
+            // A tall container gets its shape from bestFitGrid instead, so the
+            // tiles stack rather than squeezing 16:9 video into narrow columns.
+            val fit = bestFitGrid(n, w, h, s)
+            cols = fit.first
+            rows = fit.second
+        } else {
+            rows = maxOf(1, sqrt(n.toDouble()).toInt())
+            cols = ceil(n.toDouble() / rows).toInt()
+        }
+        return gridRects(cols, rows, n, w, h, s)
+    }
+
+    /**
+     * `cols x rows` in reading order with a centered partial final row. Shared
+     * by [evenGridRects] and the portrait tables.
+     */
+    private fun gridRects(cols: Int, rows: Int, count: Int, w: Float, h: Float, s: Float): List<Rect> {
         val tw = (w - (cols - 1) * s) / cols
         val th = (h - (rows - 1) * s) / rows
-        val rects = ArrayList<Rect>(n)
-        var remaining = n
+        val rects = ArrayList<Rect>(count)
+        var remaining = count
         for (row in 0 until rows) {
             val inRow = minOf(cols, remaining)
+            if (inRow <= 0) break
             val rowW = inRow * tw + (inRow - 1) * s
             val xStart = (w - rowW) / 2
             for (i in 0 until inRow) {
@@ -267,6 +294,10 @@ object MultiviewGridMath {
         if (count <= 0 || w <= 0f || h <= 0f) return emptyList()
         val n = count.coerceAtMost(9)
         if (n == 1) return layout1(w, h)
+        // Portrait: hero on TOP (full width, 2/3 height) with the followers in
+        // a row beneath. The transpose keeps the hero at index 0 and the
+        // followers in order, which is the contract resolvedRects relies on.
+        if (isPortrait(w, h)) return transposed(w, h) { tw, th -> spotlightRects(n, tw, th, s) }
         val bigW = (w - s) * 2 / 3
         val smallW = w - bigW - s
         val smallCount = n - 1
@@ -284,6 +315,7 @@ object MultiviewGridMath {
 
     fun heroCornerRects(w: Float, h: Float, s: Float): List<Rect> {
         if (w <= 0f || h <= 0f) return emptyList()
+        if (isPortrait(w, h)) return transposed(w, h) { tw, th -> heroCornerRects(tw, th, s) }
         val rects = ArrayList(layout5(w, h, s))
         val cellW = (w - 2 * s) / 3
         val cellH = (h - 2 * s) / 3
@@ -291,6 +323,85 @@ object MultiviewGridMath {
         val row2Y = 2 * (cellH + s)
         rects.add(rect(col2X, row2Y, cellW, cellH))
         return rects
+    }
+
+    // ── portrait ─────────────────────────────────────────────────────────
+
+    /**
+     * True when the container is taller than it is wide. A square container
+     * counts as landscape, which is also what guarantees [transposed] cannot
+     * recurse: it swaps the axes before re-entering, so the inner call always
+     * sees a landscape-or-square container.
+     */
+    private fun isPortrait(w: Float, h: Float) = h > w
+
+    /**
+     * Build a landscape table in an axis-swapped container, flip every rect
+     * back, and re-sort into reading order.
+     *
+     * Geometry transposes cleanly -- a hero on the left becomes a hero on top.
+     * The ORDER does not: transposing walks a grid column-major, so tile 2 of a
+     * 5-up would land bottom-left instead of top-right. Sorting by (top, left)
+     * restores the reading order the landscape table had, which is what keeps
+     * each tile in the same relative slot across a rotation.
+     */
+    private fun transposed(w: Float, h: Float, build: (Float, Float) -> List<Rect>): List<Rect> =
+        build(h, w)
+            .map { rect(it.top, it.left, it.height, it.width) }
+            .sortedWith { a, b ->
+                // 1px of slop so tiles sharing a row survive rounding.
+                if (kotlin.math.abs(a.top - b.top) > 1f) a.top.compareTo(b.top)
+                else a.left.compareTo(b.left)
+            }
+
+    /**
+     * Portrait counterpart of the per-count landscape table.
+     *
+     * The asymmetric hero shapes (3, 5) transpose: the big tile moves from the
+     * left edge to the top and its followers wrap underneath. Everything else is
+     * a uniform grid shaped by [bestFitGrid], so 2 tiles split top/bottom on a
+     * phone rather than standing up as two skinny full-height columns.
+     */
+    private fun portraitRects(n: Int, w: Float, h: Float, s: Float): List<Rect> = when (n) {
+        1 -> layout1(w, h)
+        3 -> transposed(w, h) { tw, th -> layout3(tw, th, s) }
+        5 -> transposed(w, h) { tw, th -> layout5(tw, th, s) }
+        else -> {
+            val fit = bestFitGrid(n, w, h, s)
+            gridRects(fit.first, fit.second, n, w, h, s)
+        }
+    }
+
+    /**
+     * Pick the `cols x rows` split that renders the most video, returned as
+     * (cols, rows).
+     *
+     * Candidates are scored by the area a 16:9 frame actually paints inside one
+     * cell, letterboxing included -- the metric that matters, because a cell far
+     * off the source aspect is mostly black bars. On a 393x780 phone that
+     * resolves 2 tiles to 1x2 and 4 tiles to 1x4; a squarer tablet container
+     * still resolves 4 to 2x2.
+     */
+    private fun bestFitGrid(n: Int, w: Float, h: Float, s: Float): Pair<Int, Int> {
+        val targetAspect = 16f / 9f
+        var best = 1 to maxOf(1, n)
+        var bestArea = -1f
+        for (rows in 1..maxOf(1, n)) {
+            val cols = ceil(n.toDouble() / rows).toInt()
+            // Reject shapes whose final row would be entirely empty (4 tiles in
+            // 3 rows of 2), which throw away a row's worth of height.
+            if (cols * (rows - 1) >= n) continue
+            val tw = (w - (cols - 1) * s) / cols
+            val th = (h - (rows - 1) * s) / rows
+            if (tw <= 0f || th <= 0f) continue
+            val videoW = minOf(tw, th * targetAspect)
+            val area = videoW * (videoW / targetAspect)
+            if (area > bestArea) {
+                bestArea = area
+                best = cols to rows
+            }
+        }
+        return best
     }
 
     // ── D-pad neighbor + hit-testing on arbitrary rects ──────────────────
