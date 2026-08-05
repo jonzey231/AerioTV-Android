@@ -80,7 +80,7 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 fun PlaylistsScreen(
     onBack: () -> Unit,
     onAddPlaylist: () -> Unit,
-    onOpenPlaylistDetail: () -> Unit,
+    onOpenPlaylistDetail: (String) -> Unit,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val playlists: List<PlaylistEntity> by viewModel.allPlaylists
@@ -191,7 +191,7 @@ fun PlaylistsScreen(
                         // also register as a tap on the row (see TvMenuGuard).
                         onTap = tvGuard.wrap {
                             if (pl.id == activeId) {
-                                onOpenPlaylistDetail()
+                                onOpenPlaylistDetail(pl.id)
                             } else {
                                 viewModel.switchToPlaylist(pl.id)
                             }

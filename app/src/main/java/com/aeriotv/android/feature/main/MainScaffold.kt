@@ -1513,9 +1513,7 @@ private fun SettingsTabContent(
     when (r) {
         null -> SettingsScreen(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
-            onOpenPlaylistDetail = {
-                nav.push(SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()))
-            },
+            onOpenPlaylistDetail = { id -> nav.push(SettingsRoute.PlaylistDetail(id)) },
             onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
             onAddPlaylist = {
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
@@ -1529,9 +1527,7 @@ private fun SettingsTabContent(
         )
         is SettingsRoute.Root -> SettingsScreen(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
-            onOpenPlaylistDetail = {
-                nav.push(SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()))
-            },
+            onOpenPlaylistDetail = { id -> nav.push(SettingsRoute.PlaylistDetail(id)) },
             onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
             onAddPlaylist = {
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
@@ -1567,10 +1563,8 @@ private fun SettingsTabContent(
                 // Manage Playlists then pushes the reorder page above it.
                 SettingsScreen(
                     onSectionClick = { nav.push(SettingsRoute.Section(it)) },
-                    onOpenPlaylistDetail = {
-                        nav.push(
-                            SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()),
-                        )
+                    onOpenPlaylistDetail = { id ->
+                        nav.push(SettingsRoute.PlaylistDetail(id))
                     },
                     onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
                     onAddPlaylist = {
@@ -1585,10 +1579,8 @@ private fun SettingsTabContent(
                     onAddPlaylist = {
                         nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
                     },
-                    onOpenPlaylistDetail = {
-                        nav.push(
-                            SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()),
-                        )
+                    onOpenPlaylistDetail = { id ->
+                        nav.push(SettingsRoute.PlaylistDetail(id))
                     },
                     viewModel = playlistVm,
                 )
@@ -1601,6 +1593,7 @@ private fun SettingsTabContent(
             com.aeriotv.android.feature.settings.PlaylistDetailScreen(
                 onBack = { nav.pop() },
                 onEdit = { nav.push(SettingsRoute.EditPlaylist(r.playlistId)) },
+                playlistId = r.playlistId,
                 viewModel = playlistVm,
             )
         is SettingsRoute.AddMoreCategories -> AddMoreCategoriesScreen(onBack = { nav.pop() })

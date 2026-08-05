@@ -112,7 +112,7 @@ enum class SettingsRootContent(val title: String) {
 @Composable
 fun SettingsScreen(
     onSectionClick: (SettingsSection) -> Unit,
-    onOpenPlaylistDetail: () -> Unit = {},
+    onOpenPlaylistDetail: (String) -> Unit = {},
     onOpenPlaylists: () -> Unit = {},
     onAddPlaylist: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
@@ -196,9 +196,19 @@ fun SettingsScreen(
                     activeId = activeId,
                     // In a pane the top bar already reads "Playlists".
                     showHeader = fullRoot,
+                    paneHost = content == SettingsRootContent.PlaylistsOnly,
                     onTap = { pl ->
-                        if (pl.id == activeId) onOpenPlaylistDetail()
-                        else viewModel.switchToPlaylist(pl.id)
+                        // Rev 2 canon amendment 1: in a pane host (tablet
+                        // sidebar / TV rail) EVERY playlist row enters its
+                        // detail, where the new Set Active row lives. The
+                        // phone root keeps tap-to-activate untouched.
+                        if (content == SettingsRootContent.PlaylistsOnly) {
+                            onOpenPlaylistDetail(pl.id)
+                        } else if (pl.id == activeId) {
+                            onOpenPlaylistDetail(pl.id)
+                        } else {
+                            viewModel.switchToPlaylist(pl.id)
+                        }
                     },
                     onAdd = onAddPlaylist,
                     onManage = onOpenPlaylists,
@@ -293,6 +303,7 @@ private fun PlaylistsSection(
     playlists: List<PlaylistEntity>,
     activeId: String?,
     showHeader: Boolean = true,
+    paneHost: Boolean = false,
     onTap: (PlaylistEntity) -> Unit,
     onAdd: () -> Unit,
     onManage: () -> Unit,
@@ -387,7 +398,14 @@ private fun PlaylistsSection(
         if (playlists.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             // Input-appropriate verbs: a remote has no "tap".
-            if (rememberIsTvDevice()) {
+            if (paneHost) {
+                // Pane hosts enter the detail on select, so the activate verb
+                // moved; the phone strings below are untouched.
+                SectionFooter("Select a playlist to open it · Set Active lives in its Actions section")
+                if (playlists.size > 1) {
+                    SectionFooter("Select Manage Playlists to reorder")
+                }
+            } else if (rememberIsTvDevice()) {
                 SectionFooter("Press OK on a playlist to make it active · Open the active playlist to edit or delete it")
                 if (playlists.size > 1) {
                     SectionFooter("Select Manage Playlists to reorder")

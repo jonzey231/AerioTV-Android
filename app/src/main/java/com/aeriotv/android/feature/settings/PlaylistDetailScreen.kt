@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
@@ -74,10 +75,24 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 fun PlaylistDetailScreen(
     onBack: () -> Unit,
     onEdit: () -> Unit = {},
+    // Rev 2 canon amendment 1: the rail and sidebar select ANY playlist and
+    // show its detail, so this page can no longer assume it is looking at the
+    // active one. Null keeps the old behavior for callers that mean "active".
+    playlistId: String? = null,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val playlist = state.playlist
+    val allPlaylists by viewModel.allPlaylists.collectAsStateWithLifecycle(
+        initialValue = emptyList(),
+    )
+    val playlist = allPlaylists.firstOrNull { it.id == playlistId } ?: state.playlist
+    // Whether the playlist ON SCREEN is the active one. The refresh/test
+    // actions below are deliberately gated on this: every one of them resolves
+    // `repository.activePlaylist()` and loads its result into the single
+    // channel/EPG store, so running them while viewing a DIFFERENT playlist
+    // would act on the wrong source and leave the store disagreeing with the
+    // page. Set Active is the call to action instead; refresh once it is live.
+    val isActivePlaylist = playlist != null && playlist.id == state.playlist?.id
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRefreshAll by remember { mutableStateOf(false) }
 
@@ -260,6 +275,19 @@ fun PlaylistDetailScreen(
 
             item {
                 Section(header = "Actions", footer = null) {
+                    // Rev 2 canon amendment 1: activation lives here on every
+                    // form factor. The rail and sidebar make selection show the
+                    // detail, so OK-to-activate cannot survive on those roots;
+                    // this row replaces it one move away. Mirrors Apple's
+                    // ServerDetailView.swift:243-253.
+                    ActionRow(
+                        icon = if (isActivePlaylist) Icons.Filled.CheckCircle
+                        else Icons.Outlined.PowerSettingsNew,
+                        label = if (isActivePlaylist) "Active Playlist" else "Set Active",
+                        onClick = { playlist?.id?.let { viewModel.switchToPlaylist(it) } },
+                        enabled = !isActivePlaylist,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                     if (isTv) {
                         ActionRow(
                             icon = Icons.Outlined.Edit,
@@ -268,6 +296,7 @@ fun PlaylistDetailScreen(
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                     }
+                    if (isActivePlaylist) {
                     ActionRow(
                         icon = Icons.Outlined.Public,
                         label = "Test Connection",
@@ -283,7 +312,8 @@ fun PlaylistDetailScreen(
                         running = state.playlistRefreshStatus is PlaylistViewModel.ActionStatus.Running,
                         status = state.playlistRefreshStatus,
                     )
-                    if (!playlist.lanUrlString.isNullOrBlank()) {
+                    }
+                    if (isActivePlaylist && !playlist.lanUrlString.isNullOrBlank()) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                         ActionRow(
                             icon = Icons.Outlined.Wifi,
@@ -296,7 +326,7 @@ fun PlaylistDetailScreen(
                 }
             }
 
-            item {
+            if (isActivePlaylist) item {
                 Section(
                     header = "EPG Cache",
                     footer = "Clears this playlist's cached guide data and downloads it fresh from the server. Use this if program cells look wrong or are missing. Takes a few minutes on large playlists.",
@@ -319,7 +349,7 @@ fun PlaylistDetailScreen(
                 }
             }
 
-            item {
+            if (isActivePlaylist) item {
                 Section(
                     header = "Full Refresh",
                     footer = "Clears every cache (channels, guide data, and On Demand) and reloads this playlist from scratch. Use this if newly-added channels, guide data, or movies and shows are missing or stale after changes on the server.",
@@ -489,13 +519,19 @@ private fun ActionRow(
     onClick: () -> Unit,
     destructive: Boolean = false,
     running: Boolean = false,
+    enabled: Boolean = true,
     status: PlaylistViewModel.ActionStatus = PlaylistViewModel.ActionStatus.Idle,
 ) {
     // The whole row is the click/focus target. The old shape (label inside a
     // TextButton) gave D-pad focus a tiny pill around the text only, which
     // looked out of place next to the full-width rows around it.
     var focused by remember { mutableStateOf(false) }
-    val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    val baseAccent = if (destructive) MaterialTheme.colorScheme.error
+    else MaterialTheme.colorScheme.primary
+    // Same rule as the shared SettingsActionRow: a disabled row stays FOCUSABLE
+    // so it does not drop out of D-pad traversal and strand focus; it dims and
+    // swallows the click instead. "Active Playlist" is exactly this state.
+    val accent = if (enabled) baseAccent else baseAccent.copy(alpha = 0.38f)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -510,7 +546,7 @@ private fun ActionRow(
             // Guarded instead of clickable(enabled = !running) so the row
             // keeps its D-pad focus stop while a run is in flight; a disabled
             // clickable drops out of focus traversal entirely.
-            .clickable(onClick = { if (!running) onClick() })
+            .clickable(onClick = { if (!running && enabled) onClick() })
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
