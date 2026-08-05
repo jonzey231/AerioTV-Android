@@ -40,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -62,6 +63,20 @@ fun SettingsNavRow(
 ) {
     var focused by remember { mutableStateOf(false) }
     val isTv = rememberIsTvDevice()
+    // 10-foot metrics. Measured against tvOS on the SAME 1080p panel
+    // (2026-08-05): its rail row is 5.3% of screen height and it shows 9 items;
+    // ours was 19.4% and showed 5. Two causes, both fixed here.
+    //
+    // 1. tvOS TRUNCATES the subtitle to one line; we wrapped to two, so every
+    //    row grew by a whole line. maxLines below matches tvOS.
+    // 2. The icon box and padding are phone touch-target values. Android TV
+    //    gets a 960x540dp canvas where tvOS gets 1920x1080pt, so a 34dp icon is
+    //    3.5% of the width against tvOS's 34pt at 1.8% - literally double.
+    val iconBox = if (isTv) 24.dp else 34.dp
+    val iconGlyph = if (isTv) 15.dp else 18.dp
+    val gap = if (isTv) 8.dp else 12.dp
+    val padH = if (isTv) 10.dp else 14.dp
+    val padV = if (isTv) 7.dp else 14.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -76,12 +91,12 @@ fun SettingsNavRow(
                 } else Modifier,
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 14.dp),
+            .padding(horizontal = padH, vertical = padV),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(34.dp)
+                .size(iconBox)
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
             contentAlignment = Alignment.Center,
@@ -90,10 +105,10 @@ fun SettingsNavRow(
                 imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(iconGlyph),
             )
         }
-        Spacer(Modifier.size(12.dp))
+        Spacer(Modifier.size(gap))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -101,6 +116,8 @@ fun SettingsNavRow(
                 color = if (selected && !focused) MaterialTheme.colorScheme.onSecondaryContainer
                 else MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
+                maxLines = if (isTv) 1 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
             )
             if (subtitle != null) {
                 Text(
@@ -112,6 +129,12 @@ fun SettingsNavRow(
                     else MaterialTheme.typography.bodySmall,
                     color = if (selected && !focused) MaterialTheme.colorScheme.onSecondaryContainer
                     else MaterialTheme.colorScheme.onSurfaceVariant,
+                    // tvOS truncates here rather than wrapping; matching it is
+                    // what keeps the rail row a single fixed height. TOUCH keeps
+                    // wrapping - the tablet sidebar deliberately shows Sync's
+                    // long subtitle over two lines and must not change.
+                    maxLines = if (isTv) 1 else Int.MAX_VALUE,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
