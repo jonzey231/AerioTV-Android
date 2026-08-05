@@ -103,6 +103,7 @@ import com.aeriotv.android.feature.settings.SettingsSubScreenPlaceholder
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 import com.aeriotv.android.ui.adaptive.prefersTopTabBar
+import com.aeriotv.android.ui.adaptive.topTabBarScale
 import com.aeriotv.android.ui.adaptive.rememberViewport
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.feature.settings.SettingsTwoPaneHost
@@ -625,7 +626,9 @@ fun MainScaffold(
     // screens stop reserving bottom space for a pill that is no longer there,
     // and the top bar consumes the status-bar inset so each screen's own
     // TopAppBar does not apply it a second time.
-    val topTabBar = rememberViewport().prefersTopTabBar
+    val viewport = rememberViewport()
+    val topTabBar = viewport.prefersTopTabBar
+    val tabBarScale = viewport.topTabBarScale
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -646,21 +649,18 @@ fun MainScaffold(
       ) {
       androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
         if (topTabBar) {
-            // Centered capsule rather than an edge-to-edge bar: at 1280dp the
-            // full-width pill leaves each tab stranded in its own dead zone,
-            // and iPad's top bar is a centered cluster.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(top = 6.dp, bottom = 6.dp),
+                    .padding(top = 8.dp, bottom = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                FloatingTabBar(
+                TabletTopTabBar(
                     tabs = tabs,
                     selected = selectedTab,
                     onSelect = { selectedTab = it; initialTabApplied = true },
-                    modifier = Modifier.widthIn(max = 620.dp),
+                    scale = tabBarScale,
                 )
             }
         }
@@ -1028,6 +1028,63 @@ private fun CompanionControlPickerDialog(
  * NavigationBar. Wrap-content width, surface fill with the shared accent
  * hairline, selected tab gets a soft accent capsule behind icon + label.
  */
+/**
+ * Tablet top tab bar, matched to iPad's (Phase 4 reference capture, 2026-08-04).
+ *
+ * Deliberately NOT the phone pill scaled up. iPad's top bar is text-only, hugs
+ * its labels instead of distributing them across the window, stands about half
+ * the phone bar's height, and marks the selection with a lighter neutral fill
+ * plus accent text rather than an accent wash. Reproducing those proportions is
+ * the whole point -- an icon-over-label stack at this height reads as a phone
+ * bar that wandered to the top of a tablet.
+ *
+ * [scale] comes from Viewport.topTabBarScale so the bar holds its share of the
+ * screen from an 8-inch tablet up to a 13-inch one.
+ */
+@Composable
+private fun TabletTopTabBar(
+    tabs: List<AppTab>,
+    selected: AppTab,
+    onSelect: (AppTab) -> Unit,
+    scale: Float,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                CircleShape,
+            )
+            .padding(all = 4.dp * scale),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tabs.forEach { tab ->
+            val isSel = tab == selected
+            Text(
+                text = tab.label,
+                fontSize = 17.sp * scale,
+                fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Medium,
+                // iPad: the selected tab is a LIGHTER neutral fill with accent
+                // text, not an accent-tinted fill.
+                color = if (isSel) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(
+                        if (isSel) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        else Color.Transparent,
+                    )
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = 18.dp * scale, vertical = 7.dp * scale),
+            )
+        }
+    }
+}
+
 @Composable
 private fun FloatingTabBar(
     tabs: List<AppTab>,

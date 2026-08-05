@@ -180,3 +180,17 @@ val LocalTabBarBottomInset = androidx.compose.runtime.compositionLocalOf { 104.d
  * Phones keep the bottom pill; TV has its own 10-foot top bar already.
  */
 val Viewport.prefersTopTabBar: Boolean get() = isTwoPaneEligible
+
+/**
+ * Size multiplier for the tablet top tab bar, 1.0 at the iPad 12.9-inch
+ * reference width (1024pt).
+ *
+ * Matching iPad's ABSOLUTE point sizes would render visibly small here: an
+ * Android tablet reports more dp across a similar physical width (the Pixel
+ * Tablet is 1280dp over roughly the same span the iPad covers in 1024pt), so
+ * a 38dp bar would be a smaller fraction of the screen than iPad's 38pt one.
+ * Scaling by width keeps the bar the same PROPORTION of the display it is on
+ * iPad, which is what makes an 8-inch and a 13-inch tablet both look right.
+ * Clamped so the extremes stay sane.
+ */
+val Viewport.topTabBarScale: Float get() = (widthDp / 1024f).coerceIn(0.9f, 1.35f)
