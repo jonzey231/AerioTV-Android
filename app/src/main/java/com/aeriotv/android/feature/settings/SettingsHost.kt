@@ -234,8 +234,21 @@ private fun SettingsSidebar(
 
 // MARK: - TV rail (plan B2/B4)
 
-/** Rail width and overscan-safe start inset for the 10-foot host. */
-private val TvRailWidth = 300.dp
+/**
+ * Rail width and overscan-safe start inset for the 10-foot host.
+ *
+ * Sized as a FRACTION of the canvas, not by copying tvOS's point value.
+ * A 1080p panel gives Android 960x540dp (1920x1080 at density 320) where
+ * tvOS gets 1920x1080pt, so an identical number is twice the physical size
+ * here. tvOS's rail is 430pt of 1920 = 22.4%; 220dp of 960 = 22.9%, which
+ * lands the two rails at the same size on the same TV. The plan's "~300dp"
+ * predated this measurement and read as 36% of the screen on the Streamer.
+ *
+ * The type ladder already scales correctly by the same logic (tvOS 30pt of
+ * 1920 = 1.56%; bodyLarge 16sp at the 0.9 TV scale = 14.4dp of 960 = 1.5%),
+ * so the narrower rail fits its labels exactly as tvOS's does.
+ */
+private val TvRailWidth = 220.dp
 private val TvOverscanStart = 48.dp
 
 /**
