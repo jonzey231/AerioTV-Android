@@ -87,9 +87,12 @@ fun SettingsNavRow(
     // 2. The icon box and padding are phone touch-target values. Android TV
     //    gets a 960x540dp canvas where tvOS gets 1920x1080pt, so a 34dp icon is
     //    3.5% of the width against tvOS's 34pt at 1.8% - literally double.
-    val iconBox = if (isTv) 24.dp else 34.dp
-    val iconGlyph = if (isTv) 15.dp else 18.dp
-    val gap = if (isTv) 8.dp else 12.dp
+    // TV values come from TvSettingsMetrics, which is Apple's tvOS ladder
+    // halved for the 960x540dp canvas - see that file for why halving is the
+    // correct conversion. Touch keeps the phone/tablet values.
+    val iconBox = if (isTv) TvSettingsMetrics.railIconWidth else 34.dp
+    val iconGlyph = if (isTv) TvSettingsMetrics.railIconGlyph else 18.dp
+    val gap = if (isTv) TvSettingsMetrics.railIconGap else 12.dp
     val padH = if (isTv) 10.dp else 14.dp
     val padV = if (isTv) 2.dp else 14.dp
     Row(
@@ -139,8 +142,18 @@ fun SettingsNavRow(
         Box(
             modifier = Modifier
                 .size(iconBox)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+                .then(
+                    // tvOS's rail icon is a bare tinted glyph; the filled tile
+                    // is a touch-surface affordance and reads as extra chrome
+                    // at 10 feet. Phone and tablet keep the tile.
+                    if (isTv) {
+                        Modifier
+                    } else {
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+                    },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -151,11 +164,21 @@ fun SettingsNavRow(
             )
         }
         Spacer(Modifier.size(gap))
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(
+                if (isTv) TvSettingsMetrics.railTextSpacing else 0.dp,
+            ),
+        ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge.let {
-                    if (isTv) it.copy(lineHeight = 17.sp) else it
+                    if (isTv) {
+                        it.copy(
+                            fontSize = TvSettingsMetrics.railTitleSize,
+                            lineHeight = TvSettingsMetrics.railTitleLineHeight,
+                        )
+                    } else it
                 },
                 color = if (selected && !focused) MaterialTheme.colorScheme.onSecondaryContainer
                 else MaterialTheme.colorScheme.onBackground,
@@ -170,7 +193,10 @@ fun SettingsNavRow(
                     // scale; bodyMedium keeps the subtitle readable from the
                     // couch.
                     style = if (isTv) {
-                        MaterialTheme.typography.bodyMedium.copy(lineHeight = 13.sp)
+                        MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = TvSettingsMetrics.railSubtitleSize,
+                            lineHeight = TvSettingsMetrics.railSubtitleLineHeight,
+                        )
                     } else {
                         MaterialTheme.typography.bodySmall
                     },
