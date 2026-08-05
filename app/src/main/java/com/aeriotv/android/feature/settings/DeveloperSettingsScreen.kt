@@ -59,6 +59,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.core.debug.DebugLogger
+import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import com.aeriotv.android.ui.settings.SettingsActionRow
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
@@ -126,7 +127,16 @@ fun DeveloperSettingsScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "Developer", onBack = onBack)
 
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = androidx.compose.ui.Alignment.TopCenter,
+        ) {
         LazyColumn(
+            // Phase B1 bug fix: this was the only settings screen missing the
+            // readable-width cap, so on a tablet or TV its rows stretched the
+            // full window while every sibling screen capped. Matches the
+            // Network/DVR/Playlist pattern.
+            modifier = Modifier.adaptiveFormWidth().fillMaxSize(),
             // 104dp bottom clears the MainScaffold NavigationBar so the
             // Build section (version code, "What's Captured" list) isn't
             // clipped.
@@ -164,6 +174,7 @@ fun DeveloperSettingsScreen(
             item("captured") { WhatsCapturedSection() }
 
             item("build") { BuildInfoSection() }
+        }
         }
     }
 
