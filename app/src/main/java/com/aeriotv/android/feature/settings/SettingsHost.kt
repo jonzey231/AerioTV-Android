@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.aeriotv.android.ui.settings.LocalSettingsInPane
 import com.aeriotv.android.ui.settings.SettingsNavRow
 import com.aeriotv.android.ui.settings.SettingsSectionHeader
+import com.aeriotv.android.ui.settings.TvSettingsMetrics
 
 /** Touch sidebar width (plan B3). The TV rail widens to 300dp in B4. */
 private val SidebarWidth = 320.dp
@@ -252,7 +253,12 @@ private fun SettingsSidebar(
  * so the narrower rail fits its labels exactly as tvOS's does.
  */
 private val TvRailWidth = 220.dp
-private val TvOverscanStart = 48.dp
+
+/**
+ * The rail's left inset. Aliases the shared metric so full-screen takeovers
+ * (which have no rail to align against) start at the exact same edge.
+ */
+private val TvOverscanStart = TvSettingsMetrics.overscanStart
 
 /**
  * Debounce before a focused rail row becomes the SELECTED one.

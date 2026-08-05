@@ -55,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.aeriotv.android.ui.settings.TvSettingsMetrics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
@@ -142,7 +143,21 @@ fun ConfigureSourceScreen(
     TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Configure", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+            title = {
+                Text(
+                    "Configure",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    // See ChooseSourceTypeScreen: hiding the TV back arrow
+                    // collapses the nav-icon slot and leaves the title inside
+                    // the title-safe margin.
+                    modifier = if (rememberIsTvDevice()) {
+                        Modifier.padding(start = TvSettingsMetrics.topAppBarTitleOverscanPadding)
+                    } else {
+                        Modifier
+                    },
+                )
+            },
             navigationIcon = {
                 // No back arrow on Android TV -- the remote BACK steps back to
                 // source-type pick. Phones/tablets keep it.

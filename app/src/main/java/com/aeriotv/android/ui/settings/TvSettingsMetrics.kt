@@ -55,6 +55,33 @@ object TvSettingsMetrics {
     // the font size. These restore the SwiftUI ratio.
     val railTitleLineHeight = 16.sp
     val railSubtitleLineHeight = 11.sp
+
+    // MARK: Overscan
+    //
+    // The TV title-safe inset every full-screen Settings surface starts at.
+    // 48dp of the 960dp canvas is 5%, the standard TV title-safe margin.
+    //
+    // This lives here rather than privately in a host because full-screen
+    // TAKEOVERS have to match the rail's left edge exactly. A Material
+    // `TopAppBar` whose navigation icon is hidden (as it is on TV, where the
+    // remote BACK replaces the arrow) collapses its title to the default 16dp
+    // inset, which lands the title a third of the way inside the overscan
+    // margin - measured at ~32px against the rail's 96px on a 1080p Streamer.
+    // `CenterAlignedTopAppBar` does not have the problem because its title is
+    // centred, which is why Add More Categories looked right and the Add
+    // Playlist wizard did not.
+    val overscanStart = 48.dp
+
+    /**
+     * Extra start padding a Material `TopAppBar` title needs to sit at exactly
+     * [overscanStart].
+     *
+     * Material already applies a 16dp title inset of its own, so padding a
+     * takeover title by the full [overscanStart] overshoots the rail's left
+     * edge by that much (measured 128px against the rail's 96px on a 1080p
+     * Streamer). Subtract it so the two line up.
+     */
+    val topAppBarTitleOverscanPadding = overscanStart - 16.dp
 }
 
 // MARK: - Settings text styles

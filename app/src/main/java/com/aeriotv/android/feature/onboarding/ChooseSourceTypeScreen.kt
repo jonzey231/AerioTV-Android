@@ -29,6 +29,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.aeriotv.android.ui.settings.TvSettingsMetrics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -56,7 +57,22 @@ fun ChooseSourceTypeScreen(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Add Playlist", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+            title = {
+                Text(
+                    "Add Playlist",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    // TV hides the back arrow below, which collapses the
+                    // navigation-icon slot and drops the title onto Material's
+                    // 16dp inset - inside the title-safe margin. Re-establish
+                    // the same left edge the Settings rail uses.
+                    modifier = if (rememberIsTvDevice()) {
+                        Modifier.padding(start = TvSettingsMetrics.topAppBarTitleOverscanPadding)
+                    } else {
+                        Modifier
+                    },
+                )
+            },
             navigationIcon = {
                 // No back arrow on Android TV -- the remote BACK steps back
                 // (out of the Add Playlist wizard). Phones/tablets keep it.
