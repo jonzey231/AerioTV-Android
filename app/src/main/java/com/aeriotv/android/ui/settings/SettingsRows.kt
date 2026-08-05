@@ -69,7 +69,7 @@ import com.aeriotv.android.ui.tv.tvFocusScale
 fun SettingsSectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
+        style = settingsEyebrowStyle(),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(start = 6.dp, top = 4.dp, bottom = 2.dp),
@@ -81,7 +81,7 @@ fun SettingsSectionHeader(text: String, modifier: Modifier = Modifier) {
 fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
-        style = MaterialTheme.typography.bodySmall,
+        style = settingsFootnoteStyle(),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.padding(start = 6.dp, end = 6.dp, top = 2.dp),
     )
@@ -169,14 +169,14 @@ fun SettingsSelectionRow(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyLarge,
+                style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = settingsFootnoteStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -227,7 +227,7 @@ fun SettingsToggleRow(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.bodyLarge,
+                style = settingsRowTitleStyle(),
                 color = if (enabled) MaterialTheme.colorScheme.onBackground
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Medium,
@@ -235,7 +235,7 @@ fun SettingsToggleRow(
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = settingsFootnoteStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -260,7 +260,7 @@ fun OnOffIndicator(on: Boolean) {
         Spacer(Modifier.width(8.dp))
         Text(
             text = if (on) "On" else "Off",
-            style = MaterialTheme.typography.bodyLarge,
+            style = settingsRowTitleStyle(),
             color = if (on) onColor else offColor,
             fontWeight = FontWeight.SemiBold,
         )
@@ -314,21 +314,21 @@ fun SettingsActionRow(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyLarge,
+                style = settingsRowTitleStyle(),
                 color = accent,
                 fontWeight = FontWeight.Medium,
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = settingsFootnoteStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (statusLine != null) {
                 Text(
                     text = statusLine,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = settingsFootnoteStyle(),
                     color = if (statusIsError) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.primary,
                 )
@@ -374,13 +374,13 @@ fun SettingsInfoRow(
         }
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyLarge,
+            style = settingsRowTitleStyle(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyLarge,
+            style = settingsRowTitleStyle(),
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Medium,
         )
@@ -429,7 +429,7 @@ fun SettingsDetailTopBar(title: String, onBack: () -> Unit) {
         title = {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleLarge,
+                style = settingsTitleStyle(),
                 fontWeight = FontWeight.Bold,
             )
         },

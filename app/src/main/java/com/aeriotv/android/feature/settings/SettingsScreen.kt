@@ -67,6 +67,11 @@ import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import com.aeriotv.android.ui.settings.SettingsNavRow
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.settings.settingsPaneWidth
+import com.aeriotv.android.ui.settings.settingsEyebrowStyle
+import com.aeriotv.android.ui.settings.settingsFootnoteStyle
+import com.aeriotv.android.ui.settings.settingsRowTitleStyle
+import com.aeriotv.android.ui.settings.settingsRowValueStyle
+import com.aeriotv.android.ui.settings.settingsTitleStyle
 import java.text.DateFormat
 import java.util.Date
 
@@ -155,7 +160,7 @@ fun SettingsScreen(
             title = {
                 Text(
                     text = content.title,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = settingsTitleStyle(),
                     fontWeight = FontWeight.Bold,
                 )
             },
@@ -333,7 +338,7 @@ private fun PlaylistsSection(
                 ) {
                     Text(
                         text = "No playlists added",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = settingsRowValueStyle(),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -369,7 +374,7 @@ private fun PlaylistsSection(
                 Spacer(Modifier.size(10.dp))
                 Text(
                     text = "Add Playlist",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = settingsRowValueStyle(),
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,
                 )
@@ -388,7 +393,7 @@ private fun PlaylistsSection(
                 ) {
                     Text(
                         text = "Manage Playlists",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = settingsRowValueStyle(),
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.weight(1f),
                     )
@@ -454,7 +459,7 @@ private fun PlaylistRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = playlist.name,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = settingsRowTitleStyle(),
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                 )
@@ -468,8 +473,7 @@ private fun PlaylistRow(
                 }
                 Text(
                     text = subtitle,
-                    style = if (isTv) MaterialTheme.typography.bodyMedium
-                    else MaterialTheme.typography.bodySmall,
+                    style = settingsFootnoteStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -567,7 +571,7 @@ private fun LegacySectionNavRow(section: SettingsSection, onClick: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = section.title,
-                style = MaterialTheme.typography.bodyLarge,
+                style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
             )
@@ -575,8 +579,7 @@ private fun LegacySectionNavRow(section: SettingsSection, onClick: () -> Unit) {
                 text = section.subtitle,
                 // bodySmall is ~10.8sp effective under the 0.9 TV type scale;
                 // bodyMedium keeps the subtitle readable from the couch.
-                style = if (rememberIsTvDevice()) MaterialTheme.typography.bodyMedium
-                else MaterialTheme.typography.bodySmall,
+                style = settingsFootnoteStyle(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -644,7 +647,7 @@ private fun AboutSection(
         Spacer(Modifier.height(16.dp))
         Text(
             text = "In loving memory of Jesse Mann aka EPG Guru",
-            style = MaterialTheme.typography.bodySmall,
+            style = settingsFootnoteStyle(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontStyle = FontStyle.Italic,
             textAlign = TextAlign.Center,
@@ -665,13 +668,13 @@ private fun AboutInfoRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = settingsRowValueStyle(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyMedium,
+            style = settingsRowValueStyle(),
             color = MaterialTheme.colorScheme.onBackground,
         )
     }
@@ -703,7 +706,7 @@ private fun AboutActionRow(
         Spacer(Modifier.size(10.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = settingsRowValueStyle(),
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
@@ -725,7 +728,7 @@ private fun AboutActionRow(
 private fun SectionHeader(text: String) {
     Text(
         text = text.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
+        style = settingsEyebrowStyle(),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(horizontal = 4.dp),
@@ -736,9 +739,10 @@ private fun SectionHeader(text: String) {
 private fun SectionFooter(text: String) {
     Text(
         text = text,
-        // labelSmall lands at ~9.9sp effective under the 0.9 TV type scale --
-        // unreadable from a couch; bodyMedium on TV, labelSmall on phones.
-        style = if (rememberIsTvDevice()) MaterialTheme.typography.bodyMedium
+        // TV takes the tvOS footnote (20pt halved); PHONES keep labelSmall
+        // verbatim - the shared helper falls back to bodySmall, which would
+        // have quietly enlarged frozen phone canon.
+        style = if (rememberIsTvDevice()) settingsFootnoteStyle()
         else MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
         modifier = Modifier.padding(horizontal = 4.dp),
