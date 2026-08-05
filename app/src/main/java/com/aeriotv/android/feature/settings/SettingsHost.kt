@@ -322,10 +322,25 @@ fun SettingsTvRailHost(
     // with a push they can no longer see. The next D-pad move then reads as a
     // rail selection and popToRoot() throws the push away. Takeovers are
     // excluded: they replace the whole host and bring their own focus.
+    //
+    // POPPING one is the mirror case, and it needs handling here too. In a
+    // two-pane host MainScaffold's `subScreenKey` is null for a pane push AND
+    // for its pop, so its focus pull never fires on either edge; without this,
+    // Back left focus to Compose's fallback, which parked it on the top tab
+    // bar's Live TV pill (observed on the Streamer 2026-08-05). Logan's call is
+    // that Back returns to the SIDEBAR, so aim at `railFocus` - which is
+    // attached to the SELECTED rail row, landing the user exactly where they
+    // pushed from. Takeovers are excluded on this edge too: MainScaffold's
+    // exiting-to-root branch already focuses them out correctly.
+    var prevPushed by remember { mutableStateOf<SettingsRoute?>(null) }
     androidx.compose.runtime.LaunchedEffect(pushed) {
+        val previous = prevPushed
         if (pushed != null && !takeover(pushed)) {
             runCatching { detailFocus.requestFocus() }
+        } else if (pushed == null && previous != null && !takeover(previous)) {
+            runCatching { railFocus.requestFocus() }
         }
+        prevPushed = pushed
     }
 
     // Back in the pane returns focus to the rail instead of leaving Settings.
