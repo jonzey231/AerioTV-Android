@@ -29,6 +29,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.outlined.Info
@@ -39,7 +48,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.focusGroup
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -219,4 +230,189 @@ private fun SettingsSidebar(
             }
         }
     }
+}
+
+// MARK: - TV rail (plan B2/B4)
+
+/** Rail width and overscan-safe start inset for the 10-foot host. */
+private val TvRailWidth = 300.dp
+private val TvOverscanStart = 48.dp
+
+/**
+ * Debounce before a focused rail row becomes the SELECTED one.
+ *
+ * Focus-follows-selection means holding DOWN through the rail would
+ * otherwise rebuild the detail pane once per row. The same 150ms as the
+ * tvOS rail (plan A3), so the two TV apps feel identical. DPAD_RIGHT
+ * FLUSHES a pending selection before moving focus, so entering the pane
+ * never lands on the previous row's content.
+ */
+private const val RailSelectDebounceMs = 150L
+
+/**
+ * Android TV Settings: a persistent rail of categories on the left, the
+ * selected pane on the right.
+ *
+ * Focus contract, mirroring `GroupSidebarPanel` (the proven in-app TV rail):
+ *  - focusing a rail row selects it after [RailSelectDebounceMs]
+ *  - DPAD_RIGHT flushes that pending selection, then moves focus into the pane
+ *  - Back with focus in the pane returns it to the rail rather than exiting
+ *  - Back with focus on the rail falls through to the tab bar, unchanged
+ */
+@Composable
+fun SettingsTvRailHost(
+    selection: SettingsRoute,
+    onSelect: (SettingsRoute) -> Unit,
+    pushed: SettingsRoute?,
+    sections: List<SettingsSectionGroupSpec>,
+    activePlaylistName: String?,
+    takeover: (SettingsRoute) -> Boolean,
+    detail: @Composable (SettingsRoute) -> Unit,
+) {
+    if (pushed != null && takeover(pushed)) {
+        // Edit / Add-playlist / log viewer / category editors replace the whole
+        // host, exactly as they do today, so all the TV keyboard and IME
+        // plumbing on those screens is untouched.
+        detail(pushed)
+        return
+    }
+
+    val railFocus = remember { FocusRequester() }
+    val detailFocus = remember { FocusRequester() }
+    var railHasFocus by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<SettingsRoute?>(null) }
+
+    // Debounced commit. Keyed on `pending`, so each new focus restarts the
+    // timer and a fast scroll through the rail commits only where it stops.
+    androidx.compose.runtime.LaunchedEffect(pending) {
+        val next = pending ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(RailSelectDebounceMs)
+        if (next != selection) onSelect(next)
+    }
+    val flushPending = {
+        pending?.let { if (it != selection) onSelect(it) }
+    }
+
+    // Back in the pane returns focus to the rail instead of leaving Settings.
+    // Disabled while something is pushed so the nav stack's own handler pops
+    // first, and while the rail already holds focus so Back reaches the tabs.
+    androidx.activity.compose.BackHandler(enabled = pushed == null && !railHasFocus) {
+        runCatching { railFocus.requestFocus() }
+    }
+
+    Row(modifier = Modifier.fillMaxSize()) {
+        SettingsTvRail(
+            selection = selection,
+            sections = sections,
+            activePlaylistName = activePlaylistName,
+            onFocusRoute = { pending = it },
+            onClickRoute = { route ->
+                pending = route
+                if (route != selection) onSelect(route)
+                runCatching { detailFocus.requestFocus() }
+            },
+            railFocus = railFocus,
+            modifier = Modifier
+                .width(TvRailWidth + TvOverscanStart)
+                .onFocusChanged { railHasFocus = it.hasFocus }
+                .onPreviewKeyEvent { event ->
+                    val right = event.key == Key.DirectionRight &&
+                        event.type == KeyEventType.KeyDown
+                    if (right) {
+                        // Apply the pending selection BEFORE crossing the
+                        // boundary, or the pane the user just entered would
+                        // still be showing the previously committed route.
+                        flushPending()
+                        runCatching { detailFocus.requestFocus() }
+                        true
+                    } else {
+                        false
+                    }
+                },
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .focusRequester(detailFocus)
+                .focusGroup(),
+        ) {
+            if (pushed != null) {
+                detail(pushed)
+            } else {
+                CompositionLocalProvider(LocalSettingsInPane provides true) {
+                    detail(selection)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsTvRail(
+    selection: SettingsRoute,
+    sections: List<SettingsSectionGroupSpec>,
+    activePlaylistName: String?,
+    onFocusRoute: (SettingsRoute) -> Unit,
+    onClickRoute: (SettingsRoute) -> Unit,
+    railFocus: FocusRequester,
+    modifier: Modifier = Modifier,
+) {
+    // Flatten to one list so the selected index (for initial scroll + focus) is
+    // a simple lookup rather than a per-section calculation.
+    val rows = remember(sections, activePlaylistName) {
+        buildList {
+            add(Triple(SettingsRoute.Playlists as SettingsRoute, "Playlists", activePlaylistName))
+            sections.forEach { group ->
+                group.sections.forEach { section ->
+                    add(Triple(SettingsRoute.Section(section), section.title, section.subtitle))
+                }
+            }
+            add(Triple(SettingsRoute.About as SettingsRoute, "About", null))
+        }
+    }
+    val selectedIndex = rows.indexOfFirst { it.first == selection }.coerceAtLeast(0)
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        // Land with the selected row visible and focused, like GroupSidebarPanel.
+        runCatching { listState.scrollToItem(selectedIndex) }
+        runCatching { railFocus.requestFocus() }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier.fillMaxHeight(),
+        contentPadding = PaddingValues(
+            start = TvOverscanStart,
+            end = 12.dp,
+            // Vertical overscan band, matching the root list's 28dp bottom.
+            top = 24.dp,
+            bottom = 28.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        itemsIndexed(rows, key = { _, row -> encodeSettingsRoute(row.first) }) { index, row ->
+            val (route, title, subtitle) = row
+            SettingsNavRow(
+                title = title,
+                subtitle = subtitle,
+                icon = settingsRouteIcon(route),
+                onClick = { onClickRoute(route) },
+                selected = route == selection,
+                trailingChevron = false,
+                modifier = Modifier
+                    .onFocusChanged { if (it.isFocused) onFocusRoute(route) }
+                    .then(
+                        if (index == selectedIndex) Modifier.focusRequester(railFocus)
+                        else Modifier,
+                    ),
+            )
+        }
+    }
+}
+
+/** Rail/sidebar glyph for a route. Sections carry their own. */
+private fun settingsRouteIcon(route: SettingsRoute) = when (route) {
+    is SettingsRoute.Section -> route.section.icon
+    is SettingsRoute.About -> Icons.Outlined.Info
+    else -> Icons.AutoMirrored.Filled.List
 }

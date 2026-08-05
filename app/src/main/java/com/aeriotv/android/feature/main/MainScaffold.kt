@@ -106,6 +106,7 @@ import com.aeriotv.android.ui.adaptive.prefersTopTabBar
 import com.aeriotv.android.ui.adaptive.topTabBarScale
 import com.aeriotv.android.ui.adaptive.rememberViewport
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.feature.settings.SettingsTvRailHost
 import com.aeriotv.android.feature.settings.SettingsTwoPaneHost
 import com.aeriotv.android.feature.settings.rememberSettingsNavState
 import com.aeriotv.android.feature.settings.rememberSettingsPaneSelection
@@ -1444,7 +1445,12 @@ private fun SettingsTabContent(
     // gate -- a landscape phone is "expanded" but far too short -- and TV keeps
     // the stacked layout until B4 lands the rail with its focus contract.
     val isTvDevice = rememberIsTvDevice()
-    val twoPane = rememberViewport().isTwoPaneEligible && !isTvDevice
+    val paneEligible = rememberViewport().isTwoPaneEligible
+    // Same eligibility, two hosts: touch tablets get the tap sidebar (B3), TV
+    // gets the 10-foot rail with its focus contract (B4).
+    val tabletTwoPane = paneEligible && !isTvDevice
+    val tvRail = paneEligible && isTvDevice
+    val twoPane = tabletTwoPane || tvRail
     var selection by rememberSettingsPaneSelection(nav = nav, twoPane = twoPane)
     // True for the route the pane is BASELINED on; pushes above it render as
     // ordinary screens and keep their own back affordance.
@@ -1627,7 +1633,30 @@ private fun SettingsTabContent(
     }
 
     Box(modifier = Modifier.focusRequester(settingsContentFocus).focusGroup()) {
-        if (twoPane) {
+        if (tvRail) {
+            SettingsTvRailHost(
+                selection = selection,
+                onSelect = { picked ->
+                    nav.popToRoot()
+                    selection = picked
+                },
+                pushed = route,
+                sections = visibleSettingsSections(
+                    isTv = true,
+                    updaterEnabled = updaterEnabled,
+                ),
+                activePlaylistName = playlistState.playlist?.name,
+                // Plan B2: the TV takeover set. These keep the whole screen so
+                // their keyboard / IME plumbing is untouched.
+                takeover = {
+                    it is SettingsRoute.LogViewer ||
+                        it is SettingsRoute.EditPlaylist ||
+                        it is SettingsRoute.AddPlaylist ||
+                        it is SettingsRoute.AddMoreCategories
+                },
+                detail = { renderRoute(it) },
+            )
+        } else if (tabletTwoPane) {
             // Rev 2: sidebar browsing mutates `selection` and never pushes, so
             // Back can only unwind real pushes.
             SettingsTwoPaneHost(
