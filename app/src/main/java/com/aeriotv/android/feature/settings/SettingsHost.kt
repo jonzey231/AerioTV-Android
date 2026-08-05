@@ -397,14 +397,19 @@ private fun SettingsTvRail(
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxHeight(),
-        // Budgeted so ALL rail items clear the fold. tvOS fits its 9 without
-        // scrolling; Android carries 11 (Remote Control is TV-only and App
-        // Updates is sideload-only), in roughly 437dp of usable height below
-        // the top nav, so the pitch has to come in near 40dp.
+        // Top inset aligns the first rail row with the DETAIL PANE'S TITLE.
+        // At 8dp the rail started ~20dp above it and read as floating higher
+        // than the body it belongs to (Logan, on the Streamer). tvOS lines its
+        // rail up with the pane content for the same reason.
+        //
+        // Still budgeted so ALL rail items clear the fold: tvOS fits its 9
+        // without scrolling, Android carries 11 (Remote Control is TV-only,
+        // App Updates sideload-only), so the pitch stays near 40dp and the
+        // inset can only spend what the budget leaves.
         contentPadding = PaddingValues(
             start = TvOverscanStart,
             end = 12.dp,
-            top = 8.dp,
+            top = 30.dp,
             bottom = 12.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(3.dp),
