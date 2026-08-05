@@ -309,6 +309,19 @@ fun SettingsTvRailHost(
         pending?.let { if (it != selection) onSelect(it) }
     }
 
+    // A pane-level push (playlist detail, Manage Playlists, a section's own
+    // sub-page) swaps the PANE's content while the rail stays on screen. Focus
+    // has to follow it in, or Compose falls back to the first focusable in the
+    // tree - the rail's top row - and the user is silently back on the rail
+    // with a push they can no longer see. The next D-pad move then reads as a
+    // rail selection and popToRoot() throws the push away. Takeovers are
+    // excluded: they replace the whole host and bring their own focus.
+    androidx.compose.runtime.LaunchedEffect(pushed) {
+        if (pushed != null && !takeover(pushed)) {
+            runCatching { detailFocus.requestFocus() }
+        }
+    }
+
     // Back in the pane returns focus to the rail instead of leaving Settings.
     // Disabled while something is pushed so the nav stack's own handler pops
     // first, and while the rail already holds focus so Back reaches the tabs.

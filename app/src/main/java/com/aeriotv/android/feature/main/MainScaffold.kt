@@ -1425,6 +1425,17 @@ internal fun Modifier.collapsibleChrome(visibleFraction: Float): Modifier = this
         }
     }
 
+/**
+ * Routes that replace the WHOLE Settings host rather than rendering in a pane
+ * (plan B2's TV takeover set). Shared so the focus contract and the rail host
+ * cannot disagree about what counts as a takeover.
+ */
+private fun isSettingsTakeover(route: SettingsRoute): Boolean =
+    route is SettingsRoute.LogViewer ||
+        route is SettingsRoute.EditPlaylist ||
+        route is SettingsRoute.AddPlaylist ||
+        route is SettingsRoute.AddMoreCategories
+
 @Composable
 private fun SettingsTabContent(
     // The PLAYLIST_GRAPH-scoped instance, threaded from MainTabContent. A
@@ -1500,7 +1511,17 @@ private fun SettingsTabContent(
     // lands on the nav. Keyed on the visible sub-screen; the root list (key
     // null) is left alone so the pill -> DOWN -> list traversal is unchanged.
     val settingsContentFocus = remember { FocusRequester() }
-    val subScreenKey: String? = nav.focusKey
+    // Plan B2: "fire it only for full-screen takeovers entering or exiting".
+    // In a two-pane host a push renders INSIDE the pane with the rail still up,
+    // so pulling focus to this outer group would land it on the rail's first
+    // row and orphan the push (traced on the Streamer 2026-08-05). The rail
+    // host moves focus into the pane itself for those; this stays responsible
+    // for the stacked layouts and for takeovers.
+    val subScreenKey: String? = when {
+        !twoPane -> nav.focusKey
+        route != null && isSettingsTakeover(route) -> nav.focusKey
+        else -> null
+    }
     var prevSubScreenKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(subScreenKey) {
         // Pull focus into the content both when a sub-screen OPENS and when it
@@ -1648,12 +1669,7 @@ private fun SettingsTabContent(
                 activePlaylistName = playlistState.playlist?.name,
                 // Plan B2: the TV takeover set. These keep the whole screen so
                 // their keyboard / IME plumbing is untouched.
-                takeover = {
-                    it is SettingsRoute.LogViewer ||
-                        it is SettingsRoute.EditPlaylist ||
-                        it is SettingsRoute.AddPlaylist ||
-                        it is SettingsRoute.AddMoreCategories
-                },
+                takeover = ::isSettingsTakeover,
                 detail = { renderRoute(it) },
             )
         } else if (tabletTwoPane) {
