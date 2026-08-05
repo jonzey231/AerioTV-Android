@@ -45,7 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.Routes
 import com.aeriotv.android.core.update.UpdateState
-import com.aeriotv.android.feature.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 
 /**
  * Launch-prompt gate for the in-app updater (github flavor; renders nothing

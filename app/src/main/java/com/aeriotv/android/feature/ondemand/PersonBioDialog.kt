@@ -58,7 +58,7 @@ import com.aeriotv.android.core.network.TmdbKnownForItem
 import com.aeriotv.android.core.network.TmdbPerson
 import com.aeriotv.android.core.network.TmdbPersonBio
 import com.aeriotv.android.core.tv.qrCodeBitmap
-import com.aeriotv.android.feature.settings.SettingsDialogTextButton
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.tv.tvFocusScale
 import java.text.DateFormat
 import java.text.SimpleDateFormat

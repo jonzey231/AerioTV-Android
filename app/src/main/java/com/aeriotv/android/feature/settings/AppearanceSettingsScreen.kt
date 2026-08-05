@@ -50,6 +50,11 @@ import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.category.parseHex
 import com.aeriotv.android.ui.adaptive.rememberViewport
+import com.aeriotv.android.ui.settings.OnOffIndicator
+import com.aeriotv.android.ui.settings.SettingsDetailTopBar
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
+import com.aeriotv.android.ui.settings.dpadFocusRing
+import com.aeriotv.android.ui.settings.dpadFocusWash
 import com.aeriotv.android.ui.theme.AppTheme
 import com.aeriotv.android.ui.theme.AppearanceMode
 

@@ -25,10 +25,10 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.SettingsRemote
-import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -47,22 +47,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.db.entity.sourceTypeDisplayLabel
 import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
-import com.aeriotv.android.core.data.db.entity.sourceTypeDisplayLabel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
+import com.aeriotv.android.ui.settings.SettingsNavRow
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import java.text.DateFormat
 import java.util.Date
 
@@ -500,6 +502,20 @@ private fun SettingsSectionGroup(
 
 @Composable
 private fun SectionNavRow(section: SettingsSection, onClick: () -> Unit) {
+    // Phase B1: delegates to the shared row so the root gets the same
+    // border+scale+wash focus treatment as every subpage (the old
+    // groupRowFocus was noticeably weaker on TV).
+    SettingsNavRow(
+        title = section.title,
+        subtitle = section.subtitle,
+        icon = section.icon,
+        onClick = onClick,
+    )
+}
+
+@Suppress("unused")
+@Composable
+private fun LegacySectionNavRow(section: SettingsSection, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier

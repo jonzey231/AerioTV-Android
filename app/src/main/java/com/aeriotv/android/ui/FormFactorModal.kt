@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.aeriotv.android.feature.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 
 /**
  * The app's standard modal container, split by form factor:

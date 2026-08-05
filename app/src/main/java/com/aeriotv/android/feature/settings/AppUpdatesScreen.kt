@@ -32,6 +32,11 @@ import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.core.update.UpdateState
 import com.aeriotv.android.feature.update.UpdateViewModel
 import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
+import com.aeriotv.android.ui.settings.SettingsActionRow
+import com.aeriotv.android.ui.settings.SettingsDetailTopBar
+import com.aeriotv.android.ui.settings.SettingsInfoRow
+import com.aeriotv.android.ui.settings.SettingsRowContainer
+import com.aeriotv.android.ui.settings.SettingsSection
 
 /**
  * Settings > App Updates (github flavor only; the row that opens this screen

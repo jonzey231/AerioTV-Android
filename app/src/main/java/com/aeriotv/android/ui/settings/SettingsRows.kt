@@ -1,4 +1,4 @@
-package com.aeriotv.android.feature.settings
+package com.aeriotv.android.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,6 +35,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -289,14 +291,17 @@ fun SettingsActionRow(
     statusIsError: Boolean = false,
 ) {
     val accent = when {
-        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
         destructive -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.primary
     }
     SettingsRowContainer(
-        onClick = { if (!running) onClick() },
-        modifier = modifier,
-        enabled = enabled,
+        // Plan B4: a truly disabled clickable drops out of D-pad traversal on
+        // TV, stranding focus. Stay focusable and swallow the click, but mark
+        // the row disabled for accessibility and dim its content.
+        onClick = { if (!running && enabled) onClick() },
+        modifier = modifier.semantics { if (!enabled) disabled() },
+        enabled = true,
     ) {
         Icon(
             imageVector = leadingIcon,

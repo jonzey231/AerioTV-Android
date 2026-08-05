@@ -15,6 +15,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 
 /**
  * Placeholder sub-screens. The Settings tree mirrors iOS exactly so the user

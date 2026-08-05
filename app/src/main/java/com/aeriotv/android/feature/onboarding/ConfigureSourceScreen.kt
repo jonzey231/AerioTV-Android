@@ -3,6 +3,7 @@ package com.aeriotv.android.feature.onboarding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -45,7 +45,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
-import com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -69,11 +68,12 @@ import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.onboarding.components.InfoBanner
 import com.aeriotv.android.feature.onboarding.components.SourceTypeCard
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
-import com.aeriotv.android.feature.settings.dpadFocusRing
-import com.aeriotv.android.feature.settings.dpadFocusWash
-import com.aeriotv.android.feature.settings.rememberIsTvDevice
-import com.aeriotv.android.ui.tv.dpadFocusEscape
+import com.aeriotv.android.ui.settings.dpadFocusRing
+import com.aeriotv.android.ui.settings.dpadFocusWash
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions
 import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
+import com.aeriotv.android.ui.tv.dpadFocusEscape
 import com.aeriotv.android.ui.tv.tvFormFieldInput
 
 /**

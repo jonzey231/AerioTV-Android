@@ -30,7 +30,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.R
 import com.aeriotv.android.feature.settings.SettingsViewModel
-import com.aeriotv.android.feature.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import kotlinx.coroutines.delay
 
 /**

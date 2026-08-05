@@ -1,7 +1,5 @@
 package com.aeriotv.android.feature.settings
 
-import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
-
 import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -34,13 +32,13 @@ import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,9 +62,17 @@ import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.core.sync.DriveSyncManager
 import com.aeriotv.android.core.sync.SyncCategory
 import com.aeriotv.android.core.sync.SyncConfig
-import kotlinx.coroutines.launch
+import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
+import com.aeriotv.android.ui.settings.SettingsActionRow
+import com.aeriotv.android.ui.settings.SettingsDetailTopBar
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
+import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.SettingsToggleRow
+import com.aeriotv.android.ui.settings.dpadFocusRing
+import com.aeriotv.android.ui.settings.settingsRowCard
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 /**
  * Settings > Sync sub-screen. Mirrors iOS Settings > iCloud Sync layout.

@@ -2,9 +2,9 @@ package com.aeriotv.android.feature.whatsnew
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.NavEntryPoint
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -60,7 +61,7 @@ fun WhatsNewSheet(
     // a bottom sheet is a touch idiom -- on Android TV its drag handle reads
     // as a dead control and the sheet sits awkwardly at the screen bottom.
     // TV gets a centered Dialog panel with the dismiss button auto-focused.
-    val isTv = com.aeriotv.android.feature.settings.rememberIsTvDevice()
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
     if (isTv) {
         androidx.compose.ui.window.Dialog(
             onDismissRequest = onDismiss,

@@ -36,6 +36,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.aeriotv.android.core.debug.LogShareServer
 import com.aeriotv.android.core.tv.qrCodeBitmap
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import java.io.File
 
 /**

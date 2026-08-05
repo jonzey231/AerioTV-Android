@@ -5,9 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -19,41 +16,45 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.aeriotv.android.core.data.SourceType
-import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.db.entity.canRecordToServer
 import com.aeriotv.android.core.data.db.entity.isDispatcharrAdmin
-import com.aeriotv.android.ui.LocalCanRecordToServer
-import com.aeriotv.android.ui.LocalIsDispatcharrAdmin
+import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.feature.main.MainScaffold
-import com.aeriotv.android.feature.onboarding.ChooseSourceTypeScreen
-import com.aeriotv.android.feature.onboarding.ConfigureSourceScreen
-import com.aeriotv.android.feature.onboarding.SettingUpScreen
-import com.aeriotv.android.feature.onboarding.WelcomeScreen
-import com.aeriotv.android.feature.multiview.MultiviewScreen
-import com.aeriotv.android.feature.ondemand.OnDemandViewModel
-import com.aeriotv.android.feature.ondemand.SeriesDetailScreen
 import com.aeriotv.android.feature.main.MainScaffoldEntryPoint
 import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.miniplayer.TvMiniPlayerOverlay
+import com.aeriotv.android.feature.multiview.MultiviewScreen
+import com.aeriotv.android.feature.onboarding.ChooseSourceTypeScreen
+import com.aeriotv.android.feature.onboarding.ConfigureSourceScreen
+import com.aeriotv.android.feature.onboarding.SettingUpScreen
+import com.aeriotv.android.feature.onboarding.WelcomeScreen
+import com.aeriotv.android.feature.ondemand.OnDemandViewModel
+import com.aeriotv.android.feature.ondemand.SeriesDetailScreen
 import com.aeriotv.android.feature.player.PlayerScreen
 import com.aeriotv.android.feature.player.VODPlayerScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.reminders.ReminderBannerHost
 import com.aeriotv.android.feature.update.UpdateGate
 import com.aeriotv.android.feature.whatsnew.WhatsNewGate
-import com.aeriotv.android.feature.reminders.ReminderBannerHost
+import com.aeriotv.android.ui.LocalCanRecordToServer
+import com.aeriotv.android.ui.LocalIsDispatcharrAdmin
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -658,7 +659,7 @@ fun AerioTVNavHost(
 
                 // Task #148 milestone B: routing decision for catch-up
                 // (TV = unified live player, phone = recording player).
-                val isTvDevice = com.aeriotv.android.feature.settings.rememberIsTvDevice()
+                val isTvDevice = com.aeriotv.android.ui.settings.rememberIsTvDevice()
                 CompositionLocalProvider(
                     LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: false),
                 ) {

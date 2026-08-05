@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.category.parseHex
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 
 /**
  * Hex-string colour picker dialog for a category palette row. The iOS app

@@ -59,6 +59,13 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.core.debug.DebugLogger
+import com.aeriotv.android.ui.settings.SettingsActionRow
+import com.aeriotv.android.ui.settings.SettingsDetailTopBar
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
+import com.aeriotv.android.ui.settings.SettingsInfoRow
+import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.SettingsToggleRow
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.delay
 
