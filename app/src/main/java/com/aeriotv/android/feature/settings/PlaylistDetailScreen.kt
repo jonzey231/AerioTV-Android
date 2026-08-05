@@ -140,7 +140,11 @@ fun PlaylistDetailScreen(
                 if (!rememberIsTvDevice()) {
                     SettingsHeaderTextButton(
                         label = "Edit",
-                        enabled = playlist != null,
+                        // Active-only, same rule as the refresh actions below:
+                        // saveEdits writes through repository.activePlaylist(),
+                        // so editing a NON-active playlist would silently
+                        // overwrite the active one's URL and credentials.
+                        enabled = playlist != null && isActivePlaylist,
                         onClick = onEdit,
                     )
                 }
@@ -288,7 +292,7 @@ fun PlaylistDetailScreen(
                         enabled = !isActivePlaylist,
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                    if (isTv) {
+                    if (isTv && isActivePlaylist) {
                         ActionRow(
                             icon = Icons.Outlined.Edit,
                             label = "Edit Playlist",
