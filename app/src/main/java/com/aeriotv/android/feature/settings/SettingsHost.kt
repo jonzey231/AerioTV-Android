@@ -397,14 +397,17 @@ private fun SettingsTvRail(
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxHeight(),
+        // Budgeted so ALL rail items clear the fold. tvOS fits its 9 without
+        // scrolling; Android carries 11 (Remote Control is TV-only and App
+        // Updates is sideload-only), in roughly 437dp of usable height below
+        // the top nav, so the pitch has to come in near 40dp.
         contentPadding = PaddingValues(
             start = TvOverscanStart,
             end = 12.dp,
-            // Vertical overscan band, matching the root list's 28dp bottom.
-            top = 24.dp,
-            bottom = 28.dp,
+            top = 8.dp,
+            bottom = 12.dp,
         ),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         itemsIndexed(rows, key = { _, row -> encodeSettingsRoute(row.first) }) { index, row ->
             val (route, title, subtitle) = row

@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aeriotv.android.ui.tv.tvFocusScale
 
 /**
@@ -90,7 +91,7 @@ fun SettingsNavRow(
     val iconGlyph = if (isTv) 15.dp else 18.dp
     val gap = if (isTv) 8.dp else 12.dp
     val padH = if (isTv) 10.dp else 14.dp
-    val padV = if (isTv) 7.dp else 14.dp
+    val padV = if (isTv) 2.dp else 14.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -153,7 +154,9 @@ fun SettingsNavRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.let {
+                    if (isTv) it.copy(lineHeight = 17.sp) else it
+                },
                 color = if (selected && !focused) MaterialTheme.colorScheme.onSecondaryContainer
                 else MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
@@ -166,8 +169,11 @@ fun SettingsNavRow(
                     // bodySmall is ~10.8sp effective under the 0.9 TV type
                     // scale; bodyMedium keeps the subtitle readable from the
                     // couch.
-                    style = if (isTv) MaterialTheme.typography.bodyMedium
-                    else MaterialTheme.typography.bodySmall,
+                    style = if (isTv) {
+                        MaterialTheme.typography.bodyMedium.copy(lineHeight = 13.sp)
+                    } else {
+                        MaterialTheme.typography.bodySmall
+                    },
                     color = if (selected && !focused) MaterialTheme.colorScheme.onSecondaryContainer
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     // tvOS truncates here rather than wrapping; matching it is
