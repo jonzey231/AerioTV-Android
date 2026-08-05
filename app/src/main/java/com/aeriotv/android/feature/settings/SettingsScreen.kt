@@ -196,13 +196,18 @@ fun SettingsScreen(
                     activeId = activeId,
                     // In a pane the top bar already reads "Playlists".
                     showHeader = fullRoot,
-                    paneHost = content == SettingsRootContent.PlaylistsOnly,
+                    paneHost = content == SettingsRootContent.PlaylistsOnly || isTv,
                     onTap = { pl ->
-                        // Rev 2 canon amendment 1: in a pane host (tablet
-                        // sidebar / TV rail) EVERY playlist row enters its
-                        // detail, where the new Set Active row lives. The
-                        // phone root keeps tap-to-activate untouched.
-                        if (content == SettingsRootContent.PlaylistsOnly) {
+                        // Rev 2 canon amendment 1: on every RAIL/SIDEBAR form
+                        // factor - the tablet pane and ALL of TV - a playlist
+                        // row enters its detail, where the Set Active row
+                        // lives. TV is included even though its rail host is
+                        // still pending, because the old rule made a detail
+                        // page unreachable whenever nothing was active yet
+                        // (e.g. straight after a Drive restore): only the
+                        // ACTIVE playlist opened, and OK on the others just
+                        // tried to activate. The phone root is untouched.
+                        if (content == SettingsRootContent.PlaylistsOnly || isTv) {
                             onOpenPlaylistDetail(pl.id)
                         } else if (pl.id == activeId) {
                             onOpenPlaylistDetail(pl.id)
@@ -399,14 +404,10 @@ private fun PlaylistsSection(
             Spacer(Modifier.height(8.dp))
             // Input-appropriate verbs: a remote has no "tap".
             if (paneHost) {
-                // Pane hosts enter the detail on select, so the activate verb
-                // moved; the phone strings below are untouched.
+                // Rail/sidebar form factors enter the detail on select, so the
+                // activate verb moved there. The phone strings below are
+                // untouched (frozen canon).
                 SectionFooter("Select a playlist to open it · Set Active lives in its Actions section")
-                if (playlists.size > 1) {
-                    SectionFooter("Select Manage Playlists to reorder")
-                }
-            } else if (rememberIsTvDevice()) {
-                SectionFooter("Press OK on a playlist to make it active · Open the active playlist to edit or delete it")
                 if (playlists.size > 1) {
                     SectionFooter("Select Manage Playlists to reorder")
                 }

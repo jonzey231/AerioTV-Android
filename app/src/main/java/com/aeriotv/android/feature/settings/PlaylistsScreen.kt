@@ -190,7 +190,11 @@ fun PlaylistsScreen(
                         // Guarded so the OK-release after a TV long-press can't
                         // also register as a tap on the row (see TvMenuGuard).
                         onTap = tvGuard.wrap {
-                            if (pl.id == activeId) {
+                            // Same rule as the root/pane list: on TV every row
+                            // enters its detail (Set Active lives there), so a
+                            // non-active playlist is reachable. Phone keeps
+                            // tap-to-activate.
+                            if (isTv || pl.id == activeId) {
                                 onOpenPlaylistDetail(pl.id)
                             } else {
                                 viewModel.switchToPlaylist(pl.id)
