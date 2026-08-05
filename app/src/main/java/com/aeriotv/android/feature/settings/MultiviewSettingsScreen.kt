@@ -41,6 +41,7 @@ import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsSection
 import com.aeriotv.android.ui.settings.SettingsSelectionRow
 import com.aeriotv.android.ui.settings.SettingsToggleRow
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Multiview sub-screen. Mirrors iOS MultiviewSettingsView field-for-field:
@@ -77,7 +78,7 @@ fun MultiviewSettingsScreen(
                     // 104dp bottom clears the MainScaffold NavigationBar
                     // so the Tile Appearance card's footer text stays
                     // visible on short displays.
-                    bottom = 104.dp,
+                    bottom = LocalTabBarBottomInset.current,
                 ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {

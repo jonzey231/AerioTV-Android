@@ -92,9 +92,13 @@ fun rememberSettingsPaneSelection(
                 nav.removeBaseline()
                 selection.value = baseline
             }
-        } else {
+        } else if (selection.value !is SettingsRoute.Playlists) {
             nav.insertAtBaseline(selection.value)
         }
+        // Playlists is the exception: as a PANE it renders the root's playlist
+        // block, and the stacked root already leads with that same block. Push
+        // nothing, so collapsing shows the user the content they were looking
+        // at instead of the Manage Playlists page, which is a different screen.
     }
     return selection
 }

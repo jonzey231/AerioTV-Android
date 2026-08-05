@@ -37,6 +37,7 @@ import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsInfoRow
 import com.aeriotv.android.ui.settings.SettingsRowContainer
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Settings > App Updates (github flavor only; the row that opens this screen
@@ -63,7 +64,7 @@ fun AppUpdatesScreen(
                     .adaptiveFormWidth()
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = LocalTabBarBottomInset.current),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 SettingsSection(

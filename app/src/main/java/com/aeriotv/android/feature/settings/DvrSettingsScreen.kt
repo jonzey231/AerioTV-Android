@@ -61,6 +61,7 @@ import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.dpadFocusWash
 import com.aeriotv.android.ui.settings.settingsRowCard
 import com.aeriotv.android.ui.tv.dpadFocusEscape
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * DVR Settings sub-screen. Mirrors iOS DVRSettingsView field-for-field:
@@ -114,7 +115,7 @@ fun DvrSettingsScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 12.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {

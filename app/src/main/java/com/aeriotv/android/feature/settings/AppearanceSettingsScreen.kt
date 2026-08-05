@@ -57,6 +57,7 @@ import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.dpadFocusWash
 import com.aeriotv.android.ui.theme.AppTheme
 import com.aeriotv.android.ui.theme.AppearanceMode
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Appearance sub-screen. Mirrors iOS Settings -> Appearance
@@ -119,7 +120,7 @@ fun AppearanceSettingsScreen(
                     start = 16.dp,
                     end = 16.dp,
                     top = 12.dp,
-                    bottom = 104.dp,
+                    bottom = LocalTabBarBottomInset.current,
                 ),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {

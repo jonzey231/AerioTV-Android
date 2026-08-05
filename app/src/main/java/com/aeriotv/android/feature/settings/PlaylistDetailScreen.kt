@@ -61,6 +61,7 @@ import com.aeriotv.android.ui.settings.SettingsHeaderTextButton
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import java.text.DateFormat
 import java.util.Date
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Playlist Detail. Mirrors iOS Settings > tap-a-playlist row:
@@ -163,7 +164,7 @@ fun PlaylistDetailScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 16.dp,
-                bottom = if (isTv) 32.dp else 104.dp,
+                bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

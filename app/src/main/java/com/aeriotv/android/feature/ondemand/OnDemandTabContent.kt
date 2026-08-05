@@ -108,6 +108,7 @@ import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.scale.WithDisplayScale
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.launch
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * On Demand tab shell. Mirrors iOS OnDemandView (Aerio/Features/VOD/OnDemandView.swift):
@@ -593,7 +594,7 @@ private fun MoviesSubScreen(
                 start = if (isTv) 48.dp else 12.dp,
                 end = if (isTv) 48.dp else 12.dp,
                 top = if (isTv) 16.dp else 8.dp,
-                bottom = if (isTv) 32.dp else 104.dp,
+                bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
@@ -789,7 +790,7 @@ private fun SeriesSubScreen(
                 start = if (isTv) 48.dp else 12.dp,
                 end = if (isTv) 48.dp else 12.dp,
                 top = if (isTv) 16.dp else 8.dp,
-                bottom = if (isTv) 32.dp else 104.dp,
+                bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isTv) 16.dp else 12.dp),

@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -99,6 +101,8 @@ import com.aeriotv.android.feature.settings.SettingsScreen
 import com.aeriotv.android.feature.settings.SettingsSection
 import com.aeriotv.android.feature.settings.SettingsSubScreenPlaceholder
 import com.aeriotv.android.feature.settings.SettingsViewModel
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
+import com.aeriotv.android.ui.adaptive.prefersTopTabBar
 import com.aeriotv.android.ui.adaptive.rememberViewport
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.feature.settings.SettingsTwoPaneHost
@@ -616,6 +620,13 @@ fun MainScaffold(
     // enough that no upward scroll is possible to bring it back.
     LaunchedEffect(selectedTab) { bottomBarVisible = true }
 
+    // Tablets put the tab bar on TOP, in normal flow rather than overlaying
+    // (see Viewport.prefersTopTabBar). Two consequences handled below: the tab
+    // screens stop reserving bottom space for a pill that is no longer there,
+    // and the top bar consumes the status-bar inset so each screen's own
+    // TopAppBar does not apply it a second time.
+    val topTabBar = rememberViewport().prefersTopTabBar
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -630,10 +641,41 @@ fun MainScaffold(
         // app's Liquid-Glass bar. Tab screens already reserve ~104dp of bottom
         // content padding, so their last rows scroll clear of the pill.
     ) { padding ->
+      androidx.compose.runtime.CompositionLocalProvider(
+          LocalTabBarBottomInset provides if (topTabBar) 16.dp else 104.dp,
+      ) {
+      androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
+        if (topTabBar) {
+            // Centered capsule rather than an edge-to-edge bar: at 1280dp the
+            // full-width pill leaves each tab stranded in its own dead zone,
+            // and iPad's top bar is a centered cluster.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(top = 6.dp, bottom = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                FloatingTabBar(
+                    tabs = tabs,
+                    selected = selectedTab,
+                    onSelect = { selectedTab = it; initialTabApplied = true },
+                    modifier = Modifier.widthIn(max = 620.dp),
+                )
+            }
+        }
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .padding(padding)
+                .then(
+                    // The bar above already applied the status-bar inset; without
+                    // consuming it here every tab's TopAppBar would add it again.
+                    if (topTabBar) {
+                        Modifier.consumeWindowInsets(WindowInsets.statusBars)
+                    } else Modifier,
+                )
                 // GH #20: observe every tab's scroll for the bottom-bar hide.
                 .nestedScroll(bottomBarScrollConnection),
         ) {
@@ -825,21 +867,25 @@ fun MainScaffold(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = bottomBarVisible,
-                    enter = androidx.compose.animation.slideInVertically { it } +
-                        androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.slideOutVertically { it } +
-                        androidx.compose.animation.fadeOut(),
-                ) {
-                    FloatingTabBar(
-                        tabs = tabs,
-                        selected = selectedTab,
-                        onSelect = { selectedTab = it; initialTabApplied = true },
-                    )
+                if (!topTabBar) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = bottomBarVisible,
+                        enter = androidx.compose.animation.slideInVertically { it } +
+                            androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.slideOutVertically { it } +
+                            androidx.compose.animation.fadeOut(),
+                    ) {
+                        FloatingTabBar(
+                            tabs = tabs,
+                            selected = selectedTab,
+                            onSelect = { selectedTab = it; initialTabApplied = true },
+                        )
+                    }
                 }
             }
         }
+      }
+      }
     }
 
     // GH #33: companion device picker opened from the floating "Control TV" pill.

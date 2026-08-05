@@ -65,6 +65,7 @@ import com.aeriotv.android.ui.tv.dpadFocusEscape
 import com.aeriotv.android.ui.tv.tvFormFieldInput
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * App Behaviors sub-screen. Mirrors iOS AppBehaviorsSettingsView.swift:
@@ -115,7 +116,7 @@ fun AppBehaviorsSettingsScreen(
                     top = 12.dp,
                     // 104dp bottom clears the MainScaffold NavigationBar
                     // so the last section stays reachable on short displays.
-                    bottom = 104.dp,
+                    bottom = LocalTabBarBottomInset.current,
                 ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {

@@ -69,6 +69,7 @@ import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.delay
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Settings -> Developer. Mirrors iOS DeveloperSettingsView (lines 9-444):
@@ -144,7 +145,7 @@ fun DeveloperSettingsScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 12.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {

@@ -59,6 +59,7 @@ import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Multi-playlist switcher reachable from Settings root. Lists every saved
@@ -176,7 +177,7 @@ fun PlaylistsScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 12.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {

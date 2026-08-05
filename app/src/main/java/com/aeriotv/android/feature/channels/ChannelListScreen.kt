@@ -129,6 +129,7 @@ import com.aeriotv.android.feature.reminders.RemindersViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import kotlinx.coroutines.launch
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -675,7 +676,7 @@ fun ChannelListScreen(
                     start = 12.dp,
                     end = 12.dp,
                     top = 8.dp,
-                    bottom = 104.dp,
+                    bottom = LocalTabBarBottomInset.current,
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {

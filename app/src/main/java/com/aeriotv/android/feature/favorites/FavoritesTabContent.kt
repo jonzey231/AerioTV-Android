@@ -50,6 +50,7 @@ import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Favorites tab. Mirrors iOS FavoritesView (ChannelListView.swift:2596): the
@@ -176,7 +177,7 @@ fun FavoritesTabContent(
                 start = 12.dp,
                 end = 12.dp,
                 top = 8.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

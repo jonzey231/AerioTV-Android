@@ -156,3 +156,27 @@ fun AdaptiveCenteredContent(
     }
 }
 
+
+// MARK: - Tab bar placement
+
+/**
+ * Bottom padding a scrolling tab surface must reserve so its last row clears
+ * the floating tab pill.
+ *
+ * The pill OVERLAYS content (iOS 26 parity), so every tab screen has to hold
+ * space for it itself. On tablets the pill moves to the TOP and sits in normal
+ * flow, so that reserve becomes dead space at the end of every list -- hence a
+ * provided value rather than the 104.dp that used to be typed into each screen.
+ */
+val LocalTabBarBottomInset = androidx.compose.runtime.compositionLocalOf { 104.dp }
+
+/**
+ * Whether the main tab bar belongs at the TOP of the window.
+ *
+ * Tablets: yes. Material's adaptive guidance specifies bottom navigation for
+ * COMPACT widths only and moves it off the bottom edge at expanded ones, the
+ * bottom pill collides with the expanded-width Settings sidebar, and iPad
+ * already puts its tab bar on top -- so tablets match across both platforms.
+ * Phones keep the bottom pill; TV has its own 10-foot top bar already.
+ */
+val Viewport.prefersTopTabBar: Boolean get() = isTwoPaneEligible

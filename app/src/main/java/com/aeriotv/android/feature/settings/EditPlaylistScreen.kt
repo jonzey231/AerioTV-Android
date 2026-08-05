@@ -53,6 +53,7 @@ import com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions
 import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
 import com.aeriotv.android.ui.tv.dpadFocusEscape
 import com.aeriotv.android.ui.tv.tvFormFieldInput
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Edit Playlist sub-screen. Mirrors iOS Edit Playlist modal: Cancel header
@@ -224,7 +225,7 @@ fun EditPlaylistScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 16.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

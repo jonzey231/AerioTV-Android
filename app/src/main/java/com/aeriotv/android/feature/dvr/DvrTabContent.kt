@@ -77,6 +77,7 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * DVR tab. Mirrors iOS MyRecordingsView (project_aeriotv_ios_canon.md "DVR tab"):
@@ -301,7 +302,7 @@ fun DvrTabContent(
                 start = edgeInset,
                 end = edgeInset,
                 top = 8.dp,
-                bottom = if (isTv) 32.dp else 104.dp,
+                bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

@@ -57,6 +57,7 @@ import com.aeriotv.android.ui.settings.dpadFocusWash
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions
 import java.util.UUID
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Sub-screen reached from Appearance > Add more categories. Two sections:
@@ -123,7 +124,7 @@ fun AddMoreCategoriesScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 16.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {

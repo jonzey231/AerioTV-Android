@@ -73,6 +73,7 @@ import com.aeriotv.android.ui.settings.settingsRowCard
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Settings > Sync sub-screen. Mirrors iOS Settings > iCloud Sync layout.
@@ -199,7 +200,7 @@ fun SyncSettingsScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 12.dp,
-                bottom = 104.dp,
+                bottom = LocalTabBarBottomInset.current,
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

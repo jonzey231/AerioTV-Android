@@ -33,6 +33,7 @@ import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsRowContainer
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
  * Settings > App Settings > Remote Control (TV only). Customizable
@@ -192,7 +193,7 @@ fun RemoteControlSettingsScreen(
                     .adaptiveFormWidth()
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = LocalTabBarBottomInset.current),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 SettingsSection(
