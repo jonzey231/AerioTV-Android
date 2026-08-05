@@ -93,12 +93,18 @@ import com.aeriotv.android.feature.settings.DeveloperSettingsScreen
 import com.aeriotv.android.feature.settings.DvrSettingsScreen
 import com.aeriotv.android.feature.settings.MultiviewSettingsScreen
 import com.aeriotv.android.feature.settings.NetworkSettingsScreen
+import com.aeriotv.android.feature.settings.SettingsRootContent
 import com.aeriotv.android.feature.settings.SettingsRoute
 import com.aeriotv.android.feature.settings.SettingsScreen
 import com.aeriotv.android.feature.settings.SettingsSection
 import com.aeriotv.android.feature.settings.SettingsSubScreenPlaceholder
 import com.aeriotv.android.feature.settings.SettingsViewModel
+import com.aeriotv.android.ui.adaptive.rememberViewport
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.feature.settings.SettingsTwoPaneHost
 import com.aeriotv.android.feature.settings.rememberSettingsNavState
+import com.aeriotv.android.feature.settings.rememberSettingsPaneSelection
+import com.aeriotv.android.feature.settings.visibleSettingsSections
 import com.aeriotv.android.ui.tv.tvFocusScale
 
 /**
@@ -1331,6 +1337,17 @@ private fun SettingsTabContent(
     // position, which plain `remember` could not.
     val nav = rememberSettingsNavState()
     val route = nav.current
+    // Phase B3: the tablet list-detail host. Expanded width alone is not the
+    // gate -- a landscape phone is "expanded" but far too short -- and TV keeps
+    // the stacked layout until B4 lands the rail with its focus contract.
+    val isTvDevice = rememberIsTvDevice()
+    val twoPane = rememberViewport().isTwoPaneEligible && !isTvDevice
+    var selection by rememberSettingsPaneSelection(nav = nav, twoPane = twoPane)
+    // True for the route the pane is BASELINED on; pushes above it render as
+    // ordinary screens and keep their own back affordance.
+    val inPane = twoPane && route == null
+    val updaterEnabled = hiltViewModel<com.aeriotv.android.feature.update.UpdateViewModel>()
+        .isEnabled
     val addPlaylistStep: AddPlaylistStep = when (val r = route) {
         is SettingsRoute.AddPlaylist -> when (val st = r.step) {
             is AddPlaylistWizardStep.ChooseType -> AddPlaylistStep.ChooseType
@@ -1387,11 +1404,10 @@ private fun SettingsTabContent(
         if (entering || exitingToRoot) runCatching { settingsContentFocus.requestFocus() }
         prevSubScreenKey = subScreenKey
     }
-    Box(modifier = Modifier.focusRequester(settingsContentFocus).focusGroup()) {
-    // Dispatch on the stack's top route. Ordering that used to be implicit in
-    // branch position (the log viewer had to sit ABOVE Developer to win) is now
-    // just push order.
-    when (route) {
+    // Phase B3: one renderer for a route, used by BOTH the stacked phone layout
+    // and the tablet host's detail pane, so the two can never diverge.
+    val renderRoute: @Composable (SettingsRoute?) -> Unit = { r ->
+    when (r) {
         null -> SettingsScreen(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
             onOpenPlaylistDetail = {
@@ -1402,6 +1418,11 @@ private fun SettingsTabContent(
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
             },
             viewModel = playlistVm,
+        )
+        is SettingsRoute.About -> SettingsScreen(
+            onSectionClick = { nav.push(SettingsRoute.Section(it)) },
+            viewModel = playlistVm,
+            content = SettingsRootContent.AboutOnly,
         )
         is SettingsRoute.Root -> SettingsScreen(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
@@ -1414,7 +1435,7 @@ private fun SettingsTabContent(
             },
             viewModel = playlistVm,
         )
-        is SettingsRoute.AddPlaylist -> when (val st = route.step) {
+        is SettingsRoute.AddPlaylist -> when (val st = r.step) {
             is AddPlaylistWizardStep.Configure -> ConfigureSourceScreen(
                 sourceType = st.sourceType,
                 onBack = {
@@ -1436,16 +1457,39 @@ private fun SettingsTabContent(
                 },
             )
         }
-        is SettingsRoute.Playlists -> com.aeriotv.android.feature.settings.PlaylistsScreen(
-            onBack = { nav.pop() },
-            onAddPlaylist = {
-                nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
-            },
-            onOpenPlaylistDetail = {
-                nav.push(SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()))
-            },
-            viewModel = playlistVm,
-        )
+        is SettingsRoute.Playlists ->
+            if (inPane) {
+                // As a PANE this is the sidebar's Playlists item, so it shows
+                // the root's playlist block (switch / open / Add / Manage);
+                // Manage Playlists then pushes the reorder page above it.
+                SettingsScreen(
+                    onSectionClick = { nav.push(SettingsRoute.Section(it)) },
+                    onOpenPlaylistDetail = {
+                        nav.push(
+                            SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()),
+                        )
+                    },
+                    onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
+                    onAddPlaylist = {
+                        nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+                    },
+                    viewModel = playlistVm,
+                    content = SettingsRootContent.PlaylistsOnly,
+                )
+            } else {
+                com.aeriotv.android.feature.settings.PlaylistsScreen(
+                    onBack = { nav.pop() },
+                    onAddPlaylist = {
+                        nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+                    },
+                    onOpenPlaylistDetail = {
+                        nav.push(
+                            SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()),
+                        )
+                    },
+                    viewModel = playlistVm,
+                )
+            }
         is SettingsRoute.EditPlaylist -> com.aeriotv.android.feature.settings.EditPlaylistScreen(
             onBack = { nav.pop() },
             viewModel = playlistVm,
@@ -1453,14 +1497,14 @@ private fun SettingsTabContent(
         is SettingsRoute.PlaylistDetail ->
             com.aeriotv.android.feature.settings.PlaylistDetailScreen(
                 onBack = { nav.pop() },
-                onEdit = { nav.push(SettingsRoute.EditPlaylist(route.playlistId)) },
+                onEdit = { nav.push(SettingsRoute.EditPlaylist(r.playlistId)) },
                 viewModel = playlistVm,
             )
         is SettingsRoute.AddMoreCategories -> AddMoreCategoriesScreen(onBack = { nav.pop() })
         is SettingsRoute.LogViewer -> com.aeriotv.android.feature.settings.LogViewerScreen(
             onBack = { nav.pop() },
         )
-        is SettingsRoute.Section -> when (route.section) {
+        is SettingsRoute.Section -> when (r.section) {
             SettingsSection.Appearance -> AppearanceSettingsScreen(
                 onBack = { nav.pop() },
                 onOpenAddMoreCategories = { nav.push(SettingsRoute.AddMoreCategories) },
@@ -1484,6 +1528,36 @@ private fun SettingsTabContent(
             )
         }
     }
+    }
+
+    Box(modifier = Modifier.focusRequester(settingsContentFocus).focusGroup()) {
+        if (twoPane) {
+            // Rev 2: sidebar browsing mutates `selection` and never pushes, so
+            // Back can only unwind real pushes.
+            SettingsTwoPaneHost(
+                selection = selection,
+                onSelect = { picked ->
+                    // Leaving a pane abandons anything pushed above it; the new
+                    // pane starts at its own baseline (Apple rail behavior).
+                    nav.popToRoot()
+                    selection = picked
+                },
+                pushed = route,
+                sections = visibleSettingsSections(
+                    isTv = isTvDevice,
+                    updaterEnabled = updaterEnabled,
+                ),
+                activePlaylistName = playlistState.playlist?.name,
+                // Log lines want the whole width; everything else fits a pane.
+                takeover = { it is SettingsRoute.LogViewer },
+                detail = { renderRoute(it) },
+            )
+        } else {
+            // Dispatch on the stack's top route. Ordering that used to be
+            // implicit in branch position (the log viewer had to sit ABOVE
+            // Developer to win) is now just push order.
+            renderRoute(route)
+        }
     }
 }
 

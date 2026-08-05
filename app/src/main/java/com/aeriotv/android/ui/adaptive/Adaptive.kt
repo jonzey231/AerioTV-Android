@@ -51,6 +51,16 @@ data class Viewport(val widthDp: Int, val heightDp: Int) {
      * fold without forcing the user to scroll on a remote. */
     val isShort: Boolean get() = heightDp < 720
 
+    /**
+     * Whether a two-pane Settings host (sidebar + detail) fits here.
+     *
+     * Settings redesign B1/B3: expanded width alone is not enough. A landscape
+     * PHONE reports roughly 997x450dp, which is "expanded" by width but far too
+     * short for a sidebar plus a form; it must stay stacked. The height floor
+     * keeps those out while admitting real tablets.
+     */
+    val isTwoPaneEligible: Boolean get() = isExpanded && heightDp >= 480
+
     /** Max content width for form-style screens. Phones get the full width;
      * larger viewports cap so a single column of labels + inputs stays
      * readable at 10-foot UX (TV) or 18-inch (tablet). Numbers measured

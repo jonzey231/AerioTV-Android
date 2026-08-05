@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -423,7 +424,7 @@ fun rememberIsTvDevice(): Boolean {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDetailTopBar(title: String, onBack: () -> Unit) {
-    val isTv = rememberIsTvDevice()
+    val showBack = settingsShowsBackArrow()
     CenterAlignedTopAppBar(
         title = {
             Text(
@@ -433,7 +434,7 @@ fun SettingsDetailTopBar(title: String, onBack: () -> Unit) {
             )
         },
         navigationIcon = {
-            if (!isTv) {
+            if (showBack) {
                 IconButton(onClick = onBack) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -611,3 +612,21 @@ fun SettingsDialogTextButton(
         )
     }
 }
+
+// MARK: - Pane mode
+
+/**
+ * True while a Settings surface is rendering inside a two-pane host's DETAIL
+ * pane rather than as a full-screen page (plan B3/B4).
+ *
+ * The sidebar or rail stays on screen beside the pane, so a pane header is a
+ * static label with nothing to go back to - the same situation Android TV has
+ * always been in, where the remote's BACK does the popping. Screens read this
+ * through [settingsShowsBackArrow] instead of testing the form factor
+ * themselves.
+ */
+val LocalSettingsInPane = staticCompositionLocalOf { false }
+
+/** Whether a Settings top bar should draw a back arrow at this position. */
+@Composable
+fun settingsShowsBackArrow(): Boolean = !rememberIsTvDevice() && !LocalSettingsInPane.current

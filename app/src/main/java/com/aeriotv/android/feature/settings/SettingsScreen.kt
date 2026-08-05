@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -65,6 +66,7 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import com.aeriotv.android.ui.settings.SettingsNavRow
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.settingsPaneWidth
 import java.text.DateFormat
 import java.util.Date
 
@@ -91,6 +93,21 @@ import java.util.Date
  * optional footer text in muted-tint below. Mirrors iOS .insetGrouped list
  * style + sectionHeaderStyle().
  */
+/**
+ * Which blocks of the Settings root [SettingsScreen] renders.
+ *
+ * Phase B3: on a phone the root is one scrolling list of everything. In a
+ * two-pane host the sidebar takes over the section list, and the Playlists and
+ * About blocks - which have no screen of their own - become detail panes. Both
+ * panes are this same screen filtered down, so the copy, ordering, and row
+ * behavior are literally the phone's.
+ */
+enum class SettingsRootContent(val title: String) {
+    Full("Settings"),
+    PlaylistsOnly("Playlists"),
+    AboutOnly("About"),
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -99,7 +116,13 @@ fun SettingsScreen(
     onOpenPlaylists: () -> Unit = {},
     onAddPlaylist: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
+    // Phase B3: the two-pane hosts render the Playlists and About blocks as
+    // detail panes. Rather than duplicate either block (and risk the copy
+    // drifting from the phone root, which the plan freezes), the same screen
+    // renders a subset of itself.
+    content: SettingsRootContent = SettingsRootContent.Full,
 ) {
+    val fullRoot = content == SettingsRootContent.Full
     val context = androidx.compose.ui.platform.LocalContext.current
     // Flavor-gated: the App Updates row only exists on the GitHub/sideload
     // channel (play flavor binds a disabled no-op manager).
@@ -131,7 +154,7 @@ fun SettingsScreen(
         CenterAlignedTopAppBar(
             title = {
                 Text(
-                    text = "Settings",
+                    text = content.title,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
@@ -153,7 +176,10 @@ fun SettingsScreen(
             contentAlignment = Alignment.TopCenter,
         ) {
         LazyColumn(
-            modifier = Modifier.adaptiveFormWidth().fillMaxSize(),
+            // Full-screen measures the WINDOW; a detail pane must measure the
+            // PANE or it sizes itself against the whole tablet and overflows.
+            modifier = (if (fullRoot) Modifier.adaptiveFormWidth() else Modifier.settingsPaneWidth())
+                .fillMaxSize(),
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
@@ -164,10 +190,12 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             // MARK: Playlists
-            item("playlists") {
+            if (content != SettingsRootContent.AboutOnly) item("playlists") {
                 PlaylistsSection(
                     playlists = playlists,
                     activeId = activeId,
+                    // In a pane the top bar already reads "Playlists".
+                    showHeader = fullRoot,
                     onTap = { pl ->
                         if (pl.id == activeId) onOpenPlaylistDetail()
                         else viewModel.switchToPlaylist(pl.id)
@@ -177,55 +205,28 @@ fun SettingsScreen(
                 )
             }
 
-            // MARK: App Settings
-            item("app-settings") {
-                SettingsSectionGroup(
-                    header = "App Settings",
-                    rows = buildList {
-                        add(SettingsSection.Appearance)
-                        add(SettingsSection.AppBehaviors)
-                        add(SettingsSection.Multiview)
-                        add(SettingsSection.Network)
-                        // Remote Control initiative: TV form factors only.
-                        if (rememberIsTvDevice()) add(SettingsSection.RemoteControl)
-                        if (updaterEnabled) add(SettingsSection.AppUpdates)
-                    },
-                    onClick = onSectionClick,
-                )
-            }
-
-            // MARK: Sync
-            item("sync") {
-                SettingsSectionGroup(
-                    header = "Sync",
-                    rows = listOf(SettingsSection.Sync),
-                    onClick = onSectionClick,
-                    footer = "Playlists, preferences, and watch progress sync across all devices " +
-                        "signed into the same Google account. Credentials stay in encrypted Android storage.",
-                )
-            }
-
-            // MARK: DVR
-            item("dvr") {
-                SettingsSectionGroup(
-                    header = "DVR",
-                    rows = listOf(SettingsSection.DvrSettings),
-                    onClick = onSectionClick,
-                )
-            }
-
-            // MARK: Developer
-            item("developer") {
-                SettingsSectionGroup(
-                    header = "Developer",
-                    rows = listOf(SettingsSection.Developer),
-                    onClick = onSectionClick,
-                )
+            // MARK: App Settings / Sync / DVR / Developer
+            //
+            // Sourced from the shared canon so the sidebar in the two-pane
+            // hosts cannot drift from this list (plan B7: frozen canon).
+            if (fullRoot) {
+                items(
+                    items = visibleSettingsSections(isTv = isTv, updaterEnabled = updaterEnabled),
+                    key = { it.key },
+                ) { group ->
+                    SettingsSectionGroup(
+                        header = group.header,
+                        rows = group.sections,
+                        onClick = onSectionClick,
+                        footer = group.footer,
+                    )
+                }
             }
 
             // MARK: About
-            item("about") {
+            if (content != SettingsRootContent.PlaylistsOnly) item("about") {
                 AboutSection(
+                    showHeader = fullRoot,
                     versionName = versionName,
                     versionCode = packageInfo?.longVersionCode ?: 0L,
                     installedAt = installedAt,
@@ -291,13 +292,16 @@ fun SettingsScreen(
 private fun PlaylistsSection(
     playlists: List<PlaylistEntity>,
     activeId: String?,
+    showHeader: Boolean = true,
     onTap: (PlaylistEntity) -> Unit,
     onAdd: () -> Unit,
     onManage: () -> Unit,
 ) {
     Column {
-        SectionHeader("Playlists")
-        Spacer(Modifier.height(6.dp))
+        if (showHeader) {
+            SectionHeader("Playlists")
+            Spacer(Modifier.height(6.dp))
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -569,6 +573,7 @@ private fun LegacySectionNavRow(section: SettingsSection, onClick: () -> Unit) {
 
 @Composable
 private fun AboutSection(
+    showHeader: Boolean = true,
     versionName: String,
     versionCode: Long,
     installedAt: Long,
@@ -578,8 +583,10 @@ private fun AboutSection(
     onReportIssue: () -> Unit,
 ) {
     Column {
-        SectionHeader("About")
-        Spacer(Modifier.height(6.dp))
+        if (showHeader) {
+            SectionHeader("About")
+            Spacer(Modifier.height(6.dp))
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()

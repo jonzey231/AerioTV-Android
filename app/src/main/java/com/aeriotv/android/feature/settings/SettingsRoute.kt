@@ -54,7 +54,79 @@ sealed interface SettingsRoute {
 
     /** The extra category-colour editor. */
     data object AddMoreCategories : SettingsRoute
+
+    /**
+     * The About block. On a phone it is inline at the bottom of the root list
+     * and this route is never pushed; in a two-pane host the sidebar replaces
+     * that list, so About needs a destination of its own to stay reachable.
+     */
+    data object About : SettingsRoute
 }
+
+/**
+ * The routes a two-pane host may hold as its SELECTION (the pane baseline).
+ * Everything else is a push above whichever of these is selected.
+ */
+val SettingsRoute.isPaneBaseline: Boolean
+    get() = this is SettingsRoute.Playlists ||
+        this is SettingsRoute.Section ||
+        this is SettingsRoute.About
+
+// MARK: - Frozen section canon
+//
+// Rev 2 requires the visible-section gating to be extracted VERBATIM rather
+// than re-typed, because it is now read from two places (the phone root list
+// and the tablet/TV sidebar) and any drift between them would be a silent
+// content-canon violation.
+
+/** One header + rows group in the Settings root list and sidebar. */
+data class SettingsSectionGroupSpec(
+    /** Stable LazyColumn item key; matches the pre-B3 hand-written keys. */
+    val key: String,
+    val header: String,
+    val sections: List<SettingsSection>,
+    val footer: String? = null,
+)
+
+/**
+ * The canonical Settings groups, in canon order, with the existing per-form
+ * factor gates: Remote Control is TV-only and App Updates is sideload-only.
+ */
+fun visibleSettingsSections(
+    isTv: Boolean,
+    updaterEnabled: Boolean,
+): List<SettingsSectionGroupSpec> = listOf(
+    SettingsSectionGroupSpec(
+        key = "app-settings",
+        header = "App Settings",
+        sections = buildList {
+            add(SettingsSection.Appearance)
+            add(SettingsSection.AppBehaviors)
+            add(SettingsSection.Multiview)
+            add(SettingsSection.Network)
+            // Remote Control initiative: TV form factors only.
+            if (isTv) add(SettingsSection.RemoteControl)
+            if (updaterEnabled) add(SettingsSection.AppUpdates)
+        },
+    ),
+    SettingsSectionGroupSpec(
+        key = "sync",
+        header = "Sync",
+        sections = listOf(SettingsSection.Sync),
+        footer = "Playlists, preferences, and watch progress sync across all devices " +
+            "signed into the same Google account. Credentials stay in encrypted Android storage.",
+    ),
+    SettingsSectionGroupSpec(
+        key = "dvr",
+        header = "DVR",
+        sections = listOf(SettingsSection.DvrSettings),
+    ),
+    SettingsSectionGroupSpec(
+        key = "developer",
+        header = "Developer",
+        sections = listOf(SettingsSection.Developer),
+    ),
+)
 
 /** Stage within the Add Playlist wizard. */
 sealed interface AddPlaylistWizardStep {
@@ -101,6 +173,26 @@ class SettingsNavState(initial: List<SettingsRoute> = emptyList()) {
         stack.clear()
     }
 
+    /**
+     * Inserts [route] UNDER everything already pushed. Used by the posture
+     * mapping when a two-pane host collapses to stacked: the pane selection
+     * becomes the bottom-most push, so Back walks out through it exactly as if
+     * the user had navigated there from the root list.
+     */
+    fun insertAtBaseline(route: SettingsRoute) {
+        stack.add(0, route)
+    }
+
+    /**
+     * Removes and returns the bottom-most entry, or null when empty. The
+     * stacked-to-two-pane direction of the same mapping: that entry becomes the
+     * pane selection and any deeper pushes stay on the stack above it.
+     */
+    fun removeBaseline(): SettingsRoute? {
+        if (stack.isEmpty()) return null
+        return stack.removeAt(0)
+    }
+
     /** Stable key for the focus contract; see MainScaffold's settingsContentFocus. */
     val focusKey: String?
         get() = when (val r = current) {
@@ -116,6 +208,7 @@ class SettingsNavState(initial: List<SettingsRoute> = emptyList()) {
             }
             is SettingsRoute.LogViewer -> "log"
             is SettingsRoute.AddMoreCategories -> "addmore"
+            is SettingsRoute.About -> "about"
         }
 }
 
@@ -125,7 +218,7 @@ class SettingsNavState(initial: List<SettingsRoute> = emptyList()) {
 // then survives rotation, fold posture changes, and process death, which the
 // boolean set could not (it lived in plain `remember`).
 
-private fun encode(route: SettingsRoute): String = when (route) {
+internal fun encodeSettingsRoute(route: SettingsRoute): String = when (route) {
     is SettingsRoute.Root -> "root"
     is SettingsRoute.Section -> "section:${route.section.name}"
     is SettingsRoute.Playlists -> "playlists"
@@ -137,10 +230,12 @@ private fun encode(route: SettingsRoute): String = when (route) {
     }
     is SettingsRoute.LogViewer -> "log"
     is SettingsRoute.AddMoreCategories -> "addmore"
+    is SettingsRoute.About -> "about"
 }
 
-private fun decode(raw: String): SettingsRoute? = when {
+internal fun decodeSettingsRoute(raw: String): SettingsRoute? = when {
     raw == "root" -> SettingsRoute.Root
+    raw == "about" -> SettingsRoute.About
     raw == "playlists" -> SettingsRoute.Playlists
     raw == "log" -> SettingsRoute.LogViewer
     raw == "addmore" -> SettingsRoute.AddMoreCategories
@@ -159,8 +254,17 @@ private fun decode(raw: String): SettingsRoute? = when {
 }
 
 val SettingsNavStateSaver: Saver<SettingsNavState, List<String>> = Saver(
-    save = { it.stack.map(::encode) },
-    restore = { SettingsNavState(it.mapNotNull(::decode)) },
+    save = { it.stack.map(::encodeSettingsRoute) },
+    restore = { SettingsNavState(it.mapNotNull(::decodeSettingsRoute)) },
+)
+
+/**
+ * Saver for the two-pane SELECTION, which lives outside the stack (Rev 2:
+ * "selection is not the stack") and so needs its own saveable encoding.
+ */
+val SettingsRouteSaver: Saver<SettingsRoute, String> = Saver(
+    save = { encodeSettingsRoute(it) },
+    restore = { decodeSettingsRoute(it) },
 )
 
 @Composable
