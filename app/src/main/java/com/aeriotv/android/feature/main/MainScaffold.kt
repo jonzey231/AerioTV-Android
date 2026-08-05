@@ -86,16 +86,19 @@ import com.aeriotv.android.feature.ondemand.OnDemandViewModel
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.playlist.nowPlaying
 import com.aeriotv.android.feature.settings.AddMoreCategoriesScreen
+import com.aeriotv.android.feature.settings.AddPlaylistWizardStep
 import com.aeriotv.android.feature.settings.AppBehaviorsSettingsScreen
 import com.aeriotv.android.feature.settings.AppearanceSettingsScreen
 import com.aeriotv.android.feature.settings.DeveloperSettingsScreen
 import com.aeriotv.android.feature.settings.DvrSettingsScreen
 import com.aeriotv.android.feature.settings.MultiviewSettingsScreen
 import com.aeriotv.android.feature.settings.NetworkSettingsScreen
+import com.aeriotv.android.feature.settings.SettingsRoute
 import com.aeriotv.android.feature.settings.SettingsScreen
 import com.aeriotv.android.feature.settings.SettingsSection
 import com.aeriotv.android.feature.settings.SettingsSubScreenPlaceholder
 import com.aeriotv.android.feature.settings.SettingsViewModel
+import com.aeriotv.android.feature.settings.rememberSettingsNavState
 import com.aeriotv.android.ui.tv.tvFocusScale
 
 /**
@@ -1320,13 +1323,21 @@ private fun SettingsTabContent(
     // Settings opened - same leak as LiveTVTabContent's old default.
     playlistViewModel: PlaylistViewModel,
 ) {
-    var section by remember { mutableStateOf<SettingsSection?>(null) }
-    var addMoreOpen by remember { mutableStateOf(false) }
-    var playlistDetailOpen by remember { mutableStateOf(false) }
-    var editPlaylistOpen by remember { mutableStateOf(false) }
-    var playlistsOpen by remember { mutableStateOf(false) }
-    var logViewerOpen by remember { mutableStateOf(false) }
-    var addPlaylistStep by remember { mutableStateOf<AddPlaylistStep>(AddPlaylistStep.None) }
+    // Phase B2: one saveable back stack replaces the six independent booleans
+    // plus `section`. "Innermost" is now literal (stack order) instead of being
+    // encoded implicitly in the ORDER of the BackHandler and content `when`
+    // branches, which had to be kept in agreement by hand. rememberSaveable
+    // also means rotation, fold posture changes, and process death restore the
+    // position, which plain `remember` could not.
+    val nav = rememberSettingsNavState()
+    val route = nav.current
+    val addPlaylistStep: AddPlaylistStep = when (val r = route) {
+        is SettingsRoute.AddPlaylist -> when (val st = r.step) {
+            is AddPlaylistWizardStep.ChooseType -> AddPlaylistStep.ChooseType
+            is AddPlaylistWizardStep.Configure -> AddPlaylistStep.Configure(st.sourceType)
+        }
+        else -> AddPlaylistStep.None
+    }
     val playlistVm = playlistViewModel
     val playlistState by playlistVm.state.collectAsStateWithLifecycle()
     // Watch for a playlist id flip while we're inside the Add Playlist flow;
@@ -1340,23 +1351,17 @@ private fun SettingsTabContent(
             startId != null &&
             playlistState.playlist?.id != startId
         ) {
-            addPlaylistStep = AddPlaylistStep.None
+            nav.pop()
         }
     }
-    androidx.activity.compose.BackHandler(
-        enabled = section != null || addMoreOpen || playlistDetailOpen ||
-            editPlaylistOpen || playlistsOpen || logViewerOpen ||
-            addPlaylistStep != AddPlaylistStep.None,
-    ) {
-        when {
-            addPlaylistStep is AddPlaylistStep.Configure -> addPlaylistStep = AddPlaylistStep.ChooseType
-            addPlaylistStep is AddPlaylistStep.ChooseType -> addPlaylistStep = AddPlaylistStep.None
-            playlistsOpen -> playlistsOpen = false
-            editPlaylistOpen -> editPlaylistOpen = false
-            playlistDetailOpen -> playlistDetailOpen = false
-            addMoreOpen -> addMoreOpen = false
-            logViewerOpen -> logViewerOpen = false
-            else -> section = null
+    androidx.activity.compose.BackHandler(enabled = nav.canPop) {
+        val cur = nav.current
+        // The wizard's stages advance IN PLACE rather than nesting, so Back
+        // from Configure returns to ChooseType instead of leaving the flow.
+        if (cur is SettingsRoute.AddPlaylist && cur.step is AddPlaylistWizardStep.Configure) {
+            nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+        } else {
+            nav.pop()
         }
     }
     // TV focus retention. The top nav uses selection-follows-focus (focusing
@@ -1369,17 +1374,7 @@ private fun SettingsTabContent(
     // lands on the nav. Keyed on the visible sub-screen; the root list (key
     // null) is left alone so the pill -> DOWN -> list traversal is unchanged.
     val settingsContentFocus = remember { FocusRequester() }
-    val subScreenKey: String? = when {
-        addPlaylistStep is AddPlaylistStep.Configure -> "configure"
-        addPlaylistStep is AddPlaylistStep.ChooseType -> "choosetype"
-        playlistsOpen -> "playlists"
-        editPlaylistOpen -> "edit"
-        playlistDetailOpen -> "detail"
-        addMoreOpen -> "addmore"
-        logViewerOpen -> "log"
-        section != null -> "section-$section"
-        else -> null
-    }
+    val subScreenKey: String? = nav.focusKey
     var prevSubScreenKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(subScreenKey) {
         // Pull focus into the content both when a sub-screen OPENS and when it
@@ -1393,68 +1388,101 @@ private fun SettingsTabContent(
         prevSubScreenKey = subScreenKey
     }
     Box(modifier = Modifier.focusRequester(settingsContentFocus).focusGroup()) {
-    when {
-        addPlaylistStep is AddPlaylistStep.Configure -> ConfigureSourceScreen(
-            sourceType = (addPlaylistStep as AddPlaylistStep.Configure).sourceType,
-            onBack = { addPlaylistStep = AddPlaylistStep.ChooseType },
-            viewModel = playlistVm,
-        )
-        addPlaylistStep is AddPlaylistStep.ChooseType -> ChooseSourceTypeScreen(
-            onBack = { addPlaylistStep = AddPlaylistStep.None },
-            onChoose = { type ->
-                // Start a FRESH draft so the add creates a NEW row and can't
-                // carry over the active server's bootstrap-prefilled API key
-                // (which would win over typed user/pass and re-add the active
-                // server's account). Mirrors the onboarding CHOOSE_TYPE path.
-                playlistVm.startNewSource(type)
-                addPlaylistStep = AddPlaylistStep.Configure(type)
+    // Dispatch on the stack's top route. Ordering that used to be implicit in
+    // branch position (the log viewer had to sit ABOVE Developer to win) is now
+    // just push order.
+    when (route) {
+        null -> SettingsScreen(
+            onSectionClick = { nav.push(SettingsRoute.Section(it)) },
+            onOpenPlaylistDetail = {
+                nav.push(SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()))
             },
-        )
-        playlistsOpen -> com.aeriotv.android.feature.settings.PlaylistsScreen(
-            onBack = { playlistsOpen = false },
-            onAddPlaylist = { addPlaylistStep = AddPlaylistStep.ChooseType },
-            onOpenPlaylistDetail = { playlistDetailOpen = true },
+            onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
+            onAddPlaylist = {
+                nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+            },
             viewModel = playlistVm,
         )
-        editPlaylistOpen -> com.aeriotv.android.feature.settings.EditPlaylistScreen(
-            onBack = { editPlaylistOpen = false },
+        is SettingsRoute.Root -> SettingsScreen(
+            onSectionClick = { nav.push(SettingsRoute.Section(it)) },
+            onOpenPlaylistDetail = {
+                nav.push(SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()))
+            },
+            onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
+            onAddPlaylist = {
+                nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+            },
             viewModel = playlistVm,
         )
-        playlistDetailOpen -> com.aeriotv.android.feature.settings.PlaylistDetailScreen(
-            onBack = { playlistDetailOpen = false },
-            onEdit = { editPlaylistOpen = true },
+        is SettingsRoute.AddPlaylist -> when (val st = route.step) {
+            is AddPlaylistWizardStep.Configure -> ConfigureSourceScreen(
+                sourceType = st.sourceType,
+                onBack = {
+                    nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+                },
+                viewModel = playlistVm,
+            )
+            is AddPlaylistWizardStep.ChooseType -> ChooseSourceTypeScreen(
+                onBack = { nav.pop() },
+                onChoose = { type ->
+                    // Start a FRESH draft so the add creates a NEW row and can't
+                    // carry over the active server's bootstrap-prefilled API key
+                    // (which would win over typed user/pass and re-add the active
+                    // server's account). Mirrors the onboarding CHOOSE_TYPE path.
+                    playlistVm.startNewSource(type)
+                    nav.replaceTop(
+                        SettingsRoute.AddPlaylist(AddPlaylistWizardStep.Configure(type)),
+                    )
+                },
+            )
+        }
+        is SettingsRoute.Playlists -> com.aeriotv.android.feature.settings.PlaylistsScreen(
+            onBack = { nav.pop() },
+            onAddPlaylist = {
+                nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
+            },
+            onOpenPlaylistDetail = {
+                nav.push(SettingsRoute.PlaylistDetail(playlistState.playlist?.id.orEmpty()))
+            },
             viewModel = playlistVm,
         )
-        addMoreOpen -> AddMoreCategoriesScreen(onBack = { addMoreOpen = false })
-        section == null -> SettingsScreen(
-            onSectionClick = { section = it },
-            onOpenPlaylistDetail = { playlistDetailOpen = true },
-            onOpenPlaylists = { playlistsOpen = true },
-            onAddPlaylist = { addPlaylistStep = AddPlaylistStep.ChooseType },
+        is SettingsRoute.EditPlaylist -> com.aeriotv.android.feature.settings.EditPlaylistScreen(
+            onBack = { nav.pop() },
             viewModel = playlistVm,
         )
-        section == SettingsSection.Appearance -> AppearanceSettingsScreen(
-            onBack = { section = null },
-            onOpenAddMoreCategories = { addMoreOpen = true },
+        is SettingsRoute.PlaylistDetail ->
+            com.aeriotv.android.feature.settings.PlaylistDetailScreen(
+                onBack = { nav.pop() },
+                onEdit = { nav.push(SettingsRoute.EditPlaylist(route.playlistId)) },
+                viewModel = playlistVm,
+            )
+        is SettingsRoute.AddMoreCategories -> AddMoreCategoriesScreen(onBack = { nav.pop() })
+        is SettingsRoute.LogViewer -> com.aeriotv.android.feature.settings.LogViewerScreen(
+            onBack = { nav.pop() },
         )
-        section == SettingsSection.AppBehaviors -> AppBehaviorsSettingsScreen(onBack = { section = null })
-        section == SettingsSection.Multiview -> MultiviewSettingsScreen(onBack = { section = null })
-        section == SettingsSection.Network -> NetworkSettingsScreen(onBack = { section = null })
-        section == SettingsSection.RemoteControl ->
-            com.aeriotv.android.feature.settings.RemoteControlSettingsScreen(onBack = { section = null })
-        section == SettingsSection.AppUpdates ->
-            com.aeriotv.android.feature.settings.AppUpdatesScreen(onBack = { section = null })
-        section == SettingsSection.Sync -> com.aeriotv.android.feature.settings.SyncSettingsScreen(
-            onBack = { section = null },
-        )
-        section == SettingsSection.DvrSettings -> DvrSettingsScreen(onBack = { section = null })
-        logViewerOpen -> com.aeriotv.android.feature.settings.LogViewerScreen(
-            onBack = { logViewerOpen = false },
-        )
-        section == SettingsSection.Developer -> DeveloperSettingsScreen(
-            onBack = { section = null },
-            onOpenLogViewer = { logViewerOpen = true },
-        )
+        is SettingsRoute.Section -> when (route.section) {
+            SettingsSection.Appearance -> AppearanceSettingsScreen(
+                onBack = { nav.pop() },
+                onOpenAddMoreCategories = { nav.push(SettingsRoute.AddMoreCategories) },
+            )
+            SettingsSection.AppBehaviors -> AppBehaviorsSettingsScreen(onBack = { nav.pop() })
+            SettingsSection.Multiview -> MultiviewSettingsScreen(onBack = { nav.pop() })
+            SettingsSection.Network -> NetworkSettingsScreen(onBack = { nav.pop() })
+            SettingsSection.RemoteControl ->
+                com.aeriotv.android.feature.settings.RemoteControlSettingsScreen(
+                    onBack = { nav.pop() },
+                )
+            SettingsSection.AppUpdates ->
+                com.aeriotv.android.feature.settings.AppUpdatesScreen(onBack = { nav.pop() })
+            SettingsSection.Sync -> com.aeriotv.android.feature.settings.SyncSettingsScreen(
+                onBack = { nav.pop() },
+            )
+            SettingsSection.DvrSettings -> DvrSettingsScreen(onBack = { nav.pop() })
+            SettingsSection.Developer -> DeveloperSettingsScreen(
+                onBack = { nav.pop() },
+                onOpenLogViewer = { nav.push(SettingsRoute.LogViewer) },
+            )
+        }
     }
     }
 }
