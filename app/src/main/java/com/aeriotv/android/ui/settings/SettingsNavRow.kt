@@ -15,6 +15,7 @@
 package com.aeriotv.android.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,11 +38,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.aeriotv.android.ui.tv.tvFocusScale
 
 /**
  * One navigation row in the Settings root list, the tablet sidebar, or the TV
@@ -60,6 +63,17 @@ fun SettingsNavRow(
     modifier: Modifier = Modifier,
     selected: Boolean = false,
     trailingChevron: Boolean = true,
+    /**
+     * Rail / sidebar styling: NO per-item card. Both Apple platforms draw
+     * these as plain rows on the background and reserve the filled pill for
+     * the selected or focused one (iPad sidebar and the tvOS rail, verified
+     * against Logan's 2026-08-05 captures). Boxing every item, as
+     * `settingsRowCard` does, reads as much heavier chrome than either.
+     *
+     * The phone ROOT list keeps its cards - those match iOS's grouped
+     * insetGrouped rows and are correct there.
+     */
+    flat: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     val isTv = rememberIsTvDevice()
@@ -81,14 +95,41 @@ fun SettingsNavRow(
         modifier = modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }
-            .settingsRowCard(focused = focused)
             .then(
-                if (selected && !focused) {
-                    Modifier.background(
-                        MaterialTheme.colorScheme.secondaryContainer,
-                        RoundedCornerShape(12.dp),
-                    )
-                } else Modifier,
+                if (flat) {
+                    // Plain row; fill only for focus (D-pad affordance) or
+                    // selection, and a border only on focus.
+                    Modifier
+                        .tvFocusScale(focused, focusedScale = 1.02f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            when {
+                                focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                selected -> MaterialTheme.colorScheme.secondaryContainer
+                                else -> Color.Transparent
+                            },
+                        )
+                        .then(
+                            if (focused) {
+                                Modifier.border(
+                                    2.dp,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else Modifier,
+                        )
+                } else {
+                    Modifier
+                        .settingsRowCard(focused = focused)
+                        .then(
+                            if (selected && !focused) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else Modifier,
+                        )
+                },
             )
             .clickable(onClick = onClick)
             .padding(horizontal = padH, vertical = padV),

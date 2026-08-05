@@ -195,6 +195,7 @@ private fun SettingsSidebar(
                 onClick = { onSelect(SettingsRoute.Playlists) },
                 selected = selection is SettingsRoute.Playlists,
                 trailingChevron = false,
+                flat = true,
             )
         }
         sections.forEach { group ->
@@ -213,6 +214,7 @@ private fun SettingsSidebar(
                     selected = selection is SettingsRoute.Section &&
                         selection.section == section,
                     trailingChevron = false,
+                    flat = true,
                 )
             }
         }
@@ -226,6 +228,7 @@ private fun SettingsSidebar(
                     onClick = { onSelect(SettingsRoute.About) },
                     selected = selection is SettingsRoute.About,
                     trailingChevron = false,
+                    flat = true,
                 )
             }
         }
@@ -412,6 +415,7 @@ private fun SettingsTvRail(
                 onClick = { onClickRoute(route) },
                 selected = route == selection,
                 trailingChevron = false,
+                flat = true,
                 modifier = Modifier
                     .onFocusChanged { if (it.isFocused) onFocusRoute(route) }
                     .then(
