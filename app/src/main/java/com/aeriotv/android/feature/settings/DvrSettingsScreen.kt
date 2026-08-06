@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
@@ -119,6 +120,32 @@ fun DvrSettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
+            item {
+                // Task #50 (iOS parity): where new recordings go by default.
+                // The record sheet still shows its Destination toggle for
+                // server-capable accounts; this only pre-selects it.
+                val defaultDestination by settingsVm.dvrDefaultDestination
+                    .collectAsStateWithLifecycle(initialValue = "server")
+                Card(
+                    header = "Default Destination",
+                    footer = "Where new recordings are saved unless you change it in the record sheet. Accounts without server recording always record to this device.",
+                ) {
+                    Column {
+                        DestinationRow(
+                            label = "Server (Dispatcharr)",
+                            selected = defaultDestination != "local",
+                            onSelect = { settingsVm.setDvrDefaultDestination("server") },
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        DestinationRow(
+                            label = "This device",
+                            selected = defaultDestination == "local",
+                            onSelect = { settingsVm.setDvrDefaultDestination("local") },
+                        )
+                    }
+                }
+            }
+
             item {
                 Card(
                     header = "Default Recording Buffers",
@@ -314,6 +341,38 @@ private fun Card(
  * tapping expands a DropdownMenu of the supported minute options. Two
  * BufferRows share one card via stacked layout.
  */
+/** Task #50: one Default Destination choice row (checkmark on the active). */
+@Composable
+private fun DestinationRow(
+    label: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .dpadFocusWash()
+            .clickable(onClick = onSelect)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
 @Composable
 private fun BufferRow(
     label: String,

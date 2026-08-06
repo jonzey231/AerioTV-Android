@@ -108,10 +108,16 @@ fun RecordProgramSheet(
 
     var preRoll by remember(defaultPreRoll) { mutableStateOf(defaultPreRoll) }
     var postRoll by remember(defaultPostRoll) { mutableStateOf(defaultPostRoll) }
-    // Seed the destination from capability; re-seed if it resolves after the
-    // first composition. Non-admin seeds false and the toggle is hidden, so it
-    // can never flip back to server.
-    var destinationServer by remember(canRecordToServer) { mutableStateOf(canRecordToServer) }
+    // Task #50: seed the destination from the user's Default Destination
+    // preference AND capability; re-seed if either resolves after the first
+    // composition. Non-admin seeds false and the toggle is hidden, so it can
+    // never flip back to server; a "local" default pre-selects this device
+    // for server-capable accounts too (still switchable in the sheet).
+    val defaultDestination by settingsViewModel.dvrDefaultDestination
+        .collectAsStateWithLifecycle(initialValue = "server")
+    var destinationServer by remember(canRecordToServer, defaultDestination) {
+        mutableStateOf(canRecordToServer && defaultDestination != "local")
+    }
     var removeCommercials by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
 

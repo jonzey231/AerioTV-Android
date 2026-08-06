@@ -1126,6 +1126,17 @@ class AppPreferences @Inject constructor(
     }
 
     /** iOS `dvrDefaultPreRollMins` parity. */
+    /** Task #50 (iOS parity): the record sheet's pre-seeded destination.
+     *  "server" (default) records on Dispatcharr when the account can;
+     *  "local" pre-selects this device even for server-capable accounts.
+     *  Device-local like the other DVR settings (the capability gate in the
+     *  sheet still forces local for non-admin accounts regardless). */
+    val dvrDefaultDestination: Flow<String> =
+        store.data.map { it[KEY_DVR_DEFAULT_DESTINATION] ?: "server" }
+    suspend fun setDvrDefaultDestination(value: String) {
+        store.edit { it[KEY_DVR_DEFAULT_DESTINATION] = value }
+    }
+
     val dvrDefaultPreRollMins: Flow<Int> = store.data.map { it[KEY_DVR_DEFAULT_PRE_ROLL] ?: 0 }
     suspend fun setDvrDefaultPreRollMins(value: Int) {
         store.edit { it[KEY_DVR_DEFAULT_PRE_ROLL] = value }
@@ -1318,6 +1329,7 @@ class AppPreferences @Inject constructor(
         val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")
         val KEY_DVR_DEFAULT_PRE_ROLL = intPreferencesKey("dvr_default_pre_roll_mins")
         val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")
+        val KEY_DVR_DEFAULT_DESTINATION = stringPreferencesKey("dvr_default_destination")
         val KEY_LIVE_REWIND_ENABLED = booleanPreferencesKey("live_rewind_enabled")
         val KEY_LIVE_REWIND_DEPTH_MIN = intPreferencesKey("live_rewind_depth_minutes")
         val KEY_LIVE_REWIND_PROMPT_SEEN = booleanPreferencesKey("live_rewind_prompt_seen")

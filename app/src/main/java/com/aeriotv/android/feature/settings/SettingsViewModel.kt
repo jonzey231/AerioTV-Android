@@ -354,6 +354,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setDvrMaxLocalStorageMB(value) }
     }
 
+    /** Task #50: the record sheet's pre-seeded destination ("server"/"local"). */
+    val dvrDefaultDestination: Flow<String> = prefs.dvrDefaultDestination
+    fun setDvrDefaultDestination(value: String) {
+        viewModelScope.launch { prefs.setDvrDefaultDestination(value) }
+    }
+
     val dvrDefaultPreRollMins: Flow<Int> = prefs.dvrDefaultPreRollMins
     fun setDvrDefaultPreRollMins(value: Int) {
         viewModelScope.launch { prefs.setDvrDefaultPreRollMins(value) }
