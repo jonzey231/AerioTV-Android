@@ -2016,6 +2016,18 @@ fun GuideScreen(
                     // recognizer; repeatCount >= 4 is the belt-and-suspenders
                     // fallback) and swallows further repeats until release.
                     if (event.key == Key.DirectionLeft) {
+                        // A FRESH press (repeatCount 0) always clears the hold
+                        // latch: the latch may only ever swallow repeats of the
+                        // SAME physical hold. The KeyUp reset above is not
+                        // enough on its own - when the hold opens the sidebar,
+                        // focus moves into it while the button is still down,
+                        // so the release dispatches to the sidebar and this
+                        // handler never sees it. The stale latch then swallowed
+                        // the whole NEXT hold doing nothing (Logan repro
+                        // 2026-08-06: sidebar would not reopen after Back).
+                        if (event.nativeKeyEvent.repeatCount == 0) {
+                            gridLeftHoldFired = false
+                        }
                         val isLongNow = event.nativeKeyEvent.isLongPress ||
                             event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT
                         if (isLongNow || gridLeftHoldFired) {
