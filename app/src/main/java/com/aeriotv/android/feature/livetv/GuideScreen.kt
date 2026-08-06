@@ -1548,6 +1548,45 @@ fun GuideScreen(
         }
         androidx.compose.runtime.SideEffect { guideActionDispatcher.value = dispatchGuideAction }
 
+        // Sidebar mode's DEFERRED short-Left (Logan 2026-08-06: a hold was
+        // stepping the timeline once before the sidebar opened, because the
+        // tap navigation ran on KEY DOWN). In sidebar mode the down only arms
+        // the hold timer; a genuine tap runs THIS on release instead. Mirrors
+        // the KeyDown fall-through ladder: page within a wide focused
+        // programme, else recover an orphaned focus, else step to the
+        // adjacent cell. Pills mode keeps the immediate KeyDown navigation
+        // (its hold action does not conflict with a pre-step).
+        val performDeferredShortLeft = {
+            guideNav.allowHorizontalScroll()
+            val cellStartPx = guideNav.focusedCellStartPx
+            val cellEndPx = guideNav.focusedCellEndPx
+            var done = false
+            if (guideNav.focusedChannelIndex >= 0 && cellEndPx > cellStartPx) {
+                val scroll = horizontalScrollState.value
+                val maxScroll = horizontalScrollState.maxValue
+                val hours = (windowDurationMs / 3_600_000L).toInt().coerceAtLeast(1)
+                val contentPx = with(density) { (scaledHourWidth * hours).toPx() }
+                val viewportPx = (contentPx - maxScroll).coerceAtLeast(1f)
+                val epsilon = with(density) { 8.dp.toPx() }
+                val page = viewportPx * 0.85f
+                if (cellStartPx < scroll - epsilon && scroll > 0) {
+                    val target = (scroll - page).toInt().coerceIn(0, maxScroll)
+                    navScope.launch { horizontalScrollState.scrollTo(target) }
+                    done = true
+                }
+            }
+            if (!done) {
+                if (guideNav.focusedChannelIndex < 0) {
+                    val recoverRow = guideNav.lastFocusedChannelIndex
+                    if (recoverRow >= 0 && !guideNav.verticalMoveInFlight) {
+                        navScope.launch { guideNav.moveFocusToChannel(recoverRow, listState) }
+                    }
+                } else {
+                    guideNav.stepHorizontal(forward = false)
+                }
+            }
+        }
+
         androidx.activity.compose.BackHandler(enabled = !miniActive) {
             val atTop = listState.firstVisibleItemIndex == 0 &&
                 listState.firstVisibleItemScrollOffset == 0
@@ -1780,16 +1819,21 @@ fun GuideScreen(
                 // ourselves. LEFT/RIGHT/CENTER fall through untouched, preserving
                 // horizontal timeline nav + OK-to-play.
                 .onPreviewKeyEvent { event ->
-                    // Left RELEASE just ends the hold latch so the next press
-                    // starts fresh. Logan reversed the sidebar gesture
-                    // 2026-08-06: short Left is now PLAIN navigation (stepping
-                    // left into EPG history - the old tap-opens-sidebar arming
-                    // made history unreachable in sidebar mode), and HOLD Left
-                    // opens the group sidebar instead. See the hold branch.
+                    // Left RELEASE. Sidebar mode: the tap's navigation was
+                    // DEFERRED off the down press (which only arms the hold
+                    // timer), so a release with no hold fired runs it now -
+                    // this is what stops a hold from stepping the timeline
+                    // before the sidebar opens (Logan 2026-08-06). Pills mode
+                    // just ends the hold latch so the next press starts fresh.
                     if (event.key == Key.DirectionLeft && event.type == KeyEventType.KeyUp) {
                         gridLeftHoldJob?.cancel()
                         gridLeftHoldJob = null
+                        val wasHold = gridLeftHoldFired
                         gridLeftHoldFired = false
+                        if (sidebarGroupMode) {
+                            if (!wasHold) performDeferredShortLeft()
+                            return@onPreviewKeyEvent true
+                        }
                         return@onPreviewKeyEvent false
                     }
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -1845,7 +1889,10 @@ fun GuideScreen(
                             // waiting for the OS long-press flag at ~500ms
                             // (Logan 2026-08-06: the open felt slow). A tap's
                             // KeyUp cancels it; if it fires the key is still
-                            // held, so this IS the hold gesture.
+                            // held, so this IS the hold gesture. The DOWN is
+                            // CONSUMED with no navigation - the tap's step is
+                            // deferred to the release (see the KeyUp branch) so
+                            // a hold cannot pre-step the timeline.
                             if (sidebarGroupMode) {
                                 gridLeftHoldJob?.cancel()
                                 gridLeftHoldJob = navScope.launch {
@@ -1855,10 +1902,17 @@ fun GuideScreen(
                                         openGroupSidebarFromGrid()
                                     }
                                 }
+                                return@onPreviewKeyEvent true
                             }
                         }
                         val isLongNow = event.nativeKeyEvent.isLongPress ||
                             event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT
+                        // Sidebar mode swallows the repeats between the down
+                        // and the timer firing too - navigation must never run
+                        // from a Left that might still become the hold.
+                        if (sidebarGroupMode && !isLongNow && !gridLeftHoldFired) {
+                            return@onPreviewKeyEvent true
+                        }
                         if (isLongNow || gridLeftHoldFired) {
                             if (!gridLeftHoldFired) {
                                 gridLeftHoldFired = true

@@ -1711,6 +1711,8 @@ fun PlayerScreen(
             showChannelFlipHint = appleTVChannelFlip && channels.size >= 2 &&
                 com.aeriotv.android.core.remote.RemoteControlHints.verticalFlipMapped(remoteMap),
             selectHint = com.aeriotv.android.core.remote.RemoteControlHints.selectHint(remoteMap),
+            horizontalHint = com.aeriotv.android.core.remote.RemoteControlHints
+                .playerHorizontalHint(remoteMap),
             // Explicit X tap = user is done with this channel; clear the mini-player
             // session, destroy the held MPV instance, and stop the background
             // PlaybackService so the notification disappears. System back keeps

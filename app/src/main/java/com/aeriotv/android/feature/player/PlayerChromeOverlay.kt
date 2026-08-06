@@ -147,6 +147,8 @@ fun PlayerChromeOverlay(
     /** The "Press Select ... / Hold Select ..." hint line, derived from the
      *  effective remote map by the caller; null hides the line. */
     selectHint: String? = "Press Select for player controls.",
+    /** Left/Right gesture line (map-derived); null = omitted. */
+    horizontalHint: String? = null,
     /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
      *  bar. Null on TV and on any Cast-disabled build. */
     castSlot: (@Composable () -> Unit)? = null,
@@ -717,6 +719,9 @@ fun PlayerChromeOverlay(
                         // Dynamic (Remote Control initiative): the Select line
                         // follows the mapped OK actions; null = omitted.
                         selectHint?.let { PlayerHintChip(it) }
+                        // Left/Right line (Logan 2026-08-06): channel list /
+                        // groups / previous-channel zap, from the map.
+                        horizontalHint?.let { PlayerHintChip(it) }
                     }
                 }
             }

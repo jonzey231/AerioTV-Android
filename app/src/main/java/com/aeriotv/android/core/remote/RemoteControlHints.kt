@@ -40,6 +40,26 @@ object RemoteControlHints {
         map.playerAction(RemoteSlot.UP_SHORT) == PlayerRemoteAction.CHANNEL_UP &&
             map.playerAction(RemoteSlot.DOWN_SHORT) == PlayerRemoteAction.CHANNEL_DOWN
 
+    /** The player's Left/Right line (Logan 2026-08-06: users forgot what the
+     *  horizontal presses do). CHANNEL_LIST gets the fixed second-press note -
+     *  Left inside the channel list opens the group sidebar - because that
+     *  stage is built into the overlay, not the map. Null when neither slot
+     *  maps to a phrasable action. */
+    fun playerHorizontalHint(map: RemoteControlMap): String? {
+        val left = map.playerAction(RemoteSlot.LEFT_SHORT)
+        val right = map.playerAction(RemoteSlot.RIGHT_SHORT)
+        val parts = buildList {
+            if (left == PlayerRemoteAction.CHANNEL_LIST) {
+                add("Left = channel list")
+                add("Left again = groups")
+            } else {
+                playerPhrase(left)?.let { add("Left = $it") }
+            }
+            playerPhrase(right)?.let { add("Right = $it") }
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("  ·  ")
+    }
+
     private fun guidePhrase(action: GuideRemoteAction): String? = when (action) {
         GuideRemoteAction.TIMELINE_BACK -> "browse earlier programs"
         GuideRemoteAction.TIMELINE_FORWARD -> "browse later programs"
