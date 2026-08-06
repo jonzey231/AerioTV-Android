@@ -70,11 +70,13 @@ enum class AppTab(
     ),
 
     /**
-     * Global Search as a nav-bar tab. TV-ONLY (Logan 2026-08-06): the guide's
-     * in-header search circles are gone on TV and this is the one search
-     * entry there, sitting right of Settings. Phones keep search in the Live
-     * TV app bar instead, so [com.aeriotv.android.feature.main.MainScaffold]'s
-     * visibleTabs never emits it off-TV, and the Default Tab picker skips it.
+     * Global Search. TV-ONLY (Logan 2026-08-06): the guide's in-header search
+     * circles are gone on TV and this is the one search entry there. It is
+     * NEVER a pill - visibleTabs never emits it - but it IS a selectable tab
+     * state: TvTopTabBar renders it as the floating circle LEFT of Live TV
+     * (one Left press for frequent searchers), and MainTabContent hosts its
+     * screen like any other tab. Phones keep search in the Live TV app bar,
+     * and the Default Tab picker skips it.
      */
     Search(
         id = "search",

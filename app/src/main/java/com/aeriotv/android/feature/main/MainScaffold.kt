@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -222,7 +224,6 @@ fun MainScaffold(
         hasFavorites = hasRenderableFavorites,
         hasVod = hasVodContent,
         hasRecordings = hasRecordings,
-        isTv = rememberLiveTvFormFactor().isTv,
     )
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val miniPlayerState by miniPlayerVm.state.collectAsStateWithLifecycle()
@@ -317,7 +318,11 @@ fun MainScaffold(
     // If the currently-selected tab disappears (e.g. user clears playlist, sourceType
     // changes), fall back to Live TV.
     LaunchedEffect(tabs) {
-        if (selectedTab !in tabs) selectedTab = AppTab.LiveTV
+        // Search is never IN `tabs` (it's the floating bar button, not a
+        // pill) but is a perfectly valid selection - don't bounce it.
+        if (selectedTab !in tabs && selectedTab != AppTab.Search) {
+            selectedTab = AppTab.LiveTV
+        }
     }
 
     // EPG-search guide jump (iOS: MainTabView switches to .liveTV +
@@ -413,7 +418,11 @@ fun MainScaffold(
         // One FocusRequester per pill, shared between the bar (which binds
         // them) and the content's exit redirect below (which targets the
         // SELECTED pill directly, not the bar, so no entry heuristics apply).
-        val pillRequesters = remember(tabs) { tabs.associateWith { FocusRequester() } }
+        // + Search: not a pill, but the floating bar button needs a requester
+        // for the same entry/exit focus redirects the pills use.
+        val pillRequesters = remember(tabs) {
+            (tabs + AppTab.Search).associateWith { FocusRequester() }
+        }
         // Chrome-collapse channel: long content surfaces (the On Demand grids)
         // set this true while scrolled down so the tab bar shrinks away. See
         // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
@@ -1326,37 +1335,122 @@ private fun TvTopTabBar(
             .padding(top = 16.dp, bottom = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
+        // The Search button lives OUTSIDE the pill capsule's focus group, on
+        // purpose. Bar entry arrives as a direct requestFocus on the capsule
+        // row, which IGNORES enter/onEnter redirects and lands on the group's
+        // first focusable - with the button inside the group that first
+        // focusable was the button, entry never reached the selected pill,
+        // and the armed gate (correctly) refused to treat entry focus as a
+        // selection, so Search could never open (Streamer 2026-08-06). Out
+        // here the capsule's focus contract is exactly the pre-button one,
+        // and the button is a plain focusable CLICK target: Left from Live
+        // TV highlights it, OK opens Search.
         Row(
-            modifier = Modifier
-                .focusRequester(focusRequester)
-                .focusGroup()
-                .focusProperties {
-                    onEnter = {
-                        pillRequesters[selected]?.requestFocus()
-                    }
-                }
-                // Row-level hasFocus stays true while focus moves between pills
-                // and only flips false when focus leaves the bar entirely, so it
-                // is the reliable "is the user in the bar" signal for [armed].
-                .onFocusChanged { navHasFocus = it.hasFocus }
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            // 6dp still leaves headroom for the focused pill's 1.04x paint-only
-            // grow (graphicsLayer does not relayout); at 3dp the widest pill
-            // visually collided. Trimmed from 8dp to narrow the bar.
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            tabs.forEach { tab ->
-                TvTab(
-                    tab = tab,
-                    selected = tab == selected,
-                    onFocused = { focusedTab = tab },
-                    modifier = pillRequesters[tab]?.let { Modifier.focusRequester(it) } ?: Modifier,
-                )
+            // Floating global-search button LEFT of Live TV (Logan 2026-08-06:
+            // moved from a rightmost tab so frequent searchers reach it in one
+            // Left press instead of traversing the whole bar).
+            TvSearchButton(
+                selected = selected == AppTab.Search,
+                onClick = { onSelect(AppTab.Search) },
+                modifier = pillRequesters[AppTab.Search]
+                    ?.let { Modifier.focusRequester(it) } ?: Modifier,
+            )
+            Row(
+                modifier = Modifier
+                    .focusRequester(focusRequester)
+                    .focusGroup()
+                    .focusProperties {
+                        onEnter = {
+                            pillRequesters[selected]?.requestFocus()
+                        }
+                    }
+                    // Row-level hasFocus stays true while focus moves between pills
+                    // and only flips false when focus leaves the bar entirely, so it
+                    // is the reliable "is the user in the bar" signal for [armed].
+                    .onFocusChanged { navHasFocus = it.hasFocus }
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                // 6dp still leaves headroom for the focused pill's 1.04x paint-only
+                // grow (graphicsLayer does not relayout); at 3dp the widest pill
+                // visually collided. Trimmed from 8dp to narrow the bar.
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                tabs.forEach { tab ->
+                    TvTab(
+                        tab = tab,
+                        selected = tab == selected,
+                        onFocused = { focusedTab = tab },
+                        modifier = pillRequesters[tab]?.let { Modifier.focusRequester(it) } ?: Modifier,
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * The floating global-search circle beside the pill capsule. Unlike the pills
+ * it is a plain BUTTON: focus highlights it (white ring, app convention) and
+ * OK opens Search. It deliberately does NOT select on focus - it sits outside
+ * the capsule's focus group and its armed machinery, so focus-driven
+ * selection here would fire on every accidental Left past the bar's edge.
+ * Solid primary while the Search screen is the one on screen.
+ */
+@Composable
+private fun TvSearchButton(
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val background by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.primary
+            focused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+            else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+        },
+        label = "tvSearchButtonBackground",
+    )
+    val foreground by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.onPrimary
+            focused -> MaterialTheme.colorScheme.onSurface
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        label = "tvSearchButtonForeground",
+    )
+    Box(
+        modifier = modifier
+            .tvFocusScale(focused, focusedScale = 1.04f)
+            .clip(CircleShape)
+            .background(background)
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = CircleShape,
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            // Matches the pill height (18dp icon + 6dp vertical pad + the
+            // capsule's own 4dp) so the circle centers cleanly beside it.
+            .padding(10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = AppTab.Search.iconSelected,
+            contentDescription = AppTab.Search.label,
+            tint = foreground,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -1749,17 +1843,16 @@ internal fun visibleTabs(
     hasFavorites: Boolean = false,
     hasVod: Boolean = false,
     hasRecordings: Boolean = false,
-    isTv: Boolean = false,
 ): List<AppTab> = buildList {
     add(AppTab.LiveTV)
     if (hasFavorites) add(AppTab.Favorites)
     if (hasRecordings) add(AppTab.DVR)
     if (hasVod) add(AppTab.OnDemand)
     add(AppTab.Settings)
-    // TV-only (Logan 2026-08-06): global Search lives in the top nav, right
-    // of Settings, replacing the guide header's search circles. Phones keep
-    // their app-bar search entry points instead of a fifth bottom-bar tab.
-    if (isTv) add(AppTab.Search)
+    // AppTab.Search is deliberately NOT a pill: on TV it renders as the
+    // floating circle LEFT of Live TV inside TvTopTabBar (Logan 2026-08-06:
+    // frequent searchers shouldn't traverse the whole bar), and phones keep
+    // their app-bar search entry points instead of a bottom-bar tab.
 }
 
 /** EntryPoint accessor so MainScaffold can drive pause/destroy on the held
