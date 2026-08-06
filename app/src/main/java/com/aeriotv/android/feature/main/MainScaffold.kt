@@ -1,6 +1,7 @@
 package com.aeriotv.android.feature.main
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -460,6 +462,8 @@ fun MainScaffold(
                         .collapsibleChrome(barFraction),
                 ) {
                     TvTopTabBar(
+                        onRefresh = { viewModel.refreshPlaylist() },
+                        refreshing = anyBackgroundWork,
                         tabs = tabs,
                         selected = selectedTab,
                         onSelect = { selectedTab = it; initialTabApplied = true },
@@ -1282,6 +1286,11 @@ private fun TvTopTabBar(
     focusRequester: FocusRequester,
     lastUpKeyMs: LongArray = longArrayOf(0L),
     pillRequesters: Map<AppTab, FocusRequester> = emptyMap(),
+    /** Refresh circle (Logan 2026-08-06): TV's stand-in for pull-to-refresh.
+     *  Re-fetches channels + EPG so Dispatcharr-side group/channel edits show
+     *  up without a trip through Settings > playlist. */
+    onRefresh: () -> Unit = {},
+    refreshing: Boolean = false,
 ) {
     // Selection-follows-focus, but committed ONLY for focus moves BETWEEN pills
     // (real D-pad traversal of the bar), never for focus ENTERING the bar from
@@ -1349,10 +1358,18 @@ private fun TvTopTabBar(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Floating global-search button LEFT of Live TV (Logan 2026-08-06:
-            // moved from a rightmost tab so frequent searchers reach it in one
-            // Left press instead of traversing the whole bar).
-            TvSearchButton(
+            // Floating action circles LEFT of Live TV (Logan 2026-08-06):
+            // Refresh (TV's pull-to-refresh stand-in), then Search - so the
+            // most-used action sits closest to the pills, one Left press away.
+            TvBarCircleButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = "Refresh channels and guide",
+                onClick = onRefresh,
+                spinning = refreshing,
+            )
+            TvBarCircleButton(
+                icon = AppTab.Search.iconSelected,
+                contentDescription = AppTab.Search.label,
                 selected = selected == AppTab.Search,
                 onClick = { onSelect(AppTab.Search) },
                 modifier = pillRequesters[AppTab.Search]
@@ -1394,18 +1411,23 @@ private fun TvTopTabBar(
 }
 
 /**
- * The floating global-search circle beside the pill capsule. Unlike the pills
- * it is a plain BUTTON: focus highlights it (white ring, app convention) and
- * OK opens Search. It deliberately does NOT select on focus - it sits outside
- * the capsule's focus group and its armed machinery, so focus-driven
- * selection here would fire on every accidental Left past the bar's edge.
- * Solid primary while the Search screen is the one on screen.
+ * A floating action circle beside the pill capsule (Search, Refresh). Unlike
+ * the pills these are plain BUTTONS: focus highlights (white ring, app
+ * convention) and OK acts. They deliberately do NOT select on focus - they
+ * sit outside the capsule's focus group and its armed machinery, so
+ * focus-driven action here would fire on every accidental Left past the
+ * bar's edge. [selected] paints solid primary while the button's content is
+ * the one on screen (Search); [spinning] rotates the glyph while its action
+ * is in flight (Refresh).
  */
 @Composable
-private fun TvSearchButton(
-    selected: Boolean,
+private fun TvBarCircleButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    spinning: Boolean = false,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -1415,7 +1437,7 @@ private fun TvSearchButton(
             focused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
             else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
         },
-        label = "tvSearchButtonBackground",
+        label = "tvBarCircleBackground",
     )
     val foreground by animateColorAsState(
         targetValue = when {
@@ -1423,8 +1445,28 @@ private fun TvSearchButton(
             focused -> MaterialTheme.colorScheme.onSurface
             else -> MaterialTheme.colorScheme.onSurfaceVariant
         },
-        label = "tvSearchButtonForeground",
+        label = "tvBarCircleForeground",
     )
+    // Spin only while asked: the infinite transition exists (and ticks
+    // frames) solely inside this branch, so an idle bar animates nothing.
+    val rotation = if (spinning) {
+        val transition = androidx.compose.animation.core.rememberInfiniteTransition(
+            label = "tvBarCircleSpin",
+        )
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 1000,
+                    easing = androidx.compose.animation.core.LinearEasing,
+                ),
+            ),
+            label = "tvBarCircleSpinAngle",
+        ).value
+    } else {
+        0f
+    }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusedScale = 1.04f)
@@ -1446,10 +1488,12 @@ private fun TvSearchButton(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = AppTab.Search.iconSelected,
-            contentDescription = AppTab.Search.label,
+            imageVector = icon,
+            contentDescription = contentDescription,
             tint = foreground,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier
+                .size(18.dp)
+                .graphicsLayer { rotationZ = rotation },
         )
     }
 }
