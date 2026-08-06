@@ -1963,8 +1963,20 @@ fun GuideScreen(
                         // hold that browsed earlier programmes exceeds the tap
                         // window and is disqualified here, so it can never also
                         // open the sidebar.
+                        //
+                        // The window starts at 0, not 1: an adb-injected
+                        // keyevent delivers DOWN and UP inside the same
+                        // uptimeMillis tick, so heldMs is 0 and a `1..` lower
+                        // bound silently swallowed every scripted tap (found
+                        // 2026-08-05 verifying the ac8a351 race fix on the TV
+                        // emulator - the press armed, consumed the DOWN, then
+                        // no-opped on release). No human press releases inside
+                        // a millisecond, and a spurious UP without a DOWN is
+                        // already rejected by gridLeftPendingSidebar being
+                        // false, so 0 costs nothing and makes this path
+                        // verifiable by automation.
                         val openSidebar = gridLeftPendingSidebar && !gridLeftHoldFired &&
-                            heldMs in 1..SIDEBAR_TAP_MAX_MS
+                            heldMs in 0..SIDEBAR_TAP_MAX_MS
                         gridLeftPendingSidebar = false
                         gridLeftHoldFired = false
                         if (openSidebar) {
