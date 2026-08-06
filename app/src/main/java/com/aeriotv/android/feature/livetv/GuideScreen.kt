@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.ViewList
@@ -144,6 +145,7 @@ import com.aeriotv.android.core.ui.SeasonEpisodePill
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
 import com.aeriotv.android.feature.collections.AddToCollectionFlow
+import com.aeriotv.android.feature.dvr.DvrViewModel
 import com.aeriotv.android.feature.collections.CollectionPill
 import com.aeriotv.android.feature.collections.CollectionsMenuContext
 import com.aeriotv.android.feature.collections.CollectionsViewModel
@@ -661,6 +663,30 @@ fun GuideScreen(
     val reminders by remindersVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeReminderKeys = remember(reminders) {
         reminders.mapTo(HashSet<String>()) { it.reminderKey }
+    }
+
+    // Scheduled/in-progress recording windows, hoisted once like the reminder
+    // keys above (audit task #50: iOS shows nothing here either, but the guide
+    // is where users look for "is this set to record?" -- both platforms gain
+    // the cell dot together). hiltViewModel() resolves against the same MAIN
+    // NavBackStackEntry as MainScaffold's DvrViewModel, so this SHARES that
+    // instance and its 30s refresh loop rather than spawning a second fetch.
+    // Recording rows carry no channel id/name matchable against guide rows,
+    // and pre/post-roll buffers shift startMillis off the programme boundary,
+    // so cells match by title + time-window OVERLAP instead of an exact key.
+    val dvrVm: DvrViewModel = hiltViewModel()
+    val dvrState by dvrVm.state.collectAsStateWithLifecycle()
+    val scheduledRecordingWindows = remember(dvrState.recordings) {
+        dvrState.recordings.mapNotNull { rec ->
+            val s = rec.effectiveStatus()
+            if (s == DvrViewModel.Recording.Status.Scheduled ||
+                s == DvrViewModel.Recording.Status.Recording
+            ) {
+                rec.title.trim().lowercase() to (rec.startMillis until rec.endMillis)
+            } else {
+                null
+            }
+        }
     }
 
     // Horizontal viewport clipping (iOS EPGGuideView.programRow viewport filter):
@@ -2145,6 +2171,7 @@ fun GuideScreen(
                     horizontalScrollState = horizontalScrollState,
                     guideFling = guideFling,
                     activeReminderKeys = activeReminderKeys,
+                    scheduledRecordingWindows = scheduledRecordingWindows,
                     remindersVm = remindersVm,
                     onChannelClick = {
                         // Task #226 (Logan 2026-08-06, TiviMate flow): OK on
@@ -2329,6 +2356,9 @@ private fun ChannelGuideRow(
     horizontalScrollState: androidx.compose.foundation.ScrollState,
     guideFling: FlingBehavior,
     activeReminderKeys: Set<String>,
+    /** Lowercased-title -> recording time window for every Scheduled or
+     *  in-progress recording, hoisted once in GuideScreen (audit #50). */
+    scheduledRecordingWindows: List<Pair<String, LongRange>>,
     remindersVm: RemindersViewModel,
     onChannelClick: () -> Unit,
     onProgrammeClick: (EPGProgramme) -> Unit,
@@ -2877,6 +2907,7 @@ private fun ChannelGuideRow(
                         isTv = isTv,
                         horizontalScrollState = horizontalScrollState,
                         activeReminderKeys = activeReminderKeys,
+                        scheduledRecordingWindows = scheduledRecordingWindows,
                         remindersVm = remindersVm,
                         focusRequester = cellRequester,
                         channelIndex = channelIndex,
@@ -3015,6 +3046,7 @@ private fun ProgrammeCell(
     isTv: Boolean,
     horizontalScrollState: androidx.compose.foundation.ScrollState? = null,
     activeReminderKeys: Set<String>,
+    scheduledRecordingWindows: List<Pair<String, LongRange>>,
     remindersVm: RemindersViewModel,
     focusRequester: FocusRequester,
     /** Index of this cell's channel row + the time column it occupies, reported
@@ -3046,6 +3078,25 @@ private fun ProgrammeCell(
     }
     // Membership check against the set hoisted in GuideScreen -- no per-cell flow.
     val isReminderSet = key in activeReminderKeys
+    // Audit #50: scheduled/in-progress recording marker. Recordings carry no
+    // channel identity matchable against guide rows, so a cell is "set to
+    // record" when a Scheduled/Recording entry shares its title AND its
+    // (buffer-padded) window overlaps the programme's slot. Same-title
+    // back-to-back programmes can both light up when pre/post-roll spills a
+    // few minutes across the boundary; that recording genuinely captures part
+    // of both, so the over-mark is acceptable.
+    val isRecordingSet = remember(programme, scheduledRecordingWindows) {
+        if (programme.isPlaceholder || scheduledRecordingWindows.isEmpty()) {
+            false
+        } else {
+            val title = programme.title.trim().lowercase()
+            scheduledRecordingWindows.any { (recTitle, window) ->
+                recTitle == title &&
+                    window.first < programme.endMillis &&
+                    programme.startMillis < window.last
+            }
+        }
+    }
     var focused by remember { mutableStateOf(false) }
     val cellDensity = androidx.compose.ui.platform.LocalDensity.current
     // Short time-range label ("7:00 - 7:30"), shown on the TV guide cell beneath
@@ -3373,6 +3424,28 @@ private fun ProgrammeCell(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // iOS parity (EPGGuideView cellContent): bell.fill after
+                    // the title on cells with an active reminder.
+                    if (isReminderSet) {
+                        Icon(
+                            imageVector = Icons.Filled.Notifications,
+                            contentDescription = "Reminder set",
+                            tint = if (focused) Color.White
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
+                    // Audit #50: red dot on cells with a scheduled or
+                    // in-progress recording (DVR red, DvrTabContent's
+                    // status tint).
+                    if (isRecordingSet) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF4757)),
+                        )
+                    }
                 }
                 // GH #34: the XMLTV <sub-title> (episode / sports-match name,
                 // e.g. "Team A vs Team B") is what distinguishes back-to-back
@@ -3450,6 +3523,24 @@ private fun ProgrammeCell(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // iOS parity: reminder bell after the title (bell.fill).
+                    if (isReminderSet) {
+                        Icon(
+                            imageVector = Icons.Filled.Notifications,
+                            contentDescription = "Reminder set",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(11.dp),
+                        )
+                    }
+                    // Audit #50: scheduled/in-progress recording dot.
+                    if (isRecordingSet) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF4757)),
+                        )
+                    }
                 }
                 // GH #34: surface the XMLTV <sub-title> (match/episode name).
                 programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
