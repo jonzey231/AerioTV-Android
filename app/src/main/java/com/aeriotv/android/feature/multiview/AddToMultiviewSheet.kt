@@ -448,15 +448,17 @@ fun AddToMultiviewSheet(
                                     gateAdd(true) {
                                         scope.launch {
                                             resolving = resolving + movie.uuid
-                                            onDemandVm.resolveMovieUrl(movie.uuid).onSuccess { url ->
+                                            onDemandVm.resolveMovieUrl(movie.uuid).onSuccess { r ->
                                                 val resume = watchVm.get(movie.uuid)?.positionMs ?: 0L
                                                 multiviewStore.addTile(
                                                     MultiviewTile(
                                                         id = tileId,
                                                         kind = TileKind.Vod,
                                                         displayName = movie.displayName,
-                                                        resolvedUrl = url,
-                                                        httpHeaders = vodHeaders,
+                                                        resolvedUrl = r.url,
+                                                        // Audit #53/#38: no API key to
+                                                        // an off-origin session URL.
+                                                        httpHeaders = if (r.authSafe) vodHeaders else emptyMap(),
                                                         vodId = movie.uuid,
                                                         vodType = "movie",
                                                         posterUrl = movie.posterUrl,
@@ -537,15 +539,17 @@ fun AddToMultiviewSheet(
                                             scope.launch {
                                                 resolving = resolving + ep.uuid
                                                 onDemandVm.resolveEpisodeUrl(ep.uuid, ep.firstStreamId)
-                                                    .onSuccess { url ->
+                                                    .onSuccess { r ->
                                                         val resume = watchVm.get(ep.uuid)?.positionMs ?: 0L
                                                         multiviewStore.addTile(
                                                             MultiviewTile(
                                                                 id = tileId,
                                                                 kind = TileKind.Vod,
                                                                 displayName = ep.displayName.ifBlank { "Episode $e" },
-                                                                resolvedUrl = url,
-                                                                httpHeaders = vodHeaders,
+                                                                resolvedUrl = r.url,
+                                                                // Audit #53/#38: no API key to
+                                                                // an off-origin session URL.
+                                                                httpHeaders = if (r.authSafe) vodHeaders else emptyMap(),
                                                                 vodId = ep.uuid,
                                                                 vodType = "episode",
                                                                 seriesId = drillId.toString(),

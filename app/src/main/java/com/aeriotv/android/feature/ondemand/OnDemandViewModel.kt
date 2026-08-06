@@ -1169,7 +1169,7 @@ class OnDemandViewModel @Inject constructor(
     }
 
     /** Same pattern as resolveMovieUrl but for an episode proxy URL. */
-    suspend fun resolveEpisodeUrl(episodeUuid: String, streamId: Int?): Result<String> {
+    suspend fun resolveEpisodeUrl(episodeUuid: String, streamId: Int?): Result<ResolvedVod> {
         val playlist = playlistRepository.activePlaylist()
             ?: return Result.failure(IllegalStateException("No playlist loaded."))
         // Xtream episodes carry a deterministic URL encoded in the sentinel
@@ -1177,14 +1177,14 @@ class OnDemandViewModel @Inject constructor(
         if (episodeUuid.startsWith(XC_EP_PREFIX)) {
             return resolveXtreamUrl(playlist, episodeUuid, XC_EP_PREFIX) { base, u, p, id, ext ->
                 xtreamApi.episodeStreamUrl(base, u, p, id, ext)
-            }
+            }.map { ResolvedVod(it, authSafe = true) }
         }
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
         val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
-            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            val url = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.resolveVODEpisodeStreamUrl(
                     baseUrl = base,
                     apiKey = key,
@@ -1192,6 +1192,7 @@ class OnDemandViewModel @Inject constructor(
                     streamId = streamId,
                 )
             }
+            ResolvedVod(url, authSafe = sameOrigin(base, url))
         }
     }
 
@@ -1200,7 +1201,7 @@ class OnDemandViewModel @Inject constructor(
      * for a movie. Returns a Result so the caller can surface failures via
      * Toast / inline error rather than landing on a half-loaded player.
      */
-    suspend fun resolveMovieUrl(movieUuid: String): Result<String> {
+    suspend fun resolveMovieUrl(movieUuid: String): Result<ResolvedVod> {
         val playlist = playlistRepository.activePlaylist()
             ?: return Result.failure(IllegalStateException("No playlist loaded."))
         // Xtream movies carry a deterministic URL encoded in the sentinel
@@ -1208,7 +1209,7 @@ class OnDemandViewModel @Inject constructor(
         if (movieUuid.startsWith(XC_MOVIE_PREFIX)) {
             return resolveXtreamUrl(playlist, movieUuid, XC_MOVIE_PREFIX) { base, u, p, id, ext ->
                 xtreamApi.vodStreamUrl(base, u, p, id, ext)
-            }
+            }.map { ResolvedVod(it, authSafe = true) }
         }
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
@@ -1216,7 +1217,7 @@ class OnDemandViewModel @Inject constructor(
         val movie = _state.value.movies.firstOrNull { it.uuid == movieUuid }
         val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
-            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            val url = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.resolveVODStreamUrl(
                     baseUrl = base,
                     apiKey = key,
@@ -1224,7 +1225,34 @@ class OnDemandViewModel @Inject constructor(
                     streamId = movie?.firstStreamId,
                 )
             }
+            ResolvedVod(url, authSafe = sameOrigin(base, url))
         }
+    }
+
+    /**
+     * Audit #53 (finding #38): a resolved VOD playback URL plus whether the
+     * API-key headers may ride along. Dispatcharr's 301 hands back a one-time
+     * session URL that needs no further auth; when that Location points OFF
+     * the server's origin (hostile server, or a MITM on a cleartext LAN
+     * source), attaching the default request headers would replay the user's
+     * API key to an arbitrary third-party host. Callers attach auth headers
+     * ONLY when [authSafe] is true. The non-3xx fallback (older Dispatcharr
+     * serving content from the entry path, which DOES need the key) is
+     * same-origin by construction, so it keeps its headers.
+     */
+    data class ResolvedVod(val url: String, val authSafe: Boolean)
+
+    /** Scheme+host+effective-port equality; unparseable input = NOT same origin. */
+    private fun sameOrigin(a: String, b: String): Boolean {
+        fun origin(raw: String): String? = runCatching {
+            val u = java.net.URI(raw.trim())
+            val scheme = u.scheme?.lowercase() ?: return@runCatching null
+            val host = u.host?.lowercase() ?: return@runCatching null
+            val port = if (u.port > 0) u.port else if (scheme == "https") 443 else 80
+            "$scheme://$host:$port"
+        }.getOrNull()
+        val oa = origin(a) ?: return false
+        return oa == origin(b)
     }
 
     // ───────────────────────── Xtream Codes VOD ─────────────────────────

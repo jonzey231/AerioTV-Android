@@ -1102,11 +1102,13 @@ fun AerioTVNavHost(
                     .flatten()
                     .firstOrNull { it.uuid == episodeUuid }
 
-                var resolvedUrl by remember(episodeUuid) { mutableStateOf<String?>(null) }
+                var resolved by remember(episodeUuid) {
+                    mutableStateOf<OnDemandViewModel.ResolvedVod?>(null)
+                }
                 var resolveError by remember(episodeUuid) { mutableStateOf<String?>(null) }
                 LaunchedEffect(episodeUuid) {
                     onDemandVm.resolveEpisodeUrl(episodeUuid, episode?.firstStreamId).fold(
-                        onSuccess = { resolvedUrl = it },
+                        onSuccess = { resolved = it },
                         onFailure = { resolveError = it.message ?: it::class.simpleName },
                     )
                 }
@@ -1123,11 +1125,13 @@ fun AerioTVNavHost(
                     }
 
                 VODPlayerScreen(
-                    streamUrl = resolvedUrl.orEmpty(),
+                    streamUrl = resolved?.url.orEmpty(),
                     title = episode?.displayName ?: "Episode",
-                    httpHeaders = headers,
+                    // Audit #53/#38: never replay the API key to a session URL
+                    // that resolved OFF the server's origin.
+                    httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,
                     onClose = { navController.popBackStack() },
-                    loadingMessage = resolveError ?: if (resolvedUrl == null) "Loading…" else null,
+                    loadingMessage = resolveError ?: if (resolved == null) "Loading…" else null,
                     videoId = episodeUuid,
                     posterUrl = parentSeriesPoster,
                 )
@@ -1253,21 +1257,25 @@ fun AerioTVNavHost(
                     } else emptyMap()
                 }
 
-                var resolvedUrl by remember(movieUuid) { mutableStateOf<String?>(null) }
+                var resolved by remember(movieUuid) {
+                    mutableStateOf<OnDemandViewModel.ResolvedVod?>(null)
+                }
                 var resolveError by remember(movieUuid) { mutableStateOf<String?>(null) }
                 LaunchedEffect(movieUuid) {
                     onDemandVm.resolveMovieUrl(movieUuid).fold(
-                        onSuccess = { resolvedUrl = it },
+                        onSuccess = { resolved = it },
                         onFailure = { resolveError = it.message ?: it::class.simpleName },
                     )
                 }
 
                 VODPlayerScreen(
-                    streamUrl = resolvedUrl.orEmpty(),
+                    streamUrl = resolved?.url.orEmpty(),
                     title = movie?.displayName ?: "On Demand",
-                    httpHeaders = headers,
+                    // Audit #53/#38: never replay the API key to a session URL
+                    // that resolved OFF the server's origin.
+                    httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,
                     onClose = { navController.popBackStack() },
-                    loadingMessage = resolveError ?: if (resolvedUrl == null) "Loading…" else null,
+                    loadingMessage = resolveError ?: if (resolved == null) "Loading…" else null,
                     videoId = movieUuid,
                     posterUrl = movie?.posterUrl,
                 )
