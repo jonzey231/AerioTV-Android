@@ -565,13 +565,17 @@ fun MainScaffold(
                     )
                     val hintGroupSelector by hintSettingsVm.guideGroupSelector
                         .collectAsStateWithLifecycle(initialValue = "pills")
-                    // One combined nav chip: sidebar mode's Left-for-groups and
-                    // the mapped hold-Left action, joined so they don't stack
-                    // into two more rows.
+                    // One nav chip. Sidebar mode claims the hold-Left gesture
+                    // outright (Logan 2026-08-06: short Left must scroll the
+                    // EPG naturally), so the mapped hold-Left action is not
+                    // advertised there - it never fires in that mode.
                     val navHints = buildList {
-                        if (hintGroupSelector == "sidebar") add("Left = groups")
-                        com.aeriotv.android.core.remote.RemoteControlHints
-                            .guideHoldLeftShort(hintMap)?.let { add(it) }
+                        if (hintGroupSelector == "sidebar") {
+                            add("Hold Left = groups")
+                        } else {
+                            com.aeriotv.android.core.remote.RemoteControlHints
+                                .guideHoldLeftShort(hintMap)?.let { add(it) }
+                        }
                     }
                     if (navHints.isNotEmpty()) {
                         TvGuideHintChip(navHints.joinToString("  ·  "))

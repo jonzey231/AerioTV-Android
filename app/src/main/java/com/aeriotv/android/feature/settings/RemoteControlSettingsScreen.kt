@@ -255,7 +255,7 @@ fun RemoteControlSettingsScreen(
 
                 SettingsSection(
                     header = "TV Guide Groups",
-                    footer = "How channel groups are picked in the guide. Top pills keep the group row above the grid; the sidebar menu hides that row and opens with a Left press from the currently airing column. Only one is active at a time.",
+                    footer = "How channel groups are picked in the guide. Top pills keep the group row above the grid; the sidebar menu hides that row and opens by holding Left in the grid. Only one is active at a time.",
                 ) {
                     SlotRow(
                         slotName = "Group Selection",

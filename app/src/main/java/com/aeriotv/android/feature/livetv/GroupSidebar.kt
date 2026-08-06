@@ -10,11 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,26 +28,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.ui.settings.TvSettingsMetrics
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.settingsTitleStyle
+import com.aeriotv.android.ui.tv.tvFocusScale
 
 /**
  * Channel-group sidebar (Remote Control initiative, Logan spec 2026-07-20):
  * the left-anchored group rail the common IPTV-client convention slides in
- * when the user presses Left from the "now" column. Shared between the two
+ * when the user holds Left from the guide grid. Shared between the two
  * surfaces that need it:
- *  - the GUIDE (short Left on a currently-airing cell), via
- *    [GuideGroupSidebarOverlay]'s fullscreen Popup, where picking a group
- *    drives the same filter as the pills row;
+ *  - the GUIDE (hold Left on a grid cell; reversed from short Left per Logan
+ *    2026-08-06), via [GuideGroupSidebarPane]'s docked pane, where picking a
+ *    group drives the same filter as the pills row;
  *  - the PLAYER's channel-list overlay (second Left), which embeds
  *    [GroupSidebarPanel] directly as its leading pane.
+ *
+ * Row styling matches the Settings sidebar/rail (SettingsNavRow's `flat`
+ * treatment, Logan 2026-08-06): plain rows on the background, primary-alpha
+ * fill + border only on focus, secondaryContainer for the active group. No
+ * per-row cards, no hardcoded whites.
  *
  * Tokens are the pill tokens: [PlaylistViewModel.ALL_GROUPS] or a raw group
  * title. Collections deliberately stay pills-only for now (their sentinel
@@ -76,6 +82,7 @@ internal fun GroupSidebarPanel(
         runCatching { listState.scrollToItem(selectedIndex) }
         initialFocus?.let { runCatching { it.requestFocus() } }
     }
+    val isTv = rememberIsTvDevice()
     // Size the panel to the LONGEST group label (Logan 2026-07-20: a fixed
     // 280dp wasted space with short group names). Measure every label at the
     // row's type scale, take the widest, add the row's horizontal chrome, and
@@ -83,31 +90,31 @@ internal fun GroupSidebarPanel(
     // and a single short group isn't cramped. A LazyColumn can't be intrinsic-
     // measured, so this text-measure approach is the reliable way to fit.
     val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
-    val rowLabelStyle = MaterialTheme.typography.bodyLarge
+    val rowLabelStyle = groupSidebarRowStyle()
     val density = androidx.compose.ui.platform.LocalDensity.current
     val panelWidth = remember(groups, rowLabelStyle) {
         val widestPx = groups.maxOfOrNull { token ->
             textMeasurer.measure(
                 text = groupSidebarLabel(token),
-                style = rowLabelStyle.copy(fontWeight = FontWeight.SemiBold),
+                style = rowLabelStyle.copy(fontWeight = FontWeight.Medium),
                 maxLines = 1,
             ).size.width
         } ?: 0
-        // 16dp row padding each side + 2dp focus border each side + a little
+        // Row padding each side + 2dp focus border each side + a little
         // breathing room past the text.
         with(density) { widestPx.toDp() } + 44.dp
     }.coerceIn(160.dp, 340.dp)
     Column(modifier = modifier.width(panelWidth)) {
         Text(
             text = "Groups",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = Color.White.copy(alpha = 0.8f),
-            modifier = Modifier.padding(start = 16.dp, bottom = 10.dp),
+            style = settingsTitleStyle(),
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(start = 10.dp, bottom = if (isTv) 8.dp else 10.dp),
         )
         LazyColumn(
             state = listState,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
             modifier = Modifier.fillMaxHeight(),
         ) {
             itemsIndexed(groups, key = { _, token -> token }) { index, token ->
@@ -126,6 +133,20 @@ internal fun GroupSidebarPanel(
     }
 }
 
+/** Row label style: the Settings rail's TV type ladder, bodyLarge on touch. */
+@Composable
+private fun groupSidebarRowStyle(): androidx.compose.ui.text.TextStyle {
+    val base = MaterialTheme.typography.bodyLarge
+    return if (rememberIsTvDevice()) {
+        base.copy(
+            fontSize = TvSettingsMetrics.railTitleSize,
+            lineHeight = TvSettingsMetrics.railTitleLineHeight,
+        )
+    } else {
+        base
+    }
+}
+
 @Composable
 private fun GroupSidebarRow(
     label: String,
@@ -135,32 +156,46 @@ private fun GroupSidebarRow(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val accent = MaterialTheme.colorScheme.primary
+    val isTv = rememberIsTvDevice()
+    // No icon column here, so the row needs its own vertical padding where
+    // SettingsNavRow's icon box sets the height; the resulting pitch matches
+    // the Settings rail's on the same panel.
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .tvFocusScale(focused, focusedScale = 1.02f)
+            .clip(RoundedCornerShape(12.dp))
             .background(
                 when {
-                    focused -> Color.White.copy(alpha = 0.18f)
-                    isActive -> Color.White.copy(alpha = 0.08f)
+                    focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                    isActive -> MaterialTheme.colorScheme.secondaryContainer
                     else -> Color.Transparent
                 },
             )
-            .border(
-                width = 2.dp,
-                color = if (focused) accent else Color.Transparent,
-                shape = RoundedCornerShape(8.dp),
+            .then(
+                if (focused) {
+                    Modifier.border(
+                        2.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                        RoundedCornerShape(12.dp),
+                    )
+                } else {
+                    Modifier
+                },
             )
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .focusable(interactionSource = interaction)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(
+                horizontal = if (isTv) 10.dp else 14.dp,
+                vertical = if (isTv) 5.dp else 10.dp,
+            ),
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isActive && !focused) accent else Color.White,
+            style = groupSidebarRowStyle(),
+            fontWeight = FontWeight.Medium,
+            color = if (isActive && !focused) MaterialTheme.colorScheme.onSecondaryContainer
+            else MaterialTheme.colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -168,11 +203,18 @@ private fun GroupSidebarRow(
 }
 
 /**
- * DOCKED pane for the GUIDE surface (Logan 2026-07-20): a hard, opaque
- * side menu - the guide content sits in the same Row and shifts right
- * while it is open, so the channel rail stays fully readable (no scrim,
- * no overlay). Right steps back out to the grid without changing the
- * group; Back does the same via GuideScreen's handler.
+ * DOCKED pane for the GUIDE surface (Logan 2026-07-20): a hard side menu -
+ * the guide content sits in the same Row and shifts right while it is open,
+ * so the channel rail stays fully readable (no scrim, no overlay). Right
+ * steps back out to the grid without changing the group; Back does the same
+ * via GuideScreen's handler.
+ *
+ * [topOffset] drops the pane so its top edge lines up with the guide's
+ * TIME-HEADER row instead of the sort/search controls row (Logan 2026-08-06);
+ * GuideScreen measures the live offset, so a multiview banner or status-bar
+ * inset above the guide is accounted for automatically. The surface fill is
+ * gone for the same reason the Settings sidebar has none: the guide shifts
+ * beside it, nothing overlaps, and the hairline carries the separation.
  */
 @Composable
 internal fun GuideGroupSidebarPane(
@@ -180,14 +222,14 @@ internal fun GuideGroupSidebarPane(
     selectedToken: String,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
+    topOffset: Dp = 0.dp,
 ) {
     val focus = remember { FocusRequester() }
-    Row(modifier = Modifier.fillMaxHeight()) {
+    Row(modifier = Modifier.fillMaxHeight().padding(top = topOffset)) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(start = 20.dp, end = 12.dp, top = 24.dp, bottom = 24.dp)
+                .padding(start = 20.dp, end = 12.dp, bottom = 12.dp)
                 .onPreviewKeyEvent { event ->
                     if (event.key == androidx.compose.ui.input.key.Key.DirectionRight &&
                         event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
@@ -206,12 +248,13 @@ internal fun GuideGroupSidebarPane(
                 initialFocus = focus,
             )
         }
-        // Hairline separating the menu from the shifted guide.
+        // Hairline separating the menu from the shifted guide; same token as
+        // the Settings sidebar's divider.
         Box(
             modifier = Modifier
                 .fillMaxHeight()
                 .width(1.dp)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         )
     }
 }

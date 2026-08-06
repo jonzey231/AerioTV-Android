@@ -112,6 +112,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -442,20 +444,14 @@ fun GuideScreen(
 
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
-    // Remote Control (Logan spec 2026-07-20): group sidebar overlay, opened
-    // by a SHORT Left on a currently-airing cell (there is nothing to the
-    // left of "now" - earlier programmes are the HOLD-Left gesture). The
-    // short press is deferred to key RELEASE so a hold can fire the mapped
-    // leftLong action (default: browse earlier programs) instead.
+    // Remote Control group sidebar overlay. REVERSED per Logan 2026-08-06:
+    // HOLD Left opens it and a short Left is plain navigation, because the
+    // original tap-opens-sidebar scheme (2026-07-20) made the EPG history to
+    // the left of "now" unreachable in sidebar mode - a single Left could
+    // never step into it. The tap-vs-hold release discriminator that fenced
+    // the two gestures apart is gone with the tap gesture itself.
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var gridLeftHoldFired by remember { mutableStateOf(false) }
-    var gridLeftPendingSidebar by remember { mutableStateOf(false) }
-    // Timestamp of the Left key-down that armed the sidebar. A hold is ALWAYS
-    // longer than [SIDEBAR_TAP_MAX_MS], so gating the release on this makes a
-    // hold physically unable to open the sidebar even if the long-press flag /
-    // repeat threshold behaves differently across remotes (Logan 2026-07-20:
-    // hold-Left was browsing earlier programmes AND opening the sidebar).
-    var gridLeftDownAt by remember { mutableStateOf(0L) }
     // TV focus-on-dismiss for the Program Info / Record dialogs (user report:
     // Back from Program Info parked D-pad focus on the nav pills, not the
     // cell that opened it). The originating cell's row index + time column
@@ -470,6 +466,14 @@ fun GuideScreen(
     // Captured when the sidebar opens; the tick drives the refocus effect.
     var sidebarReturnOrigin by remember { mutableStateOf<Pair<Int, Long>?>(null) }
     var sidebarFocusRestoreTick by remember { mutableStateOf(0) }
+    // The docked sidebar's top edge lines up with the TIME-HEADER row, not the
+    // sort/search controls row (Logan 2026-08-06). The offset is measured, not
+    // computed, because everything above the time row is dynamic: status-bar
+    // inset (phone only), the staged-multiview banner, and the controls row.
+    // Both Ys are in root coordinates; their difference is the pane's inset
+    // within the guide Row.
+    var guideRowRootY by remember { mutableStateOf(0f) }
+    var timeHeaderRootY by remember { mutableStateOf(0f) }
 
     // Tick "now" forward every 30s so the indicator + currently-airing tinting stay
     // accurate without forcing the whole tree to recompose on every frame.
@@ -859,9 +863,13 @@ fun GuideScreen(
         )
     }
 
-    Row(modifier = modifier.fillMaxSize()) {
-    // Sidebar group-selector mode (Logan 2026-07-20): a DOCKED, opaque menu -
-    // no scrim, no overlay. The whole guide sits beside it in this Row and
+    Row(
+        modifier = modifier
+            .fillMaxSize()
+            .onGloballyPositioned { guideRowRootY = it.positionInRoot().y },
+    ) {
+    // Sidebar group-selector mode (Logan 2026-07-20): a DOCKED menu - no
+    // scrim, no overlay. The whole guide sits beside it in this Row and
     // shifts right while it is open, so the channel rail stays fully
     // readable. Selecting a group drives the same filter as the pills row
     // (which is hidden in this mode - never both selectors at once).
@@ -869,6 +877,9 @@ fun GuideScreen(
         GuideGroupSidebarPane(
             groups = groups,
             selectedToken = state.selectedGroup,
+            topOffset = with(density) {
+                (timeHeaderRootY - guideRowRootY).coerceAtLeast(0f).toDp()
+            },
             onSelect = { token ->
                 // Group CHANGES re-filter the channel list, so the captured row
                 // index would be stale - do NOT restore focus by it here (that
@@ -1479,7 +1490,11 @@ fun GuideScreen(
         // labels. The corner uses the rail's surface fill (tvOS cardBackground)
         // so it reads as part of the sticky left column, and a semibold
         // monospaced-digit clock to match EPGGuideView.swift's corner.
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { timeHeaderRootY = it.positionInRoot().y },
+        ) {
             Box(
                 modifier = Modifier
                     .width(railWidth)
@@ -1953,43 +1968,14 @@ fun GuideScreen(
                 // ourselves. LEFT/RIGHT/CENTER fall through untouched, preserving
                 // horizontal timeline nav + OK-to-play.
                 .onPreviewKeyEvent { event ->
-                    // Left RELEASE completes the deferred short-Left (group
-                    // sidebar) armed below; a hold that fired the long action
-                    // cancels it. Handled before the KeyDown-only early-out.
+                    // Left RELEASE just ends the hold latch so the next press
+                    // starts fresh. Logan reversed the sidebar gesture
+                    // 2026-08-06: short Left is now PLAIN navigation (stepping
+                    // left into EPG history - the old tap-opens-sidebar arming
+                    // made history unreachable in sidebar mode), and HOLD Left
+                    // opens the group sidebar instead. See the hold branch.
                     if (event.key == Key.DirectionLeft && event.type == KeyEventType.KeyUp) {
-                        val heldMs = android.os.SystemClock.uptimeMillis() - gridLeftDownAt
-                        // Open the sidebar ONLY on a genuine short tap: armed,
-                        // the long action never fired, AND released quickly. A
-                        // hold that browsed earlier programmes exceeds the tap
-                        // window and is disqualified here, so it can never also
-                        // open the sidebar.
-                        //
-                        // The window starts at 0, not 1: an adb-injected
-                        // keyevent delivers DOWN and UP inside the same
-                        // uptimeMillis tick, so heldMs is 0 and a `1..` lower
-                        // bound silently swallowed every scripted tap (found
-                        // 2026-08-05 verifying the ac8a351 race fix on the TV
-                        // emulator - the press armed, consumed the DOWN, then
-                        // no-opped on release). No human press releases inside
-                        // a millisecond, and a spurious UP without a DOWN is
-                        // already rejected by gridLeftPendingSidebar being
-                        // false, so 0 costs nothing and makes this path
-                        // verifiable by automation.
-                        val openSidebar = gridLeftPendingSidebar && !gridLeftHoldFired &&
-                            heldMs in 0..SIDEBAR_TAP_MAX_MS
-                        gridLeftPendingSidebar = false
                         gridLeftHoldFired = false
-                        if (openSidebar) {
-                            // Capture the origin cell so Right/Back closing the
-                            // sidebar restores focus here (else it orphans onto
-                            // the Live TV nav pill). The sidebar-open gate above
-                            // guarantees lastFocusedChannelIndex >= 0.
-                            val anchor = if (guideNav.focusedCellAnchorMs != Long.MIN_VALUE)
-                                guideNav.focusedCellAnchorMs else nowMillis
-                            sidebarReturnOrigin = guideNav.lastFocusedChannelIndex to anchor
-                            groupSidebarOpen = true
-                            return@onPreviewKeyEvent true
-                        }
                         return@onPreviewKeyEvent false
                     }
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -2035,8 +2021,28 @@ fun GuideScreen(
                         if (isLongNow || gridLeftHoldFired) {
                             if (!gridLeftHoldFired) {
                                 gridLeftHoldFired = true
-                                gridLeftPendingSidebar = false
-                                when (
+                                // Sidebar mode (Logan 2026-08-06): HOLD Left
+                                // opens the group sidebar. This displaces the
+                                // LEFT_LONG map action while sidebar mode is
+                                // on; short Left stays plain navigation, so
+                                // EPG history is browsed by stepping left -
+                                // which is why timelineBack losing its slot
+                                // here is acceptable. Pills mode keeps the
+                                // mapped action unchanged.
+                                if (sidebarGroupMode) {
+                                    // Capture the origin cell so Right/Back
+                                    // closing the sidebar restores focus here
+                                    // (else it orphans onto the Live TV pill).
+                                    val originRow = if (guideNav.lastFocusedChannelIndex >= 0)
+                                        guideNav.lastFocusedChannelIndex
+                                    else guideNav.focusedChannelIndex
+                                    if (originRow >= 0) {
+                                        val anchor = if (guideNav.focusedCellAnchorMs != Long.MIN_VALUE)
+                                            guideNav.focusedCellAnchorMs else nowMillis
+                                        sidebarReturnOrigin = originRow to anchor
+                                    }
+                                    groupSidebarOpen = true
+                                } else when (
                                     val action = remoteMap.guideAction(
                                         com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG,
                                     )
@@ -2047,42 +2053,6 @@ fun GuideScreen(
                                     else -> guideActionDispatcher.value?.invoke(action)
                                 }
                             }
-                            return@onPreviewKeyEvent true
-                        }
-                        // SHORT Left on a currently-airing cell: arm the
-                        // deferred group-sidebar open (completed on release
-                        // above). Earlier programmes sit left of "now", so a
-                        // step-left has nothing sensible to do here; hold
-                        // still browses them via the long action.
-                        if (sidebarGroupMode &&
-                            event.nativeKeyEvent.repeatCount == 0 && !gridLeftPendingSidebar
-                        ) {
-                            val nowPx = ((nowMillis - windowStart).toFloat() / 3_600_000f) * hourWidthPx
-                            val cellS = guideNav.focusedCellStartPx
-                            val cellE = guideNav.focusedCellEndPx
-                            // lastFocusedChannelIndex fallback mirrors the
-                            // paging recovery below: the focused row can read
-                            // -1 mid-browse while the cell px stay valid.
-                            val rowKnown = guideNav.focusedChannelIndex >= 0 ||
-                                guideNav.lastFocusedChannelIndex >= 0
-                            // "Currently playing program" = the cell under the
-                            // now line - OR one that ended within the last 30
-                            // minutes: at the live anchor the entry focus can
-                            // land on a just-ended remnant cell (guide rows
-                            // refresh on their own cadence), and that is
-                            // exactly where the user presses Left expecting
-                            // groups. Cells further in the past keep normal
-                            // step-left browsing.
-                            val remnantPad = hourWidthPx * 0.5f
-                            if (rowKnown && cellE > cellS &&
-                                nowPx >= cellS && nowPx < cellE + remnantPad
-                            ) {
-                                gridLeftPendingSidebar = true
-                                gridLeftDownAt = android.os.SystemClock.uptimeMillis()
-                                return@onPreviewKeyEvent true
-                            }
-                        } else if (gridLeftPendingSidebar) {
-                            // Sub-threshold auto-repeats while armed: swallow.
                             return@onPreviewKeyEvent true
                         }
                     }
@@ -3676,9 +3646,6 @@ private const val HOLD_SCROLL_TURBO_INTERVAL_MS = 40L
  *  tvOS's 0.5s UILongPressGestureRecognizer. A tap only ever sends count 0, so
  *  the short-Left timeline scroll never trips it. */
 private const val HOLD_LEFT_ALL_PILL_REPEAT = 4
-/** Max hold duration (ms) that still counts as a short-tap for the guide
- *  group sidebar. A hold that browses earlier programmes always exceeds it. */
-private const val SIDEBAR_TAP_MAX_MS = 350L
 
 /** Off-screen pre-render pad (each side) for the horizontal viewport clip. Cells
  *  whose visible span lies entirely within this pad are composed but not actually
