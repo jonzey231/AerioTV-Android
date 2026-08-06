@@ -49,6 +49,7 @@ import com.aeriotv.android.feature.ondemand.SeriesDetailScreen
 import com.aeriotv.android.feature.player.PlayerScreen
 import com.aeriotv.android.feature.player.VODPlayerScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.playlist.nowPlaying
 import com.aeriotv.android.feature.reminders.ReminderBannerHost
 import com.aeriotv.android.feature.update.UpdateGate
 import com.aeriotv.android.feature.whatsnew.WhatsNewGate
@@ -633,13 +634,19 @@ fun AerioTVNavHost(
                 // and stays on the list (no cast-controls screen). Toggleable.
                 val castTapStaysOnList by tuneSettingsVm.castTapStaysOnList
                     .collectAsStateWithLifecycle(initialValue = true)
-                val castSenderNav = remember {
+                val playerEntryNav = remember {
                     dagger.hilt.android.EntryPointAccessors.fromApplication(
                         context.applicationContext,
                         com.aeriotv.android.feature.player.PlayerScreenEntryPoint::class.java,
-                    ).castSender()
+                    )
                 }
+                val castSenderNav = remember { playerEntryNav.castSender() }
                 val castStateNav by castSenderNav.state.collectAsStateWithLifecycle()
+                // Task #226: direct-to-mini tune needs the app-scoped player
+                // singletons + the mini session right here at the tap site.
+                val exoHolderNav = remember { playerEntryNav.exoPlayerHolder() }
+                val exoWindowNav = remember { playerEntryNav.exoWindowState() }
+                val miniVmNav: MiniPlayerViewModel = hiltViewModel()
 
                 LaunchedEffect(state.phase) {
                     // Skipped onboarding stays in the (empty) app; see
@@ -685,6 +692,68 @@ fun AerioTVNavHost(
                                 "Playing on $castDevice",
                                 android.widget.Toast.LENGTH_SHORT,
                             ).show()
+                            return@MainScaffold
+                        }
+                        // Task #226 (TiviMate flow, Logan 2026-08-06): with
+                        // "Play Channels In: Mini player" on TV, the first OK
+                        // tunes DIRECTLY into the corner mini. Routing through
+                        // the PLAYER destination just to demote it composed the
+                        // fullscreen player for ~400ms (black frame + info-card
+                        // flash over the vanished guide) and then a black mini
+                        // while the pop settled. The app-scoped holder + the
+                        // persistent window need no screen at all: prime the
+                        // stream, flip the window to Mini, activate the session
+                        // -- the guide never leaves composition and grid focus
+                        // stays put. Remote sessions (cast/companion) and
+                        // blank-URL event channels still take the route below
+                        // (PlayerScreen owns their messaging). Second OK on the
+                        // same program promotes via the guide's requestResume.
+                        if (tuneStartsInMini && isTvDevice &&
+                            castDevice == null && companionTvName == null &&
+                            channel.url.isNotBlank()
+                        ) {
+                            val pl = state.playlist
+                            val key = pl?.apiKey?.takeIf { it.isNotBlank() }
+                            val isDispatcharr =
+                                pl?.sourceType == SourceType.DispatcharrApiKey.name ||
+                                    pl?.sourceType == SourceType.DispatcharrUserPass.name
+                            exoHolderNav.httpHeaders = if (isDispatcharr && key != null) {
+                                mapOf(
+                                    "X-API-Key" to key,
+                                    "Authorization" to "ApiKey $key",
+                                )
+                            } else emptyMap()
+                            // Same fresh-tune guard as PlayerScreen's prime
+                            // effect (GH #22): re-prime on a genuine channel
+                            // change OR a holder that went idle; a tap on the
+                            // channel already decoding in the mini only
+                            // re-activates the session.
+                            if (exoHolderNav.currentChannelId != channel.id ||
+                                exoHolderNav.isIdle()
+                            ) {
+                                exoHolderNav.playUrl(
+                                    url = channel.url,
+                                    title = channel.name,
+                                    subtitle = state.epgByChannel[channel.guideMatchKey]
+                                        ?.nowPlaying()?.title.orEmpty(),
+                                    artworkUri = channel.tvgLogo
+                                        .takeIf { it.isNotBlank() }
+                                        ?.let {
+                                            runCatching { Uri.parse(it) }.getOrNull()
+                                        },
+                                    drmLicenseType = channel.drmLicenseType,
+                                    drmLicenseKey = channel.drmLicenseKey,
+                                )
+                                exoHolderNav.currentChannelId = channel.id
+                                exoWindowNav.recordTune(channel.id)
+                            }
+                            exoWindowNav.requestMini()
+                            com.aeriotv.android.core.playback.AerioMediaPlaybackService
+                                .startBackground(context)
+                            tuneSettingsVm.setLastWatchedChannelId(channel.id)
+                            tuneSettingsVm.recordRecentChannel(channel.id)
+                            miniVmNav.setCurrentChannel(channel)
+                            miniVmNav.showMiniPlayer()
                             return@MainScaffold
                         }
                         // GH #33: while companion-connected or casting, this route

@@ -2146,7 +2146,22 @@ fun GuideScreen(
                     guideFling = guideFling,
                     activeReminderKeys = activeReminderKeys,
                     remindersVm = remindersVm,
-                    onChannelClick = { onChannelClick(channel) },
+                    onChannelClick = {
+                        // Task #226 (Logan 2026-08-06, TiviMate flow): OK on
+                        // the channel ALREADY playing in the corner mini
+                        // promotes the mini to fullscreen instead of
+                        // re-tuning the same stream through a fresh player
+                        // route. Any other channel tunes as before.
+                        val miniChannel = (
+                            miniState as?
+                                com.aeriotv.android.feature.miniplayer.MiniPlayerSession.State.Active
+                            )?.channel
+                        if (isTv && miniChannel?.id == channel.id) {
+                            miniPlayerVm.session.requestResume()
+                        } else {
+                            onChannelClick(channel)
+                        }
+                    },
                     onProgrammeClick = { programme ->
                         // Capture the originating cell (row + clipped time
                         // column) so dismissal can restore D-pad focus to it.
