@@ -450,6 +450,11 @@ fun GuideScreen(
     // the two gestures apart is gone with the tap gesture itself.
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var gridLeftHoldFired by remember { mutableStateOf(false) }
+    // Sidebar mode's own hold-Left timer (SIDEBAR_HOLD_OPEN_MS). The OS
+    // long-press flag lands at ~500ms, which read as a slow open on the
+    // Streamer (Logan 2026-08-06); this fires at the tvOS-style ~320ms.
+    // Cancelled by the Left KeyUp, so a tap never trips it.
+    var gridLeftHoldJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     // TV focus-on-dismiss for the Program Info / Record dialogs (user report:
     // Back from Program Info parked D-pad focus on the nav pills, not the
     // cell that opened it). The originating cell's row index + time column
@@ -1454,6 +1459,24 @@ fun GuideScreen(
         val backScope = androidx.compose.runtime.rememberCoroutineScope()
         val activity = LocalContext.current.findActivity()
 
+        // Shared open path for the group sidebar: the ~320ms hold timer and
+        // the OS long-press fallback both land here, guarded to fire once
+        // per hold by gridLeftHoldFired at the call sites. Captures the
+        // origin cell (focus restore on unchanged-group close / cancel) and
+        // the cancel target for the live preview's Back-revert.
+        val openGroupSidebarFromGrid = {
+            val originRow = if (guideNav.lastFocusedChannelIndex >= 0)
+                guideNav.lastFocusedChannelIndex
+            else guideNav.focusedChannelIndex
+            if (originRow >= 0) {
+                val anchor = if (guideNav.focusedCellAnchorMs != Long.MIN_VALUE)
+                    guideNav.focusedCellAnchorMs else nowMillis
+                sidebarReturnOrigin = originRow to anchor
+            }
+            sidebarOriginalGroup = state.selectedGroup
+            groupSidebarOpen = true
+        }
+
         // Remote Control A2: guide-context action executor. Wrappers over
         // the SAME plumbing the Back ladder / hold gestures use, so a
         // remapped button behaves identically to the built-in path.
@@ -1764,6 +1787,8 @@ fun GuideScreen(
                     // made history unreachable in sidebar mode), and HOLD Left
                     // opens the group sidebar instead. See the hold branch.
                     if (event.key == Key.DirectionLeft && event.type == KeyEventType.KeyUp) {
+                        gridLeftHoldJob?.cancel()
+                        gridLeftHoldJob = null
                         gridLeftHoldFired = false
                         return@onPreviewKeyEvent false
                     }
@@ -1816,6 +1841,21 @@ fun GuideScreen(
                         // 2026-08-06: sidebar would not reopen after Back).
                         if (event.nativeKeyEvent.repeatCount == 0) {
                             gridLeftHoldFired = false
+                            // Sidebar mode opens on OUR ~320ms timer instead of
+                            // waiting for the OS long-press flag at ~500ms
+                            // (Logan 2026-08-06: the open felt slow). A tap's
+                            // KeyUp cancels it; if it fires the key is still
+                            // held, so this IS the hold gesture.
+                            if (sidebarGroupMode) {
+                                gridLeftHoldJob?.cancel()
+                                gridLeftHoldJob = navScope.launch {
+                                    kotlinx.coroutines.delay(SIDEBAR_HOLD_OPEN_MS)
+                                    if (!gridLeftHoldFired) {
+                                        gridLeftHoldFired = true
+                                        openGroupSidebarFromGrid()
+                                    }
+                                }
+                            }
                         }
                         val isLongNow = event.nativeKeyEvent.isLongPress ||
                             event.nativeKeyEvent.repeatCount >= HOLD_LEFT_ALL_PILL_REPEAT
@@ -1831,22 +1871,11 @@ fun GuideScreen(
                                 // here is acceptable. Pills mode keeps the
                                 // mapped action unchanged.
                                 if (sidebarGroupMode) {
-                                    // Capture the origin cell so closing the
-                                    // sidebar with the group unchanged (or a
-                                    // Back-cancel revert) restores focus here
-                                    // (else it orphans onto the Live TV pill).
-                                    val originRow = if (guideNav.lastFocusedChannelIndex >= 0)
-                                        guideNav.lastFocusedChannelIndex
-                                    else guideNav.focusedChannelIndex
-                                    if (originRow >= 0) {
-                                        val anchor = if (guideNav.focusedCellAnchorMs != Long.MIN_VALUE)
-                                            guideNav.focusedCellAnchorMs else nowMillis
-                                        sidebarReturnOrigin = originRow to anchor
-                                    }
-                                    // Live preview mutates the selection while
-                                    // browsing; this is the cancel target.
-                                    sidebarOriginalGroup = state.selectedGroup
-                                    groupSidebarOpen = true
+                                    // Normally the ~320ms timer above beat us
+                                    // here and gridLeftHoldFired short-circuits
+                                    // this branch; this is the OS long-press
+                                    // fallback in case the timer was lost.
+                                    openGroupSidebarFromGrid()
                                 } else when (
                                     val action = remoteMap.guideAction(
                                         com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG,
@@ -3457,6 +3486,11 @@ private const val HOLD_SCROLL_TURBO_INTERVAL_MS = 40L
  *  tvOS's 0.5s UILongPressGestureRecognizer. A tap only ever sends count 0, so
  *  the short-Left timeline scroll never trips it. */
 private const val HOLD_LEFT_ALL_PILL_REPEAT = 4
+
+/** Sidebar mode's own hold-Left threshold. tvOS's 0.35s feel (the app's
+ *  long-press convention) minus a little dispatch slack; the OS long-press
+ *  flag at ~500ms read as a slow open on the Streamer. */
+private const val SIDEBAR_HOLD_OPEN_MS = 320L
 
 /** Off-screen pre-render pad (each side) for the horizontal viewport clip. Cells
  *  whose visible span lies entirely within this pad are composed but not actually

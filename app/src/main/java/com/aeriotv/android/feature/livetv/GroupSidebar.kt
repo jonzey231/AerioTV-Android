@@ -212,12 +212,15 @@ private fun GroupSidebarRow(
 }
 
 /**
- * Debounce before a FOCUSED sidebar row becomes the previewed group. Same
- * 150ms as the Settings TV rail's selection-follows-focus: a fast scroll
- * through the group list previews only where focus stops, instead of
- * re-filtering the whole guide once per row.
+ * Debounce before a FOCUSED sidebar row becomes the previewed group, so a
+ * fast scroll through the group list previews only where focus stops
+ * instead of re-filtering the whole guide once per row. 90ms (down from the
+ * Settings rail's 150ms, Logan 2026-08-06: switching felt slow) - still
+ * comfortably above the ~50ms D-pad auto-repeat interval, so held scrolling
+ * keeps coalescing while a deliberate step previews sooner. The remaining
+ * switch latency is the guide grid rebuild itself (task #190).
  */
-private const val SidebarPreviewDebounceMs = 150L
+private const val SidebarPreviewDebounceMs = 90L
 
 /**
  * DOCKED pane for the GUIDE surface (Logan 2026-07-20): a hard side menu -
