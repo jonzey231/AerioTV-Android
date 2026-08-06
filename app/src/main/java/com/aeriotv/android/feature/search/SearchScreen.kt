@@ -53,6 +53,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -219,7 +220,11 @@ private fun ScopeChip(label: String, selected: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun ResultRow(result: SearchViewModel.Result, onClick: () -> Unit) {
-    val (title, subtitle, poster, icon) = resultDisplay(result)
+    val display = resultDisplay(result)
+    val title = display.title
+    val subtitle = display.subtitle
+    val poster = display.poster
+    val icon = display.icon
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     Row(
@@ -248,7 +253,24 @@ private fun ResultRow(result: SearchViewModel.Result, onClick: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             if (poster != null) {
-                AsyncImage(model = poster, contentDescription = null, modifier = Modifier.fillMaxSize())
+                // EPG rows carry a channel LOGO (any aspect, often wide): fit it
+                // inside the box with breathing room. VOD posters are 2:3 art:
+                // crop-fill the box edge to edge.
+                if (result is SearchViewModel.Result.Epg) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize().padding(5.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
             } else {
                 Icon(
                     imageVector = icon,
@@ -278,32 +300,67 @@ private fun ResultRow(result: SearchViewModel.Result, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (display.detail != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = display.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
 
-private data class ResultDisplay(val title: String, val subtitle: String, val poster: String?, val icon: ImageVector)
+private data class ResultDisplay(
+    val title: String,
+    val subtitle: String,
+    val poster: String?,
+    val icon: ImageVector,
+    /** Second info line under the subtitle: the programme description or the
+     *  VOD plot (Logan 2026-08-06: results show real content data, not just a
+     *  bare title + time). Omitted when the source has none. */
+    val detail: String? = null,
+)
 
 private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when (result) {
     is SearchViewModel.Result.Movie -> ResultDisplay(
         title = result.movie.displayName,
-        subtitle = "Movie",
+        subtitle = listOfNotNull(
+            "Movie",
+            result.movie.year?.toString(),
+            result.movie.genre?.takeIf { it.isNotBlank() },
+        ).joinToString("  ·  "),
         poster = result.movie.posterUrl?.takeIf { it.isNotBlank() },
         icon = Icons.Filled.Movie,
+        detail = result.movie.plot?.takeIf { it.isNotBlank() },
     )
     is SearchViewModel.Result.Series -> ResultDisplay(
         title = result.series.displayName,
-        subtitle = "TV Show",
+        subtitle = listOfNotNull(
+            "TV Show",
+            result.series.year?.toString(),
+            result.series.genre?.takeIf { it.isNotBlank() },
+        ).joinToString("  ·  "),
         poster = result.series.posterUrl?.takeIf { it.isNotBlank() },
         icon = Icons.Filled.Tv,
+        detail = result.series.plot?.takeIf { it.isNotBlank() },
     )
     is SearchViewModel.Result.Epg -> {
-        val time = TIME_FMT.format(Date(result.programme.startMillis))
+        val range = TIME_FMT.format(Date(result.programme.startMillis)) +
+            " - " + TIME_FMT.format(Date(result.programme.endMillis))
         ResultDisplay(
             title = result.programme.title,
-            subtitle = if (result.isLive) "LIVE · $time" else time,
-            poster = null,
+            subtitle = listOfNotNull(
+                "LIVE".takeIf { result.isLive },
+                result.channelName,
+                range,
+            ).joinToString("  ·  "),
+            poster = result.channelLogo,
             icon = if (result.isLive) Icons.Filled.LiveTv else Icons.Filled.CalendarMonth,
+            detail = result.programme.description.takeIf { it.isNotBlank() },
         )
     }
 }

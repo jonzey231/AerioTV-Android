@@ -3,7 +3,9 @@ package com.aeriotv.android.feature.search
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.EPGProgramme
+import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
 import com.aeriotv.android.core.network.DispatcharrClient
@@ -49,7 +51,14 @@ class SearchViewModel @Inject constructor(
     sealed interface Result {
         val key: String
 
-        data class Epg(val programme: EPGProgramme) : Result {
+        data class Epg(
+            val programme: EPGProgramme,
+            /** Resolved from the channel list by [guideMatchKey] (Logan
+             *  2026-08-06: results show the real channel, not a bare time).
+             *  Null when no channel matches the programme's key. */
+            val channelName: String? = null,
+            val channelLogo: String? = null,
+        ) : Result {
             override val key = "epg-${programme.channelId}-${programme.startMillis}"
             val isLive: Boolean
                 get() = System.currentTimeMillis() in programme.startMillis until programme.endMillis
@@ -115,6 +124,7 @@ class SearchViewModel @Inject constructor(
     private suspend fun searchEpg(q: String): List<Result.Epg> {
         val playlistId = runCatching { playlistRepository.activePlaylist()?.id }.getOrNull() ?: return emptyList()
         val programmes = runCatching { playlistRepository.searchEpg(playlistId, q) }.getOrDefault(emptyList())
+        val channels = channelsByMatchKey(playlistId)
         val now = System.currentTimeMillis()
         // Live-first, then soonest start (searchEpg already returns a now-forward
         // window ordered by startMillis). Cap 30 like iOS.
@@ -124,7 +134,31 @@ class SearchViewModel @Inject constructor(
                     .thenBy { it.startMillis },
             )
             .take(30)
-            .map { Result.Epg(it) }
+            .map { prog ->
+                // Cached programmes already carry the canonical guideMatchKey as
+                // channelId (bridgeChannelIds runs at fetch), so a plain map hit
+                // resolves the channel for name + logo.
+                val ch = channels[prog.channelId.trim().lowercase()]
+                Result.Epg(
+                    programme = prog,
+                    channelName = ch?.name?.takeIf { it.isNotBlank() },
+                    channelLogo = ch?.tvgLogo?.takeIf { it.isNotBlank() },
+                )
+            }
+    }
+
+    /** Channel lookup by canonical [guideMatchKey], cached per playlist so
+     *  live-as-you-type search doesn't re-read the channel cache per keystroke.
+     *  Keys are lowercased to match the bridge's normalization. */
+    private var channelKeyCache: Pair<String, Map<String, M3UChannel>>? = null
+    private suspend fun channelsByMatchKey(playlistId: String): Map<String, M3UChannel> {
+        channelKeyCache?.let { (cachedId, map) -> if (cachedId == playlistId) return map }
+        val channels = runCatching { playlistRepository.loadCachedChannels(playlistId) }
+            .getOrDefault(emptyList())
+        val map = LinkedHashMap<String, M3UChannel>(channels.size * 2)
+        for (ch in channels) map.putIfAbsent(ch.guideMatchKey.trim().lowercase(), ch)
+        channelKeyCache = playlistId to map
+        return map
     }
 
     private suspend fun searchVod(q: String, scope: Scope): List<Result> {
