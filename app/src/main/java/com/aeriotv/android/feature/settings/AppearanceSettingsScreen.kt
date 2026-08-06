@@ -80,12 +80,32 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
  * the same frame — no recreate needed.
  */
 /**
- * Minimum PANE width before the theme swatches go two-up (plan B5).
+ * Minimum PANE width before this screen lays content out two-up (plan B5).
  *
- * 560dp is the same threshold the plan sets for the display-scale sliders, so
- * the whole pane reflows at one breakpoint instead of stepping twice.
+ * One breakpoint for the theme swatches, the category palette and the two
+ * display-scale sliders, so the pane reflows once instead of stepping three
+ * times as it widens. 560dp is the figure the plan sets for the sliders.
  */
-private val ThemeGridMinPaneWidth = 560.dp
+private val TwoUpMinPaneWidth = 560.dp
+
+/**
+ * Whether [paneWidth] should lay its content out in two columns.
+ *
+ * Gated on being IN A PANE rather than on raw width: a phone in landscape is
+ * ~891dp, and a width-only test would reflow it and break the frozen phone
+ * canon. `LocalSettingsInPane` defaults to false and is only ever set by the
+ * two hosts, so a phone can never satisfy this.
+ *
+ * TV is excluded even though its rail host sets the same flag and its pane
+ * clears the threshold. Two columns would add a horizontal D-pad axis inside
+ * the pane that competes with the rail boundary; the plan scopes this to
+ * tablet, so TV stays single-column.
+ */
+@Composable
+private fun twoUpInPane(paneWidth: Dp): Boolean =
+    LocalSettingsInPane.current &&
+        !rememberIsTvDevice() &&
+        paneWidth >= TwoUpMinPaneWidth
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -142,27 +162,13 @@ fun AppearanceSettingsScreen(
                 ) {
                     // Plan B5: "theme swatch grid at doubled density" on
                     // tablet. A theme row is a 36dp swatch plus two short
-                    // lines, so at pane widths past ~560dp a single column
-                    // strands the checkmark hundreds of dp from the swatch
-                    // and pushes the rest of the page below the fold.
-                    //
-                    // Gated on being IN A PANE, not on raw width. A phone in
-                    // landscape is ~891dp and would otherwise pick up two
-                    // columns, which would break the frozen phone canon; a
-                    // phone is never in a pane. BoxWithConstraints measures
-                    // the PANE rather than the window, so the sidebar's 320dp
-                    // is already excluded.
-                    //
-                    // TV is excluded even though its rail host also sets
-                    // LocalSettingsInPane and its pane clears 560dp. The plan
-                    // scopes this to tablet, and two columns would add a
-                    // horizontal D-pad axis inside the pane that competes with
-                    // the rail boundary. Not worth destabilising TV focus for a
-                    // density win nobody asked for.
+                    // lines, so in a wide pane a single column strands the
+                    // checkmark hundreds of dp from the swatch and pushes the
+                    // rest of the card below the fold. BoxWithConstraints
+                    // measures the PANE, so the sidebar's 320dp is already
+                    // excluded. See twoUpInPane for the gating rationale.
                     BoxWithConstraints {
-                        val twoColumn = LocalSettingsInPane.current &&
-                            !rememberIsTvDevice() &&
-                            maxWidth >= ThemeGridMinPaneWidth
+                        val twoColumn = twoUpInPane(maxWidth)
                         Column {
                             if (twoColumn) {
                                 AppTheme.entries.chunked(2)
@@ -234,6 +240,18 @@ fun AppearanceSettingsScreen(
                     header = "Display Scale",
                     footer = "Independent scale for Movies & Series and Live TV List. 100% matches the default; 85-175% lets you trade density for readability (150%+ shows fewer, larger items - handy on a TV across the room). Changes apply live.",
                 ) {
+                    // Plan B5 also asks for these two side by side once the
+                    // pane clears 560dp. MEASURED AND REJECTED (2026-08-05):
+                    // these are not thin sliders, they are inline percentage
+                    // segment pickers (85/100/125/150/175), and the pane's
+                    // content is capped at Viewport.formMaxWidth = 700dp no
+                    // matter how wide the window gets. Half of that is ~330dp,
+                    // which is not enough for a label plus five segments: the
+                    // label collapsed to one character per line on a 1280dp
+                    // tablet. The plan's threshold measured PANE width when
+                    // the real constraint is PER-SLIDER width. Side by side
+                    // would need the form cap raised, which is a canon change
+                    // affecting every settings screen, so they stay stacked.
                     ScaleSliderRow(
                         label = "Movies & Series",
                         value = scaleMovies,
@@ -291,15 +309,50 @@ fun AppearanceSettingsScreen(
                     header = "Palette",
                     footer = null,
                 ) {
-                    ProgramCategory.defaultBuckets.forEachIndexed { idx, bucket ->
-                        if (idx > 0) DividerRow()
-                        Box(modifier = Modifier.alpha(if (palette.masterEnabled) 1f else 0.4f)) {
-                            CategoryPaletteRow(
-                                bucket = bucket,
-                                hex = palette.hexFor(bucket),
-                                enabled = palette.masterEnabled,
-                                onClick = { pickerTarget = bucket },
-                            )
+                    // Plan B5: "category palette in two columns" on tablet.
+                    // These rows are the narrowest on the screen (a swatch, a
+                    // short label, a hex), so they waste the most width when
+                    // stacked. See twoUpInPane for the gating rationale.
+                    BoxWithConstraints {
+                        val dim = if (palette.masterEnabled) 1f else 0.4f
+                        if (twoUpInPane(maxWidth)) {
+                            Column {
+                                ProgramCategory.defaultBuckets.chunked(2)
+                                    .forEachIndexed { rowIndex, pair ->
+                                        if (rowIndex > 0) DividerRow()
+                                        Row(modifier = Modifier.fillMaxWidth()) {
+                                            pair.forEach { bucket ->
+                                                Box(
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .alpha(dim),
+                                                ) {
+                                                    CategoryPaletteRow(
+                                                        bucket = bucket,
+                                                        hex = palette.hexFor(bucket),
+                                                        enabled = palette.masterEnabled,
+                                                        onClick = { pickerTarget = bucket },
+                                                    )
+                                                }
+                                            }
+                                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                                        }
+                                    }
+                            }
+                        } else {
+                            Column {
+                                ProgramCategory.defaultBuckets.forEachIndexed { idx, bucket ->
+                                    if (idx > 0) DividerRow()
+                                    Box(modifier = Modifier.alpha(dim)) {
+                                        CategoryPaletteRow(
+                                            bucket = bucket,
+                                            hex = palette.hexFor(bucket),
+                                            enabled = palette.masterEnabled,
+                                            onClick = { pickerTarget = bucket },
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                     DividerRow()
@@ -753,12 +806,12 @@ private fun ScaleSliderRow(
     label: String,
     value: Float,
     onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
     // tvOS renders Display Scale as inline percentage segments, not a slider
     // (cleaner with a remote + no focus-trap). The selected segment is filled.
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -804,11 +857,11 @@ private fun CategoryPaletteRow(
     hex: String,
     enabled: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
     val swatch = parseHex(hex)
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .dpadFocusWash()
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
