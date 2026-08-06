@@ -17,6 +17,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.window.DialogProperties
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 
@@ -41,6 +43,23 @@ fun FormFactorModal(
     onDismiss: () -> Unit,
     tvWidthFraction: Float = 0.55f,
     tvMaxHeight: Dp = 480.dp,
+    /**
+     * Optional width cap for the TOUCH bottom sheet (plan B5).
+     *
+     * A ModalBottomSheet spans the full window, which on a 1280dp tablet
+     * stretches a list of short group names across the whole display. Callers
+     * that want the sheet to read as a panel rather than a full-bleed drawer
+     * pass a cap here; the sheet then centres within the window.
+     *
+     * Opt-in per caller rather than a blanket default: every modal in the app
+     * shares this container, and silently narrowing all of them (the player
+     * sheets, Record from Now, What's New) would be a much wider visual change
+     * than the plan asked for. Null keeps today's full-width behaviour.
+     *
+     * Ignored on TV, which uses the centered dialog and already sizes itself
+     * with [tvWidthFraction].
+     */
+    sheetMaxWidth: Dp? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val isTv = rememberIsTvDevice()
@@ -85,8 +104,24 @@ fun FormFactorModal(
             // scroll to their last row. Short sheets are unaffected (they
             // measure below the cap and still wrap).
             val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * 0.88f
+            // `sheetMaxWidth` narrows and centres the column inside the
+            // full-width sheet. Done here rather than on the ModalBottomSheet
+            // itself so the scrim, drag handle and dismiss gesture keep
+            // spanning the window - only the CONTENT is bounded, which is what
+            // makes it read as a panel without breaking swipe-to-dismiss.
             Column(
-                modifier = Modifier.heightIn(max = maxSheetHeight),
+                modifier = Modifier
+                    .then(
+                        if (sheetMaxWidth != null) {
+                            Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = sheetMaxWidth)
+                                .align(Alignment.CenterHorizontally)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .heightIn(max = maxSheetHeight),
                 content = content,
             )
         }

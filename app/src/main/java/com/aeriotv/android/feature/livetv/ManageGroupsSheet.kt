@@ -139,6 +139,13 @@ fun ManageGroupsSheet(
         onDismiss = onDismiss,
         tvWidthFraction = 0.6f,
         tvMaxHeight = 620.dp,
+        // Plan B5: cap the touch sheet near 640dp on tablet. The content is a
+        // list of short group names with a visibility toggle; unbounded, it
+        // stretched across a 1280dp display and left the eye travelling the
+        // whole width between a name and its control. Phones are narrower than
+        // the cap, so nothing changes there. The TV path is the centered
+        // dialog above and is unaffected.
+        sheetMaxWidth = 640.dp,
     ) {
         Column(
             modifier = Modifier
