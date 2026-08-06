@@ -44,6 +44,8 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
@@ -64,6 +66,16 @@ import com.aeriotv.android.ui.settings.TvSettingsMetrics
 
 /** Touch sidebar width (plan B3). The TV rail widens to 300dp in B4. */
 private val SidebarWidth = 320.dp
+
+/**
+ * Pane-swap crossfade (plan B5: "about 150ms crossfade on pane content swaps;
+ * no shared-element transitions").
+ *
+ * Short on purpose. The rail commits a selection through its own debounce, so
+ * a longer fade would still be running when a fast scroll lands on the next
+ * row and the pane would visibly lag the highlight.
+ */
+private const val SettingsPaneCrossfadeMs = 150
 
 /** Where a fresh two-pane host lands. Canon puts Playlists first. */
 val DefaultSettingsPaneSelection: SettingsRoute = SettingsRoute.Playlists
@@ -162,9 +174,16 @@ fun SettingsTwoPaneHost(
                 // it, not above it, so system Back is not the only way out.
                 detail(pushed)
             } else {
-                paneStateHolder.SaveableStateProvider(encodeSettingsRoute(selection)) {
-                    CompositionLocalProvider(LocalSettingsInPane provides true) {
-                        detail(selection)
+                // Same crossfade as the TV host; see SettingsPaneCrossfadeMs.
+                Crossfade(
+                    targetState = selection,
+                    animationSpec = tween(SettingsPaneCrossfadeMs),
+                    label = "settingsPane",
+                ) { paneRoute ->
+                    paneStateHolder.SaveableStateProvider(encodeSettingsRoute(paneRoute)) {
+                        CompositionLocalProvider(LocalSettingsInPane provides true) {
+                            detail(paneRoute)
+                        }
                     }
                 }
             }
@@ -406,11 +425,20 @@ fun SettingsTvRailHost(
             if (pushed != null) {
                 detail(pushed)
             } else {
-                // Keyed per pane so each section keeps its OWN scroll offset;
-                // switching rail rows still starts the new pane at the top.
-                paneStateHolder.SaveableStateProvider(encodeSettingsRoute(selection)) {
-                    CompositionLocalProvider(LocalSettingsInPane provides true) {
-                        detail(selection)
+                // Plan B5: a short crossfade on pane swaps, so walking the rail
+                // does not hard-cut the whole right half of the screen. Content
+                // only; explicitly NOT a shared-element transition.
+                Crossfade(
+                    targetState = selection,
+                    animationSpec = tween(SettingsPaneCrossfadeMs),
+                    label = "settingsPane",
+                ) { paneRoute ->
+                    // Keyed per pane so each section keeps its OWN scroll
+                    // offset; switching rail rows still starts at the top.
+                    paneStateHolder.SaveableStateProvider(encodeSettingsRoute(paneRoute)) {
+                        CompositionLocalProvider(LocalSettingsInPane provides true) {
+                            detail(paneRoute)
+                        }
                     }
                 }
             }

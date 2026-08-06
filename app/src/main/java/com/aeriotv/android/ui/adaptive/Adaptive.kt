@@ -127,34 +127,12 @@ fun Modifier.adaptiveFormWidth(): Modifier {
     else this
 }
 
-/**
- * Wraps form/list content in a max-width column centered horizontally on
- * the screen. On phones it's a no-op (content flows edge-to-edge); on
- * tablet/TV the content is constrained so an OutlinedTextField doesn't
- * stretch to 1900px wide.
- *
- * The inner Box fills the available space inside the cap, so callers can
- * place a LazyColumn / Column inside and it'll size correctly.
- */
-@Composable
-fun AdaptiveCenteredContent(
-    modifier: Modifier = Modifier,
-    content: @Composable BoxScope.() -> Unit,
-) {
-    val vp = rememberViewport()
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        Box(
-            modifier = if (vp.formMaxWidth != Dp.Unspecified)
-                Modifier.widthIn(max = vp.formMaxWidth).fillMaxSize()
-            else
-                Modifier.fillMaxSize(),
-            content = content,
-        )
-    }
-}
+// `AdaptiveCenteredContent` lived here until the Settings redesign (plan B4:
+// "retires the hand-rolled centering Boxes and the unused
+// AdaptiveCenteredContent"). It had no call sites. Settings surfaces cap and
+// centre with `SettingsPaneContent`, which measures the PANE rather than the
+// window, so a two-pane host no longer sizes its form against the whole
+// display.
 
 
 // MARK: - Tab bar placement
