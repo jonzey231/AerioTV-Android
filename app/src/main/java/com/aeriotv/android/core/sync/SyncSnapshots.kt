@@ -38,6 +38,10 @@ data class PlaylistSnapshotEntry(
      *  device. Defaulted to "" so older snapshots (no key) decode and stay
      *  unfiltered. Mirrors iOS SyncedServer.dispatcharrChannelProfileIDs. */
     val dispatcharrAccountProfileIds: String = "",
+    /** Task #52: per-playlist On Demand opt-in travels with the playlist
+     *  (iOS ServerConnection.vodEnabled parity). Default true keeps older
+     *  snapshots decodable and matches the entity default. */
+    val vodEnabled: Boolean = true,
 )
 
 @Serializable
@@ -76,6 +80,22 @@ data class ReminderSnapshotEntry(
 data class RemindersSnapshot(
     val envelope: SyncEnvelope,
     val entries: List<ReminderSnapshotEntry>,
+)
+
+/** Task #52: one favorite channel + its manual-order slot (iOS
+ *  favoriteChannelIDs + favoriteOrder parity). */
+@Serializable
+data class FavoriteSnapshotEntry(
+    val channelId: String,
+    val channelName: String,
+    val displayOrder: Long,
+    val addedAt: Long,
+)
+
+@Serializable
+data class FavoritesSnapshot(
+    val envelope: SyncEnvelope,
+    val entries: List<FavoriteSnapshotEntry>,
 )
 
 @Serializable

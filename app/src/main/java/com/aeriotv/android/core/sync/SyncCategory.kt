@@ -29,6 +29,12 @@ enum class SyncCategory(
         fileName = "reminders.v1.json",
         storageSuffix = "reminders",
     ),
+    Favorites(
+        displayName = "Favorites",
+        subtitle = "Favorite channels + your manual order",
+        fileName = "favorites.v1.json",
+        storageSuffix = "favorites",
+    ),
     Preferences(
         displayName = "App Preferences",
         subtitle = "Theme, appearance mode, accent color, default tab, hidden groups, palette overrides",

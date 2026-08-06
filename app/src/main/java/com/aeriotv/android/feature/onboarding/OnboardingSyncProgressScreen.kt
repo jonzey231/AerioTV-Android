@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Tune
@@ -147,6 +148,7 @@ private val SyncCategory.lineLabel: String
         SyncCategory.Playlists -> "Playlists"
         SyncCategory.WatchProgress -> "Watch progress"
         SyncCategory.Reminders -> "Reminders"
+        SyncCategory.Favorites -> "Favorites"
         SyncCategory.Preferences -> "Preferences"
         SyncCategory.Credentials -> "Credentials"
     }
@@ -156,6 +158,7 @@ private val SyncCategory.lineIcon: ImageVector
         SyncCategory.Playlists -> Icons.AutoMirrored.Filled.PlaylistPlay
         SyncCategory.WatchProgress -> Icons.Filled.History
         SyncCategory.Reminders -> Icons.Filled.Notifications
+        SyncCategory.Favorites -> Icons.Filled.Star
         SyncCategory.Preferences -> Icons.Filled.Tune
         SyncCategory.Credentials -> Icons.Filled.Key
     }

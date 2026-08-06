@@ -8,6 +8,7 @@ import com.aeriotv.android.core.data.db.AerioDatabase
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.data.db.dao.ReminderDao
 import com.aeriotv.android.core.data.db.dao.WatchProgressDao
+import com.aeriotv.android.core.data.db.entity.FavoriteChannelEntity
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.db.entity.ReminderEntity
 import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
@@ -42,6 +43,7 @@ class DriveSyncManager @Inject constructor(
     private val playlistDao: PlaylistDao,
     private val watchProgressDao: WatchProgressDao,
     private val reminderDao: ReminderDao,
+    private val favoriteChannelDao: com.aeriotv.android.core.data.db.dao.FavoriteChannelDao,
     private val appPreferences: AppPreferences,
 ) {
 
@@ -250,6 +252,7 @@ class DriveSyncManager @Inject constructor(
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
             SyncCategory.WatchProgress -> json.encodeToString(buildWatchProgressSnapshot())
             SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
+            SyncCategory.Favorites -> json.encodeToString(buildFavoritesSnapshot())
             SyncCategory.Preferences -> json.encodeToString(buildPreferencesSnapshot())
             SyncCategory.Credentials -> json.encodeToString(buildCredentialsSnapshot())
         }
@@ -270,6 +273,7 @@ class DriveSyncManager @Inject constructor(
                 SyncCategory.Playlists -> applyPlaylistsSnapshot(json.decodeFromString(body))
                 SyncCategory.WatchProgress -> applyWatchProgressSnapshot(json.decodeFromString(body))
                 SyncCategory.Reminders -> applyRemindersSnapshot(json.decodeFromString(body))
+                SyncCategory.Favorites -> applyFavoritesSnapshot(json.decodeFromString(body))
                 SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body))
                 SyncCategory.Credentials -> applyCredentialsSnapshot(json.decodeFromString(body))
             }
@@ -306,6 +310,23 @@ class DriveSyncManager @Inject constructor(
                     apiKey = null,
                     lastUsedMillis = e.lastRefreshedAt,
                     dispatcharrAccountProfileIds = e.dispatcharrAccountProfileIds,
+                    vodEnabled = e.vodEnabled,
+                )
+            },
+        )
+    }
+
+    /** Task #52: favorites + the user's manual order (iOS parity). */
+    private suspend fun buildFavoritesSnapshot(): FavoritesSnapshot {
+        val rows = favoriteChannelDao.allOnce()
+        return FavoritesSnapshot(
+            envelope = envelope(),
+            entries = rows.map { row ->
+                FavoriteSnapshotEntry(
+                    channelId = row.channelId,
+                    channelName = row.channelName,
+                    displayOrder = row.displayOrder,
+                    addedAt = row.addedAt,
                 )
             },
         )
@@ -399,6 +420,10 @@ class DriveSyncManager @Inject constructor(
                 dispatcharrAccountProfileIds =
                     entry.dispatcharrAccountProfileIds.takeIf { it.isNotBlank() }
                         ?: current?.dispatcharrAccountProfileIds ?: "",
+                // Task #52: per-playlist On Demand opt-in follows the sync
+                // (iOS ServerConnection.vodEnabled parity). Old snapshots
+                // decode with the default true, matching the entity default.
+                vodEnabled = entry.vodEnabled,
             )
             playlistDao.upsert(merged)
         }
@@ -445,6 +470,36 @@ class DriveSyncManager @Inject constructor(
                         updatedAt = remote.updatedAt,
                     ),
                 )
+            }
+        }
+    }
+
+    /**
+     * Task #52: additive favorites merge, mirroring the reminders policy: a
+     * remote favorite this device lacks is added with its synced order; a
+     * favorite both sides have adopts the remote order only when the remote
+     * snapshot is fresher than the local add (so a reorder travels without a
+     * local drag being clobbered by a stale snapshot). Removals deliberately
+     * do NOT propagate - same create-only limitation as reminders (audit #24
+     * design note): a device can't tell "removed elsewhere" from "not added
+     * here yet" without tombstones.
+     */
+    private suspend fun applyFavoritesSnapshot(snapshot: FavoritesSnapshot) {
+        snapshot.entries.forEach { remote ->
+            val local = favoriteChannelDao.getOnce(remote.channelId)
+            if (local == null) {
+                favoriteChannelDao.upsert(
+                    FavoriteChannelEntity(
+                        channelId = remote.channelId,
+                        channelName = remote.channelName,
+                        displayOrder = remote.displayOrder,
+                        addedAt = remote.addedAt,
+                    ),
+                )
+            } else if (snapshot.envelope.lastModified > local.addedAt &&
+                local.displayOrder != remote.displayOrder
+            ) {
+                favoriteChannelDao.setDisplayOrder(remote.channelId, remote.displayOrder)
             }
         }
     }
