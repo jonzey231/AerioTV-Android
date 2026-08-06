@@ -52,6 +52,7 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -134,6 +135,10 @@ fun SettingsTwoPaneHost(
     takeover: (SettingsRoute) -> Boolean,
     detail: @Composable (SettingsRoute) -> Unit,
 ) {
+    // See the TV host: a takeover removes this whole subtree, so each pane's
+    // scroll offset has to be retained outside it to survive the round trip.
+    val paneStateHolder = rememberSaveableStateHolder()
+
     if (pushed != null && takeover(pushed)) {
         detail(pushed)
         return
@@ -157,8 +162,10 @@ fun SettingsTwoPaneHost(
                 // it, not above it, so system Back is not the only way out.
                 detail(pushed)
             } else {
-                CompositionLocalProvider(LocalSettingsInPane provides true) {
-                    detail(selection)
+                paneStateHolder.SaveableStateProvider(encodeSettingsRoute(selection)) {
+                    CompositionLocalProvider(LocalSettingsInPane provides true) {
+                        detail(selection)
+                    }
                 }
             }
         }
@@ -291,6 +298,15 @@ fun SettingsTvRailHost(
     takeover: (SettingsRoute) -> Boolean,
     detail: @Composable (SettingsRoute) -> Unit,
 ) {
+    // Retains each pane's own UI state (crucially its LazyColumn scroll
+    // offset) while that pane is out of composition. The takeover below
+    // REMOVES the whole rail+pane subtree, so without this the pane is rebuilt
+    // from scratch on the way back and lands at the top: open Add More
+    // Categories from the bottom of Appearance, press Back, and you are
+    // returned to the Theme list having lost your place. Declared before the
+    // early return so the holder itself survives the takeover.
+    val paneStateHolder = rememberSaveableStateHolder()
+
     if (pushed != null && takeover(pushed)) {
         // Edit / Add-playlist / log viewer / category editors replace the whole
         // host, exactly as they do today, so all the TV keyboard and IME
@@ -390,8 +406,12 @@ fun SettingsTvRailHost(
             if (pushed != null) {
                 detail(pushed)
             } else {
-                CompositionLocalProvider(LocalSettingsInPane provides true) {
-                    detail(selection)
+                // Keyed per pane so each section keeps its OWN scroll offset;
+                // switching rail rows still starts the new pane at the top.
+                paneStateHolder.SaveableStateProvider(encodeSettingsRoute(selection)) {
+                    CompositionLocalProvider(LocalSettingsInPane provides true) {
+                        detail(selection)
+                    }
                 }
             }
         }
