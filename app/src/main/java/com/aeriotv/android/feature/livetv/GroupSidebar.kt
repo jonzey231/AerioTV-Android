@@ -23,7 +23,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -73,6 +75,10 @@ internal fun GroupSidebarPanel(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     initialFocus: FocusRequester? = null,
+    /** Fires as D-pad focus lands on a row. The guide's docked pane uses it
+     *  for live group preview (Logan 2026-08-06); the player's channel-list
+     *  overlay leaves it a no-op. */
+    onRowFocused: (String) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val selectedIndex = groups.indexOf(selectedToken).coerceAtLeast(0)
@@ -122,6 +128,7 @@ internal fun GroupSidebarPanel(
                     label = groupSidebarLabel(token),
                     isActive = token == selectedToken,
                     onClick = { onSelect(token) },
+                    onFocused = { onRowFocused(token) },
                     modifier = if (index == selectedIndex && initialFocus != null) {
                         Modifier.focusRequester(initialFocus)
                     } else {
@@ -153,9 +160,11 @@ private fun GroupSidebarRow(
     isActive: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onFocused: () -> Unit = {},
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    LaunchedEffect(focused) { if (focused) onFocused() }
     val isTv = rememberIsTvDevice()
     // No icon column here, so the row needs its own vertical padding where
     // SettingsNavRow's icon box sets the height; the resulting pitch matches
@@ -203,11 +212,23 @@ private fun GroupSidebarRow(
 }
 
 /**
+ * Debounce before a FOCUSED sidebar row becomes the previewed group. Same
+ * 150ms as the Settings TV rail's selection-follows-focus: a fast scroll
+ * through the group list previews only where focus stops, instead of
+ * re-filtering the whole guide once per row.
+ */
+private const val SidebarPreviewDebounceMs = 150L
+
+/**
  * DOCKED pane for the GUIDE surface (Logan 2026-07-20): a hard side menu -
  * the guide content sits in the same Row and shifts right while it is open,
- * so the channel rail stays fully readable (no scrim, no overlay). Right
- * steps back out to the grid without changing the group; Back does the same
- * via GuideScreen's handler.
+ * so the channel rail stays fully readable (no scrim, no overlay).
+ *
+ * LIVE PREVIEW (Logan 2026-08-06): focusing a row applies its group after
+ * [SidebarPreviewDebounceMs], so the guide behind shows the channels before
+ * the user leaves the menu. OK or Right COMMIT the focused group and close;
+ * Back (GuideScreen's handler) CANCELS - reverts to the group the sidebar
+ * opened with.
  *
  * [topOffset] drops the pane so its top edge lines up with the guide's
  * TIME-HEADER row instead of the sort/search controls row (Logan 2026-08-06);
@@ -220,11 +241,23 @@ private fun GroupSidebarRow(
 internal fun GuideGroupSidebarPane(
     groups: List<String>,
     selectedToken: String,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit,
+    /** Debounced focus preview: apply this group NOW, sidebar stays open. */
+    onPreview: (String) -> Unit,
+    /** OK or Right: keep this group and close the sidebar. */
+    onCommit: (String) -> Unit,
     topOffset: Dp = 0.dp,
 ) {
     val focus = remember { FocusRequester() }
+    // The row focus currently rests on; commits use it directly so a Right
+    // that lands inside the debounce window still keeps what the user sees
+    // highlighted, not the last previewed group.
+    var focusedToken by remember { mutableStateOf(selectedToken) }
+    LaunchedEffect(focusedToken) {
+        if (focusedToken != selectedToken) {
+            kotlinx.coroutines.delay(SidebarPreviewDebounceMs)
+            onPreview(focusedToken)
+        }
+    }
     Row(modifier = Modifier.fillMaxHeight().padding(top = topOffset)) {
         Column(
             modifier = Modifier
@@ -234,7 +267,7 @@ internal fun GuideGroupSidebarPane(
                     if (event.key == androidx.compose.ui.input.key.Key.DirectionRight &&
                         event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
                     ) {
-                        onDismiss()
+                        onCommit(focusedToken)
                         true
                     } else {
                         false
@@ -244,8 +277,9 @@ internal fun GuideGroupSidebarPane(
             GroupSidebarPanel(
                 groups = groups,
                 selectedToken = selectedToken,
-                onSelect = onSelect,
+                onSelect = onCommit,
                 initialFocus = focus,
+                onRowFocused = { focusedToken = it },
             )
         }
         // Hairline separating the menu from the shifted guide; same token as

@@ -464,6 +464,11 @@ fun GuideScreen(
     // Captured when the sidebar opens; the tick drives the refocus effect.
     var sidebarReturnOrigin by remember { mutableStateOf<Pair<Int, Long>?>(null) }
     var sidebarFocusRestoreTick by remember { mutableStateOf(0) }
+    // The group that was active when the sidebar OPENED. Live preview (Logan
+    // 2026-08-06) mutates the real selection while the user browses, so this
+    // is what Back reverts to (cancel) and what commit compares against to
+    // decide between origin-cell focus restore (unchanged) and a fresh land.
+    var sidebarOriginalGroup by remember { mutableStateOf<String?>(null) }
     // The docked sidebar's top edge lines up with the TIME-HEADER row, not the
     // sort/search controls row (Logan 2026-08-06). The offset is measured, not
     // computed, because everything above the time row is dynamic: status-bar
@@ -878,18 +883,17 @@ fun GuideScreen(
             topOffset = with(density) {
                 (timeHeaderRootY - guideRowRootY).coerceAtLeast(0f).toDp()
             },
-            onSelect = { token ->
-                // Group CHANGES re-filter the channel list, so the captured row
-                // index would be stale - do NOT restore focus by it here (that
-                // path lands focus fresh via the normal group-select flow).
+            // Live preview (Logan 2026-08-06): the focused row's group applies
+            // while the sidebar stays open, so the channels show behind it.
+            onPreview = { token -> viewModel.onGroupSelected(token) },
+            // OK or Right: keep the focused group and close. Unchanged from
+            // the open-time group -> restore the origin cell; changed -> the
+            // captured row index would be stale against the re-filtered list,
+            // so let the normal group-select flow land focus fresh.
+            onCommit = { token ->
+                if (token != state.selectedGroup) viewModel.onGroupSelected(token)
                 groupSidebarOpen = false
-                viewModel.onGroupSelected(token)
-            },
-            // Right/Back with the group unchanged: restore focus to the origin
-            // cell so it doesn't orphan onto the Live TV nav pill.
-            onDismiss = {
-                groupSidebarOpen = false
-                if (isTv) sidebarFocusRestoreTick++
+                if (isTv && token == sidebarOriginalGroup) sidebarFocusRestoreTick++
             },
         )
     }
@@ -1827,8 +1831,9 @@ fun GuideScreen(
                                 // here is acceptable. Pills mode keeps the
                                 // mapped action unchanged.
                                 if (sidebarGroupMode) {
-                                    // Capture the origin cell so Right/Back
-                                    // closing the sidebar restores focus here
+                                    // Capture the origin cell so closing the
+                                    // sidebar with the group unchanged (or a
+                                    // Back-cancel revert) restores focus here
                                     // (else it orphans onto the Live TV pill).
                                     val originRow = if (guideNav.lastFocusedChannelIndex >= 0)
                                         guideNav.lastFocusedChannelIndex
@@ -1838,6 +1843,9 @@ fun GuideScreen(
                                             guideNav.focusedCellAnchorMs else nowMillis
                                         sidebarReturnOrigin = originRow to anchor
                                     }
+                                    // Live preview mutates the selection while
+                                    // browsing; this is the cancel target.
+                                    sidebarOriginalGroup = state.selectedGroup
                                     groupSidebarOpen = true
                                 } else when (
                                     val action = remoteMap.guideAction(
@@ -2136,7 +2144,13 @@ fun GuideScreen(
     // Sidebar-mode Back: close the docked menu. Composed AFTER the grid's
     // Back ladder (which registers inside the Column above) so this handler
     // wins while the sidebar is open.
+    // Back CANCELS the sidebar: live preview may have changed the active
+    // group while browsing, so revert to the group the sidebar opened with
+    // and restore the origin cell (which belongs to that group's list).
     androidx.activity.compose.BackHandler(enabled = groupSidebarOpen) {
+        sidebarOriginalGroup
+            ?.takeIf { it != state.selectedGroup }
+            ?.let { viewModel.onGroupSelected(it) }
         groupSidebarOpen = false
         if (isTv) sidebarFocusRestoreTick++
     }
