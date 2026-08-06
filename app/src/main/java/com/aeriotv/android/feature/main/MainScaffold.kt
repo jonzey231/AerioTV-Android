@@ -1338,43 +1338,45 @@ private fun TvTopTabBar(
     // tvOS-style floating nav: the tabs are grouped into one centered, rounded
     // "segmented" capsule over the app background (no full-width surface toolbar
     // strip), so the bar reads as a polished pill group rather than a heavy bar.
-    Box(
+    // The action circles hide on Settings (Logan 2026-08-06: they belong to
+    // the content tabs - Live TV / DVR / On Demand). They stay while the
+    // Search screen itself is up so its circle can show the selected fill.
+    val showActionCircles = selected != AppTab.Settings
+    // Cold start: TV initial focus falls on the LEFTMOST focusable, which is
+    // now the Refresh circle - pull it onto the selected pill (the
+    // pre-circle behavior, and an accidental OK there refreshed instead of
+    // doing nothing). The system grants initial focus when the WINDOW gains
+    // focus, which lands after composition - a plain one-frame LaunchedEffect
+    // lost that race (Streamer 2026-08-06) - so key the one-shot pull on the
+    // window-focus edge and run it a frame later.
+    var initialPillFocusPulled by remember { mutableStateOf(false) }
+    val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(windowFocused) {
+        if (windowFocused && !initialPillFocusPulled) {
+            initialPillFocusPulled = true
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { pillRequesters[selected]?.requestFocus() }
+        }
+    }
+    // Custom layout so the PILL CAPSULE is centered on the SCREEN (Logan
+    // 2026-08-06: adding the circles to a shared centered row shoved the
+    // pills off-center) and the circles hang off its left edge without
+    // affecting its position.
+    //
+    // The circles live OUTSIDE the capsule's focus group, on purpose. Bar
+    // entry arrives as a direct requestFocus on the capsule row, which
+    // IGNORES enter/onEnter redirects and lands on the group's first
+    // focusable - with a circle inside the group, entry never reached the
+    // selected pill and the armed gate (correctly) refused to treat entry
+    // focus as a selection, so Search could never open (Streamer
+    // 2026-08-06). Out here the capsule's focus contract is exactly the
+    // pre-circle one, and each circle is a plain focusable CLICK target
+    // that D-pad Left reaches geometrically.
+    androidx.compose.ui.layout.Layout(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 16.dp, bottom = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        // The Search button lives OUTSIDE the pill capsule's focus group, on
-        // purpose. Bar entry arrives as a direct requestFocus on the capsule
-        // row, which IGNORES enter/onEnter redirects and lands on the group's
-        // first focusable - with the button inside the group that first
-        // focusable was the button, entry never reached the selected pill,
-        // and the armed gate (correctly) refused to treat entry focus as a
-        // selection, so Search could never open (Streamer 2026-08-06). Out
-        // here the capsule's focus contract is exactly the pre-button one,
-        // and the button is a plain focusable CLICK target: Left from Live
-        // TV highlights it, OK opens Search.
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Floating action circles LEFT of Live TV (Logan 2026-08-06):
-            // Refresh (TV's pull-to-refresh stand-in), then Search - so the
-            // most-used action sits closest to the pills, one Left press away.
-            TvBarCircleButton(
-                icon = Icons.Filled.Refresh,
-                contentDescription = "Refresh channels and guide",
-                onClick = onRefresh,
-                spinning = refreshing,
-            )
-            TvBarCircleButton(
-                icon = AppTab.Search.iconSelected,
-                contentDescription = AppTab.Search.label,
-                selected = selected == AppTab.Search,
-                onClick = { onSelect(AppTab.Search) },
-                modifier = pillRequesters[AppTab.Search]
-                    ?.let { Modifier.focusRequester(it) } ?: Modifier,
-            )
+        content = {
             Row(
                 modifier = Modifier
                     .focusRequester(focusRequester)
@@ -1406,6 +1408,44 @@ private fun TvTopTabBar(
                     )
                 }
             }
+            if (showActionCircles) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Refresh (TV's pull-to-refresh stand-in), then Search -
+                    // the most-used action sits closest to the pills, one
+                    // Left press away.
+                    TvBarCircleButton(
+                        icon = Icons.Filled.Refresh,
+                        contentDescription = "Refresh channels and guide",
+                        onClick = onRefresh,
+                        spinning = refreshing,
+                    )
+                    TvBarCircleButton(
+                        icon = AppTab.Search.iconSelected,
+                        contentDescription = AppTab.Search.label,
+                        selected = selected == AppTab.Search,
+                        onClick = { onSelect(AppTab.Search) },
+                        modifier = pillRequesters[AppTab.Search]
+                            ?.let { Modifier.focusRequester(it) } ?: Modifier,
+                    )
+                }
+            }
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val capsule = measurables[0].measure(loose)
+        val circles = measurables.getOrNull(1)?.measure(loose)
+        val width = constraints.maxWidth
+        val height = maxOf(capsule.height, circles?.height ?: 0)
+        layout(width, height) {
+            val capsuleX = (width - capsule.width) / 2
+            capsule.placeRelative(capsuleX, (height - capsule.height) / 2)
+            circles?.placeRelative(
+                capsuleX - 10.dp.roundToPx() - circles.width,
+                (height - circles.height) / 2,
+            )
         }
     }
 }
