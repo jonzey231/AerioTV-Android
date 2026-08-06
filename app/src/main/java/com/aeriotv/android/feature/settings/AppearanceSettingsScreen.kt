@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -50,6 +51,8 @@ import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.category.parseHex
 import com.aeriotv.android.ui.adaptive.rememberViewport
+import com.aeriotv.android.ui.settings.LocalSettingsInPane
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.settings.OnOffIndicator
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
@@ -76,6 +79,14 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
  * (top bars, nav bar, sheets, dialogs, mini-player, splash) re-themes in
  * the same frame — no recreate needed.
  */
+/**
+ * Minimum PANE width before the theme swatches go two-up (plan B5).
+ *
+ * 560dp is the same threshold the plan sets for the display-scale sliders, so
+ * the whole pane reflows at one breakpoint instead of stepping twice.
+ */
+private val ThemeGridMinPaneWidth = 560.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppearanceSettingsScreen(
@@ -129,13 +140,62 @@ fun AppearanceSettingsScreen(
                     header = "Theme",
                     footer = "Choose the palette and the light or dark appearance. Theme sets the color; Appearance sets light vs dark. They are independent, so any theme works in either appearance. Changes apply live; the preset accent kicks in unless Custom Accent is on.",
                 ) {
-                    AppTheme.entries.forEachIndexed { index, theme ->
-                        if (index > 0) DividerRow()
-                        ThemeRow(
-                            theme = theme,
-                            selected = theme == currentTheme,
-                            onClick = { viewModel.setSelectedTheme(theme) },
-                        )
+                    // Plan B5: "theme swatch grid at doubled density" on
+                    // tablet. A theme row is a 36dp swatch plus two short
+                    // lines, so at pane widths past ~560dp a single column
+                    // strands the checkmark hundreds of dp from the swatch
+                    // and pushes the rest of the page below the fold.
+                    //
+                    // Gated on being IN A PANE, not on raw width. A phone in
+                    // landscape is ~891dp and would otherwise pick up two
+                    // columns, which would break the frozen phone canon; a
+                    // phone is never in a pane. BoxWithConstraints measures
+                    // the PANE rather than the window, so the sidebar's 320dp
+                    // is already excluded.
+                    //
+                    // TV is excluded even though its rail host also sets
+                    // LocalSettingsInPane and its pane clears 560dp. The plan
+                    // scopes this to tablet, and two columns would add a
+                    // horizontal D-pad axis inside the pane that competes with
+                    // the rail boundary. Not worth destabilising TV focus for a
+                    // density win nobody asked for.
+                    BoxWithConstraints {
+                        val twoColumn = LocalSettingsInPane.current &&
+                            !rememberIsTvDevice() &&
+                            maxWidth >= ThemeGridMinPaneWidth
+                        Column {
+                            if (twoColumn) {
+                                AppTheme.entries.chunked(2)
+                                    .forEachIndexed { rowIndex, pair ->
+                                        if (rowIndex > 0) DividerRow()
+                                        Row(modifier = Modifier.fillMaxWidth()) {
+                                            pair.forEach { theme ->
+                                                ThemeRow(
+                                                    theme = theme,
+                                                    selected = theme == currentTheme,
+                                                    onClick = { viewModel.setSelectedTheme(theme) },
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                            }
+                                            // Odd count: hold the last row's
+                                            // column so the lone theme keeps
+                                            // its width instead of stretching.
+                                            if (pair.size == 1) {
+                                                Spacer(Modifier.weight(1f))
+                                            }
+                                        }
+                                    }
+                            } else {
+                                AppTheme.entries.forEachIndexed { index, theme ->
+                                    if (index > 0) DividerRow()
+                                    ThemeRow(
+                                        theme = theme,
+                                        selected = theme == currentTheme,
+                                        onClick = { viewModel.setSelectedTheme(theme) },
+                                    )
+                                }
+                            }
+                        }
                     }
                     // Appearance mode (Dark / Light / System). Orthogonal to the
                     // theme above: this picks surface luminance, the theme picks
@@ -368,10 +428,10 @@ private fun ThemeRow(
     theme: AppTheme,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .dpadFocusWash()
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
