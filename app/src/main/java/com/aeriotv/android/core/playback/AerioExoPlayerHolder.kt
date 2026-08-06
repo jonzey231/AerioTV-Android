@@ -846,14 +846,40 @@ class AerioExoPlayerHolder @Inject constructor(
         return """{"keys":[{"kty":"oct","kid":"$kid","k":"$k"}],"type":"temporary"}"""
     }
 
-    /** TS-only extractor factory shared by the live raw-TS path and the
-     *  timeshift buffer reader (same no-sniff rationale, see buildMediaSource). */
+    /** Live extractor factory shared by the raw-stream path and the
+     *  timeshift buffer reader. Two candidates, in order:
+     *
+     *  1. FragmentedMp4Extractor with its normal (strict, reliable) sniff:
+     *     Dispatcharr's proxy can be set to fMP4 OUTPUT, and the old TS-only
+     *     factory force-fed those bytes to TsExtractor, which died in
+     *     SectionReader with an IllegalArgumentException (Logan 2026-08-06,
+     *     "why doesn't Android support fMP4").
+     *  2. A TsExtractor whose sniff ALWAYS accepts - the terminal fallback.
+     *     This preserves the original no-sniff TS guarantee: a proxy join
+     *     that starts mid-packet (not 0x47-aligned) used to fail the sniff
+     *     and double the cold start; TsExtractor.read scans for the sync
+     *     byte itself, so accepting unconditionally handles the unaligned
+     *     join with no reload, exactly as the old single-extractor path did.
+     *
+     *  Both are sourced from DefaultExtractorsFactory so their configuration
+     *  matches what the default pipeline would build. */
     private fun tsOnlyExtractorsFactory(): ExtractorsFactory = ExtractorsFactory {
         val all: Array<Extractor> = DefaultExtractorsFactory()
             .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
             .createExtractors()
-        val tsOnly: List<Extractor> = all.filterIsInstance<TsExtractor>()
-        if (tsOnly.isNotEmpty()) tsOnly.toTypedArray() else all
+        val ts: Extractor? = all.firstOrNull { it is TsExtractor }
+        val fmp4: Extractor? = all.firstOrNull {
+            it is androidx.media3.extractor.mp4.FragmentedMp4Extractor
+        }
+        if (ts == null) return@ExtractorsFactory all
+        buildList {
+            fmp4?.let { add(it) }
+            add(object : Extractor by ts {
+                override fun sniff(
+                    input: androidx.media3.extractor.ExtractorInput,
+                ): Boolean = true
+            })
+        }.toTypedArray()
     }
 
     // MARK Live Rewind (task #143)
