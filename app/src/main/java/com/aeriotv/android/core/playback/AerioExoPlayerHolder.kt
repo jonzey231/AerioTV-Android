@@ -381,6 +381,29 @@ class AerioExoPlayerHolder @Inject constructor(
             if (isPlaying && player?.playbackState == Player.STATE_READY) armWatchdog()
         }
 
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            // Live Rewind filler lifecycle (GH #51): the chrome transport was
+            // the ONLY caller of onLivePaused/onLiveResumedAtEdge, so a pause
+            // or resume that arrived through the MediaSession instead (remote
+            // media key, notification, QS media card, Bluetooth) bypassed the
+            // controller entirely. Worst case, chrome-pause + media-key-resume
+            // left the independent filler streaming the full live feed
+            // alongside the player's own tee for the rest of the channel
+            // session: a genuine second Dispatcharr client (the reported
+            // "ghost stream") AND two connections interleaving appends into
+            // the same buffer. Driving the controller off the player's actual
+            // playWhenReady makes every pause path arm the delayed filler and
+            // every direct-live resume retire it. Checked at CALLBACK time,
+            // not enqueue: the chrome's long-pause resume flips
+            // playWhenReady=true then immediately enters timeshift, and by the
+            // time this runs isTimeshifting is already true, so the filler
+            // (which timeshift playback needs) is left alone.
+            if (isTimeshifting || isCatchup) return
+            val ts = timeshift.get()
+            if (ts.activeWriter == null) return
+            if (playWhenReady) ts.onLiveResumedAtEdge() else ts.onLivePaused()
+        }
+
         override fun onPlayerError(error: PlaybackException) {
             // Task #150: remember the failure in user-showable form for the
             // unavailable overlay (self-heals below may still recover; the

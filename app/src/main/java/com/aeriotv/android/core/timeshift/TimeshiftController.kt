@@ -57,6 +57,20 @@ class TimeshiftController @Inject constructor(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
+    /**
+     * GH #51 ROOT CAUSE: the independent filler is a BLOCKING network read
+     * loop that runs for the whole connection lifetime. It used to launch
+     * on the serial [scope]; with limitedParallelism(1) every control task
+     * queued after it (stop-fill, Go Live's stop, the session close on
+     * channel change, even the NEXT channel's session start) starved
+     * behind the blocked worker - the filler was unstoppable once started
+     * ("ghost streams until manually killed in the Dispatcharr GUI"), and
+     * the next channel's tee kept appending into the previous channel's
+     * buffer. Long-blocking work gets its own unbounded IO scope; the
+     * serial scope stays the control plane.
+     */
+    private val fillScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
         // Retention/budget reaper independent of new sessions: without
         // this, disabling the feature (or never watching live again)
@@ -179,7 +193,7 @@ class TimeshiftController @Inject constructor(
         // New connection joining the proxy mid-packet: realign before
         // its bytes land in the buffer.
         writer.markDiscontinuity()
-        fillJob = scope.launch {
+        fillJob = fillScope.launch {
             try {
                 val req = Request.Builder().url(url).apply {
                     liveHeaders.forEach { (k, v) -> header(k, v) }
@@ -225,17 +239,28 @@ class TimeshiftController @Inject constructor(
     private var pauseFillJob: kotlinx.coroutines.Job? = null
 
     /**
-     * Cable-seamless pause: the player just pauses (no source switch),
-     * its stalled live connection stops feeding the tee once the
-     * internal read-ahead fills, so the filler must take over. Start it
-     * DELAYED by roughly that read-ahead so the filler's join point
-     * lines up with where the tee left off instead of duplicating the
-     * last few seconds of stream.
+     * Cable-seamless pause: the player just pauses (no source switch)
+     * and, because this is a LIVE stream, ExoPlayer keeps downloading at
+     * 1x into its read-ahead - the tee stays at the live edge and keeps
+     * feeding the buffer until maxBuffer fills (tens of seconds), or
+     * until the server kicks the idle client. The old fixed 8s delay
+     * started the filler while the tee was still reading, so BOTH
+     * connections interleaved appends into the same buffer (GH #51
+     * corruption) and the filler's server-side replay landed tens of MB
+     * behind the head. Now the filler starts only when bytes actually
+     * STOP arriving (head idle > 4s): no double-feed, and the splice
+     * overlap shrinks to the server's small join replay, which the
+     * writer's trimmer removes.
      */
     fun onLivePaused() {
         if (pauseFillJob?.isActive == true || fillJob?.isActive == true) return
         pauseFillJob = scope.launch {
-            kotlinx.coroutines.delay(8_000)
+            while (true) {
+                kotlinx.coroutines.delay(2_000)
+                val w = activeWriter ?: return@launch
+                if (w.closed || fillJob?.isActive == true) return@launch
+                if (System.currentTimeMillis() - w.headWallMs > 4_000) break
+            }
             // Serial scope: this cannot interleave with a Main-thread
             // rewind press starting its own filler (double-fill race).
             startIndependentFill()
@@ -243,15 +268,28 @@ class TimeshiftController @Inject constructor(
     }
 
     /** Short pause resumed on the untouched live pipeline: the tee is
-     *  reading again; retire the filler (it may not have started). */
+     *  reading again; retire the filler (it may not have started). If the
+     *  filler DID run (a media-key resume after a long pause, GH #51),
+     *  the tee's next append follows the filler's bytes from a different
+     *  connection - mark the splice so the writer realigns and trims. */
     fun onLiveResumedAtEdge() {
-        scope.launch { stopIndependentFill() }
+        scope.launch {
+            val fillerRan = fillJob?.isActive == true
+            stopIndependentFill()
+            if (fillerRan) activeWriter?.markDiscontinuity()
+        }
     }
 
     /** Playback switched onto the buffer at [atWallMs]. */
     fun onEnterTimeshift(atWallMs: Long) {
         val w = activeWriter ?: return
-        scope.launch { startIndependentFill() }
+        scope.launch {
+            // Retire a pending pause-stall watcher (its job is starting
+            // the SAME filler); a filler already running keeps running.
+            pauseFillJob?.cancel()
+            pauseFillJob = null
+            startIndependentFill()
+        }
         _state.update {
             it.copy(
                 timeshifting = true,
