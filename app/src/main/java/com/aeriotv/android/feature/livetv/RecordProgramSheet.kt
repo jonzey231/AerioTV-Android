@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -108,6 +109,10 @@ fun RecordProgramSheet(
 
     var preRoll by remember(defaultPreRoll) { mutableStateOf(defaultPreRoll) }
     var postRoll by remember(defaultPostRoll) { mutableStateOf(defaultPostRoll) }
+    // iOS parity (task #50): the "Custom..." buffer entry. Which row the
+    // stepper dialog is editing (null = closed) and its draft value.
+    var customBufferTarget by remember { mutableStateOf<CustomBufferTarget?>(null) }
+    var customBufferDraft by remember { mutableStateOf(5) }
     // Task #50: seed the destination from the user's Default Destination
     // preference AND capability; re-seed if either resolves after the first
     // composition. Non-admin seeds false and the toggle is hidden, so it can
@@ -264,6 +269,10 @@ fun RecordProgramSheet(
                         options = ROLL_OPTIONS,
                         selected = preRoll,
                         onSelect = { preRoll = it },
+                        onCustom = {
+                            customBufferDraft = if (preRoll > 0) preRoll else 5
+                            customBufferTarget = CustomBufferTarget.PreRoll
+                        },
                     )
                 }
 
@@ -274,6 +283,10 @@ fun RecordProgramSheet(
                     options = ROLL_OPTIONS,
                     selected = postRoll,
                     onSelect = { postRoll = it },
+                    onCustom = {
+                        customBufferDraft = if (postRoll > 0) postRoll else 5
+                        customBufferTarget = CustomBufferTarget.PostRoll
+                    },
                 )
 
                 // Destination toggle only for admins. A non-admin Dispatcharr
@@ -368,7 +381,51 @@ fun RecordProgramSheet(
             }
         }
     }
+
+    // iOS parity (task #50): "Custom Buffer" stepper dialog, 1..120 minutes
+    // (RecordProgramSheet.swift customSheet). Plain buttons so it D-pads
+    // cleanly on TV.
+    customBufferTarget?.let { editTarget ->
+        AlertDialog(
+            onDismissRequest = { customBufferTarget = null },
+            title = { Text("Custom Buffer") },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = {
+                        if (customBufferDraft > 1) customBufferDraft -= 1
+                    }) { Text("−", style = MaterialTheme.typography.titleLarge) }
+                    Text(
+                        text = "$customBufferDraft minutes",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    TextButton(onClick = {
+                        if (customBufferDraft < 120) customBufferDraft += 1
+                    }) { Text("+", style = MaterialTheme.typography.titleLarge) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (editTarget) {
+                        CustomBufferTarget.PreRoll -> preRoll = customBufferDraft
+                        CustomBufferTarget.PostRoll -> postRoll = customBufferDraft
+                    }
+                    customBufferTarget = null
+                }) { Text("Set") }
+            },
+            dismissButton = {
+                TextButton(onClick = { customBufferTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
+
+private enum class CustomBufferTarget { PreRoll, PostRoll }
 
 @Composable
 private fun LabeledValue(label: String, value: String) {
@@ -409,7 +466,12 @@ private fun MinuteRadioFlow(
     options: List<Int>,
     selected: Int,
     onSelect: (Int) -> Unit,
+    /** iOS parity (task #50): opens the Custom Buffer stepper dialog. */
+    onCustom: () -> Unit,
 ) {
+    // A value set through the Custom dialog is not one of the presets; the
+    // trailing chip owns it and echoes the minutes.
+    val isCustomSelected = selected !in options
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -439,6 +501,28 @@ private fun MinuteRadioFlow(
                     color = MaterialTheme.colorScheme.onBackground,
                 )
             }
+        }
+        Row(
+            modifier = Modifier
+                .selectable(
+                    selected = isCustomSelected,
+                    onClick = onCustom,
+                )
+                .padding(end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(
+                selected = isCustomSelected,
+                onClick = null,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
+            Text(
+                text = if (isCustomSelected) "Custom ($selected min)" else "Custom",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
         }
     }
 }
