@@ -222,6 +222,7 @@ fun MainScaffold(
         hasFavorites = hasRenderableFavorites,
         hasVod = hasVodContent,
         hasRecordings = hasRecordings,
+        isTv = rememberLiveTvFormFactor().isTv,
     )
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val miniPlayerState by miniPlayerVm.state.collectAsStateWithLifecycle()
@@ -499,6 +500,7 @@ fun MainScaffold(
                     onWatchLive = onWatchLive,
                     onWatchFromBeginning = onWatchFromBeginning,
                     onOpenSearch = onOpenSearch,
+                    onSelectTab = { selectedTab = it; initialTabApplied = true },
                     viewModel = viewModel,
                     modifier = Modifier
                         .weight(1f)
@@ -697,6 +699,7 @@ fun MainScaffold(
                 onWatchLive = onWatchLive,
                 onWatchFromBeginning = onWatchFromBeginning,
                 onOpenSearch = onOpenSearch,
+                onSelectTab = { selectedTab = it; initialTabApplied = true },
                 viewModel = viewModel,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -1189,6 +1192,10 @@ private fun MainTabContent(
     onWatchLive: (String, String, Boolean) -> Unit,
     onWatchFromBeginning: (String, String, Boolean) -> Unit,
     onOpenSearch: () -> Unit = {},
+    // Lets a tab's own content change the selected tab (the TV Search tab's
+    // Back returns to Live TV). Latches initialTabApplied at the call sites,
+    // same as a manual pill press.
+    onSelectTab: (AppTab) -> Unit = {},
     // The PLAYLIST_GRAPH-scoped PlaylistViewModel, threaded down so no tab
     // self-resolves a bare hiltViewModel() against the MAIN entry's store.
     // That default silently minted a SECOND PlaylistViewModel whose init ran
@@ -1225,6 +1232,24 @@ private fun MainTabContent(
                 onOpenSearch = onOpenSearch,
             )
             AppTab.Settings -> SettingsTabContent(playlistViewModel = viewModel)
+            // TV-only tab (Logan 2026-08-06): the same global Search screen the
+            // phone reaches via the app-bar globe, hosted in place. EPG results
+            // go through requestGuideJump, whose scaffold collector already
+            // switches to Live TV and jumps the guide; movie/series results use
+            // the same detail routes as On Demand. No back arrow (the pushed
+            // route keeps its own) and no field auto-focus - with
+            // selection-follows-focus on the nav bar, a focus grab here would
+            // yank the user out of the bar the moment the pill highlights.
+            AppTab.Search -> com.aeriotv.android.feature.search.SearchScreen(
+                onBack = { onSelectTab(AppTab.LiveTV) },
+                onEpgResult = { channelKey, startMillis ->
+                    viewModel.requestGuideJump(channelKey, startMillis)
+                },
+                onMovieClick = onMovieClick,
+                onSeriesClick = onSeriesClick,
+                showBackButton = false,
+                autoFocusField = false,
+            )
         }
     }
 }
@@ -1724,12 +1749,17 @@ internal fun visibleTabs(
     hasFavorites: Boolean = false,
     hasVod: Boolean = false,
     hasRecordings: Boolean = false,
+    isTv: Boolean = false,
 ): List<AppTab> = buildList {
     add(AppTab.LiveTV)
     if (hasFavorites) add(AppTab.Favorites)
     if (hasRecordings) add(AppTab.DVR)
     if (hasVod) add(AppTab.OnDemand)
     add(AppTab.Settings)
+    // TV-only (Logan 2026-08-06): global Search lives in the top nav, right
+    // of Settings, replacing the guide header's search circles. Phones keep
+    // their app-bar search entry points instead of a fifth bottom-bar tab.
+    if (isTv) add(AppTab.Search)
 }
 
 /** EntryPoint accessor so MainScaffold can drive pause/destroy on the held

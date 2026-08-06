@@ -476,30 +476,15 @@ fun ChannelListScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // On Android TV the List has no top app bar, so the Guide / Search /
-                // Sort controls live here, to the LEFT of the Filter (Manage Groups)
-                // button, ahead of the group pills (parity with the Guide control row).
+                // On Android TV the List has no top app bar, so Sort leads the
+                // pill row. TV guide cleanup (Logan 2026-08-06): the Guide-switch
+                // circle is gone (Settings > Default Live TV View is the switch)
+                // and the channel-search circle too (the nav bar's Search tab is
+                // the one search entry on TV). Sort stays - nothing else covers
+                // Number / Name / Favorites ordering - and the Tune circle below
+                // stays as TV's only Manage Groups entry until hidden groups
+                // sync across devices.
                 if (isTv) {
-                    if (canToggleViewMode) {
-                        item {
-                            ListControlCircle(
-                                icon = Icons.Filled.CalendarMonth,
-                                contentDescription = "Switch to Guide",
-                                onClick = onToggleViewMode,
-                            )
-                        }
-                    }
-                    item {
-                        ListControlCircle(
-                            icon = Icons.Outlined.Search,
-                            contentDescription = if (searchActive) "Close search" else "Search channels",
-                            active = searchActive,
-                            onClick = {
-                                searchActive = !searchActive
-                                if (!searchActive) viewModel.onSearchQueryChange("")
-                            },
-                        )
-                    }
                     item {
                         SortMenu(
                             currentMode = state.sortMode,

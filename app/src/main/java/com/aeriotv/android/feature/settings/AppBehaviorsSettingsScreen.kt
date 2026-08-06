@@ -142,7 +142,9 @@ fun AppBehaviorsSettingsScreen(
                 header = "Default Tab",
                 footer = "The tab shown when the app first launches.",
             ) {
-                AppTab.entries.forEach { tab ->
+                // Search is a TV-only nav tab and not a sensible launch tab;
+                // on phones it does not exist at all.
+                AppTab.entries.filter { it != AppTab.Search }.forEach { tab ->
                     val selected = (defaultTab.isEmpty() && tab == AppTab.LiveTV) ||
                         defaultTab == tab.name
                     SettingsSelectionRow(
@@ -156,9 +158,9 @@ fun AppBehaviorsSettingsScreen(
             SettingsSection(
                 header = "Default Live TV View",
                 footer = "Which layout Live TV opens in. Automatic uses the List on " +
-                    "phones and the Guide on TV and larger tablets. You can still " +
-                    "switch anytime with the List / Guide button; that switch lasts " +
-                    "for the current session and does not change this default.",
+                    "phones and the Guide on TV and larger tablets. On phones you " +
+                    "can still switch for the current session with the List / Guide " +
+                    "button; on TV this setting is the only switch.",
             ) {
                 val current = defaultLiveTVView.lowercase()
                 DEFAULT_LIVE_TV_VIEW_OPTIONS.forEach { (value, label) ->

@@ -75,6 +75,16 @@ fun SearchScreen(
     onEpgResult: (channelKey: String, startMillis: Long) -> Unit,
     onMovieClick: (uuid: String) -> Unit,
     onSeriesClick: (id: Int) -> Unit,
+    /**
+     * Both false when hosted as the TV nav-bar Search TAB (Logan 2026-08-06)
+     * rather than a pushed route: there is no screen to pop (the arrow would
+     * lie; remote Back still fires [onBack] to return to Live TV), and the
+     * field must not grab focus on composition - the TV nav bar selects on
+     * FOCUS, so the tab composes the moment its pill highlights and a focus
+     * grab here would yank the user out of the bar mid-traversal.
+     */
+    showBackButton: Boolean = true,
+    autoFocusField: Boolean = true,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -82,7 +92,9 @@ fun SearchScreen(
 
     val fieldFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(Unit) { runCatching { fieldFocus.requestFocus() } }
+    if (autoFocusField) {
+        LaunchedEffect(Unit) { runCatching { fieldFocus.requestFocus() } }
+    }
 
     Column(
         modifier = Modifier
@@ -93,14 +105,16 @@ fun SearchScreen(
         Spacer(Modifier.height(12.dp))
         // Back + search field.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = MaterialTheme.colorScheme.onBackground,
-                )
+            if (showBackButton) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
             }
-            Spacer(Modifier.width(8.dp))
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::onQueryChange,

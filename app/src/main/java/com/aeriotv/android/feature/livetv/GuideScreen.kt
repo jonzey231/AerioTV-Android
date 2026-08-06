@@ -48,9 +48,7 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.ViewList
@@ -1099,32 +1097,21 @@ fun GuideScreen(
                 )
             }
         }
-        // Control + filter row (TV only), mirroring the tvOS guide:
-        // List/Guide switcher, search toggle, and a group on/off filter on
-        // the left, then the channel-group pills (or an inline search field)
-        // filling the rest. Phone renders the shared LiveTvPillsRow above
-        // instead.
-        // Control circle sizing. TV values are tvOS-pt x 0.5 (the 960dp canvas
-        // is half tvOS's 1920pt, so the same physical size => all the group
-        // pills fit across the row exactly like tvOS, no horizontal scroll).
-        // controlCircle sizes the search/filter focus ring + active fill (the
-        // resting TV button is transparent -- just the glyph), so shrinking it
-        // tightens the white focus ring without changing the resting look. 26dp
-        // keeps a clean ring around the 16dp glyph while leaving ~9dp clearance
-        // in the 44dp row so the ring no longer crowds the pills above / time
-        // axis below.
-        if (isTv) {
-        val controlCircle = 26.dp
-        val controlIcon = 16.dp
+        // Group-pills row (TV only). TV guide cleanup (Logan 2026-08-06): the
+        // control circles that used to lead this row are GONE - the List/Guide
+        // switcher is covered by Settings > Default Live TV View, both search
+        // circles by the nav bar's Search tab, and the filter circle by the
+        // groups/pills themselves (Manage Groups stays reachable from the List
+        // view's Tune circle). With them gone the row exists only for the
+        // pills, so it is skipped entirely in sidebar mode (and for a
+        // single-group playlist) instead of leaving an empty 44dp band above
+        // the time axis. Phone renders the shared LiveTvPillsRow above instead.
+        if (isTv && !sidebarGroupMode && (groups.size > 1 || collections.isNotEmpty())) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                // The control strip is a tight 44dp on TV to keep the pills / time
-                // axis from crowding. A Material OutlinedTextField, however, needs
-                // its ~56dp min height or the entered text clips vertically, so let
-                // the row grow to 56dp WHILE the inline channel-search field is
-                // shown.
-                .height(if (!searchActive) 44.dp else 56.dp)
+                // Tight 44dp so the pills don't crowd the time axis below.
+                .height(44.dp)
                 .padding(horizontal = 20.dp)
                 // #10/#14 overshoot fix: pin a HOLD Left to the "All" pill. This
                 // handler sits on the common ancestor of BOTH the leading control
@@ -1175,209 +1162,7 @@ fun GuideScreen(
                 },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // List / Guide view switcher, to the LEFT of Search. TV-only: it
-            // uses the same bare-glyph + white-focus-ring circle as the
-            // Search / Filter controls (parity with tvOS, which offers a
-            // List / Guide switch here); the phone toggle lives in the app
-            // bar above.
-            if (canToggleViewMode && isTv) {
-                val switchesToList = viewMode == LiveTVViewMode.Guide
-                val toggleIcon = if (switchesToList)
-                    Icons.Filled.ViewList else Icons.Filled.CalendarMonth
-                val toggleDesc = if (switchesToList) "Switch to List" else "Switch to Guide"
-                run {
-                    val toggleInteraction = remember { MutableInteractionSource() }
-                    val toggleFocused by toggleInteraction.collectIsFocusedAsState()
-                    Box(
-                        modifier = Modifier.clickable(
-                            interactionSource = toggleInteraction,
-                            indication = null,
-                        ) { onToggleViewMode() },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(controlCircle)
-                                .clip(CircleShape)
-                                .background(
-                                    if (toggleFocused) Color.White.copy(alpha = 0.15f)
-                                    else Color.Transparent,
-                                )
-                                .then(
-                                    if (toggleFocused)
-                                        Modifier.border(2.dp, Color.White, CircleShape)
-                                    else Modifier,
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = toggleIcon,
-                                contentDescription = toggleDesc,
-                                modifier = Modifier.size(controlIcon),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(8.dp))
-                }
-            }
-            // Search toggle: reveals an inline channel-name search field. On TV
-            // it has NO resting fill or ring -- just the bare glyph -- and only
-            // shows the SAME 2dp white ring as a focused program cell WHEN it is
-            // focused (active = search open fills it accent regardless).
-            // TV-only: the phone search toggle lives in the app bar above.
-            if (isTv) {
-            val searchInteraction = remember { MutableInteractionSource() }
-            val searchFocused by searchInteraction.collectIsFocusedAsState()
-            val searchContainer = when {
-                searchActive -> MaterialTheme.colorScheme.primary
-                isTv && searchFocused -> Color.White.copy(alpha = 0.15f)
-                isTv -> Color.Transparent
-                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            }
-            // Hand-rolled circle, NOT FilledTonalIconButton: Material's icon button
-            // enforces a 48dp interactive minimum, so a .border() on it landed on
-            // that inflated node and the white focus ring rendered far larger than
-            // controlCircle (a visible gap to the fill) and bled into the rows
-            // above/below. Here the ring + fill are an inner Box sized EXACTLY to
-            // controlCircle; the outer clickable + phone-only padding keeps a
-            // comfortable tap target without inflating the ring.
-            Box(
-                modifier = Modifier
-                    .clickable(
-                        interactionSource = searchInteraction,
-                        indication = null,
-                    ) {
-                        searchActive = !searchActive
-                        if (!searchActive) viewModel.onSearchQueryChange("")
-                    }
-                    .padding(if (isTv) 0.dp else 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(controlCircle)
-                        .clip(CircleShape)
-                        .background(searchContainer)
-                        .then(
-                            if (isTv && searchFocused)
-                                Modifier.border(2.dp, Color.White, CircleShape)
-                            else Modifier,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Search,
-                        contentDescription = "Search channels",
-                        modifier = Modifier.size(controlIcon),
-                        tint = if (searchActive) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            // Global Search (parity #41): opens the full Search screen (movies /
-            // shows / EPG programmes). Distinct from the channel-name filter to
-            // its left -- a globe-magnifier icon so it doesn't read as a
-            // duplicate search box. TV-only: the phone globe lives in the app
-            // bar above.
-            val globalSearchInteraction = remember { MutableInteractionSource() }
-            val globalSearchFocused by globalSearchInteraction.collectIsFocusedAsState()
-            Box(
-                modifier = Modifier
-                    .clickable(interactionSource = globalSearchInteraction, indication = null) { onOpenSearch() }
-                    .padding(if (isTv) 0.dp else 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(controlCircle)
-                        .clip(CircleShape)
-                        .background(
-                            when {
-                                isTv && globalSearchFocused -> Color.White.copy(alpha = 0.15f)
-                                isTv -> Color.Transparent
-                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                            },
-                        )
-                        .then(
-                            if (isTv && globalSearchFocused) Modifier.border(2.dp, Color.White, CircleShape)
-                            else Modifier,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.TravelExplore,
-                        contentDescription = "Search",
-                        modifier = Modifier.size(controlIcon),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            // Gap between the two control circles.
-            Spacer(Modifier.width(8.dp))
-            }
-            // Filter toggle: opens the group on/off picker (Manage Groups).
-            // TV: same treatment as Search, no resting fill/ring, white focus
-            // ring only when focused; active (some groups hidden) fills accent.
-            // Phone: the List view's 36dp Tune circle + hidden-groups warning
-            // dot, so both Live TV views lead their pill row identically.
-            val filterActive = hiddenGroups.isNotEmpty()
-            if (isTv) {
-            val filterInteraction = remember { MutableInteractionSource() }
-            val filterFocused by filterInteraction.collectIsFocusedAsState()
-            val filterContainer = when {
-                filterActive -> MaterialTheme.colorScheme.primary
-                filterFocused -> Color.White.copy(alpha = 0.15f)
-                else -> Color.Transparent
-            }
-            Box(
-                modifier = Modifier
-                    .clickable(
-                        interactionSource = filterInteraction,
-                        indication = null,
-                    ) { showManageGroups = true },
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(controlCircle)
-                        .clip(CircleShape)
-                        .background(filterContainer)
-                        .then(
-                            if (filterFocused)
-                                Modifier.border(2.dp, Color.White, CircleShape)
-                            else Modifier,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.FilterList,
-                        contentDescription = "Filter groups",
-                        modifier = Modifier.size(controlIcon),
-                        tint = if (filterActive) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.width(10.dp))
-            }
-            if (searchActive) {
-                OutlinedTextField(
-                    value = state.searchQuery,
-                    onValueChange = viewModel::onSearchQueryChange,
-                    placeholder = { Text("Search channels") },
-                    singleLine = true,
-                    trailingIcon = {
-                        if (state.searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.onSearchQueryChange("") }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Clear search")
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-            } else if (!sidebarGroupMode && (groups.size > 1 || collections.isNotEmpty())) {
+            run {
                 LazyRow(
                     modifier = Modifier
                         .weight(1f)

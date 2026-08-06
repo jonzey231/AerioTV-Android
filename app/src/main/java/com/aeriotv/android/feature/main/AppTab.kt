@@ -4,11 +4,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.OndemandVideo
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.OndemandVideo
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,5 +67,19 @@ enum class AppTab(
         label = "Settings",
         iconSelected = Icons.Filled.Settings,
         iconUnselected = Icons.Outlined.Settings,
+    ),
+
+    /**
+     * Global Search as a nav-bar tab. TV-ONLY (Logan 2026-08-06): the guide's
+     * in-header search circles are gone on TV and this is the one search
+     * entry there, sitting right of Settings. Phones keep search in the Live
+     * TV app bar instead, so [com.aeriotv.android.feature.main.MainScaffold]'s
+     * visibleTabs never emits it off-TV, and the Default Tab picker skips it.
+     */
+    Search(
+        id = "search",
+        label = "Search",
+        iconSelected = Icons.Filled.Search,
+        iconUnselected = Icons.Outlined.Search,
     ),
 }
