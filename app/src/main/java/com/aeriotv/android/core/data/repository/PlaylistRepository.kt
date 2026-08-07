@@ -977,6 +977,19 @@ class PlaylistRepository @Inject constructor(
         suffix: String,
         parse: (java.io.File) -> T,
     ): T = withContext(Dispatchers.IO) {
+        // Task #45 file import: an imported source is a file:// URI pointing
+        // at the copy the picker flow stored under filesDir/imports/. No
+        // download needed -- parse it in place (refresh re-reads the same
+        // snapshot, matching iOS which parses its imported copy).
+        if (url.startsWith("file:", ignoreCase = true)) {
+            val local = java.io.File(java.net.URI(url))
+            if (!local.isFile) {
+                throw java.io.FileNotFoundException(
+                    "Imported file is missing: ${local.name}. Re-import it from Edit Playlist.",
+                )
+            }
+            return@withContext parse(local)
+        }
         // Off the main thread: Ktor's execute{} block (the file copy) and the
         // parse both run on the CALLER'S dispatcher, and the add/refresh flows
         // call in from viewModelScope (Main). A small Dispatcharr payload froze

@@ -1654,6 +1654,11 @@ internal fun normalizeSchemedUrl(raw: String): String {
     if (lower.startsWith("http://") || lower.startsWith("https://")) {
         return trimmed
     }
+    // Task #45 file import: an imported playlist/EPG carries a file: URI in
+    // the same URL fields (both the "file:///" and java.net "file:/" forms);
+    // it already has its scheme -- pass through (prepending https:// would
+    // mangle it into a bogus host).
+    if (lower.startsWith("file:")) return trimmed
     // Strip any user-supplied leading scheme-ish prefix that's NOT a real
     // scheme (e.g. "//example.com" protocol-relative) before deciding.
     val hostPart = trimmed.removePrefix("//")

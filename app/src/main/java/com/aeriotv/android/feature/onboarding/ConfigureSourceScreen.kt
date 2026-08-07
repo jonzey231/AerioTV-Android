@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.onboarding
 
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -472,6 +473,30 @@ private fun M3uFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewM
             enabled = !state.isLoading,
         )
     }
+    // Task #45 file import (iOS M3UImportView fileImporter twin). Phone and
+    // tablet only: TVs have no document-picker UI. The picked file is copied
+    // into filesDir/imports/ and its file:// URI dropped into the URL field,
+    // so the rest of the add/refresh pipeline treats it like any source
+    // (fetchViaTempFile parses file: URIs in place).
+    val importContext = androidx.compose.ui.platform.LocalContext.current
+    val importScope = androidx.compose.runtime.rememberCoroutineScope()
+    if (!rememberIsTvDevice()) {
+        val m3uPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            uri?.let {
+                importScope.launch {
+                    importPickedFile(importContext, it, "m3u")?.let(viewModel::onUrlChange)
+                }
+            }
+        }
+        ImportFileLink(label = "Import M3U from a file instead") {
+            // M3U MIME registration is a mess in the wild (x-mpegurl,
+            // audio/mpegurl, octet-stream, text/plain) -- accept anything,
+            // like iOS's [.data, .plainText] allowance.
+            m3uPicker.launch(arrayOf("*/*"))
+        }
+    }
     LabeledField(label = "EPG URL (optional)") {
         IconTextField(
             value = state.epgUrl,
@@ -481,10 +506,72 @@ private fun M3uFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewM
             enabled = !state.isLoading,
         )
     }
+    if (!rememberIsTvDevice()) {
+        val epgPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            uri?.let {
+                importScope.launch {
+                    importPickedFile(importContext, it, "xml")?.let(viewModel::onEpgUrlChange)
+                }
+            }
+        }
+        ImportFileLink(label = "Import XMLTV from a file instead") {
+            epgPicker.launch(arrayOf("*/*"))
+        }
+    }
     InfoBanner(
         text = "Paste your M3U playlist URL. Works with Dispatcharr's /output/m3u, any IPTV " +
                 "provider, or a direct .m3u file link.",
     )
+}
+
+/** Task #45: small inline action under a URL field that swaps it for an
+ *  imported local file. */
+@Composable
+private fun ImportFileLink(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+    )
+}
+
+/** Copies a picked document into filesDir/imports/ and returns its file://
+ *  URI, or null when the stream can't be opened. The copy makes the source
+ *  durable across reboots and permission-grant expiry (same reason iOS
+ *  copies imports into its container) -- refresh re-parses the snapshot. */
+private suspend fun importPickedFile(
+    context: android.content.Context,
+    uri: android.net.Uri,
+    ext: String,
+): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    runCatching {
+        val dir = java.io.File(context.filesDir, "imports").apply { mkdirs() }
+        // Carry the picked document's display name into the stored copy so
+        // the auto-derived playlist name reads "sample" instead of a UUID
+        // (deriveName takes the URL's last path segment minus extension).
+        val display = context.contentResolver.query(
+            uri,
+            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+            null, null, null,
+        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            ?.substringBeforeLast('.')
+            ?.replace(Regex("[^A-Za-z0-9 ._-]"), "")
+            ?.take(40)
+            ?.ifBlank { null }
+        val suffix = java.util.UUID.randomUUID().toString().take(8)
+        val dest = java.io.File(dir, "${display ?: "import"}-$suffix.$ext")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            dest.outputStream().use { output -> input.copyTo(output) }
+        } ?: return@runCatching null
+        android.net.Uri.fromFile(dest).toString()
+    }.getOrNull()
 }
 
 /**
