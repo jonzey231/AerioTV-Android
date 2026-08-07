@@ -108,6 +108,11 @@ class PlaylistRepository @Inject constructor(
      * reachability probe; see [LanReachability] for the trigger points.
      */
     suspend fun effectiveBaseUrl(playlist: PlaylistEntity): String {
+        // Task #49: every Dispatcharr call path resolves its base through
+        // here, so this is the one choke point that guarantees the client's
+        // per-host auth-mode registry is primed from the persisted row
+        // before the request goes out (no-op for the legacy empty mode).
+        dispatcharrClient.seedAuthMode(playlist)
         val lan = playlist.lanUrlString?.takeIf { it.isNotBlank() } ?: return playlist.urlString
         return if (lanReachability.isReachable(lan)) lan else playlist.urlString
     }

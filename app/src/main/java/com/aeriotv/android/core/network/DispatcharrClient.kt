@@ -22,6 +22,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.Url
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
@@ -61,6 +62,13 @@ import javax.inject.Singleton
  * depending on whether the `page` query param is present. We don't request
  * pagination, so flat arrays are the common case; the helper handles both.
  */
+/** Task #49: Dispatcharr auth header shapes (iOS DispatcharrAuthHeaderMode
+ *  raw values). [AUTH_MODE_BOTH] is the legacy dual shape and the meaning of
+ *  the empty string persisted on pre-v23 PlaylistEntity rows. */
+const val AUTH_MODE_BOTH = "both"
+const val AUTH_MODE_XAPIKEY = "xapikey"
+const val AUTH_MODE_BEARER = "bearer"
+
 @Singleton
 class DispatcharrClient @Inject constructor() {
 
@@ -658,10 +666,67 @@ class DispatcharrClient @Inject constructor() {
         kotlinx.serialization.serializer()
 
     private fun io.ktor.client.request.HttpRequestBuilder.applyAuth(apiKey: String) {
+        applyAuth(apiKey, hostAuthModes[url.host] ?: AUTH_MODE_BOTH)
+    }
+
+    private fun io.ktor.client.request.HttpRequestBuilder.applyAuth(apiKey: String, mode: String) {
         accept(ContentType.Application.Json)
-        header("X-API-Key", apiKey)
-        header("Authorization", "ApiKey $apiKey")
+        when (mode) {
+            AUTH_MODE_XAPIKEY -> header("X-API-Key", apiKey)
+            AUTH_MODE_BEARER -> header("Authorization", "Bearer $apiKey")
+            else -> {
+                header("X-API-Key", apiKey)
+                header("Authorization", "ApiKey $apiKey")
+            }
+        }
         header("User-Agent", dispatcharrUserAgent)
+    }
+
+    /**
+     * Task #49 (iOS DispatcharrAuthHeaderMode parity): per-HOST auth header
+     * shape, defaulting to the legacy dual shape every Dispatcharr build
+     * accepts directly. Keyed by host (not full base URL) so a server's LAN
+     * and WAN routes each resolve; seeded from the persisted
+     * PlaylistEntity.dispatcharrAuthMode by [seedAuthMode] and refreshed by
+     * [detectAuthMode] when a 401 turns out to be a header-shape rejection
+     * (reverse proxies that strip or reject `Authorization: ApiKey`).
+     */
+    private val hostAuthModes = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** Prime [hostAuthModes] for both of a playlist's routes. No-op for the
+     *  empty/legacy mode (the map default already behaves that way). */
+    fun seedAuthMode(playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity) {
+        val mode = playlist.dispatcharrAuthMode.takeIf { it.isNotBlank() } ?: return
+        listOfNotNull(playlist.urlString, playlist.lanUrlString).forEach { raw ->
+            runCatching { Url(raw).host }.getOrNull()?.let { hostAuthModes[it] = mode }
+        }
+    }
+
+    /**
+     * Probe /api/core/version/ under each auth header shape and return the
+     * first one the server accepts, recording it in [hostAuthModes]. iOS
+     * verifyConnection's v1.6.20 mode iteration (StreamingAPIs.swift:1327):
+     * dual shape first (historical default), then X-API-Key alone, then
+     * Bearer. Returns null when no shape authenticates (the key itself is
+     * bad) or the server is unreachable.
+     */
+    suspend fun detectAuthMode(baseUrl: String, apiKey: String): String? {
+        val url = "${baseUrl.trimEnd('/')}/api/core/version/"
+        for (mode in listOf(AUTH_MODE_BOTH, AUTH_MODE_XAPIKEY, AUTH_MODE_BEARER)) {
+            val ok = try {
+                val response: HttpResponse = client.get(url) { applyAuth(apiKey, mode) }
+                response.status.isSuccess()
+            } catch (t: Throwable) {
+                // Transport-level failure: no shape will fare better.
+                return null
+            }
+            if (ok) {
+                runCatching { Url(baseUrl).host }.getOrNull()
+                    ?.let { hostAuthModes[it] = mode }
+                return mode
+            }
+        }
+        return null
     }
 
     /**

@@ -134,6 +134,19 @@ data class PlaylistEntity(
      */
     @ColumnInfo(defaultValue = "7")
     val epgRetentionDays: Int = 7,
+
+    /**
+     * Task #49 (iOS ServerConnection.dispatcharrAuthMode parity): which auth
+     * header shape this Dispatcharr server accepts. "" (default) = the legacy
+     * dual shape (`X-API-Key` + `Authorization: ApiKey`) that every
+     * Dispatcharr build accepts directly; "xapikey" = X-API-Key alone (for
+     * reverse proxies that reject an unrecognised Authorization header);
+     * "bearer" = `Authorization: Bearer`. Auto-detected by
+     * [com.aeriotv.android.core.network.DispatcharrAuthBroker] when a 401
+     * surfaces, exactly like iOS detects on Test Connection. Added in DB v23.
+     */
+    @ColumnInfo(defaultValue = "")
+    val dispatcharrAuthMode: String = "",
 )
 // Credential columns (apiKey, username, password) are encrypted at rest via
 // CredentialCipher (AndroidKeystore AES-256-GCM), applied transparently by the

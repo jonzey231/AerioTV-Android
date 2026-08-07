@@ -54,9 +54,23 @@ class DispatcharrAuthBroker @Inject constructor(
             ?: throw IllegalStateException("Playlist $playlistId not found")
         val initialKey = playlist.apiKey?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("Playlist ${playlistId.take(8)} has no api_key")
+        client.seedAuthMode(playlist)
         return try {
             block(initialKey)
         } catch (e: DispatcharrError.Unauthorized) {
+            // Task #49 (iOS verifyConnection v1.6.20 parity): before assuming
+            // the KEY was rotated, check whether the 401 is a header-SHAPE
+            // rejection -- some deployments (reverse proxies, hardened
+            // builds) reject `Authorization: ApiKey` or require it, with a
+            // perfectly valid key. The probe records the working shape in
+            // the client's registry; persist it and replay. Cheap (a couple
+            // of /api/core/version/ GETs) and requires no saved credentials,
+            // so it runs ahead of the credential rebootstrap.
+            val detected = detectAndPersistAuthMode(playlist, initialKey)
+            if (detected != null) {
+                Log.i(TAG, "401 for ${playlistId.take(8)} was a header-shape rejection; retrying with mode=$detected")
+                return block(initialKey)
+            }
             Log.i(TAG, "401 on apiKey call for ${playlistId.take(8)}; attempting silent rebootstrap")
             val freshKey = silentRebootstrapApiKey(playlist)
             if (freshKey == null) {
@@ -65,6 +79,29 @@ class DispatcharrAuthBroker @Inject constructor(
             }
             block(freshKey)
         }
+    }
+
+    /**
+     * Probe the server's accepted auth header shape and, when one works AND
+     * differs from what the playlist row already records, persist it so
+     * every later call starts in the right shape. Returns the detected mode
+     * only when it represents a CHANGE worth replaying the original call
+     * for; null when no shape authenticates (key genuinely bad), the server
+     * is unreachable, or the detected shape is what we were already using
+     * (replaying would just 401 again).
+     */
+    private suspend fun detectAndPersistAuthMode(
+        playlist: PlaylistEntity,
+        apiKey: String,
+    ): String? {
+        val previous = playlist.dispatcharrAuthMode.ifBlank { AUTH_MODE_BOTH }
+        val detected = client.detectAuthMode(playlist.urlString, apiKey) ?: return null
+        // Also register the LAN route's host under the detected mode.
+        client.seedAuthMode(playlist.copy(dispatcharrAuthMode = detected))
+        if (detected == previous) return null
+        dao.update(playlist.copy(dispatcharrAuthMode = detected))
+        Log.i(TAG, "auth-mode auto-detect for ${playlist.id.take(8)}: $previous -> $detected")
+        return detected
     }
 
     /**

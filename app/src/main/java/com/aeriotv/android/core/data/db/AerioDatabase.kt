@@ -27,7 +27,7 @@ import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
         EpgProgrammeEntity::class,
         ChannelSnapshotEntity::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = false,
 )
 abstract class AerioDatabase : RoomDatabase() {
