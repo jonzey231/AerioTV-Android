@@ -78,6 +78,12 @@ class PlaylistViewModel @Inject constructor(
          *  ConfigureSourceScreen / EditPlaylistScreen. Default true, threaded
          *  through SaveRequest into PlaylistEntity.vodEnabled. */
         val vodEnabled: Boolean = true,
+        /** Task #45 DVR onboarding step (iOS AddServerView Destination
+         *  picker): where recordings land by default for Dispatcharr
+         *  sources. Persisted to AppPreferences.dvrDefaultDestination only
+         *  when the add succeeds, so backing out never mutates the global
+         *  setting. */
+        val dvrDestinationServer: Boolean = true,
         /** Catch-up guide-history retention draft for the add flow (task
          *  #135); threaded into SaveRequest.epgRetentionDays on submit. */
         val epgRetentionDays: Int = 7,
@@ -415,6 +421,11 @@ class PlaylistViewModel @Inject constructor(
     fun onVodEnabledChange(value: Boolean) {
         _state.update { it.copy(vodEnabled = value) }
     }
+
+    /** Task #45: DVR onboarding destination draft (Dispatcharr form). */
+    fun onDvrDestinationChange(server: Boolean) {
+        _state.update { it.copy(dvrDestinationServer = server) }
+    }
     /** Bound to the "Guide History" picker in ConfigureSourceScreen (task
      *  #135). Threaded into SaveRequest.epgRetentionDays on submit. */
     fun onEpgRetentionDaysChange(value: Int) {
@@ -537,6 +548,16 @@ class PlaylistViewModel @Inject constructor(
                         )
                     }
                     loadEpgIfConfigured(entity)
+                    // Task #45 DVR onboarding step: commit the destination
+                    // draft now that the Dispatcharr add actually succeeded
+                    // (iOS persists on Save; backing out never writes).
+                    if (effectiveSourceType == SourceType.DispatcharrApiKey ||
+                        effectiveSourceType == SourceType.DispatcharrUserPass
+                    ) {
+                        appPreferences.setDvrDefaultDestination(
+                            if (s.dvrDestinationServer) "server" else "local",
+                        )
+                    }
                     // One-shot: advance the add flow even when phase was already
                     // ChannelsReady (second-playlist add). Skip on an empty result
                     // so the "No channels found." error stays visible.

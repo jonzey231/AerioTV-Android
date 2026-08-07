@@ -239,6 +239,20 @@ fun ConfigureSourceScreen(
                 )
             }
 
+            // Task #45 DVR onboarding step (iOS AddServerView Destination
+            // picker, Dispatcharr only): where recordings land by default.
+            // Committed to the global DVR preference only when Test
+            // Connection succeeds; changeable later in Settings > DVR.
+            if (sourceType == SourceType.DispatcharrApiKey ||
+                sourceType == SourceType.DispatcharrUserPass
+            ) {
+                Spacer(Modifier.height(4.dp))
+                DvrDestinationRow(
+                    server = state.dvrDestinationServer,
+                    onSelect = viewModel::onDvrDestinationChange,
+                )
+            }
+
             // Catch-up guide-history retention (task #135): how many days of
             // already-aired guide data this playlist keeps. Past shows on
             // channels with catch-up can be replayed from the guide, so this
@@ -747,6 +761,48 @@ private fun VodEnabledRow(
  * bodySmall help paragraph the other rows use. Each pill carries the D-pad
  * focus wash so the choice is navigable on TV.
  */
+@Composable
+private fun DvrDestinationRow(
+    server: Boolean,
+    onSelect: (Boolean) -> Unit,
+) {
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Text(
+            text = "Default Recording Destination",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(true to "Server (Dispatcharr)", false to "This device").forEach { (isServer, label) ->
+                val selected = isServer == server
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .dpadFocusWash()
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        )
+                        .clickable { onSelect(isServer) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+        Text(
+            text = "Where recordings are saved by default. Server recording requires a Dispatcharr admin account. You can change this later in Settings > DVR.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
 @Composable
 private fun GuideHistoryRow(
     selectedDays: Int,
