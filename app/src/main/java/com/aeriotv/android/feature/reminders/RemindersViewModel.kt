@@ -29,6 +29,12 @@ import kotlinx.coroutines.launch
  * we don't have to gate the feature on the API 31+ SCHEDULE_EXACT_ALARM
  * runtime permission. A few minutes of slack is acceptable for a TV reminder.
  */
+// Task #190: @Stable so the hundreds of guide cells taking this as a
+// parameter can SKIP (the same shared instance is passed everywhere; without
+// the annotation the unstable ViewModel type defeated skipping on every
+// recomposition). Honest: no compose-read mutable fields; UI state flows out
+// through [all] and is collected once in GuideScreen.
+@androidx.compose.runtime.Stable
 @HiltViewModel
 class RemindersViewModel @Inject constructor(
     @ApplicationContext private val context: Context,

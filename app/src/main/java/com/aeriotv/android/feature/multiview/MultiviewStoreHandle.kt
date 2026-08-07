@@ -43,6 +43,10 @@ class MultiviewStoreHandleVm @Inject constructor(
  * the surface they need without an extra `: MultiviewStoreHandleVm` parameter
  * each. Equivalent to iOS's `@EnvironmentObject var multiviewStore`.
  */
+// Task #190: @Stable so guide rows/cells taking the handle can SKIP. Honest:
+// every field is a val (StateFlows + lambdas); state changes reach compose
+// through collectAsState on the flows, never through this object mutating.
+@androidx.compose.runtime.Stable
 class MultiviewStoreHandle(
     val selected: StateFlow<List<MultiviewTile>>,
     val audioFocusedIndex: StateFlow<Int>,

@@ -662,7 +662,7 @@ fun GuideScreen(
     val remindersVm: RemindersViewModel = hiltViewModel()
     val reminders by remindersVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeReminderKeys = remember(reminders) {
-        reminders.mapTo(HashSet<String>()) { it.reminderKey }
+        GuideReminderKeys(reminders.mapTo(HashSet<String>()) { it.reminderKey })
     }
 
     // Scheduled/in-progress recording windows, hoisted once like the reminder
@@ -686,7 +686,7 @@ fun GuideScreen(
             } else {
                 null
             }
-        }
+        }.let(::GuideRecordingWindows)
     }
 
     // Horizontal viewport clipping (iOS EPGGuideView.programRow viewport filter):
@@ -733,23 +733,76 @@ fun GuideScreen(
     val stripViewportPx = with(density) {
         (screenWidthDp.dp - railWidth).coerceAtLeast(1.dp).toPx()
     }
-    val visibleWindow by remember(windowStart, hourWidthPx, stripViewportPx) {
-        derivedStateOf {
-            // Task #188: 30-min buckets (was 5). Every bucket crossing during
-            // an animated horizontal step re-emits this window and recomposes
-            // EVERY visible row; a single step gliding across a wide cell
-            // crossed 6-12 five-minute buckets = 6-12 full-grid passes, the
-            // dominant slice of the measured 85ms-median horizontal frames.
-            // Correctness is unaffected: rows compose GUIDE_VIEWPORT_PAD_MS
-            // (90 min) beyond the window on both sides, so a 30-min snap can
-            // never reveal an uncomposed region.
-            val bucketMs = 30L * 60_000L
-            val padMs = GUIDE_VIEWPORT_PAD_MS
-            val scrollPx = horizontalScrollState.value.toFloat()
-            val startMs = windowStart + (scrollPx / hourWidthPx * 3_600_000f).toLong()
-            val snappedStart = (startMs / bucketMs) * bucketMs
-            val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
-            (snappedStart - padMs) to (snappedStart + spanMs + padMs)
+    // Task #190 deep pass: settle-gated composed window (replaces the #188
+    // 30-min bucket derivedStateOf). Measured on the Streamer (release,
+    // scripted 20-Right/10-Down pans): the press frame itself carried
+    // 350-550ms because the bucket window re-derived IN the scrollTo frame
+    // and synchronously composed the newly-revealed page of cells (the old
+    // 90-min pad was smaller than the 0.85-viewport page stride, so every
+    // page press revealed an uncomposed region).
+    //
+    // New model:
+    //  - The composed region pads a FULL viewport beyond each edge, so a
+    //    page press always lands on already-composed cells -- the press
+    //    frame is pure draw.
+    //  - The window re-centers AFTER the scroll settles (idle frame right
+    //    after landing composes the NEXT page ahead), never mid-gesture.
+    //  - Emergency re-center fires if a long touch fling gets within 15 min
+    //    of the composed edge, so fast scrubbing can never reveal blanks.
+    var visibleWindow by remember(windowStart, hourWidthPx, stripViewportPx) {
+        val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
+        val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
+        val startMs = windowStart +
+            (horizontalScrollState.value.toFloat() / hourWidthPx * 3_600_000f).toLong()
+        mutableStateOf((startMs - padMs) to (startMs + spanMs + padMs))
+    }
+    LaunchedEffect(windowStart, hourWidthPx, stripViewportPx) {
+        val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
+        val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
+        val emergencyMs = 15L * 60_000L
+        snapshotFlow {
+            horizontalScrollState.value to horizontalScrollState.isScrollInProgress
+        }.collect { (scroll, scrolling) ->
+            val rawStart = windowStart + (scroll / hourWidthPx * 3_600_000f).toLong()
+            val rawEnd = rawStart + spanMs
+            val (curStart, curEnd) = visibleWindow
+            // Viewport about to out-run the composed region (long fling).
+            val nearEdge = rawStart - emergencyMs < curStart || rawEnd + emergencyMs > curEnd
+            // Settled off-center by more than the emergency guard: re-center
+            // so the next page in either direction is pre-composed.
+            val settledDrift = !scrolling &&
+                kotlin.math.abs(rawStart - (curStart + padMs)) > emergencyMs
+            if (nearEdge) {
+                // Correctness first: catch up in one hop, whatever it costs.
+                visibleWindow = (rawStart - padMs) to (rawEnd + padMs)
+            } else if (settledDrift) {
+                // Idle re-center, SLICED: framestats put a whole-page
+                // extension at ~100ms composition + ~150-230ms display-list
+                // recording in a single frame. Walking the window edges an
+                // eighth-viewport per frame divides that burst across ~7
+                // frames of ~30-50ms each; a fresh gesture aborts mid-walk
+                // (the emergency path above keeps a rapid next press
+                // correct).
+                val targetStart = rawStart - padMs
+                val targetEnd = rawEnd + padMs
+                val stepMs = (spanMs / 8).coerceAtLeast(emergencyMs)
+                while (visibleWindow != targetStart to targetEnd) {
+                    if (horizontalScrollState.isScrollInProgress) break
+                    val (cs, ce) = visibleWindow
+                    val ns = when {
+                        cs < targetStart -> (cs + stepMs).coerceAtMost(targetStart)
+                        cs > targetStart -> (cs - stepMs).coerceAtLeast(targetStart)
+                        else -> cs
+                    }
+                    val ne = when {
+                        ce < targetEnd -> (ce + stepMs).coerceAtMost(targetEnd)
+                        ce > targetEnd -> (ce - stepMs).coerceAtLeast(targetEnd)
+                        else -> ce
+                    }
+                    visibleWindow = ns to ne
+                    androidx.compose.runtime.withFrameNanos { }
+                }
+            }
         }
     }
 
@@ -2152,7 +2205,7 @@ fun GuideScreen(
         ) {
             // Key by url, not the non-unique "m3u:<tvg-id>" id (GH #31 crash fix).
             itemsIndexed(items = filteredChannels, key = { _, ch -> ch.url }) { channelIndex, channel ->
-                val programmes = state.epgByChannel[channel.guideMatchKey].orEmpty()
+                val programmes = GuideRowProgrammes(state.epgByChannel[channel.guideMatchKey].orEmpty())
                 ChannelGuideRow(
                     channel = channel,
                     channelIndex = channelIndex,
@@ -2333,13 +2386,30 @@ fun GuideScreen(
     }
 }
 
+/* Task #190: @Immutable wrappers for the guide hot path's collection
+ * parameters. Raw List/Set parameter TYPES are unstable to the Compose
+ * compiler (could be mutable), which defeated skipping on every visible row
+ * AND cell whenever GuideScreen recomposed -- the compiler report showed
+ * ChannelGuideRow/ProgrammeCell as skippable but these params as unstable,
+ * so nothing actually skipped. The wrappers are value-compared (data class
+ * equals -> structural list compare, tiny per-row windows), so an unchanged
+ * row now skips even when the parent rebuilt its lists. */
+@androidx.compose.runtime.Immutable
+private data class GuideRowProgrammes(val items: List<EPGProgramme>)
+
+@androidx.compose.runtime.Immutable
+private data class GuideReminderKeys(val keys: Set<String>)
+
+@androidx.compose.runtime.Immutable
+private data class GuideRecordingWindows(val windows: List<Pair<String, LongRange>>)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelGuideRow(
     channel: M3UChannel,
     channelIndex: Int,
     guideNav: GuideVerticalNavState,
-    programmes: List<EPGProgramme>,
+    programmes: GuideRowProgrammes,
     windowStart: Long,
     windowDurationMs: Long,
     hourWidth: androidx.compose.ui.unit.Dp,
@@ -2355,10 +2425,10 @@ private fun ChannelGuideRow(
     textScale: Float = 1f,
     horizontalScrollState: androidx.compose.foundation.ScrollState,
     guideFling: FlingBehavior,
-    activeReminderKeys: Set<String>,
+    activeReminderKeys: GuideReminderKeys,
     /** Lowercased-title -> recording time window for every Scheduled or
      *  in-progress recording, hoisted once in GuideScreen (audit #50). */
-    scheduledRecordingWindows: List<Pair<String, LongRange>>,
+    scheduledRecordingWindows: GuideRecordingWindows,
     remindersVm: RemindersViewModel,
     onChannelClick: () -> Unit,
     onProgrammeClick: (EPGProgramme) -> Unit,
@@ -2810,7 +2880,7 @@ private fun ChannelGuideRow(
             Box(modifier = Modifier.width(totalWidth).fillMaxHeight()) {
                 // Programme cells, positioned by offset.
                 val windowEnd = windowStart + windowDurationMs
-                programmes.forEachIndexed { index, programme ->
+                programmes.items.forEachIndexed { index, programme ->
                     val rawStart = programme.startMillis
                     val rawEnd = programme.endMillis
                     // Window clip: skip programmes entirely outside the guide span.
@@ -2855,7 +2925,7 @@ private fun ChannelGuideRow(
                     // Anti-overlap: clamp the cell end to the next programme's start
                     // so a feed with overlapping entries doesn't paint cells on top
                     // of each other (iOS clamps to nextProgramStart).
-                    val nextStart = programmes.getOrNull(index + 1)?.startMillis
+                    val nextStart = programmes.items.getOrNull(index + 1)?.startMillis
                     val clippedEnd = rawEnd.coerceAtMost(windowEnd)
                         .let { e -> if (nextStart != null) minOf(e, maxOf(nextStart, clippedStart)) else e }
                     val xDp = msToDp(clippedStart - windowStart, hourWidth)
@@ -3045,8 +3115,8 @@ private fun ProgrammeCell(
     liveProgress: Float?,
     isTv: Boolean,
     horizontalScrollState: androidx.compose.foundation.ScrollState? = null,
-    activeReminderKeys: Set<String>,
-    scheduledRecordingWindows: List<Pair<String, LongRange>>,
+    activeReminderKeys: GuideReminderKeys,
+    scheduledRecordingWindows: GuideRecordingWindows,
     remindersVm: RemindersViewModel,
     focusRequester: FocusRequester,
     /** Index of this cell's channel row + the time column it occupies, reported
@@ -3077,7 +3147,7 @@ private fun ProgrammeCell(
         reminderKey(channelName, programme.title, programme.startMillis)
     }
     // Membership check against the set hoisted in GuideScreen -- no per-cell flow.
-    val isReminderSet = key in activeReminderKeys
+    val isReminderSet = key in activeReminderKeys.keys
     // Audit #50: scheduled/in-progress recording marker. Recordings carry no
     // channel identity matchable against guide rows, so a cell is "set to
     // record" when a Scheduled/Recording entry shares its title AND its
@@ -3086,11 +3156,11 @@ private fun ProgrammeCell(
     // few minutes across the boundary; that recording genuinely captures part
     // of both, so the over-mark is acceptable.
     val isRecordingSet = remember(programme, scheduledRecordingWindows) {
-        if (programme.isPlaceholder || scheduledRecordingWindows.isEmpty()) {
+        if (programme.isPlaceholder || scheduledRecordingWindows.windows.isEmpty()) {
             false
         } else {
             val title = programme.title.trim().lowercase()
-            scheduledRecordingWindows.any { (recTitle, window) ->
+            scheduledRecordingWindows.windows.any { (recTitle, window) ->
                 recTitle == title &&
                     window.first < programme.endMillis &&
                     programme.startMillis < window.last
@@ -3686,6 +3756,11 @@ private fun msToDp(ms: Long, hourWidth: androidx.compose.ui.unit.Dp): androidx.c
  *    leading edge to the outgoing highlight's x so the highlight stays put while
  *    the shared timeline slides under it (the "stable highlight" model).
  */
+// Task #190: @Stable so rows/cells taking this as a parameter can SKIP when
+// nothing else changed. Honest: all externally-visible mutable state is
+// snapshot-backed (mutableStateOf), so Compose observes changes through the
+// snapshot system, not through parameter inequality.
+@androidx.compose.runtime.Stable
 private class GuideVerticalNavState {
     /** Index (into the filtered channel list) of the row whose cell is focused;
      *  -1 when focus is outside the grid. Read by the key handler. */

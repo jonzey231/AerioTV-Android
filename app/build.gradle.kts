@@ -138,6 +138,16 @@ kotlin {
     }
 }
 
+composeCompiler {
+    // Task #190 perf audit: `./gradlew assembleGithubRelease -PcomposeReports`
+    // drops skippability + stability reports under
+    // app/build/compose_reports/. Opt-in only; normal builds unaffected.
+    if (project.hasProperty("composeReports")) {
+        reportsDestination = layout.buildDirectory.dir("compose_reports")
+        metricsDestination = layout.buildDirectory.dir("compose_reports")
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
