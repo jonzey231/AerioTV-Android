@@ -59,6 +59,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var castReceiver: AerioCastReceiverController
     @Inject lateinit var castSender: com.aeriotv.android.core.cast.AerioCastSender
     @Inject lateinit var companionHost: com.aeriotv.android.core.cast.companion.CompanionHostController
+    @Inject lateinit var homeChannelsPublisher: com.aeriotv.android.core.tv.HomeChannelsPublisher
 
     /**
      * Most recent deep-link target the activity has received from a
@@ -417,6 +418,12 @@ class MainActivity : ComponentActivity() {
         val target = when (host) {
             "channel" -> DeepLinkTarget.Channel(path)
             "vod" -> DeepLinkTarget.Vod(path)
+            // Audit #47 Watch Next: resume playback directly (the launcher's
+            // continue-watching row semantics), not the detail page.
+            "vodplay" -> DeepLinkTarget.VodPlay(
+                videoId = path,
+                isEpisode = data.getQueryParameter("episode") == "1",
+            )
             "guide" -> {
                 val start = data.getQueryParameter("start")?.toLongOrNull()
                     ?: return // no start time => cannot anchor; ignore
@@ -671,6 +678,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             appPreferences.effectiveRemoteControlMap.collect { remoteMap = it }
         }
+        // Audit #47: keep the Android TV launcher's channel row + Watch Next
+        // in sync. No-op on phones/tablets (FEATURE_LEANBACK gate inside).
+        homeChannelsPublisher.start(lifecycleScope)
         // GH #38: one-shot startup refresh-rate pin (first emitted value only -
         // changing the setting later applies on next launch, avoiding a live
         // HDMI re-handshake underneath a playing stream).

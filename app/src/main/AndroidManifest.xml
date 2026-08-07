@@ -102,6 +102,8 @@
                 <data android:scheme="aeriotv" />
                 <data android:host="channel" />
                 <data android:host="vod" />
+                <!-- Audit #47 Watch Next: resume VOD playback directly. -->
+                <data android:host="vodplay" />
             </intent-filter>
 
             <!--
@@ -222,6 +224,18 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Audit #47: the TV launcher asks the app to (re)populate its
+             home-screen channel row when the user enables it from the
+             launcher's customize UI. Must be exported for the launcher to
+             deliver it; the receiver only republishes launcher metadata. -->
+        <receiver
+            android:name=".core.tv.HomeChannelsInitReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.tv.action.INITIALIZE_PROGRAMS" />
             </intent-filter>
         </receiver>
     </application>
