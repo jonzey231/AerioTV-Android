@@ -697,9 +697,11 @@ fun PlayerScreen(
             }
     }
     androidx.activity.compose.BackHandler {
-        if (channelListSidebarOpen) {
+        if (channelListSidebarOpen || channelListVisible) {
+            // Logan 2026-08-06: Back closes the WHOLE channel-list overlay
+            // from any stage (Right is the layer-by-layer step-out: rail ->
+            // list -> player). Previously Back unwound one layer at a time.
             channelListSidebarOpen = false
-        } else if (channelListVisible) {
             channelListVisible = false
         } else if (recentsOverlayVisible) {
             recentsOverlayVisible = false

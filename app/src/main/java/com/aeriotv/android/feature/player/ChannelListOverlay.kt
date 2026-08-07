@@ -138,6 +138,14 @@ internal fun ChannelListOverlay(
                         ) {
                             onSidebarOpenChange(true)
                             true
+                        } else if (!sidebarOpen && event.key == Key.DirectionRight &&
+                            event.type == KeyEventType.KeyDown
+                        ) {
+                            // Logan 2026-08-06: Right steps OUT one layer at
+                            // every stage. From the list (rail closed) the
+                            // next layer out is the player itself.
+                            onDismiss()
+                            true
                         } else {
                             false
                         }
