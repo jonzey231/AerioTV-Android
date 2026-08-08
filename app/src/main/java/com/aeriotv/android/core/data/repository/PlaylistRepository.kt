@@ -1430,7 +1430,7 @@ internal fun dispatcharrEpgLayers(
         val data = (channel.effectiveEpgDataId ?: channel.epgDataId)
             ?.let(epgById::get) ?: continue
         val sourceId = data.epgSourceId ?: continue
-        val tvgId = data.tvgId?.takeIf { it.isNotBlank() } ?: continue
+        val tvgId = data.tvgId?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: continue
         if (knownChannelKeys != null && tvgId !in knownChannelKeys) continue
         keysBySource.getOrPut(sourceId, ::linkedSetOf).add(tvgId)
     }

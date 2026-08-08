@@ -61,6 +61,24 @@ class DispatcharrEpgSourceScopeTest {
     }
 
     @Test
+    fun `mixed-case EPG tvg ids are normalized like XMLTV parser channel ids`() {
+        val channels = listOf(
+            DispatcharrChannel(id = 1, name = "Mixed", uuid = "mixed", epgDataId = 10),
+        )
+        val epgData = listOf(
+            DispatcharrEpgData(id = 10, tvgId = "  Mixed.Case.TV  ", epgSourceId = 1),
+        )
+        val sources = listOf(
+            DispatcharrEpgSource(id = 1, sourceType = "xmltv", url = "https://chosen/epg.xml"),
+        )
+
+        assertEquals(
+            listOf(DispatcharrEpgLayer("https://chosen/epg.xml", setOf("mixed.case.tv"))),
+            dispatcharrEpgLayers(channels, epgData, sources, setOf("mixed.case.tv")),
+        )
+    }
+
+    @Test
     fun `source records sharing one URL combine their independently assigned channel keys`() {
         val channels = listOf(
             DispatcharrChannel(id = 1, name = "One", uuid = "one", epgDataId = 10),
