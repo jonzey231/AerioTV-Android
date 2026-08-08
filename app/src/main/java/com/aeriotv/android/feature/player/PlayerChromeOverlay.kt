@@ -219,8 +219,10 @@ fun PlayerChromeOverlay(
     if (!isTv) {
         DisposableEffect(Unit) {
             onDispose {
+                // Auto-Rotate aware: UNSPECIFIED when following the sensor,
+                // LOCKED when the user disabled rotation in App Behaviors.
                 context.findActivity()?.requestedOrientation =
-                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    com.aeriotv.android.core.preferences.AutoRotateState.restingOrientation
             }
         }
     }
@@ -537,7 +539,8 @@ fun PlayerChromeOverlay(
                         context.findActivity()?.requestedOrientation = if (forcedLandscape) {
                             android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
                         } else {
-                            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                            // Auto-Rotate aware release (App Behaviors).
+                            com.aeriotv.android.core.preferences.AutoRotateState.restingOrientation
                         }
                     },
                 )

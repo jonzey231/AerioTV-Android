@@ -154,6 +154,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setSkipLoadingScreen(value) }
     }
 
+    /** Auto-Rotate (Logan 2026-08-07): follow device orientation, default ON. */
+    val autoRotate: Flow<Boolean> = prefs.autoRotate
+    fun setAutoRotate(value: Boolean) {
+        viewModelScope.launch { prefs.setAutoRotate(value) }
+    }
+
     val appleTVChannelFlip: Flow<Boolean> = prefs.appleTVChannelFlip
 
     /** Remote Control initiative: decoded button map (tolerant of unknown

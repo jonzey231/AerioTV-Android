@@ -138,6 +138,27 @@ fun AppBehaviorsSettingsScreen(
                 )
             }
 
+            // Auto-Rotate (Logan 2026-08-07, iOS twin): phones/tablets only -
+            // TVs have no rotation. Default ON; when off MainActivity locks
+            // the activity to its current orientation.
+            if (!isTv) {
+                val autoRotate by viewModel.autoRotate
+                    .collectAsStateWithLifecycle(initialValue = true)
+                SettingsSection(
+                    header = "Orientation",
+                    footer = "The player's fullscreen button can still rotate " +
+                        "into landscape either way.",
+                ) {
+                    SettingsToggleRow(
+                        title = "Auto-rotate",
+                        subtitle = "Follow the device orientation. When off, " +
+                            "AerioTV stays in its current orientation",
+                        checked = autoRotate,
+                        onCheckedChange = viewModel::setAutoRotate,
+                    )
+                }
+            }
+
             SettingsSection(
                 header = "Default Tab",
                 footer = "The tab shown when the app first launches.",

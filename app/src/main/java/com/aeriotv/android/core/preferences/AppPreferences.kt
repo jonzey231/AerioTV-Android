@@ -224,6 +224,19 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * iOS `appBehaviorsAutoRotate` parity (Logan 2026-08-07). Follow the
+     * device orientation app-wide on phones/tablets. Default ON. When off,
+     * MainActivity locks the activity to its current orientation
+     * (SCREEN_ORIENTATION_LOCKED); the player's fullscreen button still
+     * forces landscape. Device-local (not in the sync snapshot) - rotation
+     * is a per-device preference and TVs ignore it entirely.
+     */
+    val autoRotate: Flow<Boolean> = store.data.map { it[KEY_AUTO_ROTATE] ?: true }
+    suspend fun setAutoRotate(value: Boolean) {
+        store.edit { it[KEY_AUTO_ROTATE] = value }
+    }
+
+    /**
      * iOS `appBehaviorsAppleTVChannelFlip` parity. Gates the Player vertical
      * swipe-flip (PlayerScreen.kt) and the future Apple TV-style D-pad nav.
      * Defaults to true so the v1.0 ship matches iOS's default.
@@ -1277,6 +1290,7 @@ class AppPreferences @Inject constructor(
         val KEY_CUSTOM_ACCENT_HEX = stringPreferencesKey("custom_accent_hex")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")
         val KEY_SKIP_LOADING_SCREEN = booleanPreferencesKey("app_behaviors_skip_loading_screen")
+        val KEY_AUTO_ROTATE = booleanPreferencesKey("app_behaviors_auto_rotate")
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
         val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")

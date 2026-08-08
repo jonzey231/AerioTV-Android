@@ -336,8 +336,10 @@ fun VODPlayerScreen(
             }
             onDispose {
                 controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                // Auto-Rotate aware: UNSPECIFIED when following the sensor,
+                // LOCKED when the user disabled rotation in App Behaviors.
                 activity?.requestedOrientation =
-                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    com.aeriotv.android.core.preferences.AutoRotateState.restingOrientation
             }
         }
     }
@@ -1184,7 +1186,8 @@ fun VODPlayerScreen(
                                 context.findActivity()?.requestedOrientation = if (forcedLandscape) {
                                     android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
                                 } else {
-                                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                    // Auto-Rotate aware release (App Behaviors).
+                                    com.aeriotv.android.core.preferences.AutoRotateState.restingOrientation
                                 }
                             }) {
                                 Icon(

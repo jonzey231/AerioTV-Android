@@ -681,6 +681,24 @@ class MainActivity : ComponentActivity() {
         // Audit #47: keep the Android TV launcher's channel row + Watch Next
         // in sync. No-op on phones/tablets (FEATURE_LEANBACK gate inside).
         homeChannelsPublisher.start(lifecycleScope)
+        // Auto-Rotate (Logan 2026-08-07): phones/tablets follow the sensor
+        // by default; when disabled, freeze the activity in its current
+        // orientation. TVs never rotate - skip entirely. The player's
+        // forced-landscape toggle overrides this while engaged and restores
+        // through AutoRotateState.restingOrientation.
+        if (!isTelevisionDevice()) {
+            lifecycleScope.launch {
+                appPreferences.autoRotate.collect { enabled ->
+                    com.aeriotv.android.core.preferences.AutoRotateState.enabled = enabled
+                    val forcedLandscape = requestedOrientation ==
+                        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                    if (!forcedLandscape) {
+                        requestedOrientation =
+                            com.aeriotv.android.core.preferences.AutoRotateState.restingOrientation
+                    }
+                }
+            }
+        }
         // GH #38: one-shot startup refresh-rate pin (first emitted value only -
         // changing the setting later applies on next launch, avoiding a live
         // HDMI re-handshake underneath a playing stream).
