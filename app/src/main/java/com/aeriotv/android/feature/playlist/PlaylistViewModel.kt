@@ -741,7 +741,7 @@ class PlaylistViewModel @Inject constructor(
         // -- the same speedup the windowed cache load (P1 #5) gives the
         // downstream pipeline, but applied to fresh network fetches too.
         val knownKeys = buildChannelEpgKeyBridge(_state.value.channels).keys
-        return repository.loadEpg(playlist, knownKeys).fold(
+        return repository.loadEpg(playlist, knownKeys, _state.value.channels).fold(
             onSuccess = { rawProgrammes ->
                 // Channels may have arrived between the cache-paint above
                 // and the network fetch; re-read so we bridge against the

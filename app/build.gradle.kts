@@ -245,5 +245,7 @@ dependencies {
     // from the first frame.
     implementation(libs.androidx.profileinstaller)
 
+    testImplementation(libs.junit)
+
     debugImplementation(libs.androidx.ui.tooling)
 }
