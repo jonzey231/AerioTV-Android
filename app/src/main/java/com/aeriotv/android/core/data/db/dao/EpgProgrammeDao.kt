@@ -65,6 +65,10 @@ interface EpgProgrammeDao {
     @Query("SELECT MAX(fetchedAt) FROM epg_programme WHERE playlistId = :playlistId")
     suspend fun newestFetchedAt(playlistId: String): Long?
 
+    /** Full-cache guide buckets, independent of the UI's selected time window. */
+    @Query("SELECT DISTINCT channelId FROM epg_programme WHERE playlistId = :playlistId")
+    suspend fun channelIdsForPlaylist(playlistId: String): List<String>
+
     @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: String)
 
