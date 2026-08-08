@@ -24,6 +24,7 @@ import com.aeriotv.android.core.parser.XMLTVParser
 import com.aeriotv.android.core.preferences.AppPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -1425,10 +1426,31 @@ data class ChannelProfileOption(
 )
 
 /**
+ * Parse a Dispatcharr grid timestamp to epoch millis, accepting both forms the
+ * server emits.
+ *
+ * Dispatcharr renders regular programme times as `2026-08-08T08:35:00Z` but
+ * GENERATED dummy programmes as an explicit offset, `2026-08-08T08:35:00+00:00`.
+ * `Instant.parse` is ISO_INSTANT, and on the desugared java.time shipped to
+ * older Android runtimes that rejects the offset form, so every generated dummy
+ * row was silently dropped in DTO conversion while regular rows survived. That
+ * is the "guide shows placeholders on channels with dummy EPG" class of report
+ * (GitHub #53: 3,754 of 4,226 rows dropped on a SHIELD).
+ *
+ * Instant first (the common case, no exception on the hot path), then
+ * OffsetDateTime. Strictly additive: anything that parsed before still parses.
+ */
+private fun parseGridInstantMillis(raw: String?): Long? {
+    val text = raw?.takeIf { it.isNotBlank() } ?: return null
+    runCatching { return Instant.parse(text).toEpochMilli() }
+    return runCatching { OffsetDateTime.parse(text).toInstant().toEpochMilli() }.getOrNull()
+}
+
+/**
  * Convert Dispatcharr `/api/epg/grid/` entries into the universal EPGProgramme
  * shape the rest of the app consumes. Entries without a tvg_id are dropped -
- * they cannot be matched back to a channel row. Entries with malformed times
- * are dropped too (Instant.parse will throw).
+ * they cannot be matched back to a channel row. Entries with genuinely
+ * malformed times are dropped too (see [parseGridInstantMillis]).
  *
  * Dispatcharr bulk grid intentionally omits `category` for perf; we propagate
  * empty string. Lazy category enrichment via /api/epg/programs/<id>/ lives in
@@ -1437,10 +1459,8 @@ data class ChannelProfileOption(
 private fun List<DispatcharrEpgEntry>.toProgrammes(): List<EPGProgramme> =
     mapNotNull { entry ->
         val channelId = entry.tvgId?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        val start = runCatching { Instant.parse(entry.startTime).toEpochMilli() }.getOrNull()
-            ?: return@mapNotNull null
-        val end = runCatching { Instant.parse(entry.endTime).toEpochMilli() }.getOrNull()
-            ?: return@mapNotNull null
+        val start = parseGridInstantMillis(entry.startTime) ?: return@mapNotNull null
+        val end = parseGridInstantMillis(entry.endTime) ?: return@mapNotNull null
         val title = entry.title.takeIf { it.isNotBlank() } ?: return@mapNotNull null
         EPGProgramme(
             channelId = channelId,
