@@ -56,6 +56,7 @@ class OnDemandViewModel @Inject constructor(
     private val tmdbService: TMDBService,
     private val vodResetBus: VodResetBus,
     private val vodCatalog: com.aeriotv.android.core.data.vod.VodCatalogRepository,
+    private val vodRefreshPipeline: com.aeriotv.android.core.data.vod.VodRefreshPipeline,
 ) : ViewModel() {
 
     data class UiState(
@@ -141,6 +142,17 @@ class OnDemandViewModel @Inject constructor(
     init {
         refresh()
         refreshSeries()
+        // Movies & TV B1: fill the persistent catalog alongside the in-memory
+        // load. Deliberately fire-and-forget and OFF the visible-load path:
+        // nothing reads the catalog yet (detail fallback aside), so its only
+        // job right now is to be populated and measurable. The pipeline
+        // serializes per playlist internally, mirrors the Apple orchestrator
+        // placement, and a failure logs without touching UI state.
+        viewModelScope.launch {
+            val playlist = playlistRepository.activePlaylist() ?: return@launch
+            val base = playlistRepository.effectiveBaseUrl(playlist)
+            vodRefreshPipeline.refresh(playlist, base)
+        }
         // React to the active playlist changing (switch) or being deleted.
         // iOS Issue #25: when a playlist is removed, On Demand must drop the
         // old source's movies/series instead of leaving stale, unplayable
