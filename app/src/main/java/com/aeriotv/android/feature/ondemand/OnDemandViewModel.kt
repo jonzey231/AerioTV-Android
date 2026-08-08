@@ -55,6 +55,7 @@ class OnDemandViewModel @Inject constructor(
     private val appPreferences: AppPreferences,
     private val tmdbService: TMDBService,
     private val vodResetBus: VodResetBus,
+    private val vodCatalog: com.aeriotv.android.core.data.vod.VodCatalogRepository,
 ) : ViewModel() {
 
     data class UiState(
@@ -75,6 +76,12 @@ class OnDemandViewModel @Inject constructor(
         val moviesNextCursor: String? = null,
         val isLoadingMore: Boolean = false,
         val unsupportedSource: Boolean = false,
+        // Titles resolved from the persistent catalog for a detail screen whose
+        // in-memory lookup missed (deep entry / process death). Deliberately
+        // NOT merged into `movies` / `series`: a single fetched title must
+        // never look like a loaded page to pagination or the grids.
+        val catalogFallback: List<DispatcharrVODMovie> = emptyList(),
+        val seriesCatalogFallback: List<DispatcharrVODSeries> = emptyList(),
         // XC only: the cheap init probe found VOD/series categories but the
         // expensive per-category enumeration is deferred until the On Demand tab
         // is opened. Keeps the tab visible without doing the heavy work up front
@@ -814,6 +821,7 @@ class OnDemandViewModel @Inject constructor(
     fun seriesById(id: Int): DispatcharrVODSeries? =
         _state.value.series.firstOrNull { it.id == id }
             ?: _state.value.seriesSearchResults.firstOrNull { it.id == id }
+            ?: _state.value.seriesCatalogFallback.firstOrNull { it.id == id }
 
     fun movieById(id: Int): DispatcharrVODMovie? =
         _state.value.movies.firstOrNull { it.id == id }
@@ -821,6 +829,38 @@ class OnDemandViewModel @Inject constructor(
     fun movieByUuid(uuid: String): DispatcharrVODMovie? =
         _state.value.movies.firstOrNull { it.uuid == uuid }
             ?: _state.value.searchResults.firstOrNull { it.uuid == uuid }
+            ?: _state.value.catalogFallback.firstOrNull { it.uuid == uuid }
+
+    /**
+     * Detail screens call this when their in-memory lookup misses, which
+     * happens on DEEP ENTRY and after PROCESS DEATH: the detail route is alive
+     * but the On Demand tab never populated its lists, so the screen would
+     * render "not found" for a title the user definitely has. The persistent
+     * catalog answers that directly.
+     *
+     * Results land in a separate [UiState.catalogFallback] list rather than
+     * being merged into `movies` / `series`, so a single fetched title can
+     * never masquerade as a loaded page and confuse pagination or the grids.
+     */
+    fun ensureMovieAvailable(uuid: String) {
+        if (movieByUuid(uuid) != null) return
+        viewModelScope.launch {
+            val playlistId = playlistRepository.activePlaylist()?.id ?: return@launch
+            val fromCatalog = runCatching { vodCatalog.movieWire(playlistId, uuid) }.getOrNull()
+                ?: return@launch
+            _state.update { it.copy(catalogFallback = it.catalogFallback + fromCatalog) }
+        }
+    }
+
+    fun ensureSeriesAvailable(id: Int) {
+        if (seriesById(id) != null) return
+        viewModelScope.launch {
+            val playlistId = playlistRepository.activePlaylist()?.id ?: return@launch
+            val fromCatalog = runCatching { vodCatalog.seriesWire(playlistId, id) }.getOrNull()
+                ?: return@launch
+            _state.update { it.copy(seriesCatalogFallback = it.seriesCatalogFallback + fromCatalog) }
+        }
+    }
 
     /**
      * Navigation target for a "Known For" tile in the cast bio sheet: the

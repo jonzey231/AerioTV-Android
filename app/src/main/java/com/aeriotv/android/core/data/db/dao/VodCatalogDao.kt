@@ -176,6 +176,10 @@ interface VodCatalogDao {
     @Query("SELECT * FROM vod_series WHERE playlistId = :playlistId AND uuid = :uuid LIMIT 1")
     suspend fun seriesByUuid(playlistId: String, uuid: String): VodSeriesEntity?
 
+    /** Series routes carry the numeric server id, not the uuid. */
+    @Query("SELECT * FROM vod_series WHERE playlistId = :playlistId AND id = :id LIMIT 1")
+    suspend fun seriesByIdValue(playlistId: String, id: String): VodSeriesEntity?
+
     @Query(
         """
         SELECT * FROM vod_episodes

@@ -1005,12 +1005,18 @@ fun AerioTVNavHost(
                 // alive underneath, and resolving the VM through that entry
                 // gives this screen the SAME instance the On Demand tab
                 // populated. Default `hiltViewModel()` here would scope to
-                // this nav entry and hand back a fresh empty VM, which is
-                // the bug that caused "Series not found" on direct entry.
+                // this nav entry and hand back a fresh empty VM.
+                //
+                // Movies & TV B1: getBackStackEntry THROWS when MAIN is not on
+                // the stack (process-death restore directly into this route),
+                // which crashed instead of showing the screen. Fall back to
+                // route scope in that case; the screen now self-hydrates from
+                // the persistent catalog (ensureSeriesAvailable), so a fresh
+                // VM renders the title instead of "Series not found".
                 val mainEntry = remember(entry) {
-                    navController.getBackStackEntry(Routes.MAIN)
+                    runCatching { navController.getBackStackEntry(Routes.MAIN) }.getOrNull()
                 }
-                val onDemandVm: OnDemandViewModel = hiltViewModel(mainEntry)
+                val onDemandVm: OnDemandViewModel = hiltViewModel(mainEntry ?: entry)
                 val seriesId = entry.arguments?.getInt("seriesId") ?: 0
                 SeriesDetailScreen(
                     seriesId = seriesId,
@@ -1036,10 +1042,11 @@ fun AerioTVNavHost(
                 route = Routes.MOVIE_DETAIL,
                 arguments = listOf(navArgument("movieUuid") { type = NavType.StringType }),
             ) { entry ->
+                // Same MAIN-scope-with-fallback pattern as SERIES_DETAIL above.
                 val mainEntry = remember(entry) {
-                    navController.getBackStackEntry(Routes.MAIN)
+                    runCatching { navController.getBackStackEntry(Routes.MAIN) }.getOrNull()
                 }
-                val onDemandVm: OnDemandViewModel = hiltViewModel(mainEntry)
+                val onDemandVm: OnDemandViewModel = hiltViewModel(mainEntry ?: entry)
                 val movieUuid = Uri.decode(entry.arguments?.getString("movieUuid").orEmpty())
                 com.aeriotv.android.feature.ondemand.MovieDetailScreen(
                     movieUuid = movieUuid,

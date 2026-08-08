@@ -7,6 +7,7 @@ import com.aeriotv.android.core.data.db.entity.VodCategoryEntity
 import com.aeriotv.android.core.data.db.entity.VodEpisodeEntity
 import com.aeriotv.android.core.data.db.entity.VodMovieEntity
 import com.aeriotv.android.core.data.db.entity.VodSeriesEntity
+import com.aeriotv.android.core.network.DispatcharrVODLogo
 import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import javax.inject.Inject
@@ -78,6 +79,54 @@ class VodCatalogRepository @Inject constructor(
      *  a partial walk must never be read as upstream deletions. */
     suspend fun pruneNotSeenSince(playlistId: String, cutoff: Long): Int =
         dao.pruneMovies(playlistId, cutoff) + dao.pruneSeries(playlistId, cutoff)
+
+    // ---- Catalog -> wire (detail fallback) ---------------------------------
+
+    /**
+     * Rebuild the wire model a detail screen expects from a stored row.
+     *
+     * This is what lets a detail screen open correctly on DEEP ENTRY or after
+     * PROCESS DEATH, when the On Demand tab's in-memory lists are empty and the
+     * lookup would otherwise miss and render "not found". Fields the catalog
+     * does not store (streams, custom properties) come back empty; the screen
+     * fills those from provider-info on its own, exactly as it does today.
+     */
+    suspend fun movieWire(playlistId: String, uuid: String): DispatcharrVODMovie? =
+        dao.movieByUuid(playlistId, uuid)?.let { e ->
+            DispatcharrVODMovie(
+                id = e.id.toIntOrNull() ?: 0,
+                uuid = e.uuid,
+                title = e.title,
+                plot = e.plot,
+                genre = e.genre,
+                rating = e.rating,
+                year = e.year,
+                durationSecs = e.durationSecs,
+                tmdbId = e.tmdbId.ifBlank { null },
+                imdbId = e.imdbId.ifBlank { null },
+                youtubeTrailer = e.trailerUrl.ifBlank { null },
+                // The stored poster is ALREADY resolved through the adapter's
+                // policy, so this can never reintroduce a filesystem path.
+                logo = e.posterUrl.ifBlank { null }?.let { DispatcharrVODLogo(url = it) },
+                categoryName = e.category.ifBlank { null },
+            )
+        }
+
+    suspend fun seriesWire(playlistId: String, id: Int): DispatcharrVODSeries? =
+        dao.seriesByIdValue(playlistId, id.toString())?.let { e ->
+            DispatcharrVODSeries(
+                id = e.id.toIntOrNull() ?: 0,
+                uuid = e.uuid,
+                name = e.title,
+                plot = e.plot,
+                genre = e.genre,
+                rating = e.rating,
+                year = e.year,
+                tmdbId = e.tmdbId.ifBlank { null },
+                logo = e.posterUrl.ifBlank { null }?.let { DispatcharrVODLogo(url = it) },
+                categoryName = e.category.ifBlank { null },
+            )
+        }
 
     // ---- Mapping -----------------------------------------------------------
 

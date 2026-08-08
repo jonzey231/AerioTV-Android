@@ -123,6 +123,13 @@ fun MovieDetailScreen(
         movie?.id?.let { viewModel.loadMovieProviderInfo(it) }
     }
 
+    // Deep entry / post-process-death: the tab's in-memory lists are empty, so
+    // the lookup above misses. Hydrate this one title from the persistent
+    // catalog; the state update re-runs the lookup and the screen fills in.
+    LaunchedEffect(movieUuid) {
+        if (movie == null) viewModel.ensureMovieAvailable(movieUuid)
+    }
+
     // TMDB poster fallback (opt-in). Resolves ONLY when the server supplied no
     // artwork (no logo, no provider poster/backdrop) and provider-info has
     // settled, so it never overrides a real poster or hits TMDB needlessly.

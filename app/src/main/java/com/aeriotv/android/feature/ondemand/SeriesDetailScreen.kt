@@ -127,6 +127,12 @@ fun SeriesDetailScreen(
         viewModel.loadEpisodes(seriesId)
     }
 
+    // Deep entry / post-process-death: hydrate from the persistent catalog
+    // when the tab's in-memory lookup misses (the "Series not found" class).
+    LaunchedEffect(seriesId, series == null) {
+        if (series == null) viewModel.ensureSeriesAvailable(seriesId)
+    }
+
     // TMDB poster fallback (opt-in): only when the server gave no artwork.
     var tmdbPosterUrl by remember(seriesId) { mutableStateOf<String?>(null) }
     LaunchedEffect(seriesId, info, state.seriesProviderInfoLoading) {
