@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Decides whether a playlist's LAN URL is usable by ASKING THE SERVER instead
@@ -96,7 +97,14 @@ class LanReachability @Inject constructor(
         // the same URL serialise here so it is one extra cheap HEAD at worst.
         probeMutex.withLock {
             val prior = verdicts[key]
-            val reachable = probe(key)
+            // Log BEFORE the probe: a probe wedged in DNS resolution (which
+            // HttpURLConnection's connect/read timeouts do NOT bound) used to
+            // hang here invisibly -- while holding probeMutex, stalling every
+            // other routing decision in the process. The hard cap below
+            // resumes us even if the probe thread stays stuck; a timed-out
+            // probe routes WAN, same as a failed one.
+            Log.i(TAG, "LAN probe starting for $key")
+            val reachable = withTimeoutOrNull(PROBE_HARD_CAP_MS) { probe(key) } ?: false
             verdicts[key] = reachable
             Log.i(TAG, "LAN probe $key -> ${if (reachable) "reachable (using LAN)" else "unreachable (using WAN)"}")
             // Emit only on a genuine LAN<->WAN flip vs the previous KNOWN value
@@ -166,5 +174,10 @@ class LanReachability @Inject constructor(
         // A LAN server answers in single-digit milliseconds; 1.5s is a wide
         // margin that still keeps the worst-case first-route delay short.
         const val PROBE_TIMEOUT_MS = 1_500
+
+        // Coroutine-level ceiling on one probe() call. Covers what the
+        // HttpURLConnection timeouts don't: DNS resolution of a hostname LAN
+        // URL, which can block far beyond connect+read on a broken resolver.
+        const val PROBE_HARD_CAP_MS = 5_000L
     }
 }

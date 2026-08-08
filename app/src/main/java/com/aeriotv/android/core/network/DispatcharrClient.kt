@@ -69,6 +69,12 @@ const val AUTH_MODE_BOTH = "both"
 const val AUTH_MODE_XAPIKEY = "xapikey"
 const val AUTH_MODE_BEARER = "bearer"
 
+/** Upper bound on the DRF `next`-cursor walk in fetchListOrResults. DRF's
+ *  default PAGE_SIZE is 50, so 200 pages covers a 10k-channel server with
+ *  headroom while still terminating on a server that echoes a cyclic
+ *  cursor. Hitting the cap logs a warning rather than failing. */
+private const val MAX_LIST_PAGES = 200
+
 @Singleton
 class DispatcharrClient @Inject constructor() {
 
@@ -625,25 +631,83 @@ class DispatcharrClient @Inject constructor() {
                 "Unexpected response shape from $url: ${raw::class.simpleName}",
             )
         }
+        // POSTing to a DRF `next` cursor is version-dependent behavior, so this
+        // variant deliberately does NOT walk pages -- but if the server ever
+        // paginates a POST list, say so instead of silently truncating.
+        val next = (raw as? JsonObject)?.get("next")
+        if (next is JsonPrimitive && next !is JsonNull) {
+            android.util.Log.w(
+                "DispatcharrClient",
+                "$url: POST response is paginated (next cursor present); only page 1 was read",
+            )
+        }
         return array.map { json.decodeFromJsonElement(serializer<T>(), it) }
     }
 
+    /**
+     * User report "only ~40 channels load": the old body accepted the DRF
+     * envelope but kept page 1's `results` and never read `next`, so any
+     * deployment where ChannelViewSet paginates WITHOUT the `page` query
+     * param (DRF global PAGE_SIZE, hardened builds) silently truncated
+     * channels / groups / epgdata to the first page and reported success.
+     * Walk the cursor chain instead: a flat array (stock Dispatcharr) is
+     * one round-trip exactly as before; an envelope accumulates every page.
+     * Each `next` cursor is pinned to the original host -- same SSRF guard
+     * as the VOD page walk (audit task #42) -- and the walk is capped so a
+     * server echoing a cyclic cursor can't loop us forever.
+     */
     private suspend inline fun <reified T> fetchListOrResults(
         url: String,
         apiKey: String,
     ): List<T> {
-        val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
-        unauthorizedCheck(response, url)
-        if (!response.status.isSuccess()) {
-            throw DispatcharrError.Transport("HTTP ${response.status.value} ${response.status.description} from $url")
+        val trustedHost = runCatching { java.net.URI(url).host }.getOrNull()
+        val out = ArrayList<T>()
+        var reportedCount = -1
+        var nextUrl: String? = url
+        var pagesLeft = MAX_LIST_PAGES
+        while (nextUrl != null && pagesLeft > 0) {
+            pagesLeft -= 1
+            val pageUrl: String = nextUrl
+            val response: HttpResponse = client.get(pageUrl) { applyAuth(apiKey) }
+            unauthorizedCheck(response, pageUrl)
+            if (!response.status.isSuccess()) {
+                throw DispatcharrError.Transport("HTTP ${response.status.value} ${response.status.description} from $pageUrl")
+            }
+            val raw: JsonElement = response.body()
+            nextUrl = when {
+                raw is JsonArray -> {
+                    raw.forEach { out.add(json.decodeFromJsonElement(serializer<T>(), it)) }
+                    null
+                }
+                raw is JsonObject && raw["results"] is JsonArray -> {
+                    raw["results"]!!.jsonArray.forEach {
+                        out.add(json.decodeFromJsonElement(serializer<T>(), it))
+                    }
+                    reportedCount = (raw["count"] as? JsonPrimitive)?.intOrNull ?: reportedCount
+                    (raw["next"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+                        ?.takeIf { cursor ->
+                            val cursorHost = runCatching { java.net.URI(cursor).host }.getOrNull()
+                            cursorHost != null && trustedHost != null &&
+                                cursorHost.equals(trustedHost, ignoreCase = true)
+                        }
+                }
+                else -> throw DispatcharrError.UnexpectedResponse("Unexpected response shape from $pageUrl: ${raw::class.simpleName}")
+            }
         }
-        val raw: JsonElement = response.body()
-        val array: JsonArray = when {
-            raw is JsonArray -> raw
-            raw is JsonObject && raw["results"] is JsonArray -> raw["results"]!!.jsonArray
-            else -> throw DispatcharrError.UnexpectedResponse("Unexpected response shape from $url: ${raw::class.simpleName}")
+        if (nextUrl != null) {
+            // No silent caps: say exactly what was dropped and why.
+            android.util.Log.w(
+                "DispatcharrClient",
+                "$url: stopped after $MAX_LIST_PAGES pages with a next cursor still pending; kept ${out.size} rows",
+            )
         }
-        return array.map { json.decodeFromJsonElement(serializer<T>(), it) }
+        if (reportedCount >= 0) {
+            android.util.Log.i(
+                "DispatcharrClient",
+                "$url: paginated envelope, server count=$reportedCount, fetched=${out.size}",
+            )
+        }
+        return out
     }
 
     /**
