@@ -58,7 +58,7 @@ enum class AppTab(
     ),
     OnDemand(
         id = "ondemand",
-        label = "On Demand",
+        label = "Movies & TV",
         iconSelected = Icons.Filled.OndemandVideo,
         iconUnselected = Icons.Outlined.OndemandVideo,
     ),

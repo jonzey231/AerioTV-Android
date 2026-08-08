@@ -817,7 +817,7 @@ private fun VodEnabledRow(
                 ),
         ) {
             Text(
-                text = "Fetch On Demand from this playlist",
+                text = "Fetch Movies & TV from this playlist",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
@@ -834,7 +834,7 @@ private fun VodEnabledRow(
             )
         }
         Text(
-            text = "When off, this playlist's movies and TV shows aren't loaded into On Demand. Useful if you only want Live TV from this server, or if you have a second playlist that already provides On Demand. You can change this later in Settings.",
+            text = "When off, this playlist's movies and TV shows aren't loaded into Movies & TV. Useful if you only want Live TV from this server, or if you have a second playlist that already provides them. You can change this later in Settings.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),

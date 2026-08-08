@@ -356,7 +356,7 @@ fun PlaylistDetailScreen(
             if (isActivePlaylist) item {
                 Section(
                     header = "Full Refresh",
-                    footer = "Clears every cache (channels, guide data, and On Demand) and reloads this playlist from scratch. Use this if newly-added channels, guide data, or movies and shows are missing or stale after changes on the server.",
+                    footer = "Clears every cache (channels, guide data, and Movies & TV) and reloads this playlist from scratch. Use this if newly-added channels, guide data, or movies and shows are missing or stale after changes on the server.",
                 ) {
                     ActionRow(
                         icon = Icons.Filled.Refresh,
@@ -419,7 +419,7 @@ fun PlaylistDetailScreen(
             title = { Text("Refresh Everything?") },
             text = {
                 Text(
-                    "Clears all cached channels, guide data, and On Demand, then " +
+                    "Clears all cached channels, guide data, and Movies & TV, then " +
                         "reloads \"${playlist.name}\" from scratch. Use this if " +
                         "channels or guide data are missing or stale. May take a " +
                         "few minutes on large playlists.",

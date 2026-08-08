@@ -404,8 +404,8 @@ fun EditPlaylistScreen(
             if (sourceType.supportsVOD) {
                 item {
                     Section(
-                        header = "On Demand",
-                        footer = "When off, this playlist's movies and TV shows aren't loaded into On Demand. Useful if you only want Live TV from this server, or if you have a second playlist that already provides On Demand.",
+                        header = "Movies & TV",
+                        footer = "When off, this playlist's movies and TV shows aren't loaded into Movies & TV. Useful if you only want Live TV from this server, or if you have a second playlist that already provides them.",
                     ) {
                         // Whole row is the focus/toggle target so D-pad focus is
                         // visible; the Switch is display-only.
@@ -421,7 +421,7 @@ fun EditPlaylistScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "Fetch On Demand from this playlist",
+                                text = "Fetch Movies & TV from this playlist",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onBackground,
                                 fontWeight = FontWeight.Medium,

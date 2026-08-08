@@ -1287,7 +1287,7 @@ fun AerioTVNavHost(
 
                 VODPlayerScreen(
                     streamUrl = resolved?.url.orEmpty(),
-                    title = movie?.displayName ?: "On Demand",
+                    title = movie?.displayName ?: "Movies & TV",
                     // Audit #53/#38: never replay the API key to a session URL
                     // that resolved OFF the server's origin.
                     httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,

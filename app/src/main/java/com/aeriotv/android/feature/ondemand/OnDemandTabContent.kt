@@ -6,6 +6,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -45,6 +46,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Search
@@ -137,7 +139,7 @@ fun OnDemandTabContent(
     viewModel: OnDemandViewModel = hiltViewModel(),
     watchVm: WatchProgressViewModel = hiltViewModel(),
 ) {
-    var section by rememberSaveable { mutableStateOf(OnDemandSection.Movies) }
+    var section by rememberSaveable { mutableStateOf(OnDemandSection.Home) }
 
     // Issue #9: Continue Watching is its own On Demand sub-tab now (movies +
     // episodes), replacing the rails that sat squished atop the Movies / Series
@@ -153,19 +155,11 @@ fun OnDemandTabContent(
                 (row.durationMs <= 0L || row.positionMs < row.durationMs - 5 * 60 * 1000L)
         }
     }
-    val availableSections = remember(continueWatchingRows.isNotEmpty()) {
-        buildList {
-            if (continueWatchingRows.isNotEmpty()) add(OnDemandSection.ContinueWatching)
-            add(OnDemandSection.Movies)
-            add(OnDemandSection.Series)
-        }
-    }
-    // If Continue Watching empties while it is the selected tab (last item
-    // finished / removed), fall back to Movies so the pill can disappear
-    // without stranding the user on a vanished tab.
-    LaunchedEffect(availableSections) {
-        if (section !in availableSections) section = OnDemandSection.Movies
-    }
+    // All three sections are ALWAYS present now. The old list was conditional
+    // (the Continue pill came and went with the user's progress), which moved
+    // the other pills sideways under the user's finger and, on TV, under their
+    // focus. Home simply hides its own empty rows instead.
+    val availableSections = OnDemandSection.entries
     // XC libraries are probed cheaply at init but the heavy per-category walk is
     // deferred until the tab is actually shown -- kick it off here (no-op for
     // non-XC sources and once already loaded).
@@ -185,7 +179,7 @@ fun OnDemandTabContent(
     val activeGridState = when (section) {
         OnDemandSection.Movies -> moviesGridState
         OnDemandSection.Series -> seriesGridState
-        OnDemandSection.ContinueWatching -> continueGridState
+        OnDemandSection.Home -> continueGridState
     }
     // TV chrome collapse: once the user scrolls past the first poster row,
     // report "collapsed" to the shell (top tab bar) and shrink the segment
@@ -214,7 +208,7 @@ fun OnDemandTabContent(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        text = "On Demand",
+                        text = "Movies & TV",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
@@ -252,14 +246,16 @@ fun OnDemandTabContent(
         }
 
         when (section) {
-            OnDemandSection.ContinueWatching -> ContinueWatchingSubScreen(
+            OnDemandSection.Home -> MediaHomeSubScreen(
                 viewModel = viewModel,
-                movieRows = continueWatchingRows.filter { it.vodType != "episode" },
-                episodeRows = continueWatchingRows.filter { it.vodType == "episode" },
+                progressRows = continueWatchingRows,
                 onResumeMovie = onResumeMovie,
                 onEpisodeResume = onEpisodeResume,
+                onMovieClick = onMovieClick,
                 onSeriesClick = onSeriesClick,
                 onRemove = { watchVm.delete(it) },
+                onBrowseMovies = { section = OnDemandSection.Movies },
+                onBrowseSeries = { section = OnDemandSection.Series },
             )
             OnDemandSection.Movies -> MoviesSubScreen(
                 viewModel = viewModel,
@@ -367,64 +363,153 @@ private fun SegmentPill(
 }
 
 /**
- * Continue Watching sub-tab (issue #9). Two horizontal shelves -- in-progress
- * Movies and in-progress TV Shows -- reusing the same rail + card components
- * that used to sit squished atop the Movies / Series grids. The reporter asked
- * for exactly this ("a separate tab ... horizontal scrolling 2 rows"). The pill
- * that leads here is only shown when at least one shelf has content, so this is
- * never reached empty; the guard is defensive.
+ * Home section of the Movies & TV tab.
+ *
+ * Row order comes from [HomeRows], the pure mirror of Apple's HomeRowsBuilder,
+ * so both platforms lay Home out identically:
+ *   1. Continue Watching, ONE rail merging movies and episodes, deduped per
+ *      series and ordered by last activity. This replaces the two separate
+ *      Movies / TV Shows rails: split rails meant the thing the user watched
+ *      most recently could be the second rail's third card.
+ *   2. Recently Added, one rail per library, personal libraries first.
+ *
+ * Every row hides itself when empty, so an untouched library with no progress
+ * shows the empty state rather than a page of headers with nothing under them.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ContinueWatchingSubScreen(
+private fun MediaHomeSubScreen(
     viewModel: OnDemandViewModel,
-    movieRows: List<WatchProgressEntity>,
-    episodeRows: List<WatchProgressEntity>,
+    progressRows: List<WatchProgressEntity>,
     onResumeMovie: (String) -> Unit,
     onEpisodeResume: (String) -> Unit,
+    onMovieClick: (DispatcharrVODMovie) -> Unit,
     onSeriesClick: (DispatcharrVODSeries) -> Unit,
     onRemove: (String) -> Unit,
+    onBrowseMovies: () -> Unit,
+    onBrowseSeries: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val seriesById = remember(state.series) { state.series.associateBy { it.id } }
-    if (movieRows.isEmpty() && episodeRows.isEmpty()) {
+
+    // Merge + dedup + order in the shared rule, then map the returned ids back
+    // to their live rows. The builder deals in ids only, so it can never hold a
+    // stale copy of a row the user just removed.
+    val continueRows = remember(progressRows) {
+        val byId = progressRows.associateBy { it.videoId }
+        HomeRows.continueWatching(
+            progressRows.map { row ->
+                HomeRows.ProgressSnapshot(
+                    videoId = row.videoId,
+                    vodType = row.vodType,
+                    seriesId = row.seriesId,
+                    positionMs = row.positionMs,
+                    durationMs = row.durationMs,
+                    isFinished = row.isFinished,
+                    updatedAt = row.updatedAt,
+                )
+            },
+        ).mapNotNull { byId[it] }
+    }
+
+    val movieShelves = remember(state.movies) { movieShelves(state.movies) }
+    val seriesShelves = remember(state.series) { seriesShelves(state.series) }
+
+    if (continueRows.isEmpty() && movieShelves.isEmpty() && seriesShelves.isEmpty()) {
         EmptyState(
-            title = "Nothing in progress",
-            body = "Movies and shows you start will show up here so you can pick up where you left off.",
+            title = "Nothing here yet",
+            body = "Movies and shows from your playlists will show up here, along with anything you have started watching.",
         )
         return
     }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(vertical = 8.dp),
     ) {
-        if (movieRows.isNotEmpty()) {
-            ContinueWatchingRail(
-                title = "Movies",
-                items = movieRows,
-                posterFor = { it.posterUrl },
-                // Resume by id: opens the movie detail (with its Resume button),
-                // so it works even for a movie that hasn't paged into the grid.
-                onItemClick = { onResumeMovie(it.videoId) },
-                onRemove = { onRemove(it.videoId) },
-            )
-        }
-        if (episodeRows.isNotEmpty()) {
+        if (continueRows.isNotEmpty()) {
+            // One merged rail. Episode rows still resolve their parent show for
+            // artwork and the SxxEyy chip, and still offer Open Series, so the
+            // card behaviour the reporter asked for in issue #9 is unchanged;
+            // only the grouping moved.
             SeriesContinueWatchingRail(
-                title = "TV Shows",
-                items = episodeRows,
+                title = "Continue Watching",
+                items = continueRows,
                 seriesById = seriesById,
-                onItemClick = { onEpisodeResume(it.videoId) },
+                onItemClick = { row ->
+                    if (row.vodType == "episode") onEpisodeResume(row.videoId)
+                    else onResumeMovie(row.videoId)
+                },
                 onRemove = { onRemove(it.videoId) },
                 onOpenSeries = { row ->
                     row.seriesId?.toIntOrNull()?.let { seriesById[it] }?.let(onSeriesClick)
                 },
             )
         }
+        movieShelves.forEach { shelf ->
+            MediaShelfRail(
+                title = shelf.title,
+                items = shelf.items,
+                posterFor = { it.logo?.url },
+                labelFor = { it.displayName },
+                onItemClick = onMovieClick,
+                onSeeAll = onBrowseMovies,
+            )
+        }
+        seriesShelves.forEach { shelf ->
+            MediaShelfRail(
+                title = shelf.title,
+                items = shelf.items,
+                posterFor = { it.posterUrl },
+                labelFor = { it.displayName },
+                onItemClick = onSeriesClick,
+                onSeeAll = onBrowseSeries,
+            )
+        }
     }
 }
+
+/**
+ * Group movies into Recently Added shelves.
+ *
+ * Personal-library detection needs the provider relation marker, which the
+ * current fetch path does not surface; until that plumbing lands with the
+ * media-library phase every category derives as a provider catalog, which is
+ * exactly the stock-server behaviour and therefore correct today.
+ *
+ * The VOD models carry no server add time, so ordering falls back to the
+ * builder's title tie-break. Phase 6 feeds real createdAt from the Room catalog
+ * without touching [HomeRows], which is the point of keeping it pure.
+ */
+private fun movieShelves(movies: List<DispatcharrVODMovie>): List<HomeRows.Shelf<DispatcharrVODMovie>> =
+    HomeRows.recentlyAddedShelves(
+        movies.map { movie ->
+            HomeRows.CatalogSnapshot(
+                item = movie,
+                libraryKey = movie.categoryName.orEmpty().ifEmpty { "movies" },
+                libraryDisplayName = movie.categoryName.orEmpty().ifEmpty { "Recently Added" },
+                isPersonalLibrary = false,
+                createdAt = null,
+                sortName = movie.displayName,
+            )
+        },
+    )
+
+private fun seriesShelves(series: List<DispatcharrVODSeries>): List<HomeRows.Shelf<DispatcharrVODSeries>> =
+    HomeRows.recentlyAddedShelves(
+        series.map { show ->
+            HomeRows.CatalogSnapshot(
+                item = show,
+                libraryKey = show.categoryName.orEmpty().ifEmpty { "series" },
+                libraryDisplayName = show.categoryName.orEmpty().ifEmpty { "Recently Added" },
+                isPersonalLibrary = false,
+                createdAt = null,
+                sortName = show.displayName,
+            )
+        },
+    )
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1128,6 +1213,111 @@ private fun SeriesPoster(
     }
 }
 
+/**
+ * A generic "Recently Added" shelf on the Movies & TV Home section.
+ *
+ * Built from ContinueWatchingRail's skeleton (header, LazyRow, TV-aware
+ * padding) because that layout is already proven on phone, tablet, foldable,
+ * and TV. Generic over the item type so movies and series share one rail
+ * instead of the duplicate pair the grids used to carry.
+ */
+@Composable
+private fun <T : Any> MediaShelfRail(
+    title: String,
+    items: List<T>,
+    posterFor: (T) -> String?,
+    labelFor: (T) -> String,
+    onItemClick: (T) -> Unit,
+    onSeeAll: (() -> Unit)? = null,
+) {
+    if (items.isEmpty()) return
+    val isTv = rememberLiveTvFormFactor().isTv
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (isTv) 48.dp else 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (onSeeAll != null) {
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = "See All",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(onClick = onSeeAll),
+                )
+            }
+        }
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = if (isTv) 44.dp else 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(items = items) { item ->
+                MediaShelfCard(
+                    posterUrl = posterFor(item),
+                    label = labelFor(item),
+                    onClick = { onItemClick(item) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaShelfCard(
+    posterUrl: String?,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val isTv = rememberLiveTvFormFactor().isTv
+    val width = if (isTv) 150.dp else 108.dp
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .width(width)
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusScale(focused)
+            .clickable(onClick = onClick),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            AsyncImage(
+                model = posterUrl,
+                contentDescription = label,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = label,
+            style = if (isTv) MaterialTheme.typography.labelMedium
+            else MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+    }
+}
+
 @Composable
 private fun ContinueWatchingRail(
     items: List<WatchProgressEntity>,
@@ -1636,11 +1826,15 @@ private fun EmptyState(title: String, body: String) {
 }
 
 private enum class OnDemandSection(val label: String, val icon: ImageVector) {
-    // Issue #9: a Continue Watching sub-tab, shown only when there is
-    // in-progress content (movies + episodes). Rendered first, before Movies.
-    ContinueWatching(label = "Continue", icon = Icons.Outlined.History),
+    // Movies & TV redesign phase 2: the old "Continue" pill is GONE. Continue
+    // Watching is now the first row of Home, merged across movies and episodes
+    // (dossier section 5.3), which is also what Apple does. A pill that
+    // appeared and disappeared with the user's progress made the nav shift
+    // under them, and splitting movies from episodes meant the most recently
+    // watched thing could be the second rail's third card.
+    Home(label = "Home", icon = Icons.Outlined.Home),
     Movies(label = "Movies", icon = Icons.Outlined.Movie),
-    Series(label = "Series", icon = Icons.Outlined.Tv),
+    Series(label = "TV Shows", icon = Icons.Outlined.Tv),
 }
 
 /**
