@@ -407,4 +407,8 @@ object DatabaseModule {
 
     @Provides
     fun provideChannelSnapshotDao(db: AerioDatabase): ChannelSnapshotDao = db.channelSnapshotDao()
+
+    @Provides
+    fun provideVodCatalogDao(db: AerioDatabase): com.aeriotv.android.core.data.db.dao.VodCatalogDao =
+        db.vodCatalogDao()
 }
