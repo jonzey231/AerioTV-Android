@@ -8,6 +8,40 @@ import org.junit.Test
 
 class DispatcharrEpgSourceScopeTest {
     @Test
+    fun `shared dummy assignment uses each channel UUID as its guide key`() {
+        val data = mapOf(10 to DispatcharrEpgData(10, "shared.dummy", 1))
+        val sourceTypes = mapOf(1 to "dummy")
+        val one = DispatcharrChannel(1, "One", uuid = "uuid-one", epgDataId = 10)
+        val two = DispatcharrChannel(2, "Two", uuid = "uuid-two", epgDataId = 10)
+
+        assertEquals("uuid-one", dispatcharrGuideKey(one, data, sourceTypes))
+        assertEquals("uuid-two", dispatcharrGuideKey(two, data, sourceTypes))
+    }
+
+    @Test
+    fun `XMLTV assignment keeps EPGData tvg id and effective assignment wins`() {
+        val data = mapOf(
+            10 to DispatcharrEpgData(10, "old.tv", 1),
+            20 to DispatcharrEpgData(20, "effective.tv", 2),
+        )
+        val channel = DispatcharrChannel(
+            1, "One", uuid = "uuid-one", tvgId = "raw.tv",
+            epgDataId = 10, effectiveEpgDataId = 20,
+        )
+
+        assertEquals(
+            "effective.tv",
+            dispatcharrGuideKey(channel, data, mapOf(1 to "xmltv", 2 to "xmltv")),
+        )
+    }
+
+    @Test
+    fun `channel without EPGData uses UUID for Dispatcharr generated placeholder`() {
+        val channel = DispatcharrChannel(1, "One", uuid = "uuid-one", tvgId = "raw.tv")
+        assertEquals("uuid-one", dispatcharrGuideKey(channel, emptyMap(), emptyMap()))
+    }
+
+    @Test
     fun `same tvg id is accepted only from the source assigned to the loaded channel`() {
         val channels = listOf(
             DispatcharrChannel(

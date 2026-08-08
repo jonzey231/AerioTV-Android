@@ -771,6 +771,14 @@ class PlaylistRepository @Inject constructor(
         // stays clean and reloads never feed a duplicate key to the url-keyed
         // Live TV lists. Distinct streams that share a tvg-id are kept.
         val channels = rawChannels.distinctBy { it.url }
+        val previousGuideKeys = channelSnapshotDao.forPlaylist(playlistId)
+            .mapNotNull { row -> row.dispatcharrChannelId?.let { it to row.tvgID } }
+            .toMap()
+        val guideKeysChanged = channels.any { channel ->
+            channel.dispatcharrChannelId?.let { id ->
+                previousGuideKeys[id]?.let { it != channel.tvgID }
+            } == true
+        }
         // GH #31: persist in CHUNKS inside ONE transaction instead of mapping the
         // whole ~100k-row entity list + one giant insertAll. That overlap (the
         // channel list + the full entity list + the transaction bind) was the
@@ -782,6 +790,10 @@ class PlaylistRepository @Inject constructor(
         // autoGenerate with only a NON-unique index on playlistId, so REPLACE
         // never dedups — chunked inserts without it would duplicate every row.
         database.withTransaction {
+            // Cached EPG rows are already rewritten to the old guide key. Purge
+            // only this playlist's guide if a Dispatcharr channel's key changed;
+            // favorites, settings, and recordings remain untouched.
+            if (guideKeysChanged) epgProgrammeDao.deleteForPlaylist(playlistId)
             channelSnapshotDao.deleteForPlaylist(playlistId)
             var position = 0
             for (chunk in channels.asSequence().chunked(CHANNEL_CACHE_CHUNK)) {
@@ -1106,10 +1118,12 @@ class PlaylistRepository @Inject constructor(
             // channel's own tvg_id, so map epg_data_id -> EPGData.tvg_id and use
             // THAT as the channel's tvgID below. Without this, only channels
             // whose raw tvg_id happens to equal the EPGData tvg_id get a guide.
-            val epgDataTvgById: Map<Int, String> = runCatching {
-                dispatcharrClient.listEpgData(base, key)
-                    .mapNotNull { d -> d.tvgId?.takeIf { it.isNotBlank() }?.let { d.id to it } }
-                    .toMap()
+            val epgDataById = runCatching {
+                dispatcharrClient.listEpgData(base, key).associateBy { it.id }
+            }.getOrDefault(emptyMap())
+            val epgSourceTypeById = runCatching {
+                dispatcharrClient.listEpgSources(base, key)
+                    .associate { it.id to it.sourceType }
             }.getOrDefault(emptyMap())
             val channels = dispatcharrClient.listChannels(base, key)
                 .let { list -> if (accountAllowedIds != null) list.filter { it.id in accountAllowedIds } else list }
@@ -1130,13 +1144,11 @@ class PlaylistRepository @Inject constructor(
                         name = ch.name,
                         url = dispatcharrClient.streamUrl(base, ch.uuid!!),
                         groupTitle = ch.channelGroupId?.let { groups[it] }.orEmpty(),
-                        // Prefer the matched EPGData's tvg_id (resolved via the
-                        // epg_data_id FK) so grid programmes attach; fall back to
-                        // the channel's own tvg_id when it has no EPG mapping.
-                        tvgID = (ch.effectiveEpgDataId ?: ch.epgDataId)
-                            ?.let { epgDataTvgById[it] }
-                            ?.takeIf { it.isNotBlank() }
-                            ?: ch.tvgId.orEmpty(),
+                        // Dispatcharr deliberately keys generated dummy/no-EPG
+                        // grid rows by channel UUID so channels sharing one dummy
+                        // EPGData stay isolated. Persisted sources remain keyed by
+                        // EPGData.tvg_id.
+                        tvgID = dispatcharrGuideKey(ch, epgDataById, epgSourceTypeById),
                         tvgName = ch.name,
                         tvgLogo = ch.logoId?.let { dispatcharrClient.logoUrl(base, it) }.orEmpty(),
                         channelNumber = ch.channelNumber?.formatChannelNumber(),
@@ -1409,6 +1421,20 @@ private fun M3UChannel.toCacheEntity(
     fetchedAt = fetchedAt,
 )
 
+
+internal fun dispatcharrGuideKey(
+    channel: com.aeriotv.android.core.network.DispatcharrChannel,
+    epgDataById: Map<Int, com.aeriotv.android.core.network.DispatcharrEpgData>,
+    epgSourceTypeById: Map<Int, String?>,
+): String {
+    val data = (channel.effectiveEpgDataId ?: channel.epgDataId)?.let(epgDataById::get)
+    val sourceType = data?.epgSourceId?.let(epgSourceTypeById::get)
+    return when {
+        data == null || sourceType == "dummy" -> channel.uuid.orEmpty()
+        !data.tvgId.isNullOrBlank() -> data.tvgId
+        else -> channel.tvgId?.takeIf { it.isNotBlank() } ?: channel.uuid.orEmpty()
+    }
+}
 
 internal data class DispatcharrEpgLayer(
     val url: String,
