@@ -35,6 +35,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.ConcurrentHashMap
@@ -59,6 +62,33 @@ import java.util.concurrent.ConcurrentHashMap
  *  entities are trivially cheap against the heap, large enough that per-chunk
  *  SQLite bind overhead stays negligible across a ~100k-row XC catalog. */
 private const val CHANNEL_CACHE_CHUNK = 2_000
+
+/** Ceiling on one EPG load (network + parse). Wide enough for a multi-hundred
+ *  MB provider XMLTV on a slow link; exists so a wedged load releases the
+ *  in-flight latch in [PlaylistRepository.loadEpg] instead of blocking every
+ *  future EPG refresh until the process dies. */
+private const val EPG_LOAD_TIMEOUT_MS = 5L * 60L * 1000L
+
+/** Upstream Dispatcharr XMLTV feeds to layer for catch-up depth (task #210).
+ *  Was 8. A Direct Connect server can list many sources, and each one is a
+ *  FULL XMLTV download; the value of the 4th feed is negligible next to the
+ *  cost of fetching it on every EPG load. */
+private const val MAX_UPSTREAM_EPG_SOURCES = 3
+
+/** Ceiling on ONE upstream feed. A single slow or enormous XMLTV must not be
+ *  able to stall the EPG load behind it. */
+private const val UPSTREAM_EPG_PER_SOURCE_MS = 90L * 1000L
+
+/** Ceiling on the whole upstream-layering phase. This is bonus history, not
+ *  the user's guide: past this the grid ships as-is. */
+private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 3L * 60L * 1000L
+
+/** Orphaned download temp files older than this are swept at startup. The
+ *  download path deletes its temp in a `finally`, but a process death mid
+ *  download (force-stop while "syncing", low-memory kill) skips that entirely,
+ *  and each orphan is the full size of whatever was being fetched. The Discord
+ *  report of a 4GB app cache was exactly this, repeated. */
+private const val ORPHAN_TEMP_MAX_AGE_MS = 60L * 60L * 1000L
 
 @Singleton
 class PlaylistRepository @Inject constructor(
@@ -493,12 +523,42 @@ class PlaylistRepository @Inject constructor(
         val winner = inFlightLoads.putIfAbsent(key, mine)
         if (winner != null) {
             // Another caller already started the fetch; await their result.
+            // Log the join: the 2026-08 "no EPG" report showed a load that
+            // never returned wedging every later call on this latch. If that
+            // recurs, this line is the tell.
+            Log.i("PlaylistRepo", "loadEpg: joining in-flight load for ${key.take(8)}")
             return winner.await()
         }
         return try {
-            val result = loadEpgInternal(playlist, knownChannelKeys)
+            // Hard ceiling so a load that hangs pre-network (same report:
+            // "fetching EPG" logged, then silence -- no grid request, no
+            // success, no failure) completes the latch as a failure instead
+            // of wedging this playlist's EPG until force-stop. Generous
+            // because M3U XMLTV sources legitimately stream hundreds of MB.
+            val result = withTimeout(EPG_LOAD_TIMEOUT_MS) {
+                loadEpgInternal(playlist, knownChannelKeys)
+            }
             mine.complete(result)
             result
+        } catch (timeout: TimeoutCancellationException) {
+            // The wedge this fix exists for. Report it as a failure so the
+            // latch releases and the next refresh actually retries.
+            Log.w(
+                "PlaylistRepo",
+                "loadEpg: timed out after ${EPG_LOAD_TIMEOUT_MS / 1000}s; releasing the in-flight latch",
+            )
+            val r: Result<List<EPGProgramme>> = Result.failure(timeout)
+            mine.complete(r)
+            r
+        } catch (cancel: CancellationException) {
+            // NOT a failure: the caller's scope went away (screen left
+            // composition, process winding down). Release the latch for any
+            // joiner, then let cancellation propagate rather than reporting a
+            // bogus EPG error and continuing work in a dead scope. The
+            // timeout arm above runs first, so this only sees real
+            // cancellation -- TimeoutCancellationException is a subclass.
+            mine.complete(Result.failure(cancel))
+            throw cancel
         } catch (t: Throwable) {
             val r: Result<List<EPGProgramme>> = Result.failure(t)
             mine.complete(r)
@@ -520,7 +580,14 @@ class PlaylistRepository @Inject constructor(
         // minutes before the guide could paint.
         withContext(Dispatchers.Default) { runCatching {
         val sourceType = playlist.resolvedSourceType()
+        // Breadcrumbs bracketing base resolution: the 2026-08 hang sat
+        // somewhere between the ViewModel's "fetching EPG" line and the first
+        // AerioNet request, and nothing in that stretch logged. Which of
+        // these two lines is the last one out pins the stall to either the
+        // LAN probe (before) or the auth-broker Room read (after).
+        Log.i("PlaylistRepo", "loadEpg: resolving base (source=$sourceType)")
         val base = effectiveBaseUrl(playlist)
+        Log.i("PlaylistRepo", "loadEpg: base resolved, starting fetch")
         val programmes = when (sourceType) {
             SourceType.M3uUrl -> {
                 val epgUrl = playlist.epgUrl?.takeIf { it.isNotBlank() } ?: return@runCatching emptyList()
@@ -602,20 +669,51 @@ class PlaylistRepository @Inject constructor(
                     }
                     .distinct()
                     .filter { it != customXmltv }
-                    .take(8)
+                    .take(MAX_UPSTREAM_EPG_SOURCES)
                     .toList()
-                val layerUrls = listOfNotNull(customXmltv) + upstreamSourceUrls
+                // The user's OWN EPG URL is not optional work and keeps no
+                // budget; the upstream layering below is a bonus and must never
+                // cost more than its budget.
                 var layered = grid
-                for (layerUrl in layerUrls) {
+                customXmltv?.let { own ->
                     val xmltv = runCatching {
-                        // GH #26: constant-memory download + parse.
-                        fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                        fetchViaTempFile(own, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                    }.getOrElse { emptyList() }
+                    if (xmltv.isNotEmpty()) layered = layered + xmltv
+                }
+                // Discord report 2026-08-08 (rmebast): this layering made EVERY
+                // EPG load download up to 8 full upstream XMLTV feeds. On a
+                // server whose feeds are large or slow the load never returned
+                // -- guide empty, "syncing" forever -- and each force-stop
+                // orphaned the in-flight temp file, growing app cache past 4GB.
+                // The feature is a nice-to-have (deeper catch-up history), so
+                // it now runs on a strict budget and can never hold the grid
+                // hostage: per-source ceiling, whole-phase ceiling, and it stops
+                // early the moment the budget is gone.
+                val layerDeadline = System.currentTimeMillis() + UPSTREAM_EPG_TOTAL_BUDGET_MS
+                var layeredCount = 0
+                for (layerUrl in upstreamSourceUrls) {
+                    if (System.currentTimeMillis() >= layerDeadline) {
+                        Log.w(
+                            "PlaylistRepo",
+                            "upstream EPG layering: budget spent after $layeredCount source(s); " +
+                                "skipping ${upstreamSourceUrls.size - layeredCount} more",
+                        )
+                        break
+                    }
+                    val xmltv = runCatching {
+                        withTimeout(UPSTREAM_EPG_PER_SOURCE_MS) {
+                            // GH #26: constant-memory download + parse.
+                            fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                        }
                     }.getOrElse {
                         // Don't fail the whole EPG load just because one XMLTV
-                        // URL is unreachable; keep the grid the user already
-                        // paid the auth-retry roundtrip for.
+                        // URL is unreachable or slow; keep the grid the user
+                        // already paid the auth-retry roundtrip for.
+                        Log.w("PlaylistRepo", "upstream EPG source skipped: ${it.javaClass.simpleName}")
                         emptyList()
                     }
+                    layeredCount++
                     if (xmltv.isNotEmpty()) layered = layered + xmltv
                 }
                 if (upstreamSourceUrls.isNotEmpty()) {
@@ -1006,6 +1104,38 @@ class PlaylistRepository @Inject constructor(
         }
     }
 
+    /**
+     * Delete download temp files left behind by a process that died mid
+     * fetch. [fetchViaTempFile] removes its own temp in a `finally`, but that
+     * never runs when the app is force-stopped or killed for memory while a
+     * download is in flight -- and each orphan is the full size of the payload
+     * (a large XMLTV or a 100MB+ M3U). Repeated over a wedged EPG load this is
+     * what grew one reporter's app cache past 4GB.
+     *
+     * Age-gated so a download running RIGHT NOW in another coroutine is never
+     * pulled out from under itself.
+     */
+    fun sweepOrphanedDownloads() {
+        runCatching {
+            val cutoff = System.currentTimeMillis() - ORPHAN_TEMP_MAX_AGE_MS
+            var freed = 0L
+            var count = 0
+            context.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("aerio_dl") }
+                ?.forEach { f ->
+                    if (f.lastModified() < cutoff) {
+                        val size = f.length()
+                        if (f.delete()) {
+                            freed += size
+                            count++
+                        }
+                    }
+                }
+            if (count > 0) {
+                Log.i("PlaylistRepo", "swept $count orphaned download temp file(s), freed ${freed / 1024 / 1024}MB")
+            }
+        }
+    }
+
     private fun deriveName(url: String): String =
         url.substringAfterLast('/').substringBeforeLast('.').ifBlank { "Source" }
 
@@ -1108,9 +1238,20 @@ class PlaylistRepository @Inject constructor(
                     .mapNotNull { d -> d.tvgId?.takeIf { it.isNotBlank() }?.let { d.id to it } }
                     .toMap()
             }.getOrDefault(emptyMap())
-            val channels = dispatcharrClient.listChannels(base, key)
-                .let { list -> if (accountAllowedIds != null) list.filter { it.id in accountAllowedIds } else list }
-                .let { list -> if (manualAllowedIds != null) list.filter { it.id in manualAllowedIds } else list }
+            val serverChannels = dispatcharrClient.listChannels(base, key)
+            val afterAccount =
+                if (accountAllowedIds != null) serverChannels.filter { it.id in accountAllowedIds } else serverChannels
+            val channels =
+                if (manualAllowedIds != null) afterAccount.filter { it.id in manualAllowedIds } else afterAccount
+            // 2026-08 "only ~40 channels" report: neither filter layer logged,
+            // so a truncated or filtered list was indistinguishable from a
+            // small server. Always record where the count came from.
+            Log.i(
+                "PlaylistRepo",
+                "Dispatcharr channels: server=${serverChannels.size}, " +
+                    "accountFilter=${accountAllowedIds?.size?.toString() ?: "off"} -> ${afterAccount.size}, " +
+                    "manualFilter=${manualAllowedIds?.size?.toString() ?: "off"} -> ${channels.size}",
+            )
             channels
                 .filter { !it.uuid.isNullOrBlank() }
                 .sortedWith(compareBy(
