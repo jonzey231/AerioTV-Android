@@ -69,6 +69,27 @@ private const val CHANNEL_CACHE_CHUNK = 2_000
  *  future EPG refresh until the process dies. */
 private const val EPG_LOAD_TIMEOUT_MS = 5L * 60L * 1000L
 
+/** Upstream Dispatcharr XMLTV feeds to layer for catch-up depth (task #210).
+ *  Was 8. A Direct Connect server can list many sources, and each one is a
+ *  FULL XMLTV download; the value of the 4th feed is negligible next to the
+ *  cost of fetching it on every EPG load. */
+private const val MAX_UPSTREAM_EPG_SOURCES = 3
+
+/** Ceiling on ONE upstream feed. A single slow or enormous XMLTV must not be
+ *  able to stall the EPG load behind it. */
+private const val UPSTREAM_EPG_PER_SOURCE_MS = 90L * 1000L
+
+/** Ceiling on the whole upstream-layering phase. This is bonus history, not
+ *  the user's guide: past this the grid ships as-is. */
+private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 3L * 60L * 1000L
+
+/** Orphaned download temp files older than this are swept at startup. The
+ *  download path deletes its temp in a `finally`, but a process death mid
+ *  download (force-stop while "syncing", low-memory kill) skips that entirely,
+ *  and each orphan is the full size of whatever was being fetched. The Discord
+ *  report of a 4GB app cache was exactly this, repeated. */
+private const val ORPHAN_TEMP_MAX_AGE_MS = 60L * 60L * 1000L
+
 @Singleton
 class PlaylistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -648,20 +669,51 @@ class PlaylistRepository @Inject constructor(
                     }
                     .distinct()
                     .filter { it != customXmltv }
-                    .take(8)
+                    .take(MAX_UPSTREAM_EPG_SOURCES)
                     .toList()
-                val layerUrls = listOfNotNull(customXmltv) + upstreamSourceUrls
+                // The user's OWN EPG URL is not optional work and keeps no
+                // budget; the upstream layering below is a bonus and must never
+                // cost more than its budget.
                 var layered = grid
-                for (layerUrl in layerUrls) {
+                customXmltv?.let { own ->
                     val xmltv = runCatching {
-                        // GH #26: constant-memory download + parse.
-                        fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                        fetchViaTempFile(own, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                    }.getOrElse { emptyList() }
+                    if (xmltv.isNotEmpty()) layered = layered + xmltv
+                }
+                // Discord report 2026-08-08 (rmebast): this layering made EVERY
+                // EPG load download up to 8 full upstream XMLTV feeds. On a
+                // server whose feeds are large or slow the load never returned
+                // -- guide empty, "syncing" forever -- and each force-stop
+                // orphaned the in-flight temp file, growing app cache past 4GB.
+                // The feature is a nice-to-have (deeper catch-up history), so
+                // it now runs on a strict budget and can never hold the grid
+                // hostage: per-source ceiling, whole-phase ceiling, and it stops
+                // early the moment the budget is gone.
+                val layerDeadline = System.currentTimeMillis() + UPSTREAM_EPG_TOTAL_BUDGET_MS
+                var layeredCount = 0
+                for (layerUrl in upstreamSourceUrls) {
+                    if (System.currentTimeMillis() >= layerDeadline) {
+                        Log.w(
+                            "PlaylistRepo",
+                            "upstream EPG layering: budget spent after $layeredCount source(s); " +
+                                "skipping ${upstreamSourceUrls.size - layeredCount} more",
+                        )
+                        break
+                    }
+                    val xmltv = runCatching {
+                        withTimeout(UPSTREAM_EPG_PER_SOURCE_MS) {
+                            // GH #26: constant-memory download + parse.
+                            fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
+                        }
                     }.getOrElse {
                         // Don't fail the whole EPG load just because one XMLTV
-                        // URL is unreachable; keep the grid the user already
-                        // paid the auth-retry roundtrip for.
+                        // URL is unreachable or slow; keep the grid the user
+                        // already paid the auth-retry roundtrip for.
+                        Log.w("PlaylistRepo", "upstream EPG source skipped: ${it.javaClass.simpleName}")
                         emptyList()
                     }
+                    layeredCount++
                     if (xmltv.isNotEmpty()) layered = layered + xmltv
                 }
                 if (upstreamSourceUrls.isNotEmpty()) {
@@ -1049,6 +1101,38 @@ class PlaylistRepository @Inject constructor(
             parse(tmp)
         } finally {
             tmp.delete()
+        }
+    }
+
+    /**
+     * Delete download temp files left behind by a process that died mid
+     * fetch. [fetchViaTempFile] removes its own temp in a `finally`, but that
+     * never runs when the app is force-stopped or killed for memory while a
+     * download is in flight -- and each orphan is the full size of the payload
+     * (a large XMLTV or a 100MB+ M3U). Repeated over a wedged EPG load this is
+     * what grew one reporter's app cache past 4GB.
+     *
+     * Age-gated so a download running RIGHT NOW in another coroutine is never
+     * pulled out from under itself.
+     */
+    fun sweepOrphanedDownloads() {
+        runCatching {
+            val cutoff = System.currentTimeMillis() - ORPHAN_TEMP_MAX_AGE_MS
+            var freed = 0L
+            var count = 0
+            context.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("aerio_dl") }
+                ?.forEach { f ->
+                    if (f.lastModified() < cutoff) {
+                        val size = f.length()
+                        if (f.delete()) {
+                            freed += size
+                            count++
+                        }
+                    }
+                }
+            if (count > 0) {
+                Log.i("PlaylistRepo", "swept $count orphaned download temp file(s), freed ${freed / 1024 / 1024}MB")
+            }
         }
     }
 

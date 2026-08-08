@@ -292,6 +292,11 @@ class PlaylistViewModel @Inject constructor(
 
     private fun bootstrap() {
         viewModelScope.launch {
+            // Reclaim download temps orphaned by a process death mid fetch,
+            // before anything else. Cheap (one cacheDir listing) and it is the
+            // only thing that recovers space a force-stopped download leaves
+            // behind -- the 4GB-cache report was exactly that, repeated.
+            withContext(Dispatchers.IO) { repository.sweepOrphanedDownloads() }
             val saved = repository.activePlaylist()
             if (saved == null) {
                 _state.update { it.copy(phase = Phase.NeedsUrl) }
