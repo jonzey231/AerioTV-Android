@@ -14,6 +14,7 @@ import com.aeriotv.android.core.data.buildChannelEpgKeyBridge
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.repository.ChannelProfileOption
 import com.aeriotv.android.core.data.repository.PlaylistRepository
+import com.aeriotv.android.core.data.repository.shouldFetchDispatcharrEpg
 import com.aeriotv.android.core.debug.MemoryPressureBus
 import com.aeriotv.android.core.debug.VodResetBus
 import com.aeriotv.android.core.preferences.AppPreferences
@@ -723,7 +724,28 @@ class PlaylistViewModel @Inject constructor(
             val newest = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
             val fresh = newest != null &&
                 (System.currentTimeMillis() - newest) < EPG_CACHE_TTL_MS
-            if (fresh) {
+            val sourceType = SourceType.entries.firstOrNull { it.name == playlist.sourceType }
+            val isDispatcharr = sourceType in setOf(
+                SourceType.DispatcharrApiKey,
+                SourceType.DispatcharrUserPass,
+            )
+            val channelGuideKeys = _state.value.channels.asSequence().map { it.guideMatchKey }.toSet()
+            val cachedGuideKeys = if (isDispatcharr && fresh) {
+                runCatching { repository.cachedEpgChannelIds(playlist.id) }.getOrDefault(emptySet())
+            } else {
+                emptySet()
+            }
+            val shouldFetch = if (isDispatcharr) {
+                shouldFetchDispatcharrEpg(
+                    forceRefresh = false,
+                    cacheFresh = fresh,
+                    cachedGuideKeys = cachedGuideKeys,
+                    channelGuideKeys = channelGuideKeys,
+                )
+            } else {
+                !fresh
+            }
+            if (!shouldFetch) {
                 Log.i(TAG, "loadEpgIfConfigured: cache fresh, skipping network")
                 _state.update { it.copy(isEpgLoading = false) }
                 return null
@@ -741,7 +763,7 @@ class PlaylistViewModel @Inject constructor(
         // -- the same speedup the windowed cache load (P1 #5) gives the
         // downstream pipeline, but applied to fresh network fetches too.
         val knownKeys = buildChannelEpgKeyBridge(_state.value.channels).keys
-        return repository.loadEpg(playlist, knownKeys).fold(
+        return repository.loadEpg(playlist, knownKeys, _state.value.channels).fold(
             onSuccess = { rawProgrammes ->
                 // Channels may have arrived between the cache-paint above
                 // and the network fetch; re-read so we bridge against the

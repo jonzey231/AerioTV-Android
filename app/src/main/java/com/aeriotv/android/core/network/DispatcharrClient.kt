@@ -1658,6 +1658,8 @@ data class DispatcharrEpgData(
     val id: Int,
     @SerialName("tvg_id")
     val tvgId: String? = null,
+    @SerialName("epg_source")
+    val epgSourceId: Int? = null,
 )
 
 /**

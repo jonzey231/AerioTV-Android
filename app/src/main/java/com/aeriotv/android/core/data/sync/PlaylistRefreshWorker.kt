@@ -77,7 +77,7 @@ class PlaylistRefreshWorker @AssistedInject constructor(
         val knownKeys = com.aeriotv.android.core.data.buildChannelEpgKeyBridge(
             channels.getOrThrow(),
         ).keys
-        val epg = repository.loadEpg(playlist, knownKeys)
+        val epg = repository.loadEpg(playlist, knownKeys, channels.getOrThrow())
         if (epg.isFailure) {
             Log.w(TAG, "EPG refresh failed", epg.exceptionOrNull())
             // EPG miss is recoverable: channels are still fresh.

@@ -24,6 +24,7 @@ import com.aeriotv.android.core.parser.XMLTVParser
 import com.aeriotv.android.core.preferences.AppPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -487,6 +488,7 @@ class PlaylistRepository @Inject constructor(
     suspend fun loadEpg(
         playlist: PlaylistEntity,
         knownChannelKeys: Set<String>? = null,
+        knownChannels: List<M3UChannel>? = null,
     ): Result<List<EPGProgramme>> {
         val key = playlist.id
         val mine = CompletableDeferred<Result<List<EPGProgramme>>>()
@@ -496,7 +498,7 @@ class PlaylistRepository @Inject constructor(
             return winner.await()
         }
         return try {
-            val result = loadEpgInternal(playlist, knownChannelKeys)
+            val result = loadEpgInternal(playlist, knownChannelKeys, knownChannels)
             mine.complete(result)
             result
         } catch (t: Throwable) {
@@ -513,6 +515,7 @@ class PlaylistRepository @Inject constructor(
     private suspend fun loadEpgInternal(
         playlist: PlaylistEntity,
         knownChannelKeys: Set<String>? = null,
+        knownChannels: List<M3UChannel>? = null,
     ): Result<List<EPGProgramme>> =
         // Parse + grid-mapping run on Default, NOT the caller's (Main) dispatcher.
         // A large provider EPG is hundreds of thousands of programmes; parsing
@@ -540,8 +543,18 @@ class PlaylistRepository @Inject constructor(
                 // on legacy installs) but keeps the guide useful instead of
                 // blank.
                 val grid = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    runCatching { dispatcharrClient.getEpgGrid(base, key).toProgrammes() }
-                        .getOrElse { gridErr ->
+                    runCatching {
+                        val entries = dispatcharrClient.getEpgGrid(base, key)
+                        entries.toProgrammes().also { converted ->
+                            if (converted.size != entries.size) {
+                                Log.w(
+                                    "PlaylistRepo",
+                                    "Dispatcharr grid conversion kept ${converted.size}/${entries.size} entries: " +
+                                        dispatcharrEpgDropSummary(entries),
+                                )
+                            }
+                        }
+                    }.getOrElse { gridErr ->
                             Log.w(
                                 "PlaylistRepo",
                                 "Dispatcharr grid failed; falling back to current + bulk-upcoming",
@@ -587,41 +600,42 @@ class PlaylistRepository @Inject constructor(
                 // handle accumulation and overlap downstream. Sources that are
                 // unreachable from the app (LAN-only paths, file:// mounts on the
                 // server) fail silently per-source; the grid is never at risk.
-                val upstreamSourceUrls = runCatching {
+                val loadedDispatcharrIds = knownChannels
+                    ?.mapNotNull { it.dispatcharrChannelId }
+                    ?.toSet()
+                val upstreamLayers = runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                        dispatcharrClient.listEpgSources(base, key)
+                        dispatcharrEpgLayers(
+                            channels = dispatcharrClient.listChannels(base, key).filter { channel ->
+                                loadedDispatcharrIds == null || channel.id in loadedDispatcharrIds
+                            },
+                            epgData = dispatcharrClient.listEpgData(base, key),
+                            sources = dispatcharrClient.listEpgSources(base, key),
+                            knownChannelKeys = knownChannelKeys,
+                        )
                     }
                 }.getOrDefault(emptyList())
-                    .asSequence()
-                    .filter { it.isActive && it.sourceType == "xmltv" && it.hasChannels != false }
-                    .mapNotNull { src ->
-                        src.url?.trim()?.takeIf { u ->
-                            u.startsWith("http://", ignoreCase = true) ||
-                                u.startsWith("https://", ignoreCase = true)
-                        }
-                    }
-                    .distinct()
-                    .filter { it != customXmltv }
-                    .take(8)
-                    .toList()
-                val layerUrls = listOfNotNull(customXmltv) + upstreamSourceUrls
                 var layered = grid
-                for (layerUrl in layerUrls) {
+                if (customXmltv != null) {
                     val xmltv = runCatching {
-                        // GH #26: constant-memory download + parse.
-                        fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
-                    }.getOrElse {
-                        // Don't fail the whole EPG load just because one XMLTV
-                        // URL is unreachable; keep the grid the user already
-                        // paid the auth-retry roundtrip for.
-                        emptyList()
-                    }
+                        fetchViaTempFile(customXmltv, ".xmltv") {
+                            XMLTVParser.parseFile(it, knownChannelKeys)
+                        }
+                    }.getOrElse { emptyList() }
                     if (xmltv.isNotEmpty()) layered = layered + xmltv
                 }
-                if (upstreamSourceUrls.isNotEmpty()) {
+                for (layer in upstreamLayers.filter { it.url != customXmltv }.take(8)) {
+                    val xmltv = runCatching {
+                        fetchViaTempFile(layer.url, ".xmltv") {
+                            XMLTVParser.parseFile(it, layer.channelKeys)
+                        }
+                    }.getOrElse { emptyList() }
+                    if (xmltv.isNotEmpty()) layered = layered + xmltv
+                }
+                if (upstreamLayers.isNotEmpty()) {
                     Log.i(
                         "PlaylistRepo",
-                        "Layered ${upstreamSourceUrls.size} upstream Dispatcharr EPG source(s); " +
+                        "Layered ${upstreamLayers.size} source-scoped upstream Dispatcharr EPG source(s); " +
                             "programmes now ${layered.size} (grid ${grid.size})",
                     )
                 }
@@ -712,6 +726,9 @@ class PlaylistRepository @Inject constructor(
     suspend fun newestEpgFetch(playlistId: String): Long? =
         epgProgrammeDao.newestFetchedAt(playlistId)
 
+    suspend fun cachedEpgChannelIds(playlistId: String): Set<String> =
+        epgProgrammeDao.channelIdsForPlaylist(playlistId).toSet()
+
     /**
      * Per-playlist EPG cache purge (iOS GuideStore audit P2 #11). Called by
      * the user-initiated "Refresh EPG Data" action on the playlist detail
@@ -768,6 +785,7 @@ class PlaylistRepository @Inject constructor(
         // stays clean and reloads never feed a duplicate key to the url-keyed
         // Live TV lists. Distinct streams that share a tvg-id are kept.
         val channels = rawChannels.distinctBy { it.url }
+
         // GH #31: persist in CHUNKS inside ONE transaction instead of mapping the
         // whole ~100k-row entity list + one giant insertAll. That overlap (the
         // channel list + the full entity list + the transaction bind) was the
@@ -1103,11 +1121,21 @@ class PlaylistRepository @Inject constructor(
             // channel's own tvg_id, so map epg_data_id -> EPGData.tvg_id and use
             // THAT as the channel's tvgID below. Without this, only channels
             // whose raw tvg_id happens to equal the EPGData tvg_id get a guide.
-            val epgDataTvgById: Map<Int, String> = runCatching {
-                dispatcharrClient.listEpgData(base, key)
-                    .mapNotNull { d -> d.tvgId?.takeIf { it.isNotBlank() }?.let { d.id to it } }
-                    .toMap()
-            }.getOrDefault(emptyMap())
+            val epgDataResult = runCatching {
+                dispatcharrClient.listEpgData(base, key).associateBy { it.id }
+            }
+            val epgSourcesResult = runCatching {
+                dispatcharrClient.listEpgSources(base, key)
+                    .associate { it.id to it.sourceType }
+            }
+            val epgMetadata = if (epgDataResult.isSuccess) {
+                DispatcharrEpgMetadata.Available(
+                    epgDataById = epgDataResult.getOrThrow(),
+                    sourceTypesById = epgSourcesResult.getOrNull(),
+                )
+            } else {
+                DispatcharrEpgMetadata.Unavailable
+            }
             val channels = dispatcharrClient.listChannels(base, key)
                 .let { list -> if (accountAllowedIds != null) list.filter { it.id in accountAllowedIds } else list }
                 .let { list -> if (manualAllowedIds != null) list.filter { it.id in manualAllowedIds } else list }
@@ -1127,13 +1155,11 @@ class PlaylistRepository @Inject constructor(
                         name = ch.name,
                         url = dispatcharrClient.streamUrl(base, ch.uuid!!),
                         groupTitle = ch.channelGroupId?.let { groups[it] }.orEmpty(),
-                        // Prefer the matched EPGData's tvg_id (resolved via the
-                        // epg_data_id FK) so grid programmes attach; fall back to
-                        // the channel's own tvg_id when it has no EPG mapping.
-                        tvgID = (ch.effectiveEpgDataId ?: ch.epgDataId)
-                            ?.let { epgDataTvgById[it] }
-                            ?.takeIf { it.isNotBlank() }
-                            ?: ch.tvgId.orEmpty(),
+                        // Dispatcharr deliberately keys generated dummy/no-EPG
+                        // grid rows by channel UUID so channels sharing one dummy
+                        // EPGData stay isolated. Persisted sources remain keyed by
+                        // EPGData.tvg_id.
+                        tvgID = dispatcharrGuideKey(ch, epgMetadata),
                         tvgName = ch.name,
                         tvgLogo = ch.logoId?.let { dispatcharrClient.logoUrl(base, it) }.orEmpty(),
                         channelNumber = ch.channelNumber?.formatChannelNumber(),
@@ -1293,13 +1319,30 @@ data class ChannelProfileOption(
  * empty string. Lazy category enrichment via /api/epg/programs/<id>/ lives in
  * a later phase tied to ProgramInfoView.
  */
-private fun List<DispatcharrEpgEntry>.toProgrammes(): List<EPGProgramme> =
+internal fun dispatcharrEpgDropSummary(entries: List<DispatcharrEpgEntry>): String {
+    var missingKey = 0
+    var invalidStart = 0
+    var invalidEnd = 0
+    var blankTitle = 0
+    entries.forEach { entry ->
+        if (entry.tvgId.isNullOrBlank()) missingKey += 1
+        if (parseDispatcharrTimestamp(entry.startTime) == null) invalidStart += 1
+        if (parseDispatcharrTimestamp(entry.endTime) == null) invalidEnd += 1
+        if (entry.title.isBlank()) blankTitle += 1
+    }
+    return "missingKey=$missingKey, invalidStart=$invalidStart, invalidEnd=$invalidEnd, blankTitle=$blankTitle"
+}
+
+/** Accept both persisted `...Z` and generated `+00:00` ISO-8601 timestamps. */
+internal fun parseDispatcharrTimestamp(value: String): Long? =
+    runCatching { Instant.parse(value).toEpochMilli() }.getOrNull()
+        ?: runCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrNull()
+
+internal fun List<DispatcharrEpgEntry>.toProgrammes(): List<EPGProgramme> =
     mapNotNull { entry ->
         val channelId = entry.tvgId?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        val start = runCatching { Instant.parse(entry.startTime).toEpochMilli() }.getOrNull()
-            ?: return@mapNotNull null
-        val end = runCatching { Instant.parse(entry.endTime).toEpochMilli() }.getOrNull()
-            ?: return@mapNotNull null
+        val start = parseDispatcharrTimestamp(entry.startTime) ?: return@mapNotNull null
+        val end = parseDispatcharrTimestamp(entry.endTime) ?: return@mapNotNull null
         val title = entry.title.takeIf { it.isNotBlank() } ?: return@mapNotNull null
         EPGProgramme(
             channelId = channelId,
@@ -1406,6 +1449,85 @@ private fun M3UChannel.toCacheEntity(
     fetchedAt = fetchedAt,
 )
 
+
+internal sealed interface DispatcharrEpgMetadata {
+    data object Unavailable : DispatcharrEpgMetadata
+    data class Available(
+        val epgDataById: Map<Int, com.aeriotv.android.core.network.DispatcharrEpgData>,
+        val sourceTypesById: Map<Int, String?>?,
+    ) : DispatcharrEpgMetadata
+}
+
+internal fun dispatcharrGuideKey(
+    channel: com.aeriotv.android.core.network.DispatcharrChannel,
+    metadata: DispatcharrEpgMetadata,
+): String {
+    val compatibilityKey = channel.tvgId?.trim()?.takeIf { it.isNotBlank() }
+        ?: channel.uuid.orEmpty()
+    if (metadata === DispatcharrEpgMetadata.Unavailable) return compatibilityKey
+
+    metadata as DispatcharrEpgMetadata.Available
+    val assignmentId = channel.effectiveEpgDataId ?: channel.epgDataId
+    val data = assignmentId?.let(metadata.epgDataById::get)
+    // A successful EPGData response positively establishes that an unassigned
+    // channel has no EPG. A missing assigned row, however, is ambiguous (stale
+    // FK / pagination / version skew), so preserve the compatibility key.
+    if (assignmentId == null) return channel.uuid.orEmpty()
+    if (data == null) return compatibilityKey
+    val sourceTypes = metadata.sourceTypesById ?: return compatibilityKey
+    val sourceType = data.epgSourceId?.let(sourceTypes::get)?.trim()?.lowercase()
+    return when {
+        sourceType == "dummy" -> channel.uuid.orEmpty()
+        sourceType == null -> compatibilityKey
+        !data.tvgId.isNullOrBlank() -> data.tvgId
+        else -> compatibilityKey
+    }
+}
+
+internal fun shouldFetchDispatcharrEpg(
+    forceRefresh: Boolean,
+    cacheFresh: Boolean,
+    cachedGuideKeys: Set<String>,
+    channelGuideKeys: Set<String>,
+): Boolean = forceRefresh || !cacheFresh || !cachedGuideKeys.containsAll(channelGuideKeys)
+
+internal data class DispatcharrEpgLayer(
+    val url: String,
+    val channelKeys: Set<String>,
+)
+
+/** Resolve each loaded channel through its EPGData FK to the exact upstream
+ * XMLTV source selected in Dispatcharr. Parser keys are scoped per source so
+ * duplicate tvg-ids in unrelated feeds cannot leak into a channel's guide. */
+internal fun dispatcharrEpgLayers(
+    channels: List<com.aeriotv.android.core.network.DispatcharrChannel>,
+    epgData: List<com.aeriotv.android.core.network.DispatcharrEpgData>,
+    sources: List<com.aeriotv.android.core.network.DispatcharrEpgSource>,
+    knownChannelKeys: Set<String>? = null,
+): List<DispatcharrEpgLayer> {
+    val epgById = epgData.associateBy { it.id }
+    val keysBySource = linkedMapOf<Int, MutableSet<String>>()
+    for (channel in channels) {
+        val data = (channel.effectiveEpgDataId ?: channel.epgDataId)
+            ?.let(epgById::get) ?: continue
+        val sourceId = data.epgSourceId ?: continue
+        val tvgId = data.tvgId?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: continue
+        if (knownChannelKeys != null && tvgId !in knownChannelKeys) continue
+        keysBySource.getOrPut(sourceId, ::linkedSetOf).add(tvgId)
+    }
+    val layers = sources.asSequence()
+        .filter { it.id in keysBySource && it.isActive && it.sourceType == "xmltv" }
+        .mapNotNull { source ->
+            val url = source.url?.trim()?.takeIf {
+                it.startsWith("http://", true) || it.startsWith("https://", true)
+            } ?: return@mapNotNull null
+            DispatcharrEpgLayer(url, keysBySource.getValue(source.id))
+        }
+        .toList()
+    return layers.groupBy { it.url }.map { (url, sameUrlLayers) ->
+        DispatcharrEpgLayer(url, sameUrlLayers.flatMapTo(linkedSetOf()) { it.channelKeys })
+    }
+}
 
 /**
  * Format a Dispatcharr-API channel-number Double back to a display string,
