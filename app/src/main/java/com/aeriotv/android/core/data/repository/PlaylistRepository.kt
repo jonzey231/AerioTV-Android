@@ -35,6 +35,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -517,6 +519,25 @@ class PlaylistRepository @Inject constructor(
             }
             mine.complete(result)
             result
+        } catch (timeout: TimeoutCancellationException) {
+            // The wedge this fix exists for. Report it as a failure so the
+            // latch releases and the next refresh actually retries.
+            Log.w(
+                "PlaylistRepo",
+                "loadEpg: timed out after ${EPG_LOAD_TIMEOUT_MS / 1000}s; releasing the in-flight latch",
+            )
+            val r: Result<List<EPGProgramme>> = Result.failure(timeout)
+            mine.complete(r)
+            r
+        } catch (cancel: CancellationException) {
+            // NOT a failure: the caller's scope went away (screen left
+            // composition, process winding down). Release the latch for any
+            // joiner, then let cancellation propagate rather than reporting a
+            // bogus EPG error and continuing work in a dead scope. The
+            // timeout arm above runs first, so this only sees real
+            // cancellation -- TimeoutCancellationException is a subclass.
+            mine.complete(Result.failure(cancel))
+            throw cancel
         } catch (t: Throwable) {
             val r: Result<List<EPGProgramme>> = Result.failure(t)
             mine.complete(r)
