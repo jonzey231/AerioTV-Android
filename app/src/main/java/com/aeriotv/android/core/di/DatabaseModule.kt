@@ -274,6 +274,99 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * Movies & TV rebuild: the persistent VOD catalog (design
+     * ~/Desktop/MoviesTVRedesign.md, plan B1). ADDITIVE ONLY - four new tables,
+     * no transform of any existing row, so watch_progress and playlists are
+     * untouched and the migration cannot lose user data. Every table carries a
+     * CASCADE FK to playlists, matching WatchProgressEntity, so removing a
+     * playlist takes its catalog with it.
+     */
+    private val MIGRATION_23_24 = object : Migration(23, 24) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `vod_categories` (
+                    `playlistId` TEXT NOT NULL, `id` TEXT NOT NULL, `name` TEXT NOT NULL,
+                    `categoryType` TEXT NOT NULL, `enabled` INTEGER NOT NULL DEFAULT 1,
+                    `isPersonalLibrary` INTEGER NOT NULL DEFAULT 0,
+                    `librarySource` TEXT NOT NULL DEFAULT '', `libraryName` TEXT NOT NULL DEFAULT '',
+                    `provider` TEXT NOT NULL DEFAULT '', `syncedAt` INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(`playlistId`, `id`),
+                    FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_categories_playlistId` ON `vod_categories` (`playlistId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_categories_categoryType` ON `vod_categories` (`categoryType`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_categories_isPersonalLibrary` ON `vod_categories` (`isPersonalLibrary`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `vod_movies` (
+                    `playlistId` TEXT NOT NULL, `id` TEXT NOT NULL, `uuid` TEXT NOT NULL,
+                    `title` TEXT NOT NULL, `sortTitle` TEXT NOT NULL,
+                    `plot` TEXT NOT NULL DEFAULT '', `genre` TEXT NOT NULL DEFAULT '',
+                    `rating` TEXT NOT NULL DEFAULT '', `year` INTEGER, `durationSecs` INTEGER,
+                    `tmdbId` TEXT NOT NULL DEFAULT '', `imdbId` TEXT NOT NULL DEFAULT '',
+                    `trailerUrl` TEXT NOT NULL DEFAULT '', `posterUrl` TEXT NOT NULL DEFAULT '',
+                    `category` TEXT NOT NULL DEFAULT '', `isPersonalLibrary` INTEGER NOT NULL DEFAULT 0,
+                    `libraryKey` TEXT NOT NULL DEFAULT '', `serverCreatedAt` INTEGER,
+                    `syncedAt` INTEGER NOT NULL DEFAULT 0, `sourceKind` TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(`playlistId`, `id`),
+                    FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_movies_playlistId` ON `vod_movies` (`playlistId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_movies_uuid` ON `vod_movies` (`uuid`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_movies_sortTitle` ON `vod_movies` (`sortTitle`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_movies_serverCreatedAt` ON `vod_movies` (`serverCreatedAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_movies_category` ON `vod_movies` (`category`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `vod_series` (
+                    `playlistId` TEXT NOT NULL, `id` TEXT NOT NULL, `uuid` TEXT NOT NULL,
+                    `title` TEXT NOT NULL, `sortTitle` TEXT NOT NULL,
+                    `plot` TEXT NOT NULL DEFAULT '', `genre` TEXT NOT NULL DEFAULT '',
+                    `rating` TEXT NOT NULL DEFAULT '', `year` INTEGER,
+                    `tmdbId` TEXT NOT NULL DEFAULT '', `posterUrl` TEXT NOT NULL DEFAULT '',
+                    `category` TEXT NOT NULL DEFAULT '', `isPersonalLibrary` INTEGER NOT NULL DEFAULT 0,
+                    `libraryKey` TEXT NOT NULL DEFAULT '', `episodeCount` INTEGER NOT NULL DEFAULT 0,
+                    `serverCreatedAt` INTEGER, `syncedAt` INTEGER NOT NULL DEFAULT 0,
+                    `sourceKind` TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(`playlistId`, `id`),
+                    FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_series_playlistId` ON `vod_series` (`playlistId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_series_uuid` ON `vod_series` (`uuid`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_series_sortTitle` ON `vod_series` (`sortTitle`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_series_serverCreatedAt` ON `vod_series` (`serverCreatedAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_series_category` ON `vod_series` (`category`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `vod_episodes` (
+                    `playlistId` TEXT NOT NULL, `id` TEXT NOT NULL, `uuid` TEXT NOT NULL,
+                    `seriesId` TEXT NOT NULL, `seasonNumber` INTEGER NOT NULL DEFAULT 0,
+                    `episodeNumber` INTEGER NOT NULL DEFAULT 0, `title` TEXT NOT NULL DEFAULT '',
+                    `plot` TEXT NOT NULL DEFAULT '', `airDate` TEXT NOT NULL DEFAULT '',
+                    `durationSecs` INTEGER, `stillUrl` TEXT NOT NULL DEFAULT '',
+                    `syncedAt` INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(`playlistId`, `id`),
+                    FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_episodes_playlistId` ON `vod_episodes` (`playlistId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_episodes_seriesId` ON `vod_episodes` (`seriesId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vod_episodes_uuid` ON `vod_episodes` (`uuid`)")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -282,7 +375,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 
