@@ -203,6 +203,20 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "Guide stuck syncing, fixed",
+            body = "The guide could sit empty with the sync indicator spinning " +
+                "forever, and app storage could balloon past several gigabytes. " +
+                "Pulling extra catch-up history from your server's own guide " +
+                "sources now runs on a strict time budget instead of holding up " +
+                "the guide, and abandoned downloads are cleaned up at launch.",
+        ),
+        WhatsNewItem(
+            title = "All your channels, every time",
+            body = "On servers that hand back channel, group, and guide lists a " +
+                "page at a time, AerioTV now reads every page instead of " +
+                "stopping at the first one.",
+        ),
+        WhatsNewItem(
             title = "Match content frame rate",
             body = "The player now asks your device for a real refresh-rate " +
                 "switch when the stream's frame rate differs (50fps content on " +
