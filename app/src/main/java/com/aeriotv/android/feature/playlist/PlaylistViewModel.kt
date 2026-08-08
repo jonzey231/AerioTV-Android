@@ -356,6 +356,7 @@ class PlaylistViewModel @Inject constructor(
             Log.i(TAG, "bootstrap: refreshing channels (hadCache=$hasChannelCache)")
             repository.refresh(saved).fold(
                 onSuccess = { channels ->
+                    Log.i(TAG, "bootstrap: refreshed ${channels.size} channels")
                     _state.update {
                         it.copy(
                             phase = Phase.ChannelsReady,
@@ -1066,6 +1067,10 @@ class PlaylistViewModel @Inject constructor(
             }
             repository.refresh(active).fold(
                 onSuccess = { channels ->
+                    // Count goes to the LOG, not only the UI status pill: the
+                    // 2026-08 "40 channels" report was undiagnosable because
+                    // the size only ever reached the screen.
+                    Log.i(TAG, "refreshPlaylist: ${channels.size} channels loaded")
                     // Re-read the persisted row so the detail card's Channels /
                     // Last Connected values go live (the repo just stamped them).
                     val updated = repository.activePlaylist()
@@ -1222,6 +1227,8 @@ class PlaylistViewModel @Inject constructor(
             // 3. Re-fetch channels (refresh() rewrites the snapshot cache too).
             repository.refresh(active).fold(
                 onSuccess = { channels ->
+                    // See refreshPlaylist: the count must reach the log too.
+                    Log.i(TAG, "refreshEverything: ${channels.size} channels reloaded")
                     val updated = repository.activePlaylist()
                     _state.update {
                         it.copy(

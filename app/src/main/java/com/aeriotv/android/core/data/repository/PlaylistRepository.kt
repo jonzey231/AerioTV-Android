@@ -35,6 +35,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.ConcurrentHashMap
@@ -59,6 +60,12 @@ import java.util.concurrent.ConcurrentHashMap
  *  entities are trivially cheap against the heap, large enough that per-chunk
  *  SQLite bind overhead stays negligible across a ~100k-row XC catalog. */
 private const val CHANNEL_CACHE_CHUNK = 2_000
+
+/** Ceiling on one EPG load (network + parse). Wide enough for a multi-hundred
+ *  MB provider XMLTV on a slow link; exists so a wedged load releases the
+ *  in-flight latch in [PlaylistRepository.loadEpg] instead of blocking every
+ *  future EPG refresh until the process dies. */
+private const val EPG_LOAD_TIMEOUT_MS = 5L * 60L * 1000L
 
 @Singleton
 class PlaylistRepository @Inject constructor(
@@ -493,10 +500,21 @@ class PlaylistRepository @Inject constructor(
         val winner = inFlightLoads.putIfAbsent(key, mine)
         if (winner != null) {
             // Another caller already started the fetch; await their result.
+            // Log the join: the 2026-08 "no EPG" report showed a load that
+            // never returned wedging every later call on this latch. If that
+            // recurs, this line is the tell.
+            Log.i("PlaylistRepo", "loadEpg: joining in-flight load for ${key.take(8)}")
             return winner.await()
         }
         return try {
-            val result = loadEpgInternal(playlist, knownChannelKeys)
+            // Hard ceiling so a load that hangs pre-network (same report:
+            // "fetching EPG" logged, then silence -- no grid request, no
+            // success, no failure) completes the latch as a failure instead
+            // of wedging this playlist's EPG until force-stop. Generous
+            // because M3U XMLTV sources legitimately stream hundreds of MB.
+            val result = withTimeout(EPG_LOAD_TIMEOUT_MS) {
+                loadEpgInternal(playlist, knownChannelKeys)
+            }
             mine.complete(result)
             result
         } catch (t: Throwable) {
@@ -520,7 +538,14 @@ class PlaylistRepository @Inject constructor(
         // minutes before the guide could paint.
         withContext(Dispatchers.Default) { runCatching {
         val sourceType = playlist.resolvedSourceType()
+        // Breadcrumbs bracketing base resolution: the 2026-08 hang sat
+        // somewhere between the ViewModel's "fetching EPG" line and the first
+        // AerioNet request, and nothing in that stretch logged. Which of
+        // these two lines is the last one out pins the stall to either the
+        // LAN probe (before) or the auth-broker Room read (after).
+        Log.i("PlaylistRepo", "loadEpg: resolving base (source=$sourceType)")
         val base = effectiveBaseUrl(playlist)
+        Log.i("PlaylistRepo", "loadEpg: base resolved, starting fetch")
         val programmes = when (sourceType) {
             SourceType.M3uUrl -> {
                 val epgUrl = playlist.epgUrl?.takeIf { it.isNotBlank() } ?: return@runCatching emptyList()
@@ -1108,9 +1133,20 @@ class PlaylistRepository @Inject constructor(
                     .mapNotNull { d -> d.tvgId?.takeIf { it.isNotBlank() }?.let { d.id to it } }
                     .toMap()
             }.getOrDefault(emptyMap())
-            val channels = dispatcharrClient.listChannels(base, key)
-                .let { list -> if (accountAllowedIds != null) list.filter { it.id in accountAllowedIds } else list }
-                .let { list -> if (manualAllowedIds != null) list.filter { it.id in manualAllowedIds } else list }
+            val serverChannels = dispatcharrClient.listChannels(base, key)
+            val afterAccount =
+                if (accountAllowedIds != null) serverChannels.filter { it.id in accountAllowedIds } else serverChannels
+            val channels =
+                if (manualAllowedIds != null) afterAccount.filter { it.id in manualAllowedIds } else afterAccount
+            // 2026-08 "only ~40 channels" report: neither filter layer logged,
+            // so a truncated or filtered list was indistinguishable from a
+            // small server. Always record where the count came from.
+            Log.i(
+                "PlaylistRepo",
+                "Dispatcharr channels: server=${serverChannels.size}, " +
+                    "accountFilter=${accountAllowedIds?.size?.toString() ?: "off"} -> ${afterAccount.size}, " +
+                    "manualFilter=${manualAllowedIds?.size?.toString() ?: "off"} -> ${channels.size}",
+            )
             channels
                 .filter { !it.uuid.isNullOrBlank() }
                 .sortedWith(compareBy(

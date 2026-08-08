@@ -56,6 +56,11 @@ class DebugLogger @Inject constructor(
     // the blocking readLine() on its pipe.
     @Volatile private var logcatProc: Process? = null
 
+    // Whether a capture in THIS process has already dumped the per-pid
+    // backlog (see startLogcatCapture). Deliberately not persisted: a new
+    // process has a new pid and an empty backlog of its own.
+    @Volatile private var dumpedBacklogThisProcess = false
+
     init {
         scope.launch {
             for (line in queue) {
@@ -156,12 +161,23 @@ class DebugLogger @Inject constructor(
         logcatJob = scope.launch {
             runCatching {
                 val pid = android.os.Process.myPid()
-                // -T 1 starts the stream at "now" instead of first re-dumping
-                // the whole per-pid ring buffer the file already holds from a
-                // previous capture session.
-                val proc = Runtime.getRuntime().exec(
-                    arrayOf("logcat", "-T", "1", "-v", "time", "--pid=$pid"),
-                )
+                // First capture in THIS process dumps the pid-scoped backlog
+                // before following. Launch-critical lines (bootstrap, cache
+                // paint) land in the buffer while this reader is still
+                // spawning, and the old unconditional `-T 1` skipped them --
+                // the 2026-08 "no EPG" report arrived with exactly those
+                // decisive lines missing. `--pid` scoping means the backlog
+                // is only ever THIS process's lines, so the dump can't
+                // duplicate a previous session's file content. Re-enables
+                // within the same process keep `-T 1` (stream from "now"), so
+                // toggling doesn't re-dump what the first capture wrote.
+                val args = if (dumpedBacklogThisProcess) {
+                    arrayOf("logcat", "-T", "1", "-v", "time", "--pid=$pid")
+                } else {
+                    arrayOf("logcat", "-v", "time", "--pid=$pid")
+                }
+                dumpedBacklogThisProcess = true
+                val proc = Runtime.getRuntime().exec(args)
                 logcatProc = proc
                 logcatActive.set(true)
                 proc.inputStream.bufferedReader().useLines { lines ->
