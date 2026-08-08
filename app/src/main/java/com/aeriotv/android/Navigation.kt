@@ -1173,7 +1173,17 @@ fun AerioTVNavHost(
                         .stop(mvContext.applicationContext)
                 }
                 MultiviewScreen(
-                    onClose = { navController.popBackStack() },
+                    // Desktop repro 2026-08-05: multiview entered from the
+                    // PLAYER used to pop back onto a player whose stream
+                    // multiview had deliberately taken over - a black, dead
+                    // screen. Both exit-dialog actions promise the guide, so
+                    // land on the main scaffold no matter what pushed
+                    // multiview (guide-staged entries pop the same way).
+                    onClose = {
+                        if (!navController.popBackStack(Routes.MAIN, false)) {
+                            navController.popBackStack()
+                        }
+                    },
                     httpHeaders = headers,
                     // Pass the PLAYLIST_GRAPH-scoped VM so the re-entrant
                     // "Add streams" picker reuses this single instance.

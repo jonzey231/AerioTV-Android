@@ -419,6 +419,15 @@ fun MultiviewScreen(
                     relocatingIndex = null
                 } else if (r == idx) {
                     relocatingIndex = null
+                } else if (selected.size == 1) {
+                    // Desktop repro 2026-08-05: after removing down to a sole
+                    // tile, a remote user had NO path back to the chrome -
+                    // audio focus is a no-op on the only tile, and the other
+                    // chrome trigger (tile focus) needs a neighbor to move
+                    // to. OK (and a touch tap on the tile) now toggles the
+                    // chrome, same as the touch background tap.
+                    chromeVisible = !chromeVisible
+                    lastInteractionAt = android.os.SystemClock.uptimeMillis()
                 } else {
                     storeHandle.setAudioFocus(idx)
                 }
