@@ -64,12 +64,19 @@ class VodRefreshPipeline @Inject constructor(
     ): Result {
         val playlistId = playlist.id
         lock.withLock {
-            if (!inFlight.add(playlistId)) return Result(skipped = true)
+            if (!inFlight.add(playlistId)) {
+                Log.i(TAG, "refresh skipped: already in flight for this playlist")
+                return Result(skipped = true)
+            }
         }
         val startedAt = System.currentTimeMillis()
         try {
-            val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() }
-                ?: return Result(error = "no api key")
+            // Every bail is logged (the CarPlay cold-car lesson): a silent
+            // early return here is indistinguishable from "never ran".
+            val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: run {
+                Log.w(TAG, "refresh bail: playlist has no api key (source=${playlist.sourceType})")
+                return Result(error = "no api key")
+            }
 
             // Categories first: they carry the library namespacing every item
             // row is tagged with, so they must land before the items do.

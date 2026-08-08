@@ -149,8 +149,12 @@ class OnDemandViewModel @Inject constructor(
         // serializes per playlist internally, mirrors the Apple orchestrator
         // placement, and a failure logs without touching UI state.
         viewModelScope.launch {
-            val playlist = playlistRepository.activePlaylist() ?: return@launch
+            val playlist = playlistRepository.activePlaylist() ?: run {
+                android.util.Log.i("VodRefreshPipeline", "trigger bail: no active playlist")
+                return@launch
+            }
             val base = playlistRepository.effectiveBaseUrl(playlist)
+            android.util.Log.i("VodRefreshPipeline", "trigger: starting catalog refresh")
             vodRefreshPipeline.refresh(playlist, base)
         }
         // React to the active playlist changing (switch) or being deleted.
