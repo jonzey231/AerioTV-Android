@@ -203,6 +203,14 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "Saving a new API key works again",
+            body = "If your playlist was added with a username and password " +
+                "and you later switched it to API Key mode, entering a new " +
+                "key was silently discarded, so anything that needs the key " +
+                "kept failing. Most visibly, On Demand stopped appearing " +
+                "while live channels carried on working.",
+        ),
+        WhatsNewItem(
             title = "Guide loads in seconds",
             body = "The guide now appears as soon as your server sends it, " +
                 "instead of waiting behind large guide-history downloads. " +
