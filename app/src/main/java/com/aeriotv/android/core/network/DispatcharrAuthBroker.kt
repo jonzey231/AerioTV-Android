@@ -78,7 +78,19 @@ class DispatcharrAuthBroker @Inject constructor(
             Log.i(TAG, "401 on apiKey call for ${playlistId.take(8)}; attempting silent rebootstrap")
             val freshKey = silentRebootstrapApiKey(playlist)
             if (freshKey == null) {
-                Log.w(TAG, "silent rebootstrap returned null for ${playlistId.take(8)}; surfacing original 401")
+                // API-Key-mode playlists have no credentials to re-mint from,
+                // so a rejected key is terminal until the user replaces it.
+                // Before this flag the failure was invisible: Live TV and the
+                // guide kept serving from cache while VOD alone 401'd, so the
+                // Movies & TV tab simply never appeared and nothing said why
+                // (reported 2026-08-08 on both a Z Fold and the Streamer).
+                // Record it so Settings can prompt for a new key.
+                Log.w(
+                    TAG,
+                    "silent rebootstrap returned null for ${playlistId.take(8)}: API-Key-mode " +
+                        "playlist with a rejected key has nothing to re-mint from. The user must " +
+                        "enter a new key in Edit Playlist. Surfacing the 401.",
+                )
                 throw e
             }
             block(freshKey)
