@@ -29,6 +29,12 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -515,6 +521,81 @@ class PlaylistRepository @Inject constructor(
      */
     private val inFlightLoads = ConcurrentHashMap<String, CompletableDeferred<Result<List<EPGProgramme>>>>()
 
+    /** Owns the background upstream-layering jobs. Supervisor so one playlist's
+     *  failed layering never cancels another's; Default because the work is a
+     *  CPU-bound parse. Repository is a @Singleton, so this scope lives for the
+     *  process -- layering outlives the screen that triggered it, which is the
+     *  point: the user keeps browsing on the grid while history accumulates. */
+    private val layeringScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** One layering job per playlist. A refresh while one is running reuses it
+     *  rather than downloading the same feeds twice in parallel. */
+    private val layeringJobs = ConcurrentHashMap<String, Job>()
+
+    private val _upstreamEpgLayered = MutableSharedFlow<String>(extraBufferCapacity = 4)
+
+    /** Emits a playlistId after that playlist's upstream catch-up history has
+     *  been merged into the EPG cache. Collectors re-read the cache (the
+     *  existing mergeEpgHistory path) rather than receiving rows directly, so
+     *  there is exactly one merge/dedup implementation. */
+    val upstreamEpgLayered = _upstreamEpgLayered.asSharedFlow()
+
+    /**
+     * Fetch + parse the upstream XMLTV sources OFF the EPG critical path and
+     * merge the result into the cache. Same budget model as 0.4.5, with the
+     * enforcement fixed: the wall-clock deadline is checked INSIDE the parse
+     * loop (XMLTVParser.shouldAbort), because a multi-million-programme feed
+     * parses for minutes without ever reaching a suspension point where
+     * withTimeout could fire. A source that blows its ceiling keeps what it
+     * parsed (partial history is still history) and yields to the next.
+     */
+    private fun layerUpstreamInBackground(
+        playlistId: String,
+        sourceUrls: List<String>,
+        knownChannelKeys: Set<String>?,
+    ) {
+        layeringJobs.compute(playlistId) { _, existing ->
+            if (existing?.isActive == true) return@compute existing
+            layeringScope.launch {
+                val phaseDeadline = System.currentTimeMillis() + UPSTREAM_EPG_TOTAL_BUDGET_MS
+                var collected = 0
+                for (url in sourceUrls) {
+                    if (System.currentTimeMillis() >= phaseDeadline) {
+                        Log.w("PlaylistRepo", "upstream layering: phase budget spent; stopping")
+                        break
+                    }
+                    val sourceDeadline = minOf(
+                        System.currentTimeMillis() + UPSTREAM_EPG_PER_SOURCE_MS,
+                        phaseDeadline,
+                    )
+                    val xmltv = runCatching {
+                        fetchViaTempFile(url, ".xmltv") { file ->
+                            XMLTVParser.parseFile(file, knownChannelKeys) {
+                                System.currentTimeMillis() >= sourceDeadline
+                            }
+                        }
+                    }.getOrElse {
+                        if (it is CancellationException) throw it
+                        Log.w("PlaylistRepo", "upstream EPG source skipped: ${it.javaClass.simpleName}")
+                        emptyList()
+                    }
+                    if (xmltv.isNotEmpty()) {
+                        // Merge per-source so a kill mid-phase loses at most
+                        // one feed, not all of them. saveEpgToCache merges and
+                        // prunes to the retention window.
+                        runCatching { saveEpgToCache(playlistId, xmltv) }
+                            .onFailure { Log.w("PlaylistRepo", "layered cache merge failed", it) }
+                        collected += xmltv.size
+                    }
+                }
+                if (collected > 0) {
+                    Log.i("PlaylistRepo", "upstream layering: merged $collected programmes in background")
+                    _upstreamEpgLayered.tryEmit(playlistId)
+                }
+            }
+        }
+    }
+
     suspend fun loadEpg(
         playlist: PlaylistEntity,
         knownChannelKeys: Set<String>? = null,
@@ -672,9 +753,8 @@ class PlaylistRepository @Inject constructor(
                     .filter { it != customXmltv }
                     .take(MAX_UPSTREAM_EPG_SOURCES)
                     .toList()
-                // The user's OWN EPG URL is not optional work and keeps no
-                // budget; the upstream layering below is a bonus and must never
-                // cost more than its budget.
+                // The user's OWN EPG URL is not optional work and stays on
+                // the critical path (it is guide data they configured).
                 var layered = grid
                 customXmltv?.let { own ->
                     val xmltv = runCatching {
@@ -682,47 +762,25 @@ class PlaylistRepository @Inject constructor(
                     }.getOrElse { emptyList() }
                     if (xmltv.isNotEmpty()) layered = layered + xmltv
                 }
-                // Discord report 2026-08-08 (rmebast): this layering made EVERY
-                // EPG load download up to 8 full upstream XMLTV feeds. On a
-                // server whose feeds are large or slow the load never returned
-                // -- guide empty, "syncing" forever -- and each force-stop
-                // orphaned the in-flight temp file, growing app cache past 4GB.
-                // The feature is a nice-to-have (deeper catch-up history), so
-                // it now runs on a strict budget and can never hold the grid
-                // hostage: per-source ceiling, whole-phase ceiling, and it stops
-                // early the moment the budget is gone.
-                val layerDeadline = System.currentTimeMillis() + UPSTREAM_EPG_TOTAL_BUDGET_MS
-                var layeredCount = 0
-                for (layerUrl in upstreamSourceUrls) {
-                    if (System.currentTimeMillis() >= layerDeadline) {
-                        Log.w(
-                            "PlaylistRepo",
-                            "upstream EPG layering: budget spent after $layeredCount source(s); " +
-                                "skipping ${upstreamSourceUrls.size - layeredCount} more",
-                        )
-                        break
-                    }
-                    val xmltv = runCatching {
-                        withTimeout(UPSTREAM_EPG_PER_SOURCE_MS) {
-                            // GH #26: constant-memory download + parse.
-                            fetchViaTempFile(layerUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
-                        }
-                    }.getOrElse {
-                        // Don't fail the whole EPG load just because one XMLTV
-                        // URL is unreachable or slow; keep the grid the user
-                        // already paid the auth-retry roundtrip for.
-                        Log.w("PlaylistRepo", "upstream EPG source skipped: ${it.javaClass.simpleName}")
-                        emptyList()
-                    }
-                    layeredCount++
-                    if (xmltv.isNotEmpty()) layered = layered + xmltv
-                }
+                // Discord reports 2026-08-08 (rmebast; needcoffee, measured
+                // directly against their server): the upstream layering used
+                // to run HERE, between the grid fetch and the return, so the
+                // guide could not paint until every feed was downloaded and
+                // parsed. The 0.4.5 budget capped the damage but kept the
+                // architecture: on a server with four epg.guru 7-day national
+                // feeds the user still stared at an empty "syncing" guide for
+                // the full budget on EVERY load, because a CPU-bound XMLTV
+                // parse never hits a suspension point and withTimeout cannot
+                // fire mid-parse. Meanwhile the grid itself had returned in
+                // ~1s (3.9MB measured on the affected server).
+                //
+                // The grid now returns IMMEDIATELY and the layering runs in
+                // [layerUpstreamInBackground]: same source list, same budget,
+                // but off the critical path, cancellable mid-parse, merged
+                // through the EPG cache, and announced via [upstreamEpgLayered]
+                // so the ViewModel folds it in when it lands.
                 if (upstreamSourceUrls.isNotEmpty()) {
-                    Log.i(
-                        "PlaylistRepo",
-                        "Layered ${upstreamSourceUrls.size} upstream Dispatcharr EPG source(s); " +
-                            "programmes now ${layered.size} (grid ${grid.size})",
-                    )
+                    layerUpstreamInBackground(playlist.id, upstreamSourceUrls, knownChannelKeys)
                 }
                 layered
             }
