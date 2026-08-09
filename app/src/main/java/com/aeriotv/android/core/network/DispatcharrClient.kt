@@ -1722,6 +1722,12 @@ data class DispatcharrEpgData(
     val id: Int,
     @SerialName("tvg_id")
     val tvgId: String? = null,
+    /** FK to the EPG source that supplied this row. GH #53 needs it twice:
+     *  the source's TYPE decides whether the row carries a real broadcast
+     *  identity (a "dummy" source does not), and the source's URL decides
+     *  which upstream feed a given tvg-id legitimately belongs to. */
+    @SerialName("epg_source")
+    val epgSourceId: Int? = null,
 )
 
 /**

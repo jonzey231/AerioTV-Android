@@ -159,17 +159,39 @@ data class TimeshiftSegment(
 /** GH #51: packet count of the head fingerprint the splice trimmer hunts for. */
 private const val OVERLAP_RUN = 16
 
-/** GH #51: stop hunting for the overlap after discarding this many bytes.
- *  The overlap is the server's client-join replay
- *  (new_client_behind_seconds, ~5s by default), which arrives as an
- *  instant burst: 8MB covers 5s at ~13Mbps. */
+/** GH #55: byte cap on the overlap hunt, used ONLY when the stream
+ *  carries no usable PCR (see [TimeshiftWriter.trimDiscard]).
+ *
+ *  This used to be the primary bound and it was the bug. The hunt
+ *  discards as it scans, so hitting the cap threw away 8 MiB of video
+ *  that had already arrived. Destro706's three logs (GH #55, one per
+ *  device) show the fingerprint was never once found and the cap was
+ *  hit every time, always within 436-1068 ms, i.e. the bytes arrive at
+ *  60-150 Mbps. That is a server backlog burst, not live video: the
+ *  join replay starts BEHIND our head, so our head fingerprint is in
+ *  the burst's future and can never appear, and we then binned several
+ *  seconds of perfectly good video and spliced a hard hole. The hole
+ *  breaks PTS continuity, which is the AudioSink discontinuity storm
+ *  in the same logs. */
 private const val OVERLAP_SEARCH_CAP = 8 * 1024 * 1024
 
-/** GH #51: stop hunting after this much wall time. The replay burst
- *  lands in the first fraction of a second; a server with join replay
- *  disabled simply has no fingerprint to find, and this bound caps the
- *  resulting gap. */
+/** GH #51: stop hunting after this much wall time when there is no PCR
+ *  to steer by. */
 private const val OVERLAP_SEARCH_MS = 3_000L
+
+/** GH #55: seatbelt for the PCR-steered hunt. The stop condition there
+ *  is "the new connection's clock passed our head", which a real replay
+ *  always reaches, so this only fires if a server streams an enormous
+ *  backlog or restamps its clock. Generous, because every byte the hunt
+ *  discards under PCR steering genuinely IS content we already hold. */
+private const val OVERLAP_PCR_SEARCH_MS = 15_000L
+
+/** PCR is a 33-bit 90 kHz counter; it wraps roughly every 26.5 hours. */
+private const val PCR_WRAP = 1L shl 33
+
+/** Writer queue depth, in chunks. Also the permit count of the
+ *  admission semaphore that fronts it. */
+private const val WRITE_SLOTS = 256
 
 /**
  * Appends the live TS byte stream into rolling segment files.
@@ -227,6 +249,28 @@ class TimeshiftWriter(
     private var matchLen = 0
     private var discardedBytes = 0L
     private var discardStartMs = 0L
+
+    // GH #55 PCR steering. The byte fingerprint only works when the new
+    // connection replays bit-identical bytes that our head lies inside;
+    // the stream's own clock says definitively whether the incoming
+    // bytes are behind our head (replay, discard) or past it (fresh,
+    // keep). PCR is what makes the hunt terminate for the right reason.
+    /** Last PCR committed to the buffer, 90 kHz base; -1 = none seen. */
+    private var headPcr = -1L
+    /** PID that carried [headPcr], so a second program on the same mux
+     *  cannot be mistaken for the clock we are tracking. */
+    private var headPcrPid = -1
+    /** [headPcr] snapshotted at the last discontinuity. */
+    private var spliceAnchorPcr = -1L
+    private var spliceAnchorPid = -1
+    /** Set once the discard scan sees any PCR on the anchor PID; while
+     *  false the byte cap is still the only available bound. */
+    private var sawAnchorPcr = false
+
+    /** Chunks the writer had to refuse because the queue was full.
+     *  Reported once per session close: a nonzero count means the buffer
+     *  has holes and is worth knowing about in a shared log. */
+    private val droppedChunks = java.util.concurrent.atomic.AtomicLong(0)
     /** Wall time of the newest byte written; the "live edge" of the buffer. */
     @Volatile var headWallMs: Long = sessionStartMs
         private set
@@ -234,11 +278,29 @@ class TimeshiftWriter(
     @Volatile var tailWallMs: Long = sessionStartMs
         private set
 
+    /** Admission control for [executor]. The queue is sized above the
+     *  permit count so a permitted task is never rejected; the permit is
+     *  what decides whether a producer is dropped or made to wait. */
+    private val slots = java.util.concurrent.Semaphore(WRITE_SLOTS)
+
     private val executor = ThreadPoolExecutor(
         1, 1, 30, TimeUnit.SECONDS,
-        LinkedBlockingQueue(64),
+        LinkedBlockingQueue(WRITE_SLOTS + 16),
     ) { r -> Thread(r, "timeshift-writer").apply { priority = Thread.NORM_PRIORITY - 1 } }
-        .apply { setRejectedExecutionHandler { _, _ -> /* drop chunk, never block playback */ } }
+        .apply { setRejectedExecutionHandler { _, _ -> onChunkDropped() } }
+
+    /** GH #55: a refused chunk is a hole of arbitrary length, and the
+     *  bytes after it no longer line up with the packet remainder held
+     *  in [carry] - without a resync EVERY later packet in the session
+     *  is misaligned by (holeBytes + carry) mod 188 and the demuxer
+     *  never recovers. Silently dropping was never safe. */
+    private fun onChunkDropped() {
+        needResync = true
+        val n = droppedChunks.incrementAndGet()
+        if (n == 1L || n % 64L == 0L) {
+            Log.w("TimeshiftBuffer", "writer queue full, dropped $n chunk(s); buffer will resync")
+        }
+    }
 
     /** Mark that the NEXT appended bytes come from a fresh connection:
      *  drop the packet-fragment carry and re-scan for TS sync. GH #51:
@@ -256,7 +318,7 @@ class TimeshiftWriter(
      *  or a different-content connection) falls back to the old splice
      *  behavior. */
     fun markDiscontinuity() {
-        executor.execute {
+        submit(blocking = false) {
             synchronized(lock) {
                 carry = ByteArray(0)
                 needResync = true
@@ -268,7 +330,12 @@ class TimeshiftWriter(
                 ) {
                     recentHashes.toIntArray()
                 } else null
-                discardActive = spliceTarget != null
+                spliceAnchorPcr = headPcr
+                spliceAnchorPid = headPcrPid
+                sawAnchorPcr = false
+                // Either signal on its own is enough to trim: PCR alone
+                // still tells us where the replay ends.
+                discardActive = spliceTarget != null || spliceAnchorPcr >= 0
                 matchLen = 0
                 discardedBytes = 0L
                 discardStartMs = 0L
@@ -276,10 +343,53 @@ class TimeshiftWriter(
         }
     }
 
+    /** Append from the live tee. Playback owns this thread, so a full
+     *  queue drops the chunk rather than stalling the picture. */
     fun append(data: ByteArray, offset: Int, length: Int) {
         if (closed || length <= 0) return
         val copy = data.copyOfRange(offset, offset + length)
-        executor.execute { writeChunk(copy) }
+        submit(blocking = false) { writeChunk(copy) }
+    }
+
+    /**
+     * GH #55: append from the independent filler. Nothing is rendering
+     * off this thread, so it can afford to wait for the writer instead
+     * of punching holes in the buffer. It matters here specifically:
+     * the filler's first seconds are a server backlog burst measured at
+     * 60-150 Mbps in the field logs, an order of magnitude above the
+     * live rate the queue was sized for, and every chunk dropped in
+     * that window also breaks the splice hunt scanning through it.
+     */
+    fun appendFill(data: ByteArray, offset: Int, length: Int) {
+        if (closed || length <= 0) return
+        val copy = data.copyOfRange(offset, offset + length)
+        submit(blocking = true) { writeChunk(copy) }
+    }
+
+    /** Take an admission permit (waiting only for non-playback
+     *  producers), then hand the work to the writer thread. */
+    private fun submit(blocking: Boolean, work: () -> Unit) {
+        val admitted = if (blocking) {
+            runCatching { slots.tryAcquire(2, TimeUnit.SECONDS) }.getOrDefault(false)
+        } else {
+            slots.tryAcquire()
+        }
+        if (!admitted) {
+            onChunkDropped()
+            return
+        }
+        try {
+            executor.execute {
+                try {
+                    work()
+                } finally {
+                    slots.release()
+                }
+            }
+        } catch (t: Throwable) {
+            slots.release()
+            onChunkDropped()
+        }
     }
 
     private fun writeChunk(chunk: ByteArray) {
@@ -332,25 +442,56 @@ class TimeshiftWriter(
         while (p < end) {
             recentHashes.addLast(packetHash(buf, p))
             while (recentHashes.size > OVERLAP_RUN) recentHashes.removeFirst()
+            val pcr = packetPcr(buf, p)
+            if (pcr >= 0) {
+                headPcr = pcr
+                headPcrPid = packetPid(buf, p)
+            }
             p += TimeshiftBufferStore.TS_PACKET
         }
     }
 
     /**
-     * GH #51: discard the new connection's packets until the pre-splice
-     * head fingerprint run completes. Everything up to and including the
-     * fingerprint is the server's replay of content the buffer already
-     * holds (Dispatcharr sends a joining client the last
-     * new_client_behind_seconds as an instant burst); dropping it makes
-     * the splice bit-exact. Streaming, nothing held back: the search is
-     * bounded by [OVERLAP_SEARCH_CAP] bytes and [OVERLAP_SEARCH_MS] wall
-     * time - a server with no join replay costs at most that small
-     * packet-aligned gap, which beats appending a duplicate region the
-     * demuxer chews through as artifacts.
+     * Discard the new connection's packets for as long as they are
+     * content the buffer already holds, then splice.
+     *
+     * GH #51 established WHY: Dispatcharr hands a joining client the
+     * last new_client_behind_seconds as an instant burst, so appending
+     * the new connection as-is put a backwards PTS jump in the buffer
+     * that the demuxer chewed through as artifacts and A/V desync.
+     *
+     * GH #55 established WHEN TO STOP. Two independent signals, in
+     * priority order:
+     *
+     *  1. The byte fingerprint of our head ([spliceTarget]). When the
+     *     replay really does contain our head, this splices bit-exactly.
+     *
+     *  2. The stream's own clock. Every PCR says where the incoming
+     *     bytes sit relative to [spliceAnchorPcr], the last clock we
+     *     committed. Once a PCR passes the anchor, the connection has
+     *     caught up with our head and everything from that packet on is
+     *     content we do NOT have: stop discarding immediately.
+     *
+     * Signal 2 is what makes the common failure benign. If the server
+     * joins us at or ahead of our head there is no fingerprint to find,
+     * and the old byte cap responded by binning 8 MiB of arriving video
+     * and splicing a hole - turning a small genuine gap into a multi
+     * second one. Now the very first PCR ends the discard, so a server
+     * with no useful replay costs essentially nothing.
+     *
+     * The anchor is the last PCR we COMMITTED, and the head may sit up
+     * to one PCR interval past it (~40-100 ms), so this can re-admit
+     * that much duplicate. A sub-frame overlap is a far better failure
+     * than a gap: the demuxer absorbs it, whereas a hole stalls the
+     * audio sink.
+     *
+     * The byte cap survives only for streams with no PCR on the anchor
+     * PID at all.
      */
     private fun trimDiscard(merged: ByteArray, whole: Int, now: Long) {
         val target = spliceTarget
-        if (target == null) {
+        val anchorPcr = spliceAnchorPcr
+        if (target == null && anchorPcr < 0) {
             discardActive = false
             commitPackets(merged, 0, whole, now)
             return
@@ -358,35 +499,113 @@ class TimeshiftWriter(
         if (discardStartMs == 0L) discardStartMs = now
         var p = 0
         while (p < whole) {
-            val h = packetHash(merged, p)
-            matchLen = when {
-                h == target[matchLen] -> matchLen + 1
-                h == target[0] -> 1
-                else -> 0
+            val packetStart = p
+            if (target != null) {
+                val h = packetHash(merged, p)
+                matchLen = when {
+                    h == target[matchLen] -> matchLen + 1
+                    h == target[0] -> 1
+                    else -> 0
+                }
             }
             p += TimeshiftBufferStore.TS_PACKET
-            if (matchLen == target.size) {
+            if (target != null && matchLen == target.size) {
                 // Fingerprint completed at THIS packet: bytes before and
                 // including it are the replay; the rest of the chunk is
                 // fresh continuation.
-                discardActive = false
-                spliceTarget = null
-                val dropped = discardedBytes + p
-                Log.i("TimeshiftBuffer", "splice overlap trimmed ($dropped bytes)")
+                endDiscard()
+                Log.i("TimeshiftBuffer", "splice overlap trimmed (${discardedBytes + p} bytes)")
                 if (p < whole) commitPackets(merged, p, whole - p, now)
                 return
             }
+            if (anchorPcr >= 0) {
+                val pcr = packetPcr(merged, packetStart)
+                if (pcr >= 0 &&
+                    (spliceAnchorPid < 0 || packetPid(merged, packetStart) == spliceAnchorPid)
+                ) {
+                    sawAnchorPcr = true
+                    val aheadMs = pcrDelta(pcr, anchorPcr) / 90
+                    if (aheadMs > 0) {
+                        // Caught up with our head. This packet and
+                        // everything after it is new material.
+                        endDiscard()
+                        Log.i(
+                            "TimeshiftBuffer",
+                            "splice resynced on stream clock ${aheadMs}ms past head after " +
+                                "discarding ${discardedBytes + packetStart} bytes",
+                        )
+                        commitPackets(merged, packetStart, whole - packetStart, now)
+                        return
+                    }
+                }
+            }
         }
         discardedBytes += whole
-        if (discardedBytes > OVERLAP_SEARCH_CAP || now - discardStartMs > OVERLAP_SEARCH_MS) {
-            discardActive = false
-            spliceTarget = null
-            Log.i(
+        val elapsed = now - discardStartMs
+        if (sawAnchorPcr) {
+            // Steering by the clock: the replay is real and every byte
+            // discarded is content we hold. Only a runaway trips this.
+            if (elapsed > OVERLAP_PCR_SEARCH_MS) {
+                endDiscard()
+                Log.w(
+                    "TimeshiftBuffer",
+                    "splice clock never passed the head in ${elapsed}ms " +
+                        "($discardedBytes bytes); splicing with a gap",
+                )
+            }
+        } else if (discardedBytes > OVERLAP_SEARCH_CAP || elapsed > OVERLAP_SEARCH_MS) {
+            endDiscard()
+            Log.w(
                 "TimeshiftBuffer",
-                "splice fingerprint not found; spliced with a gap after " +
-                    "discarding $discardedBytes bytes",
+                "splice found no head fingerprint and no stream clock within " +
+                    "$discardedBytes bytes / ${elapsed}ms; splicing with a gap",
             )
         }
+    }
+
+    private fun endDiscard() {
+        discardActive = false
+        spliceTarget = null
+        spliceAnchorPcr = -1L
+        spliceAnchorPid = -1
+        sawAnchorPcr = false
+    }
+
+    /**
+     * The 33-bit 90 kHz PCR base carried by this packet, or -1 if it has
+     * none. Layout: byte 3 bits 5-4 are adaptation_field_control; a
+     * value of 2 or 3 means an adaptation field follows at byte 4 as
+     * (length, flags, ...), and flag 0x10 puts the 48-bit PCR in the
+     * next 6 bytes - 33 bits of base, 6 reserved, 9 of extension. Only
+     * the base is needed to order two points in the same stream.
+     */
+    private fun packetPcr(buf: ByteArray, offset: Int): Long {
+        if (buf[offset] != 0x47.toByte()) return -1L
+        val afc = (buf[offset + 3].toInt() shr 4) and 0x03
+        if (afc != 2 && afc != 3) return -1L
+        val afLen = buf[offset + 4].toInt() and 0xFF
+        // Needs the flags byte plus 6 PCR bytes, and must stay inside
+        // the packet: a malformed length must not read into the next one.
+        if (afLen < 7 || 5 + afLen > TimeshiftBufferStore.TS_PACKET) return -1L
+        if (buf[offset + 5].toInt() and 0x10 == 0) return -1L
+        return ((buf[offset + 6].toLong() and 0xFF) shl 25) or
+            ((buf[offset + 7].toLong() and 0xFF) shl 17) or
+            ((buf[offset + 8].toLong() and 0xFF) shl 9) or
+            ((buf[offset + 9].toLong() and 0xFF) shl 1) or
+            ((buf[offset + 10].toLong() and 0x80) shr 7)
+    }
+
+    private fun packetPid(buf: ByteArray, offset: Int): Int =
+        ((buf[offset + 1].toInt() and 0x1F) shl 8) or (buf[offset + 2].toInt() and 0xFF)
+
+    /** Signed distance a - b in 90 kHz ticks, tolerating the 33-bit
+     *  wrap (a stream that wraps mid-splice must not read as a 26-hour
+     *  jump backwards). */
+    private fun pcrDelta(a: Long, b: Long): Long {
+        var d = a - b
+        if (d > PCR_WRAP / 2) d -= PCR_WRAP
+        if (d < -PCR_WRAP / 2) d += PCR_WRAP
+        return d
     }
 
     /** FNV-1a over one 188-byte packet. */
@@ -469,9 +688,14 @@ class TimeshiftWriter(
     }
 
     fun close() {
+        val dropped = droppedChunks.get()
+        if (dropped > 0) {
+            Log.w("TimeshiftBuffer", "session ${sessionDir.name} dropped $dropped chunk(s)")
+        }
         // Flush pending writes, then close the file on the writer thread
-        // so we never truncate a chunk mid-write.
-        executor.execute { synchronized(lock) { closeLocked() } }
+        // so we never truncate a chunk mid-write. Submitted directly:
+        // close must not be refused for want of an admission permit.
+        runCatching { executor.execute { synchronized(lock) { closeLocked() } } }
         executor.shutdown()
     }
 
