@@ -203,6 +203,38 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "LIVE and NEW tags are readable again",
+            body = "In the TV Guide, the LIVE, NEW and REPEAT tags could be " +
+                "squashed into thin coloured slivers with no text, on " +
+                "programmes whose description ran to two lines. The tags now " +
+                "keep their space and the description gives up its second " +
+                "line instead.",
+        ),
+        WhatsNewItem(
+            title = "Smooth pause and rewind",
+            body = "Fixed glitches and audio dropouts after pausing or " +
+                "rewinding live TV. When the app reconnected to your " +
+                "server it could throw away several seconds of video it " +
+                "had already received and leave a hole in the buffer, " +
+                "which is what broke the picture and sound wherever " +
+                "playback crossed that point.",
+        ),
+        WhatsNewItem(
+            title = "Guide accuracy on Direct Connect",
+            body = "Channels that share a placeholder guide entry no " +
+                "longer show each other's schedule, and programmes from " +
+                "one guide provider no longer turn up on another " +
+                "provider's channels.",
+        ),
+        WhatsNewItem(
+            title = "Saving a new API key works again",
+            body = "If your playlist was added with a username and password " +
+                "and you later switched it to API Key mode, entering a new " +
+                "key was silently discarded, so anything that needs the key " +
+                "kept failing. Most visibly, On Demand stopped appearing " +
+                "while live channels carried on working.",
+        ),
+        WhatsNewItem(
             title = "Guide loads in seconds",
             body = "The guide now appears as soon as your server sends it, " +
                 "instead of waiting behind large guide-history downloads. " +

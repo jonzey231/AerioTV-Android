@@ -3623,28 +3623,55 @@ private fun ProgrammeCell(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // GH #46: work out whether a badge row will render BEFORE laying
+                // out the description, because the two compete for the same
+                // fixed 72dp row.
+                val flags = if (!programme.isPlaceholder && LocalShowEpgBadges.current) {
+                    programme.epgFlags()
+                } else {
+                    emptyList()
+                }
+                val seLabel = if (!programme.isPlaceholder && LocalShowEpgBadges.current) {
+                    programme.seasonEpisodeLabel()
+                } else {
+                    null
+                }
+                val hasBadgeRow = flags.isNotEmpty() || seLabel != null
+
                 if (programme.description.isNotBlank()) {
                     Text(
                         text = programme.description,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
+                        // GH #46 (jayegles, reproduced on a Z Fold): the cell is
+                        // a FIXED 72dp and a Column measures its unweighted
+                        // children in order, so whatever comes last gets only
+                        // the leftover. Title plus sub-title plus a two-line
+                        // description already spends about 64dp, which left the
+                        // badge row a few dp: LIVE and NEW rendered as thin red
+                        // and green slivers with their text clipped away. Give
+                        // the description one line whenever badges are present,
+                        // so the row that carries meaning the user cannot infer
+                        // from anywhere else keeps its height.
+                        maxLines = if (hasBadgeRow) 1 else 2,
                         overflow = TextOverflow.Ellipsis,
+                        // Belt and braces for the long-title case (a title that
+                        // wraps to two lines can still squeeze what follows):
+                        // as the only weighted child, the description is
+                        // measured LAST and absorbs the squeeze itself instead
+                        // of passing it on to the badges.
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
                 // Badges sit BELOW the title and description so the cell reads
                 // cleanly top-down instead of a busy middle row.
-                if (!programme.isPlaceholder && LocalShowEpgBadges.current) {
-                    val flags = programme.epgFlags()
-                    val seLabel = programme.seasonEpisodeLabel()
-                    if (flags.isNotEmpty() || seLabel != null) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            SeasonEpisodePill(seLabel, compact = true)
-                            EpgFlagsRow(flags, compact = true)
-                        }
+                if (hasBadgeRow) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        SeasonEpisodePill(seLabel, compact = true)
+                        EpgFlagsRow(flags, compact = true)
                     }
                 }
             }

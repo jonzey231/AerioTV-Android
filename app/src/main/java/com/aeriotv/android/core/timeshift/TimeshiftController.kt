@@ -210,7 +210,11 @@ class TimeshiftController @Inject constructor(
                     while (currentCoroutineContext().isActive && !writer.closed) {
                         val n = src.read(buf)
                         if (n < 0) break
-                        if (n > 0) writer.append(buf, 0, n)
+                        // appendFill, not append: nothing renders off this
+                        // thread, so it waits for the writer instead of
+                        // punching holes in the buffer when the server's
+                        // join backlog arrives far faster than live (GH #55).
+                        if (n > 0) writer.appendFill(buf, 0, n)
                     }
                 }
             } catch (t: Throwable) {

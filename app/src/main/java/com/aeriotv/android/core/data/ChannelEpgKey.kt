@@ -72,6 +72,13 @@ fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
             ch.rawAttributes["channel-id"],
             ch.rawAttributes["channel-uuid"],
             ch.rawAttributes["uuid"],
+            // GH #53: a Dispatcharr channel whose EPG assignment is a dummy
+            // source is keyed canonically by its UUID (its grid rows arrive
+            // that way, and siblings sharing one dummy EPGData must not
+            // collapse onto one key). Its own tvg-id is still a valid inbound
+            // key though, so a tvg-id-keyed feed the user configured
+            // separately can still find it.
+            ch.rawAttributes["tvg-id"],
             // GH #35: Dispatcharr Dummy / no-EPG grid programmes are keyed by
             // str(channel.uuid) (Dispatcharr apps/epg/api_views.py::EPGGridAPIView),
             // NOT the channel's real tvg-id. These are exactly the OTA subchannels
