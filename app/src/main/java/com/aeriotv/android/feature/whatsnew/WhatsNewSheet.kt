@@ -203,6 +203,22 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "Smooth pause and rewind",
+            body = "Fixed glitches and audio dropouts after pausing or " +
+                "rewinding live TV. When the app reconnected to your " +
+                "server it could throw away several seconds of video it " +
+                "had already received and leave a hole in the buffer, " +
+                "which is what broke the picture and sound wherever " +
+                "playback crossed that point.",
+        ),
+        WhatsNewItem(
+            title = "Guide accuracy on Direct Connect",
+            body = "Channels that share a placeholder guide entry no " +
+                "longer show each other's schedule, and programmes from " +
+                "one guide provider no longer turn up on another " +
+                "provider's channels.",
+        ),
+        WhatsNewItem(
             title = "Saving a new API key works again",
             body = "If your playlist was added with a username and password " +
                 "and you later switched it to API Key mode, entering a new " +
