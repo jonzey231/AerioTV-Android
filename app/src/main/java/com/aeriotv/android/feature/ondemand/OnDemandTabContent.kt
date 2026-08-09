@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -423,12 +424,14 @@ private fun MediaHomeSubScreen(
         return
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(vertical = 8.dp),
+    // LazyColumn, not a verticalScroll Column: a plain Column composes every
+    // rail up front, and each rail then loads its posters. Apple hit exactly
+    // this and jetsammed; do not regress it back to eager.
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = 8.dp),
     ) {
+        item {
         if (continueRows.isNotEmpty()) {
             // One merged rail. Episode rows still resolve their parent show for
             // artwork and the SxxEyy chip, and still offer Open Series, so the
@@ -448,7 +451,8 @@ private fun MediaHomeSubScreen(
                 },
             )
         }
-        movieShelves.forEach { shelf ->
+        }
+        items(movieShelves, key = { it.id }) { shelf ->
             MediaShelfRail(
                 title = shelf.title,
                 items = shelf.items,
@@ -458,7 +462,7 @@ private fun MediaHomeSubScreen(
                 onSeeAll = onBrowseMovies,
             )
         }
-        seriesShelves.forEach { shelf ->
+        items(seriesShelves, key = { it.id }) { shelf ->
             MediaShelfRail(
                 title = shelf.title,
                 items = shelf.items,
@@ -488,8 +492,12 @@ private fun movieShelves(movies: List<DispatcharrVODMovie>): List<HomeRows.Shelf
         movies.map { movie ->
             HomeRows.CatalogSnapshot(
                 item = movie,
-                libraryKey = movie.categoryName.orEmpty().ifEmpty { "movies" },
-                libraryDisplayName = movie.categoryName.orEmpty().ifEmpty { "Recently Added" },
+                // ONE row per provider catalog, not one per category. Grouping
+                // by category turned a stock server's few hundred categories
+                // into a few hundred rails, which is not a Home screen and
+                // which killed the Apple TV building them all.
+                libraryKey = "provider|movies",
+                libraryDisplayName = "Recently Added Movies",
                 isPersonalLibrary = false,
                 createdAt = null,
                 sortName = movie.displayName,
@@ -502,8 +510,8 @@ private fun seriesShelves(series: List<DispatcharrVODSeries>): List<HomeRows.She
         series.map { show ->
             HomeRows.CatalogSnapshot(
                 item = show,
-                libraryKey = show.categoryName.orEmpty().ifEmpty { "series" },
-                libraryDisplayName = show.categoryName.orEmpty().ifEmpty { "Recently Added" },
+                libraryKey = "provider|series",
+                libraryDisplayName = "Recently Added TV Shows",
                 isPersonalLibrary = false,
                 createdAt = null,
                 sortName = show.displayName,
