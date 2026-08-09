@@ -242,16 +242,36 @@ class PlaylistRepository @Inject constructor(
         // (silent rebootstrap pattern, DispatcharrDirectConnect.swift line 534-588).
         val resolvedApiKey: String? = when (sourceType) {
             SourceType.DispatcharrUserPass -> {
+                // A playlist ORIGINALLY added with username/password can be
+                // switched to API Key mode in Edit Playlist; its stored
+                // sourceType stays DispatcharrUserPass while the credential it
+                // now carries is a key. Demanding a username here made that
+                // save throw "Username is required", so the entered key was
+                // silently discarded and the STALE key kept 401ing every VOD
+                // call. Reported 2026-08-08 (Logan, Z Fold + Streamer): "I
+                // keep entering a new API Key and it isn't taking it", while
+                // channels and the test button kept working from cache and
+                // the token path. Honour the key when that is what was
+                // supplied; only demand credentials when there is no key.
+                val suppliedKey = request.apiKey?.takeIf { it.isNotBlank() }
                 val u = request.username?.takeIf { it.isNotBlank() }
-                    ?: throw IllegalArgumentException("Username is required")
                 val p = request.password?.takeIf { it.isNotBlank() }
-                    ?: throw IllegalArgumentException("Password is required")
-                val jwt = dispatcharrClient.login(normalisedBase, u, p)
-                // Stash the JWT pair so the warmup coordinator picks up the
-                // refresh token on the next app foreground and the bearer-mode
-                // calls don't need to re-login from scratch every session.
-                dispatcharrTokenStore.store(playlistId, jwt.access, jwt.refresh)
-                dispatcharrClient.fetchCurrentUserApiKey(normalisedBase, jwt.access)
+                if (suppliedKey != null && (u == null || p == null)) {
+                    Log.i(
+                        "PlaylistRepo",
+                        "UserPass playlist saved in API Key mode; using the supplied key",
+                    )
+                    suppliedKey
+                } else {
+                    val user = u ?: throw IllegalArgumentException("Username is required")
+                    val pass = p ?: throw IllegalArgumentException("Password is required")
+                    val jwt = dispatcharrClient.login(normalisedBase, user, pass)
+                    // Stash the JWT pair so the warmup coordinator picks up the
+                    // refresh token on the next app foreground and the
+                    // bearer-mode calls don't re-login from scratch every session.
+                    dispatcharrTokenStore.store(playlistId, jwt.access, jwt.refresh)
+                    dispatcharrClient.fetchCurrentUserApiKey(normalisedBase, jwt.access)
+                }
             }
             else -> request.apiKey
         }
