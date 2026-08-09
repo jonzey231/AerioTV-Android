@@ -263,6 +263,28 @@ class PlaylistViewModel @Inject constructor(
     init {
         bootstrap()
         observeMemoryPressure()
+        observeUpstreamLayering()
+    }
+
+    /**
+     * Fold background-layered upstream catch-up history into the guide when it
+     * lands. The repository merges each upstream XMLTV source into the EPG
+     * cache OFF the load's critical path (the guide now paints from the grid
+     * in seconds; deep history arrives whenever the feeds finish) and emits
+     * the playlistId here. mergeEpgHistory is the existing cache -> state
+     * merge with per-(channel, start) dedup, so this adds no second merge
+     * implementation.
+     */
+    private fun observeUpstreamLayering() {
+        viewModelScope.launch {
+            repository.upstreamEpgLayered.collect { playlistId ->
+                val active = runCatching { repository.activePlaylist() }.getOrNull()
+                if (active?.id != playlistId) return@collect
+                Log.i(TAG, "upstream layering landed; merging history into guide")
+                runCatching { mergeEpgHistory(active) }
+                    .onFailure { Log.w(TAG, "layered history merge failed", it) }
+            }
+        }
     }
 
     /**
