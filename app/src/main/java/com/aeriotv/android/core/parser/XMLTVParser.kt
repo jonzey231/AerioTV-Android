@@ -53,13 +53,14 @@ object XMLTVParser {
     fun parseFile(
         file: java.io.File,
         knownChannelKeys: Set<String>? = null,
+        shouldAbort: (() -> Boolean)? = null,
     ): List<EPGProgramme> {
         val head = ByteArray(2)
         val isGzip = file.inputStream().use { it.read(head) == 2 } &&
             head[0] == 0x1F.toByte() && head[1] == 0x8B.toByte()
         val base = file.inputStream().buffered()
         val stream = if (isGzip) GZIPInputStream(base) else base
-        return stream.use { parse(it, knownChannelKeys) }
+        return stream.use { parse(it, knownChannelKeys, shouldAbort) }
     }
 
     /**
@@ -69,6 +70,12 @@ object XMLTVParser {
      * pass over the entire decompressed payload — important when guides reach
      * 50+ MB. XML built-ins (`amp lt gt quot apos`) are already known to the parser.
      */
+    /** Poll cadence for [parse]'s shouldAbort hook. A parser event is one
+     *  tag/text token, so 8192 events is a few hundred programmes: frequent
+     *  enough that a budget overrun is caught within tens of milliseconds,
+     *  rare enough to cost nothing measurable on the happy path. */
+    private const val ABORT_CHECK_EVERY = 8192
+
     private val HTML_ENTITIES = mapOf(
         "nbsp" to " ",
         "middot" to "·",
@@ -107,6 +114,18 @@ object XMLTVParser {
     fun parse(
         input: InputStream,
         knownChannelKeys: Set<String>? = null,
+        /**
+         * Cooperative budget hook, polled every [ABORT_CHECK_EVERY] parser
+         * events. When it returns true the parse STOPS and returns whatever
+         * it has so far (partial data is still valid programmes).
+         *
+         * This exists because withTimeout cannot interrupt this loop: it is
+         * CPU-bound and never suspends, so a multi-million-programme national
+         * feed (epg.guru 7-day files, Discord reports 2026-08-08) blew
+         * minutes past its "90s ceiling" while the timeout sat unfired.
+         * Wall-clock enforcement has to live INSIDE the loop.
+         */
+        shouldAbort: (() -> Boolean)? = null,
     ): List<EPGProgramme> {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
@@ -148,7 +167,18 @@ object XMLTVParser {
         val text = StringBuilder()
 
         var event = parser.eventType
+        var eventsSinceCheck = 0
         while (event != XmlPullParser.END_DOCUMENT) {
+            if (shouldAbort != null && ++eventsSinceCheck >= ABORT_CHECK_EVERY) {
+                eventsSinceCheck = 0
+                if (shouldAbort()) {
+                    android.util.Log.w(
+                        "XMLTVParser",
+                        "parse aborted by budget; keeping ${out.size} programmes parsed so far",
+                    )
+                    return out
+                }
+            }
             when (event) {
                 XmlPullParser.START_TAG -> {
                     text.setLength(0)
