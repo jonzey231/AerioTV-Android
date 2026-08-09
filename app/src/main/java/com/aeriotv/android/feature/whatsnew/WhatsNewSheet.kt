@@ -203,6 +203,14 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "LIVE and NEW tags are readable again",
+            body = "In the TV Guide, the LIVE, NEW and REPEAT tags could be " +
+                "squashed into thin coloured slivers with no text, on " +
+                "programmes whose description ran to two lines. The tags now " +
+                "keep their space and the description gives up its second " +
+                "line instead.",
+        ),
+        WhatsNewItem(
             title = "Smooth pause and rewind",
             body = "Fixed glitches and audio dropouts after pausing or " +
                 "rewinding live TV. When the app reconnected to your " +
