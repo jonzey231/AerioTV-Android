@@ -203,6 +203,13 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
+            title = "Guide loads in seconds",
+            body = "The guide now appears as soon as your server sends it, " +
+                "instead of waiting behind large guide-history downloads. " +
+                "Deeper catch-up history still arrives; it now fills in " +
+                "quietly in the background a minute or two later.",
+        ),
+        WhatsNewItem(
             title = "Guide stuck syncing, fixed",
             body = "The guide could sit empty with the sync indicator spinning " +
                 "forever, and app storage could balloon past several gigabytes. " +
