@@ -338,12 +338,34 @@ private val EPG_WINDOW_OPTIONS: List<EpgWindowOption> = listOf(
 
 data class BufferOption(val id: String, val label: String, val detail: String, val cachingMs: Int)
 
+/**
+ * Discord (di5cord20, Formuler Z11, 2026-08-09): "Default -> Small made
+ * zapping worse." It cannot have. The live player applies
+ * `minBufferMs = maxOf(4_000, bufferFloorMs)` (AerioExoPlayerHolder), and the
+ * old ladder was 300 / 1000 / 3000 / 8000 ms, so **Small, Default and Large
+ * all collapsed onto the same 4s/8s LoadControl**: three of the four options
+ * did nothing at all, while their subtitles advertised latencies (300 ms,
+ * 1 second, 3 seconds) the player never used. Extra Large was worse than
+ * inert - 8000 produced min == max == 8s, a LoadControl with no headroom
+ * between its two bounds.
+ *
+ * The 4s floor is not an accident: it is the measured fix for the recurring
+ * mid-stream micro-stutter on the Streamer (see the LoadControl comment in
+ * AerioExoPlayerHolder, which walks through why 500ms and 2.5s both failed).
+ * Nothing may sit below it, which leaves no room for a real "Small" - so it
+ * is gone, and anyone on it is mapped to Default, which is exactly what they
+ * were already getting.
+ *
+ * Default keeps its current behaviour to the millisecond, so no existing
+ * install changes. Large and Extra Large start doing what their labels always
+ * claimed.
+ */
 internal val BUFFER_OPTIONS: List<BufferOption> = listOf(
-    BufferOption("small", "Small", "300 ms - fast, stable networks", 300),
-    BufferOption("default", "Default", "1 second - recommended", 1_000),
-    BufferOption("large", "Large", "3 seconds - unstable connections", 3_000),
-    BufferOption("xlarge", "Extra Large", "8 seconds - very poor networks", 8_000),
+    BufferOption("default", "Default", "4 seconds - recommended", 4_000),
+    BufferOption("large", "Large", "8 seconds - unstable connections", 8_000),
+    BufferOption("xlarge", "Extra Large", "16 seconds - very poor networks", 16_000),
 )
 
+/** Unknown ids (including the retired "small") resolve to Default. */
 internal fun bufferMillisFor(id: String): Int =
-    BUFFER_OPTIONS.firstOrNull { it.id == id }?.cachingMs ?: 1_000
+    BUFFER_OPTIONS.firstOrNull { it.id == id }?.cachingMs ?: 4_000

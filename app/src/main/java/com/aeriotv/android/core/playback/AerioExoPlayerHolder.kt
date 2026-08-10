@@ -636,11 +636,20 @@ class AerioExoPlayerHolder @Inject constructor(
         //     keeps mid-stream rebuffer recovery snappy.
         // (Multiview + VOD have their own LoadControls; this governs only the
         // single live player.)
+        // The 4s floor stays: it is the measured minimum that suppresses the
+        // micro-stutter described above. The Buffer Size ladder no longer
+        // offers anything below it - Small, Default and Large all used to
+        // collapse onto this same value, which is why a user switching
+        // between them measured no difference at all (see BUFFER_OPTIONS).
         val minBufferMs = maxOf(4_000, bufferFloorMs)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ minBufferMs,
-                /* maxBufferMs = */ maxOf(8_000, minBufferMs),
+                // Real headroom between the bounds at EVERY rung. The old
+                // maxOf(8_000, minBufferMs) degenerated to min == max once the
+                // floor reached 8s, leaving the load control nothing to work
+                // with on precisely the setting chosen for poor networks.
+                /* maxBufferMs = */ minBufferMs * 2,
                 /* bufferForPlaybackMs = */ 1_200,
                 /* bufferForPlaybackAfterRebufferMs = */ 2_000,
             )
