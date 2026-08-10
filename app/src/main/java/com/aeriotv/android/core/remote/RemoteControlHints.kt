@@ -77,8 +77,26 @@ object RemoteControlHints {
         guidePhrase(map.guideAction(RemoteSlot.LEFT_LONG))
             ?.let { "Hold left on remote to $it." }
 
+    /**
+     * Terse phrases for the corner hint chip. [guidePhrase] is written for
+     * full sentences ("browse earlier programs"); dropped verbatim into the
+     * chip it pushed the pill under the centered tab bar, so the chip gets
+     * its own two-or-three-word forms. Mirrors Apple's `guidePhraseShort`.
+     */
+    private fun guidePhraseShort(action: GuideRemoteAction): String? = when (action) {
+        GuideRemoteAction.TIMELINE_BACK -> "earlier"
+        GuideRemoteAction.TIMELINE_FORWARD -> "later"
+        GuideRemoteAction.FOCUS_GROUP_PILLS -> "group pills"
+        GuideRemoteAction.PAGE_UP -> "page up"
+        GuideRemoteAction.PAGE_DOWN -> "page down"
+        GuideRemoteAction.JUMP_TO_NOW -> "now"
+        GuideRemoteAction.JUMP_TO_TOP -> "top channel"
+        GuideRemoteAction.RESUME_PLAYER -> "player"
+        else -> null
+    }
+
     /** Terse form for the compact combined guide nav chip: "Hold Left = X". */
     fun guideHoldLeftShort(map: RemoteControlMap): String? =
-        guidePhrase(map.guideAction(RemoteSlot.LEFT_LONG))
+        guidePhraseShort(map.guideAction(RemoteSlot.LEFT_LONG))
             ?.let { "Hold Left = $it" }
 }
