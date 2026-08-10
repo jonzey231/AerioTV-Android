@@ -43,6 +43,46 @@ class PlaylistFetcher @Inject constructor() {
         }
     }
 
+    /**
+     * Discord (di5cord20 + Matschi, 2026-08-09): a tuliprox Xtream Codes
+     * playlist connects, verifies, saves, and then shows ZERO channels, on
+     * two different boxes, surviving force-close / cache clear / reboot, while
+     * the same credentials load fully elsewhere.
+     *
+     * tuliprox answers ANY m3u failure with an empty 204. From
+     * `backend/src/api/endpoints/m3u_api.rs`:
+     *
+     *     Err(err) => {
+     *         error!("{}", sanitize_sensitive_info(&err.to_string()));
+     *         axum::http::StatusCode::NO_CONTENT.into_response()
+     *     }
+     *
+     * Ktor's `HttpStatusCode.isSuccess()` is `value in 200..299`, so 204 sailed
+     * through as a successful fetch: we wrote a zero-byte file, parsed zero
+     * channels, and stored a perfectly healthy-looking empty playlist. Nothing
+     * in the app could tell the user anything, which is why nothing the users
+     * tried made any difference.
+     *
+     * So a 2xx is not enough - the body has to actually contain something.
+     * Treat 204, and any empty body on a 2xx, as the failure it is. This is
+     * deliberately server-agnostic: it catches every proxy that reports "I
+     * could not build your playlist" as a polite empty success, not just this
+     * one. A legitimately empty source is not affected, because an empty M3U is
+     * still `#EXTM3U` and an empty guide is still a `<tv>` document; zero bytes
+     * always means something went wrong upstream.
+     */
+    private fun emptyBodyError(status: Int, url: String): IllegalStateException =
+        IllegalStateException(
+            if (status == 204) {
+                "The server accepted the request but returned no data (HTTP 204) from " +
+                    "${LogSanitizer.redactUrl(url)}. That usually means it could not build " +
+                    "the playlist for these credentials: check the username and password, " +
+                    "and that this device is allowed to connect."
+            } else {
+                "The server returned an empty response from ${LogSanitizer.redactUrl(url)}."
+            },
+        )
+
     suspend fun fetchBytes(
         url: String,
         userAgent: String? = null,
@@ -57,7 +97,10 @@ class PlaylistFetcher @Inject constructor() {
                 "HTTP ${response.status.value} ${response.status.description} from ${LogSanitizer.redactUrl(url)}",
             )
         }
-        return response.readRawBytes()
+        if (response.status.value == 204) throw emptyBodyError(204, url)
+        return response.readRawBytes().also {
+            if (it.isEmpty()) throw emptyBodyError(response.status.value, url)
+        }
     }
 
     /** GH #26: stream a large body straight to [dest] in constant memory.
@@ -79,9 +122,13 @@ class PlaylistFetcher @Inject constructor() {
                 "HTTP ${response.status.value} ${response.status.description} from ${LogSanitizer.redactUrl(url)}",
             )
         }
+        // See [emptyBodyError]: a 2xx with nothing in it is a failure the caller
+        // must not mistake for an empty playlist.
+        if (response.status.value == 204) throw emptyBodyError(204, url)
         response.bodyAsChannel().toInputStream().use { input ->
             dest.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
         }
+        if (dest.length() == 0L) throw emptyBodyError(response.status.value, url)
         dest
     }
 }
