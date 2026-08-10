@@ -324,7 +324,35 @@ class TimeshiftController @Inject constructor(
 
     private fun stopSessionInternal() {
         stopIndependentFill()
-        activeWriter?.close()
+        val finished = activeWriter
+        finished?.close()
         activeWriter = null
+        // Discord (di5cord20, Formuler Z11): app storage past 3 GB. A closed
+        // session's directory is DEAD BYTES - every read path in
+        // TimeshiftDataSources goes through writerProvider(), i.e. the ACTIVE
+        // writer, and startSession() always mints a fresh `sess_<now>` dir, so
+        // nothing in the app can open a session again once it has ended. They
+        // were nevertheless kept for the full FIXED_RETENTION_MS hour and
+        // measured against a "budget" of totalBytes() + (free - 2 GB), which on
+        // a box with a large disk is not a budget at all. Every channel change
+        // therefore stranded up to a depth's worth of transport stream - 30
+        // minutes of HD runs to a gigabyte or two - for an hour, on the slow
+        // eMMC of exactly the devices least able to afford it.
+        //
+        // Delete it here instead. No feature is lost, because no feature could
+        // ever have used it. pruneExpired/enforceBudget stay as the
+        // crash-recovery net for a process that dies mid-session, which is now
+        // the only way a directory can be left behind.
+        //
+        // Deleting files another thread may still hold open is safe here: the
+        // unlink leaves existing descriptors valid, so a data source racing the
+        // teardown reads to its natural end instead of faulting.
+        finished?.let { w ->
+            runCatching {
+                if (w.sessionDir.deleteRecursively()) {
+                    Log.i(TAG, "released buffer ${w.sessionDir.name}")
+                }
+            }.onFailure { Log.w(TAG, "session cleanup failed: $it") }
+        }
     }
 }
