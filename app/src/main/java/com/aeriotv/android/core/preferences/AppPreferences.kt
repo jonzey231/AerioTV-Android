@@ -258,6 +258,27 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Whether THIS device shares its remote button map through Drive sync.
+     *
+     * Discord (Glitzbr, reported on Apple, same shape here): a customised map
+     * from one TV landed on another whose remote is a different model, and the
+     * only escape was turning off App Preferences sync entirely, losing theme,
+     * default tab and the rest with it. The map rides preferences.v1.json, and
+     * Android couples one SyncCategory to one Drive file, so this is a slice
+     * toggle inside that category rather than a category of its own.
+     *
+     * Deliberately NOT synced. The whole point is "this device is different",
+     * so a device that opts out must not propagate that opt-out and silence
+     * the other devices' maps too. Gates BOTH directions: an opted-out device
+     * stops publishing its map AND stops accepting one.
+     */
+    val syncRemoteControlMap: Flow<Boolean> =
+        store.data.map { it[KEY_SYNC_REMOTE_CONTROL_MAP] ?: true }
+    suspend fun setSyncRemoteControlMap(value: Boolean) {
+        store.edit { it[KEY_SYNC_REMOTE_CONTROL_MAP] = value }
+    }
+
+    /**
      * TV guide group-selector style (Logan 2026-07-20): "pills" = the top
      * group-pill row (the original layout), "sidebar" = a docked left menu
      * opened with a Left press from the currently-airing column. Mutually
@@ -969,7 +990,11 @@ class AppPreferences @Inject constructor(
         // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
         data[KEY_SKIP_LOADING_SCREEN]?.let { out["skipLoadingScreen"] = it.toString() }
         data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
-        data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
+        // Slice gate (see syncRemoteControlMap). Absent key reads as true, so
+        // existing installs are unchanged.
+        if (data[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
+            data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
+        }
         data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
         data[KEY_CAST_TAP_STAYS_ON_LIST]?.let { out["castTapStaysOnList"] = it.toString() }
@@ -1017,7 +1042,9 @@ class AppPreferences @Inject constructor(
             // never re-clobber this device's form-factor default.
             keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN] = it }
             keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
-            keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
+            if (prefs[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
+                keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
+            }
             keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
             keys["castTapStaysOnList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CAST_TAP_STAYS_ON_LIST] = it }
@@ -1294,6 +1321,7 @@ class AppPreferences @Inject constructor(
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
         val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")
+        val KEY_SYNC_REMOTE_CONTROL_MAP = booleanPreferencesKey("sync_remote_control_map")
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")

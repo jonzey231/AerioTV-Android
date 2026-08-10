@@ -278,6 +278,23 @@ fun SyncSettingsScreen(
                             checked = enabled,
                             onCheckedChange = { viewModel.setCategoryEnabled(category, it) },
                         )
+                        // Slice of App Preferences rather than a category of
+                        // its own: the map rides preferences.v1.json and each
+                        // SyncCategory owns exactly one Drive file, so a second
+                        // category pointing at that file would upload it twice.
+                        // Sits directly under its parent so the nesting reads.
+                        if (category == SyncCategory.Preferences) {
+                            val shareRemoteMap by viewModel.syncRemoteControlMap
+                                .collectAsStateWithLifecycle(initialValue = true)
+                            SettingsToggleRow(
+                                title = "Remote Button Map",
+                                subtitle = "Part of App Preferences. Turn off on a device whose " +
+                                    "remote differs from your others. This choice stays on this " +
+                                    "device and is not shared.",
+                                checked = shareRemoteMap,
+                                onCheckedChange = { viewModel.setSyncRemoteControlMap(it) },
+                            )
+                        }
                     }
                 }
             }

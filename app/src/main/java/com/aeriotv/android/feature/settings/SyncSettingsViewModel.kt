@@ -94,6 +94,14 @@ class SyncSettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setSyncCategoryEnabled(category, value) }
     }
 
+    /** Slice of App Preferences, not a category of its own - see
+     *  AppPreferences.syncRemoteControlMap for why. Per-device. */
+    val syncRemoteControlMap: Flow<Boolean> = prefs.syncRemoteControlMap
+
+    fun setSyncRemoteControlMap(value: Boolean) {
+        viewModelScope.launch { prefs.setSyncRemoteControlMap(value) }
+    }
+
     suspend fun signInWithGoogle(activity: Activity): String? =
         sync.signInWithGoogle(activity)
 
