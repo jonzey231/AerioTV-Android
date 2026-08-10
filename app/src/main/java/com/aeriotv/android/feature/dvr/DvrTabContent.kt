@@ -106,10 +106,18 @@ fun DvrTabContent(
     // Auto-refresh server-side recordings every 30s while the tab is visible
     // so a Scheduled -> Recording -> Completed transition lands without the
     // user manually swiping the tab.
+    //
+    // GH #52: refresh FIRST, then wait. The loop used to sleep 30s before its
+    // first call, and the poll only runs while this tab is composed - so
+    // returning from the player (the exact path in the report: watch an
+    // in-progress recording, it finishes, come back to DVR) showed the stale
+    // "Recording" bucket for up to half a minute with no fetch in flight.
+    // The reporter concluded he had to restart the app for it to move to
+    // Completed. Entering the tab now always kicks a fetch.
     LaunchedEffect(Unit) {
         while (true) {
-            delay(30_000L)
             viewModel.refresh()
+            delay(30_000L)
         }
     }
 
