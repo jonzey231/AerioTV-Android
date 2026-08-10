@@ -203,109 +203,52 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "LIVE and NEW tags are readable again",
-            body = "In the TV Guide, the LIVE, NEW and REPEAT tags could be " +
-                "squashed into thin coloured slivers with no text, on " +
-                "programmes whose description ran to two lines. The tags now " +
-                "keep their space and the description gives up its second " +
-                "line instead.",
+            title = "Choose what comes in from Drive",
+            body = "Turning on Google Drive sync now asks what should come " +
+                "across before anything is pulled down, and each device " +
+                "chooses for itself. Your customised remote button map is " +
+                "its own category and stays on the TV that made it, so a TV " +
+                "with a different remote no longer inherits the wrong map.",
         ),
         WhatsNewItem(
-            title = "Smooth pause and rewind",
-            body = "Fixed glitches and audio dropouts after pausing or " +
-                "rewinding live TV. When the app reconnected to your " +
-                "server it could throw away several seconds of video it " +
-                "had already received and leave a hole in the buffer, " +
-                "which is what broke the picture and sound wherever " +
-                "playback crossed that point.",
+            title = "Signing in turns sync on",
+            body = "Signing into Drive as a brand-new user with nothing to " +
+                "restore now leaves sync switched on, so everything from " +
+                "that point forward keeps in step across your devices. " +
+                "Settings also spells out what actually triggers a sync.",
         ),
         WhatsNewItem(
-            title = "Guide accuracy on Direct Connect",
-            body = "Channels that share a placeholder guide entry no " +
-                "longer show each other's schedule, and programmes from " +
-                "one guide provider no longer turn up on another " +
-                "provider's channels.",
+            title = "Manage Groups is back in the TV Guide",
+            body = "Android TV's Guide has its own Manage Groups button " +
+                "again: after the last group pill, or beside the Groups " +
+                "heading when you use the sidebar. Hiding and reordering " +
+                "groups no longer means switching to List view first.",
         ),
         WhatsNewItem(
-            title = "Saving a new API key works again",
-            body = "If your playlist was added with a username and password " +
-                "and you later switched it to API Key mode, entering a new " +
-                "key was silently discarded, so anything that needs the key " +
-                "kept failing. Most visibly, On Demand stopped appearing " +
-                "while live channels carried on working.",
+            title = "Guide no longer crashes with a long guide",
+            body = "Opening the grid view with a very deep guide history " +
+                "could close the app outright. The guide's timeline is now " +
+                "capped to a span it can actually draw.",
         ),
         WhatsNewItem(
-            title = "Guide loads in seconds",
-            body = "The guide now appears as soon as your server sends it, " +
-                "instead of waiting behind large guide-history downloads. " +
-                "Deeper catch-up history still arrives; it now fills in " +
-                "quietly in the background a minute or two later.",
+            title = "Live Rewind gives storage back",
+            body = "A channel's rewind buffer is now released the moment you " +
+                "leave it instead of being kept, which could add up to " +
+                "gigabytes over an evening of channel surfing. Buffer Size " +
+                "in Settings also does something real now, and says what " +
+                "each option is for.",
         ),
         WhatsNewItem(
-            title = "Guide stuck syncing, fixed",
-            body = "The guide could sit empty with the sync indicator spinning " +
-                "forever, and app storage could balloon past several gigabytes. " +
-                "Pulling extra catch-up history from your server's own guide " +
-                "sources now runs on a strict time budget instead of holding up " +
-                "the guide, and abandoned downloads are cleaned up at launch.",
+            title = "Empty playlists are reported, not shown as empty",
+            body = "A playlist that answers with nothing at all is now " +
+                "reported as an error instead of quietly appearing as a " +
+                "playlist with no channels.",
         ),
         WhatsNewItem(
-            title = "All your channels, every time",
-            body = "On servers that hand back channel, group, and guide lists a " +
-                "page at a time, AerioTV now reads every page instead of " +
-                "stopping at the first one.",
-        ),
-        WhatsNewItem(
-            title = "Match content frame rate",
-            body = "The player now asks your device for a real refresh-rate " +
-                "switch when the stream's frame rate differs (50fps content on " +
-                "a 60Hz output, for example). Your system's Match content " +
-                "frame rate setting stays in charge: set it to Always for the " +
-                "full switch, Seamless-only to avoid the brief black resync.",
-        ),
-        WhatsNewItem(
-            title = "Steadier playback on lower-power devices",
-            body = "Fixed a freeze where scrolling the guide on a busy device " +
-                "(like an older Chromecast) could trick the player into " +
-                "reloading a healthy stream over and over until it gave up. " +
-                "The stream watchdog now checks whether data is still " +
-                "arriving before it intervenes, and spaces out its retries.",
-        ),
-        WhatsNewItem(
-            title = "TV Guide navigation overhaul",
-            body = "On TV, the focus highlight always stays visible, rides a " +
-                "steady lane while you scroll channels, and never wanders into " +
-                "the past. Press Back to snap the timeline home to now.",
-        ),
-        WhatsNewItem(
-            title = "Audio Sync",
-            body = "New Audio Sync slider in the player's audio track sheet: " +
-                "nudge audio up to a second earlier or later to fix lip-sync.",
-        ),
-        WhatsNewItem(
-            title = "Catch-up improvements",
-            body = "Smarter programme windows (no more clipped endings) and " +
-                "paused catch-up sessions no longer expire mid-break.",
-        ),
-        WhatsNewItem(
-            title = "SVG channel logos",
-            body = "Channel logos and artwork supplied as SVG files now " +
-                "display instead of rendering blank.",
-        ),
-        WhatsNewItem(
-            title = "Deeper catch-up history on Dispatcharr",
-            body = "The guide now pulls past programming straight from your " +
-                "server's EPG sources, so catch-up reaches as far back as your " +
-                "provider's guide data goes instead of the couple of days " +
-                "Dispatcharr keeps.",
-        ),
-        WhatsNewItem(
-            title = "Multiview in portrait",
-            body = "Multiview no longer needs a sideways phone. In portrait the " +
-                "tiles stack top to bottom, and rotating re-flows them side by " +
-                "side without interrupting playback. On TV, a new Stacked " +
-                "layout gives you the same top/bottom split from the layout " +
-                "picker.",
+            title = "DVR list keeps up",
+            body = "Opening the DVR tab refreshes it immediately, so a " +
+                "recording that has just finished shows up under Completed " +
+                "without waiting or restarting the app.",
         ),
     )
 }
