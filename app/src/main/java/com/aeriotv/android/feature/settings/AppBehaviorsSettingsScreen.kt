@@ -231,16 +231,18 @@ fun AppBehaviorsSettingsScreen(
                 // Reworked 2026-07-11 (user directive, round 2): ONE
                 // slider - how far back the user can rewind. Retention
                 // as a user concept is gone; buffered video is deleted
-                // about an hour after the session ends (fixed, internal:
-                // TimeshiftController.FIXED_RETENTION_MS), and the
+                // the moment the session ends (TimeshiftController
+                // releases the directory in stopSessionInternal; the
+                // FIXED_RETENTION_MS reaper is now only a
+                // crash-recovery net), and the
                 // free-space floor in TimeshiftBufferStore stays as the
                 // seatbelt. Storage estimates scale with the depth
                 // choice since that bounds live disk usage.
                 SettingsSection(
                     header = "Keep Available",
                     footer = "How far back you can rewind the channel you are " +
-                        "watching. Buffered video is removed about an hour " +
-                        "after you leave a channel. " +
+                        "watching. Buffered video is released as soon as you " +
+                        "leave the channel. " +
                         depthEstimateText(liveRewindDepth),
                 ) {
                     SteppedSliderRow(
