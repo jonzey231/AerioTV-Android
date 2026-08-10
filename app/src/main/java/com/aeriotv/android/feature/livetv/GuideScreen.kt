@@ -500,7 +500,42 @@ fun GuideScreen(
     // history merge lands; 1h during cold-launch paint), then `epgWindowHours`
     // ahead. The forward span comes from Settings > Network > EPG Window
     // (6/12/24/36/48/72h or "All available"). iOS `epgWindowHours` parity.
-    val historyMs = state.epgHistoryHours.coerceAtLeast(1).toLong() * 3_600_000L
+    //
+    // HARD CEILING on the whole span (Discord: mehow, consistent crash on
+    // entering the guide, 0.4.9, phone). Compose packs a layout dimension into
+    // at most 18 bits: `bitsNeedForSizeUnchecked` returns a poison 255 for any
+    // size >= 262143px, and `createConstraints` then throws
+    // "Can't represent a width of N and height of M in Constraints". The
+    // guide's time axis is ONE fixed-width Row of hourWidth * totalHours, so
+    // the span and the zoom together decide whether the guide can be laid out
+    // at all. 320dp/hour on a density-3 phone is 960px, which puts the wall at
+    // about 273 hours - reachable today by EPG Window "All available" against a
+    // provider that ships two weeks of guide, or by 72h forward plus a long
+    // catch-up retention, or by pinch-zooming a span that was fine unzoomed.
+    // Past the wall the app does not degrade, it dies, every single time the
+    // user opens the Guide, which is exactly what was reported.
+    //
+    // The programme strip already clamped its own width (the Android TV
+    // display-scale case below), but a clamp on ONE of the two fixed-width
+    // rows cannot save the other and silently desyncs the time labels from the
+    // cells. So clamp the SPAN instead: every consumer - header, strip, cell
+    // offsets, the now-line, the D-pad page math - derives from
+    // windowDurationMs, so capping it there keeps them all consistent.
+    val guideHourWidthPx = with(LocalDensity.current) { scaledHourWidth.toPx() }
+    val maxAxisHours = remember(guideHourWidthPx) {
+        (GUIDE_MAX_STRIP_PX / guideHourWidthPx.coerceAtLeast(1f)).toInt().coerceAtLeast(6)
+    }
+    // History is capped only by what it would crowd out, so nobody already
+    // inside the budget sees their catch-up depth change: a long retention is
+    // trimmed just far enough to leave the forward window room, and the total
+    // cap below then trims the forward end if it is still too wide. Getting
+    // this order wrong would open the guide on nothing but the past.
+    val guideForwardReserveHours =
+        (if (epgWindowHours > 0) epgWindowHours else 12).coerceAtMost(maxAxisHours / 2)
+    val historyMs = state.epgHistoryHours
+        .coerceAtLeast(1)
+        .coerceAtMost((maxAxisHours - guideForwardReserveHours).coerceAtLeast(1))
+        .toLong() * 3_600_000L
     val windowStart = remember(nowMillis, historyMs) {
         // Floor `now` to the start of the current hour to keep header labels clean.
         val hourMs = 3_600_000L
@@ -510,14 +545,35 @@ fun GuideScreen(
     // programme end, clamped to a 6h floor so a thin EPG still scrolls. A
     // numeric hour value spans that many hours past "now" (the history span
     // is added on top so back-scroll never eats the forward window).
-    val windowDurationMs = remember(epgWindowHours, state.epgByChannel, windowStart, historyMs) {
-        if (epgWindowHours > 0) {
+    val windowDurationMs = remember(
+        epgWindowHours,
+        state.epgByChannel,
+        windowStart,
+        historyMs,
+        maxAxisHours,
+    ) {
+        val raw = if (epgWindowHours > 0) {
             historyMs + epgWindowHours.toLong() * 3_600_000L
         } else {
+            // "All available" is bounded only by what the provider sent, and a
+            // single programme with a garbage far-future end date would set it
+            // on its own, so this branch in particular needs the cap below.
             val latestEnd = state.epgByChannel.values.asSequence()
                 .flatten()
                 .maxOfOrNull { it.endMillis } ?: (windowStart + 24L * 3_600_000L)
             (latestEnd - windowStart).coerceAtLeast(6L * 3_600_000L)
+        }
+        val cap = maxAxisHours.toLong() * 3_600_000L
+        if (raw > cap) {
+            android.util.Log.w(
+                "GuideScreen",
+                "guide span ${raw / 3_600_000L}h exceeds the $maxAxisHours" +
+                    "h this zoom can lay out (Compose caps a fixed dimension at " +
+                    "262143px); clamping so the guide renders instead of throwing",
+            )
+            cap
+        } else {
+            raw
         }
     }
 
@@ -2884,15 +2940,17 @@ private fun ChannelGuideRow(
         ) {
             val totalWidth = run {
                 val raw = hourWidth * (windowDurationMs / 3_600_000L).toInt()
-                // Compose caps a fixed layout dimension at ~262143px. A wide EPG
-                // window at a high display scale (Live TV List 150-175% on
-                // Android TV) pushes hourWidth x total-hours past that, which
-                // SILENTLY blanks the entire programme strip -- cells render
-                // nothing while the channel rail + time header (which don't hang
-                // off this giant box) survive. Clamp the scroll-range width to a
-                // safe px budget so the strip always measures; cells beyond it
-                // are simply unreachable by horizontal scroll (many days out at
-                // that zoom) while every visible / near-now cell still renders.
+                // BACKSTOP. windowDurationMs is now capped to the same px budget
+                // at source, so this branch should never fire; it stays because
+                // it is the last line before Compose's 262143px limit turns a
+                // measure into an IllegalArgumentException, and because a clamp
+                // HERE alone is not a fix - it leaves the time header (also one
+                // fixed-width Row) unbounded and desyncs the hour labels from
+                // the cells beneath them. Originally added for the Android TV
+                // display-scale case (Live TV List at 150-175%), where the
+                // symptom was a silently blank programme strip: cells rendered
+                // nothing while the rail and header, which do not hang off this
+                // giant box, survived.
                 val maxDp = with(LocalDensity.current) { GUIDE_MAX_STRIP_PX.toDp() }
                 if (raw > maxDp) {
                     android.util.Log.w(

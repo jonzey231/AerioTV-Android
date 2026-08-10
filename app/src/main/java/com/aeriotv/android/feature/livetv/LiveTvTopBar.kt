@@ -3,7 +3,7 @@ package com.aeriotv.android.feature.livetv
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
+
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -74,8 +74,12 @@ internal fun TvManageGroupsCircle(
             .then(
                 if (focused) Modifier.border(2.dp, Color.White, CircleShape) else Modifier,
             )
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .focusable(interactionSource = interaction),
+            // clickable() already contributes the focus target. Chaining a
+            // second focusable() on the same interaction source nests two focus
+            // nodes, and on the Streamer the D-pad walked straight past this
+            // button to the top nav bar. The guide's own TV pills use the bare
+            // clickable form and focus correctly, so match them exactly.
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

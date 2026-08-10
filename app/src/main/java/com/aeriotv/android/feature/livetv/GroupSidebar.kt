@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -89,6 +91,7 @@ internal fun GroupSidebarPanel(
     hiddenGroupCount: Int = 0,
 ) {
     val listState = rememberLazyListState()
+    val manageFocus = remember { FocusRequester() }
     val selectedIndex = groups.indexOf(selectedToken).coerceAtLeast(0)
     LaunchedEffect(Unit) {
         // Land with the active group visible + focused, like the common
@@ -124,7 +127,31 @@ internal fun GroupSidebarPanel(
         if (onManageGroups != null) 200.dp else 160.dp,
         340.dp,
     )
-    Column(modifier = modifier.width(panelWidth)) {
+    // GH #57 focus routing, learned on the Streamer. GuideScreen pins
+    // `focusProperties { up = <top nav pills> }` on an ancestor (audit task
+    // #57 escape hatch) and that ancestor wins over an override placed on the
+    // sidebar's list, so a plain D-pad Up from a group row sailed past the
+    // header button and landed on "Live TV" - the button rendered, took no
+    // focus, and OK went to the nav bar. Intercept Up here instead, BEFORE the
+    // focus engine sees it, and hand it to the button; once the button holds
+    // focus, Up falls through to the inherited escape so the nav bar is still
+    // one press away.
+    var manageFocused by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier
+            .width(panelWidth)
+            .onPreviewKeyEvent { event ->
+                if (onManageGroups == null ||
+                    manageFocused ||
+                    event.key != androidx.compose.ui.input.key.Key.DirectionUp ||
+                    event.type != androidx.compose.ui.input.key.KeyEventType.KeyDown
+                ) {
+                    false
+                } else {
+                    runCatching { manageFocus.requestFocus() }.isSuccess
+                }
+            },
+    ) {
         Row(
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -143,7 +170,13 @@ internal fun GroupSidebarPanel(
             // band, and this button is above every row); Up from the top row
             // is what reaches it.
             onManageGroups?.let { open ->
-                TvManageGroupsCircle(hiddenGroupsCount = hiddenGroupCount, onClick = open)
+                TvManageGroupsCircle(
+                    hiddenGroupsCount = hiddenGroupCount,
+                    onClick = open,
+                    modifier = Modifier
+                        .focusRequester(manageFocus)
+                        .onFocusChanged { manageFocused = it.isFocused },
+                )
             }
         }
         LazyColumn(
