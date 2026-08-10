@@ -79,6 +79,14 @@ internal fun GroupSidebarPanel(
      *  for live group preview (Logan 2026-08-06); the player's channel-list
      *  overlay leaves it a no-op. */
     onRowFocused: (String) -> Unit = {},
+    /** GH #57 (Logan 2026-08-10): opens Manage Groups from the round button
+     *  beside the "Groups" header. Sidebar mode hides the pill row, and with
+     *  it the only entry into hide/reorder, so the sidebar has to carry its
+     *  own. Null on the player's channel-list overlay, which is a transient
+     *  tuning surface with no settings affordances. */
+    onManageGroups: (() -> Unit)? = null,
+    /** Warning dot on that button when groups are currently hidden. */
+    hiddenGroupCount: Int = 0,
 ) {
     val listState = rememberLazyListState()
     val selectedIndex = groups.indexOf(selectedToken).coerceAtLeast(0)
@@ -109,15 +117,35 @@ internal fun GroupSidebarPanel(
         // Row padding each side + 2dp focus border each side + a little
         // breathing room past the text.
         with(density) { widestPx.toDp() } + 44.dp
-    }.coerceIn(160.dp, 340.dp)
+    }.coerceIn(
+        // GH #57: the header now carries the Manage Groups button beside the
+        // title, so a short group list must not squeeze it off the panel.
+        // 10dp lead + "Groups" + 12dp gap + the 30dp circle + 10dp trail.
+        if (onManageGroups != null) 200.dp else 160.dp,
+        340.dp,
+    )
     Column(modifier = modifier.width(panelWidth)) {
-        Text(
-            text = "Groups",
-            style = settingsTitleStyle(),
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
+        Row(
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(start = 10.dp, bottom = if (isTv) 8.dp else 10.dp),
-        )
+        ) {
+            Text(
+                text = "Groups",
+                style = settingsTitleStyle(),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            // GH #57: the sidebar's own entry into hide/reorder. It sits in
+            // the header rather than the list so a D-pad Right out of a row
+            // still commits and closes the pane (Compose's two-dimensional
+            // focus search looks within the focused row's own horizontal
+            // band, and this button is above every row); Up from the top row
+            // is what reaches it.
+            onManageGroups?.let { open ->
+                TvManageGroupsCircle(hiddenGroupsCount = hiddenGroupCount, onClick = open)
+            }
+        }
         LazyColumn(
             state = listState,
             verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -249,6 +277,9 @@ internal fun GuideGroupSidebarPane(
     /** OK or Right: keep this group and close the sidebar. */
     onCommit: (String) -> Unit,
     topOffset: Dp = 0.dp,
+    /** GH #57: opens Manage Groups from the header button. */
+    onManageGroups: (() -> Unit)? = null,
+    hiddenGroupCount: Int = 0,
 ) {
     val focus = remember { FocusRequester() }
     // The row focus currently rests on; commits use it directly so a Right
@@ -283,6 +314,8 @@ internal fun GuideGroupSidebarPane(
                 onSelect = onCommit,
                 initialFocus = focus,
                 onRowFocused = { focusedToken = it },
+                onManageGroups = onManageGroups,
+                hiddenGroupCount = hiddenGroupCount,
             )
         }
         // Hairline separating the menu from the shifted guide; same token as

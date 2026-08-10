@@ -979,6 +979,11 @@ fun GuideScreen(
                 groupSidebarOpen = false
                 if (isTv && token == sidebarOriginalGroup) sidebarFocusRestoreTick++
             },
+            // GH #57: sidebar mode hides the pill row, taking the only Manage
+            // Groups entry with it. The pane's header button restores it
+            // without making the user switch to List view to reach it.
+            onManageGroups = { showManageGroups = true },
+            hiddenGroupCount = hiddenGroups.size,
         )
     }
     Column(modifier = Modifier.weight(1f).fillMaxHeight().statusBarsPadding()) {
@@ -1172,8 +1177,10 @@ fun GuideScreen(
             // the two views match pixel-for-pixel (user report: the Tune
             // button and pills shifted slightly between views). Gated like
             // the List view: hidden when there is only the All group and no
-            // collections.
-            if (groups.size > 1 || collections.isNotEmpty()) {
+            // collections. Hidden groups count too (iOS parity): a user who
+            // hides everything down to a single group would otherwise lose
+            // the only control that can un-hide them.
+            if (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty()) {
                 LiveTvPillsRow(
                     groups = groups,
                     selectedGroup = state.selectedGroup,
@@ -1186,15 +1193,25 @@ fun GuideScreen(
             }
         }
         // Group-pills row (TV only). TV guide cleanup (Logan 2026-08-06): the
-        // control circles that used to lead this row are GONE - the List/Guide
-        // switcher is covered by Settings > Default Live TV View, both search
-        // circles by the nav bar's Search tab, and the filter circle by the
-        // groups/pills themselves (Manage Groups stays reachable from the List
-        // view's Tune circle). With them gone the row exists only for the
-        // pills, so it is skipped entirely in sidebar mode (and for a
-        // single-group playlist) instead of leaving an empty 44dp band above
-        // the time axis. Phone renders the shared LiveTvPillsRow above instead.
-        if (isTv && !sidebarGroupMode && (groups.size > 1 || collections.isNotEmpty())) {
+        // control circles that used to LEAD this row are GONE - the List/Guide
+        // switcher is covered by Settings > Default Live TV View, and both
+        // search circles by the nav bar's Search tab.
+        //
+        // GH #57 corrects the third one. That cleanup also dropped the filter
+        // circle, reasoning that the pills themselves cover filtering and that
+        // Manage Groups stayed reachable from the List view's Tune circle. But
+        // hiding and reordering groups are not filtering, and sending someone
+        // to a different VIEW to configure the one they are in reads as the
+        // feature being absent - especially with Guide as the default Live TV
+        // view. It comes back as a round button AFTER the last pill (Logan's
+        // placement), so the leading run stays clear for the hold-Left gesture.
+        //
+        // The row is still skipped entirely in sidebar mode - that mode has its
+        // own header button - rather than leaving an empty 44dp band above the
+        // time axis. Phone renders the shared LiveTvPillsRow above instead.
+        if (isTv && !sidebarGroupMode &&
+            (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty())
+        ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1351,6 +1368,17 @@ fun GuideScreen(
                         collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING },
                         key = { "coll_${it.id}" },
                     ) { c -> collectionPillItem(c) }
+                    // GH #57 (Logan 2026-08-10): round Manage Groups button
+                    // AFTER the last group. It is the last focusable item in
+                    // the row, so the hold-Left-to-"All" gesture never has to
+                    // step past it, and Right off the final pill lands
+                    // somewhere useful instead of dead-ending.
+                    item(key = "manage_groups") {
+                        TvManageGroupsCircle(
+                            hiddenGroupsCount = hiddenGroups.size,
+                            onClick = { showManageGroups = true },
+                        )
+                    }
                 }
             }
         }

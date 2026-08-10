@@ -1,7 +1,11 @@
 package com.aeriotv.android.feature.livetv
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +41,64 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.core.data.ChannelCollection
+
+/**
+ * GH #57 (Logan 2026-08-10): the TV Guide's round Manage Groups control.
+ *
+ * The TV guide cleanup stripped the leading control circles off the guide's
+ * pill row, and the comment left behind said Manage Groups stayed reachable
+ * from the List view's Tune circle. That is a view switch to reach a setting
+ * about the view you are already in, and for anyone whose default Live TV
+ * view is the Guide the feature simply looks absent. Logan's placement: a
+ * round button AFTER the last group when pills are showing, and beside the
+ * "Groups" header in sidebar mode.
+ *
+ * Styled off the guide's own TV pill (30dp tall, soft surfaceVariant fill, a
+ * 2dp white focus ring - the same ring a programme cell draws) rather than
+ * the phone circle, so it reads as part of the pill row instead of a
+ * Material chip dropped into it.
+ */
+@Composable
+internal fun TvManageGroupsCircle(
+    hiddenGroupsCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Box(
+        modifier = modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .then(
+                if (focused) Modifier.border(2.dp, Color.White, CircleShape) else Modifier,
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .focusable(interactionSource = interaction),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Tune,
+            contentDescription = if (hiddenGroupsCount == 0) "Manage groups"
+            else "Manage groups ($hiddenGroupsCount hidden)",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        // iOS parity (ManageGroupsButton): warning dot when groups are hidden,
+        // so a user who cannot find a group has a visible reason to open this.
+        if (hiddenGroupsCount > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 3.dp, end = 3.dp)
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFFA502)),
+            )
+        }
+    }
+}
 
 /**
  * Centered "Live TV" title bar whose trailing actions SHRINK on narrow
