@@ -402,6 +402,27 @@ fun AerioTVNavHost(
                 // regardless of whether the user had granted Drive scope
                 // on a previous session.
                 val tryRestoreAndAdvance: suspend (String?) -> Unit = { signedInEmail ->
+                    // Logan 2026-08-10: signing in here IS the opt-in, so turn
+                    // sync on for good rather than treating this as a one-shot
+                    // import.
+                    //
+                    // syncMasterEnabled defaults to FALSE and nothing in this
+                    // flow ever set it, while DriveSyncWorker.enqueuePeriodic
+                    // is only ever called from setMasterEnabled. So a new user
+                    // who signed into Drive during setup got their restore and
+                    // then never synced again: Settings showed the master
+                    // toggle off and the periodic worker had never been
+                    // scheduled. Worst for the exact case Logan raised - a
+                    // brand-new account with nothing to restore, where the
+                    // import is a no-op and the ONLY thing that mattered was
+                    // being switched on from here forward.
+                    //
+                    // Set before the pull, not after, so an import that throws
+                    // still leaves the user syncing. Idempotent, and it runs on
+                    // both entry paths (already-Authorized and post-consent)
+                    // because both funnel through here.
+                    syncVm.setMasterEnabled(true)
+
                     // Surface the restore-progress screen for the whole pull
                     // + bootstrap stretch. Clear any stale steps first so a
                     // second sign-in attempt doesn't flash the previous run's
