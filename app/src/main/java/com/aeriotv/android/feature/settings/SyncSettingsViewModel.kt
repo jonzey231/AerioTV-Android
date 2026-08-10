@@ -233,11 +233,16 @@ class SyncSettingsViewModel @Inject constructor(
     suspend fun restoreFromDrive(): Map<SyncCategory, Boolean> {
         val token = (sync.status.value as? DriveSyncManager.Status.SignedIn)?.accessToken
             ?: return emptyMap()
-        // Pull everything regardless of the user's per-category toggles --
-        // first-launch restore wants the full snapshot. The toggles still
-        // gate subsequent SyncWorker passes once the user is settled. The
-        // tracked variant additionally publishes per-category progress via
-        // [restoreSteps] for the onboarding restore screen.
-        return sync.pullAllTracked(token, SyncCategory.entries.toSet())
+        // Honour the per-category toggles. This USED to pull everything
+        // regardless, on the reasoning that a first-launch restore wants the
+        // full snapshot - but onboarding now asks the user what should come in
+        // BEFORE sign-in (OnboardingSyncCategoryChooser, Logan 2026-08-10), and
+        // ignoring that answer here would fetch the very data they just
+        // declined. A declined category must never be pulled, not pulled and
+        // then ignored. The tracked variant still publishes per-category
+        // progress via [restoreSteps] for the onboarding restore screen.
+        val wanted = SyncCategory.entries.filter { prefs.syncCategoryEnabled(it).first() }.toSet()
+        if (wanted.isEmpty()) return emptyMap()
+        return sync.pullAllTracked(token, wanted)
     }
 }

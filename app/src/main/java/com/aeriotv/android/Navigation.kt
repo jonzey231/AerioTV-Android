@@ -383,6 +383,10 @@ fun AerioTVNavHost(
                 val scope = androidx.compose.runtime.rememberCoroutineScope()
                 var googleSignInInFlight by remember { mutableStateOf(false) }
                 var welcomeNotConfiguredDialog by remember { mutableStateOf(false) }
+                // Sync-category chooser shown before the first Drive pull.
+                var welcomeSyncChooser by remember { mutableStateOf(false) }
+                var welcomeSyncChoicesMade by remember { mutableStateOf(false) }
+                var pendingSignIn by remember { mutableStateOf(false) }
                 // Restore-progress screen state (replaces the old silent
                 // wait between sign-in success and the auto-advance to MAIN).
                 // While visible it REPLACES WelcomeScreen entirely -- an
@@ -493,6 +497,61 @@ fun AerioTVNavHost(
                     }
                 }
 
+                // Sign-in body, hoisted so both the button tap AND the
+                // resume-after-chooser path run exactly the same flow.
+                val startGoogleSignIn: () -> Unit = start@{
+                    val activity = context.findActivity()
+                    if (activity == null) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Sign-in needs a foreground activity. Try again.",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        return@start
+                    }
+                    googleSignInInFlight = true
+                    scope.launch {
+                        val email = syncVm.signInWithGoogle(activity)
+                        if (email == null) {
+                            googleSignInInFlight = false
+                            android.widget.Toast.makeText(
+                                context,
+                                "Sign-in cancelled or failed.",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                            return@launch
+                        }
+                        when (val driveResult = syncVm.requestDriveScope()) {
+                            is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Authorized -> {
+                                tryRestoreAndAdvance(email)
+                                googleSignInInFlight = false
+                            }
+                            is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.NeedsConsent -> {
+                                consentLauncher.launch(
+                                    androidx.activity.result.IntentSenderRequest.Builder(driveResult.intentSender).build(),
+                                )
+                            }
+                            com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Failed, null -> {
+                                googleSignInInFlight = false
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Drive authorization failed.",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    }
+                }
+
+                // Chooser confirmed -> continue into the sign-in the user
+                // already asked for.
+                androidx.compose.runtime.LaunchedEffect(pendingSignIn) {
+                    if (pendingSignIn) {
+                        pendingSignIn = false
+                        startGoogleSignIn()
+                    }
+                }
+
                 if (restoreOverlayVisible) {
                     com.aeriotv.android.feature.onboarding.OnboardingSyncProgressScreen(
                         steps = restoreSteps,
@@ -522,49 +581,39 @@ fun AerioTVNavHost(
                             welcomeNotConfiguredDialog = true
                             return@WelcomeScreen
                         }
-                        val activity = context.findActivity()
-                        if (activity == null) {
-                            android.widget.Toast.makeText(
-                                context,
-                                "Sign-in needs a foreground activity. Try again.",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
+                        // Logan 2026-08-10: ask what should come in BEFORE any
+                        // of it does. Apple's onboarding chooser, same idea:
+                        // the per-category toggles already existed in Settings,
+                        // but by the time a user goes looking for them the
+                        // restore has already landed (Discord: Glitzbr, whose
+                        // second Apple TV inherited a remote map meant for a
+                        // different remote). Deferring sign-in behind the sheet
+                        // means a declined category is never fetched at all.
+                        if (!welcomeSyncChoicesMade) {
+                            welcomeSyncChooser = true
                             return@WelcomeScreen
                         }
-                        googleSignInInFlight = true
-                        scope.launch {
-                            val email = syncVm.signInWithGoogle(activity)
-                            if (email == null) {
-                                googleSignInInFlight = false
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Sign-in cancelled or failed.",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                                return@launch
-                            }
-                            when (val driveResult = syncVm.requestDriveScope()) {
-                                is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Authorized -> {
-                                    tryRestoreAndAdvance(email)
-                                    googleSignInInFlight = false
-                                }
-                                is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.NeedsConsent -> {
-                                    consentLauncher.launch(
-                                        androidx.activity.result.IntentSenderRequest.Builder(driveResult.intentSender).build(),
-                                    )
-                                }
-                                com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Failed, null -> {
-                                    googleSignInInFlight = false
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        "Drive authorization failed.",
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
-                            }
-                        }
+                        startGoogleSignIn()
                     },
                 )
+
+                if (welcomeSyncChooser) {
+                    com.aeriotv.android.feature.onboarding.OnboardingSyncCategoryChooser(
+                        onConfirm = { choices ->
+                            scope.launch {
+                                choices.forEach { (category, enabled) ->
+                                    syncVm.setCategoryEnabled(category, enabled)
+                                }
+                                welcomeSyncChoicesMade = true
+                                welcomeSyncChooser = false
+                                // Re-enter the sign-in path the user already
+                                // asked for, now that the choices are stored.
+                                pendingSignIn = true
+                            }
+                        },
+                        onDismiss = { welcomeSyncChooser = false },
+                    )
+                }
 
                 if (welcomeNotConfiguredDialog) {
                     androidx.compose.material3.AlertDialog(
