@@ -30,14 +30,19 @@ import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 
 /**
- * Xtream Codes `player_api.php` client for VOD + series. Mirrors the iOS
- * `XtreamCodesAPI` (Aerio Networking/StreamingAPIs.swift + XtreamSeriesAPI
- * .swift). Live channels + EPG do NOT go through here -- those use the M3U
- * (`get.php?type=m3u_plus`) and `xmltv.php` in PlaylistRepository, which is
- * exactly what iOS does too (the M3U carries the real playable stream URLs).
+ * Xtream Codes `player_api.php` client for LIVE channels, VOD and series.
+ * Mirrors the iOS `XtreamCodesAPI` (Aerio Networking/StreamingAPIs.swift +
+ * XtreamSeriesAPI.swift).
  *
- * This client only covers what the M3U can't: VOD movies, series, and the
- * per-series episode list, via the JSON player_api actions.
+ * Live channels moved here from the `get.php?type=m3u_plus` M3U on
+ * 2026-08-10 (see [getLiveStreams] for the measurements). The short version:
+ * m3u_plus is a flat dump of live + all VOD + all series -- 538MB on a real
+ * provider versus 23.7MB for the same channels here -- and on that panel it
+ * carried NO tvg-id at all, so a guide built from it could never match the
+ * XMLTV feed. This is also what iOS has always done.
+ *
+ * EPG programmes still come from `xmltv.php` in PlaylistRepository; this
+ * client supplies the `epg_channel_id` they key against.
  *
  * Robustness: Xtream panels are notoriously loose with JSON types --
  * `stream_id` / `series_id` / episode `id` arrive as either an Int or a
@@ -285,26 +290,77 @@ class XtreamCodesApi @Inject constructor() {
         return out
     }
 
+    /** One live channel as the panel describes it in get_live_streams. */
+    data class XtreamLiveStream(
+        val streamId: Int,
+        /** The panel's own channel number. Null when it omits `num`. */
+        val num: Int?,
+        val name: String,
+        val icon: String,
+        /** XMLTV id for this channel, blank when the panel has no guide for it. */
+        val epgChannelId: String,
+        val categoryId: String,
+        /** Archive retention in days; 0 when the channel has no catch-up. */
+        val catchupDays: Int,
+    )
+
     /**
-     * Catch-up availability from get_live_streams (task #133): stream_id ->
-     * archive retention in DAYS, for channels whose panel reports tv_archive
-     * truthy. Types are parsed loosely on purpose: genuine panels emit
-     * tv_archive as Int 1 while real providers are seen sending the String
-     * "1", and tv_archive_duration arrives as Int or String depending on the
-     * panel. This is the only live-TV use of player_api in the app -- live
-     * channels themselves still come from the M3U (see the class doc).
+     * The full live channel list. THIS is the live-TV source of truth, not the
+     * get.php m3u_plus (measured 2026-08-10 against a real provider):
+     *
+     *  - SIZE. m3u_plus is one flat dump of live + VOD + series: 538MB on that
+     *    panel, of which ~95% was movie/episode rows we parsed and immediately
+     *    threw away because On Demand loads them from JSON anyway. This
+     *    endpoint is 23.7MB for the same 53,599 live channels.
+     *  - EPG IDENTITY. That panel emits `tvg-id=""` on EVERY m3u_plus entry
+     *    (2000/2000 sampled), so a guide built from the M3U can never match
+     *    anything - it logged "EPG loaded: 0 programmes across 53306 channels"
+     *    against a perfectly good 32MB xmltv.php. The JSON carries
+     *    epg_channel_id (populated on 9,846 of those channels).
+     *
+     * Streams element-at-a-time via [fetchAndMapArray], so a huge library
+     * never materializes as a DOM. Rows without a stream_id are dropped: no
+     * id means no playable URL and no catch-up handle.
      */
-    suspend fun getLiveCatchupInfo(
+    suspend fun getLiveStreams(
         base: String,
         username: String,
         password: String,
-    ): Map<Int, Int> =
+    ): List<XtreamLiveStream> =
         fetchAndMapArray(base, username, password, "get_live_streams") { o ->
             val id = o.flexInt("stream_id") ?: return@fetchAndMapArray null
             val hasArchive = o.flexInt("tv_archive") == 1
             val days = o.flexInt("tv_archive_duration") ?: 0
-            if (hasArchive && days > 0) id to days else null
-        }.toMap()
+            XtreamLiveStream(
+                streamId = id,
+                num = o.flexInt("num"),
+                name = o.str("name")?.trim().orEmpty().ifBlank { "Channel $id" },
+                icon = o.str("stream_icon").orEmpty(),
+                epgChannelId = o.str("epg_channel_id").orEmpty(),
+                categoryId = o.str("category_id").orEmpty(),
+                catchupDays = if (hasArchive && days > 0) days else 0,
+            )
+        }
+
+    /** id -> display-name for live groups, e.g. "9905" -> "FAVORITES". */
+    suspend fun getLiveCategories(base: String, username: String, password: String): List<XtreamCategory> =
+        fetchCategories(base, username, password, "get_live_categories")
+
+    /**
+     * Live stream URL in the Xtream standard form. VERIFIED byte-identical to
+     * what the panel itself serves in its m3u_plus (2026-08-10: the M3U line
+     * for stream 39817 was ".../live/<user>/<pass>/39817.ts"), so channels
+     * rebuilt from JSON play through exactly the same URL the M3U path used.
+     * `.ts` matches the flavour the app prefers everywhere else.
+     */
+    fun liveStreamUrl(
+        base: String,
+        username: String,
+        password: String,
+        streamId: Int,
+        ext: String = "ts",
+    ): String =
+        "${base.trimEnd('/')}/live/${enc(username)}/${enc(password)}/$streamId.${ext.ifBlank { "ts" }}"
 
     /**
      * `server_info.timezone` from the bare player_api handshake -- the IANA
