@@ -83,6 +83,10 @@ class EncryptingPlaylistDao(
         cipher.encrypt(password),
     )
 
+    // No credential columns involved, so it passes straight through.
+    override suspend fun updateChannelCount(id: String, count: Int) =
+        delegate.updateChannelCount(id, count)
+
     override suspend fun upsertAsActive(entity: PlaylistEntity) =
         delegate.upsertAsActive(entity.encrypted())
 

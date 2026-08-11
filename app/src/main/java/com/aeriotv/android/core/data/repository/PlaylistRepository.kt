@@ -989,6 +989,19 @@ class PlaylistRepository @Inject constructor(
                     chunk.map { ch -> ch.toCacheEntity(playlistId, position++, now) },
                 )
             }
+            // Stamp the displayed count from the list ACTUALLY PERSISTED, in the
+            // same transaction that persists it.
+            //
+            // Callers used to set channelCount = channels.size from their own
+            // pre-dedup list while this function stored `distinctBy { url }`, so
+            // the number on the Playlists / playlist-detail screens was computed
+            // from a different list than the one the user then scrolls. Any
+            // provider that repeats a stream URL made the two disagree
+            // permanently, and every caller had to remember to stamp it at all.
+            // Doing it here means the count cannot drift from the snapshot by
+            // construction, for every write path (add, refresh, switch-active,
+            // background refresh worker).
+            dao.updateChannelCount(playlistId, channels.size)
         }
     }
 
