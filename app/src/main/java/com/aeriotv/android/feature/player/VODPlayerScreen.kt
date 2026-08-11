@@ -984,14 +984,23 @@ fun VODPlayerScreen(
                 Log.w(TAG, "DVR from-beginning: window never became seekable after ${waited}ms")
                 return@LaunchedEffect
             }
-            val dur = player.contentDuration
+            // Seek on POSITION alone. The first cut of this gated on
+            // contentDuration ("are we within 10s of the end?"), which is
+            // TIME_UNSET on a live HLS window - so the guard was always false
+            // and the correction never ran. Measured on the emulator against a
+            // 43-minute in-progress recording: the window resolved to
+            // 2597147ms (the live edge) and the seek was skipped.
+            //
+            // The user explicitly asked to start from the beginning, and this
+            // runs once before they can seek, so any non-trivial offset is
+            // Media3's live-edge default and should be corrected. The 2s
+            // threshold only avoids a pointless seek when 0 already stuck.
             val pos = player.contentPosition
-            // Within 10s of the end of the window == the live edge.
-            if (dur > 0L && pos > dur - 10_000L) {
+            if (pos > 2_000L) {
                 player.seekTo(player.currentMediaItemIndex, 0L)
-                Log.i(TAG, "DVR from-beginning: window resolved at live edge (${pos}/${dur}ms), corrected to start")
+                Log.i(TAG, "DVR from-beginning: resolved to ${pos}ms (live edge), seeking to window start")
             } else {
-                Log.i(TAG, "DVR from-beginning: started at ${pos}ms, no correction needed")
+                Log.i(TAG, "DVR from-beginning: already at ${pos}ms, nothing to correct")
             }
         }
 
