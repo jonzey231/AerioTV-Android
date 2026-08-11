@@ -1,15 +1,19 @@
 package com.aeriotv.android.core.network
 
+import android.util.Log
 import com.aeriotv.android.core.debug.LogSanitizer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.readRawBytes
+import io.ktor.http.contentLength
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.jvm.javaio.toInputStream
 import java.io.File
@@ -114,6 +118,24 @@ class PlaylistFetcher @Inject constructor() {
         userAgent: String? = null,
         extraHeaders: Map<String, String> = emptyMap(),
     ): File = client.prepareGet(url) {
+        // NO total-request cap on a streamed download. The global
+        // requestTimeoutMillis budgets the ENTIRE body, so it silently becomes
+        // a MINIMUM BANDWIDTH requirement: at 300s a 538MB provider playlist
+        // (crx.watch - 53.6k live, 194k VOD, 44.7k series) demands ~14.3 Mbit/s
+        // sustained for five unbroken minutes or the add dies mid-stream.
+        // Logan hit exactly that on 2026-08-10: the same playlist "finally
+        // pulled on the third attempt". Raising the number just moves the
+        // cliff - it had already been raised 60s -> 300s for this same reason.
+        // A total cap is the wrong instrument for a download whose size is set
+        // by the provider, not by us.
+        //
+        // socketTimeoutMillis is the right instrument and still applies: 30s
+        // with no bytes arriving still fails a dead or wedged host fast. Bytes
+        // still moving means it is working, however slow the user's link is.
+        timeout {
+            requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+            socketTimeoutMillis = 30_000
+        }
         if (userAgent != null) header("User-Agent", userAgent)
         for ((k, v) in extraHeaders) header(k, v)
     }.execute { response ->
@@ -125,10 +147,65 @@ class PlaylistFetcher @Inject constructor() {
         // See [emptyBodyError]: a 2xx with nothing in it is a failure the caller
         // must not mistake for an empty playlist.
         if (response.status.value == 204) throw emptyBodyError(204, url)
+        // Fail early and legibly rather than dying with ENOSPC half a gigabyte
+        // in. Provider playlists are big enough that a cheap TV box with a
+        // nearly-full data partition is a real scenario, not a hypothetical.
+        val expected = response.contentLength() ?: -1L
+        val free = dest.parentFile?.usableSpace ?: Long.MAX_VALUE
+        if (expected > 0 && free < expected + SPACE_HEADROOM_BYTES) {
+            throw IllegalStateException(
+                "Not enough free space to download this playlist: it needs about " +
+                    "${expected / 1_000_000}MB but only ${free / 1_000_000}MB is free. " +
+                    "Free up some space and try again.",
+            )
+        }
+        if (expected > LARGE_DOWNLOAD_BYTES) {
+            Log.i(TAG, "large download starting: ~${expected / 1_000_000}MB")
+        }
+        var total = 0L
+        var nextMark = PROGRESS_LOG_BYTES
         response.bodyAsChannel().toInputStream().use { input ->
-            dest.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+            dest.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    total += n
+                    // Coarse progress so "stuck adding a playlist" reports come
+                    // with evidence of whether bytes were actually moving,
+                    // without logging inside a hot loop.
+                    if (total >= nextMark) {
+                        Log.i(TAG, "download progress: ${total / 1_000_000}MB")
+                        nextMark += PROGRESS_LOG_BYTES
+                    }
+                }
+            }
         }
         if (dest.length() == 0L) throw emptyBodyError(response.status.value, url)
+        // A truncated body is worse than a failed one: it parses into a partial
+        // playlist that looks perfectly legitimate, so the user silently loses
+        // channels with no error anywhere. Content-Length disagreeing with what
+        // landed means the connection died mid-stream.
+        if (expected > 0 && total < expected) {
+            throw IllegalStateException(
+                "The playlist download ended early (${total / 1_000_000}MB of " +
+                    "${expected / 1_000_000}MB). The connection dropped part-way " +
+                    "through; please try again.",
+            )
+        }
+        if (expected > LARGE_DOWNLOAD_BYTES) {
+            Log.i(TAG, "large download complete: ${total / 1_000_000}MB")
+        }
         dest
+    }
+
+    private companion object {
+        const val TAG = "PlaylistFetcher"
+        /** Only narrate downloads big enough to be worth narrating. */
+        const val LARGE_DOWNLOAD_BYTES = 32L * 1_000_000
+        const val PROGRESS_LOG_BYTES = 32L * 1_000_000
+        /** Slack left on the partition beyond the payload itself. */
+        const val SPACE_HEADROOM_BYTES = 64L * 1_000_000
     }
 }
