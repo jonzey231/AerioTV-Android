@@ -118,13 +118,25 @@ interface EpgProgrammeDao {
         nowMillis: Long,
     ) {
         if (rows.isEmpty()) return
+        // Drop degenerate programmes before they reach the cache. A row whose
+        // stop is at or before its start cannot be drawn: on Apple the same
+        // data rendered ~10px-wide slivers with the title wrapped to one
+        // character per line (tvOS guide, 2026-08-11). The ingest paths only
+        // ever checked that a programme OVERLAPS the requested window, which a
+        // zero-length or inverted row satisfies, so nothing filtered them.
+        //
+        // 30s floor rather than 0: sub-30s entries are feed noise (placeholder
+        // or truncated rows), not schedule data. Filtering here, at the single
+        // point every source persists through, rather than in each parser.
+        val drawable = rows.filter { it.endMillis - it.startMillis >= 30_000L }
+        if (drawable.isEmpty()) return
         // Chunked: SQLite caps host parameters (999 by default) and a feed can
         // carry thousands of channels, so an unchunked IN (...) would throw.
-        rows.asSequence()
+        drawable.asSequence()
             .map { it.channelId }
             .distinct()
             .chunked(900)
             .forEach { deleteCoveredWindowForChannels(playlistId, nowMillis, it) }
-        insertAll(rows)
+        insertAll(drawable)
     }
 }
