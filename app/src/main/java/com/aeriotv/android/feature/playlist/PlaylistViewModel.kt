@@ -161,6 +161,13 @@ class PlaylistViewModel @Inject constructor(
          */
         private const val EPG_CACHE_TTL_MS = 30L * 60L * 1000L
 
+        /** Generation of the on-disk EPG cache this build trusts. BUMP THIS
+         *  whenever a shipped defect could have written a corrupt cache: the
+         *  next launch forces one full refetch, re-stamps, and resumes normal
+         *  TTL behaviour. 1 = the 0.4.10 per-source merge bug, where each
+         *  upstream feed deleted the previous one's present+future. */
+        private const val EPG_CACHE_EPOCH = 1
+
         /**
          * Channel snapshots refresh on a much slower cadence than the EPG (a
          * channel list adds/removes channels far less often than guide data
@@ -747,7 +754,27 @@ class PlaylistViewModel @Inject constructor(
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
-        if (!forceRefresh) {
+        // A cache written by a build with a known cache-corrupting defect must
+        // not be trusted no matter how recent it is. The 0.4.10 per-source
+        // merge (see EpgProgrammeDao.mergeForPlaylist) let each upstream feed
+        // delete the previous one's present+future; the survivor was still
+        // inside the TTL, so the network was skipped on every relaunch and the
+        // guide never healed - history only, nothing at or after "now".
+        //
+        // Deliberately NOT a heuristic. "Does the cache reach past now?" was
+        // tried and is unusable: a single channel with forward data satisfies
+        // it while hundreds have none, which is exactly the poisoned shape.
+        // One stamped refetch per epoch bump is deterministic and verifiable.
+        val cacheEpoch = runCatching { appPreferences.epgCacheEpoch.first() }.getOrDefault(0)
+        val staleEpoch = cacheEpoch < EPG_CACHE_EPOCH
+        if (staleEpoch) {
+            Log.w(
+                TAG,
+                "loadEpgIfConfigured: cache epoch $cacheEpoch < $EPG_CACHE_EPOCH " +
+                    "(written by a build with a known EPG cache defect); forcing one refetch",
+            )
+        }
+        if (!forceRefresh && !staleEpoch) {
             val newest = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
             val fresh = newest != null &&
                 (System.currentTimeMillis() - newest) < EPG_CACHE_TTL_MS
@@ -800,6 +827,13 @@ class PlaylistViewModel @Inject constructor(
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes across ${grouped.size} channels")
                 _state.update { it.copy(epgByChannel = grouped, isEpgLoading = false) }
                 // Persist the fresh guide so the next launch is instant.
+                // Re-stamp the cache generation only HERE, on a SUCCESSFUL
+                // network fetch: a failed one must leave the old epoch alone
+                // so the next launch retries instead of trusting a cache the
+                // bump exists to distrust. Without this the epoch check turns
+                // into a refetch-on-every-launch loop (observed on the TV
+                // emulator: three cold starts, three full fetches).
+                runCatching { appPreferences.setEpgCacheEpoch(EPG_CACHE_EPOCH) }
                 runCatching { repository.saveEpgToCache(playlist.id, programmes) }
                     .onFailure { Log.w(TAG, "saveEpgToCache failed", it) }
                 // iOS parity: fire-and-forget category enrichment for

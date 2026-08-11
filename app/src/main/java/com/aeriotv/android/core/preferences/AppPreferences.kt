@@ -638,6 +638,23 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_EPG_WINDOW_HOURS] = value }
     }
 
+    /**
+     * Generation stamp for the on-disk EPG cache. Bump
+     * PlaylistViewModel.EPG_CACHE_EPOCH whenever a defect could have left
+     * existing caches corrupt: the next launch forces one full refetch and
+     * re-stamps, so a bad cache cannot outlive the build that produced it.
+     *
+     * Added for the 0.4.10 per-source merge bug, where each upstream feed
+     * deleted the previous one's present+future and the survivor was still
+     * recent enough to suppress the network on every relaunch. A heuristic
+     * ("does the cache reach past now?") was tried first and proved unusable:
+     * one channel with forward data satisfied it while hundreds had none.
+     */
+    val epgCacheEpoch: Flow<Int> = store.data.map { it[KEY_EPG_CACHE_EPOCH] ?: 0 }
+    suspend fun setEpgCacheEpoch(value: Int) {
+        store.edit { it[KEY_EPG_CACHE_EPOCH] = value }
+    }
+
     // ── Multiview ────────────────────────────────────────────────────────
 
     /**
@@ -1361,6 +1378,7 @@ class AppPreferences @Inject constructor(
         val KEY_MAX_RETRIES = intPreferencesKey("max_retries")
         val KEY_STREAM_BUFFER_SIZE = stringPreferencesKey("stream_buffer_size")
         val KEY_EPG_WINDOW_HOURS = intPreferencesKey("epg_window_hours")
+        val KEY_EPG_CACHE_EPOCH = intPreferencesKey("epg_cache_epoch")
         val KEY_MULTIVIEW_AUDIO_FOCUS_STYLE = stringPreferencesKey("multiview_audio_focus_style")
         val KEY_MULTIVIEW_TILE_PADDING = booleanPreferencesKey("multiview_tile_padding")
         val KEY_MULTIVIEW_TILE_CORNERS_ROUNDED = booleanPreferencesKey("multiview_tile_corners_rounded")

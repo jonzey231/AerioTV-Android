@@ -74,23 +74,42 @@ interface EpgProgrammeDao {
     @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId AND endMillis < :before")
     suspend fun deleteEndedBeforeForPlaylist(playlistId: String, before: Long)
 
-    /** Delete the airing-and-future region the fresh feed owns outright;
-     *  [mergeForPlaylist]'s helper. */
-    @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId AND endMillis > :fromMillis")
-    suspend fun deleteCoveredWindow(playlistId: String, fromMillis: Long)
+    /** Delete the airing-and-future region the fresh feed owns outright, for
+     *  the CHANNELS it actually carries; [mergeForPlaylist]'s helper. */
+    @Query(
+        "DELETE FROM epg_programme WHERE playlistId = :playlistId " +
+            "AND endMillis > :fromMillis AND channelId IN (:channelIds)"
+    )
+    suspend fun deleteCoveredWindowForChannels(
+        playlistId: String,
+        fromMillis: Long,
+        channelIds: List<String>,
+    )
 
     /**
      * Merge a fresh feed into one source's cached guide in a single
      * transaction so a reader never sees a half-written batch. The feed owns
-     * the PRESENT AND FUTURE outright (that whole region is deleted and
-     * re-inserted), while ALREADY-AIRED rows are left in place so history
-     * accumulates for catch-up (task #135/#137). Any past rows the feed
-     * still carries replace their cached copies via the unique
-     * (playlistId, channelId, startMillis) index + REPLACE conflict
-     * strategy instead of duplicating. An earlier revision deleted
-     * everything after the feed's EARLIEST start; feeds trim their own
-     * history between refreshes, so recently-ended programmes inside that
-     * window but absent from the new feed were silently erased.
+     * the PRESENT AND FUTURE for THE CHANNELS IT CARRIES (that region is
+     * deleted and re-inserted), while ALREADY-AIRED rows are left in place so
+     * history accumulates for catch-up (task #135/#137). Any past rows the
+     * feed still carries replace their cached copies via the unique
+     * (playlistId, channelId, startMillis) index + REPLACE conflict strategy
+     * instead of duplicating. An earlier revision deleted everything after the
+     * feed's EARLIEST start; feeds trim their own history between refreshes,
+     * so recently-ended programmes inside that window but absent from the new
+     * feed were silently erased.
+     *
+     * The channel scoping is load-bearing (Logan 2026-08-10). This used to
+     * delete the whole present+future for the PLAYLIST, which is correct only
+     * when `rows` is the complete feed - and PlaylistRepository's upstream
+     * layering deliberately calls saveEpgToCache ONCE PER SOURCE so a kill
+     * mid-phase loses at most one feed. With a playlist-wide delete each of
+     * those saves wiped the previous one, so a 3-source layering left only the
+     * last source's rows: a 6518-programme grid collapsed to ~545, the guide
+     * lost everything past "now", and because the cache was non-empty the
+     * freshness check then skipped the network on every relaunch, so it never
+     * healed. Scoping the delete to the incoming feed's channels lets the
+     * sources compose instead of clobber.
      */
     @Transaction
     suspend fun mergeForPlaylist(
@@ -99,7 +118,13 @@ interface EpgProgrammeDao {
         nowMillis: Long,
     ) {
         if (rows.isEmpty()) return
-        deleteCoveredWindow(playlistId, nowMillis)
+        // Chunked: SQLite caps host parameters (999 by default) and a feed can
+        // carry thousands of channels, so an unchunked IN (...) would throw.
+        rows.asSequence()
+            .map { it.channelId }
+            .distinct()
+            .chunked(900)
+            .forEach { deleteCoveredWindowForChannels(playlistId, nowMillis, it) }
         insertAll(rows)
     }
 }
