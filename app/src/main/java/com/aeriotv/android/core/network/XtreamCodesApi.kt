@@ -52,6 +52,14 @@ import okhttp3.OkHttpClient
  * decode), we parse to JsonElement and pull fields tolerantly -- the same
  * defensive per-field decode iOS does in its custom init(from:).
  */
+/**
+ * The panel answered with something that is not JSON at all -- a plain-text
+ * error, an HTML challenge page, a rate-limit or ban notice. Distinct from an
+ * empty library, which panels legitimately express as `[]`, `false`, `null` or
+ * an object, and which stays lenient.
+ */
+class XtreamServerError(message: String) : IllegalStateException(message)
+
 @Singleton
 class XtreamCodesApi @Inject constructor() {
 
@@ -429,15 +437,38 @@ class XtreamCodesApi @Inject constructor() {
         return runCatching {
             withContext(Dispatchers.IO) {
                 client.prepareGet(url).execute { response ->
+                    val raw = response.bodyAsChannel().toInputStream()
+                    // Keep the first bytes so a non-JSON body can be reported
+                    // with what the server actually said, then hand the FULL
+                    // stream (head + rest) to the streaming decoder.
+                    val head = ByteArray(512)
+                    var n = 0
+                    while (n < head.size) {
+                        val r = raw.read(head, n, head.size - n)
+                        if (r <= 0) break
+                        n += r
+                    }
+                    val headText = String(head, 0, maxOf(n, 0)).trim()
+                    if (!looksLikeJsonBody(headText)) throw notJsonError(action, headText)
+                    val full = java.io.SequenceInputStream(
+                        java.io.ByteArrayInputStream(head, 0, maxOf(n, 0)),
+                        raw,
+                    )
                     val out = ArrayList<T>()
-                    json.decodeToSequence<JsonElement>(
-                        response.bodyAsChannel().toInputStream(),
-                        DecodeSequenceMode.ARRAY_WRAPPED,
-                    ).forEach { el -> (el as? JsonObject)?.let(transform)?.let(out::add) }
+                    json.decodeToSequence<JsonElement>(full, DecodeSequenceMode.ARRAY_WRAPPED)
+                        .forEach { el -> (el as? JsonObject)?.let(transform)?.let(out::add) }
                     out
                 }
             }
-        }.onFailure { Log.w(TAG, "XC $action fetch failed", it) }.getOrElse { emptyList() }
+        }.onFailure { Log.w(TAG, "XC $action fetch failed", it) }.getOrElse { e ->
+            // Transport hiccups and per-row decode noise stay lenient (an empty
+            // list, as before). A server that answered with something that is
+            // not JSON at all is NOT an empty library and must reach the user:
+            // On Demand otherwise renders a blank grid indistinguishable from
+            // an account with no movies.
+            if (e is XtreamServerError) throw e
+            emptyList()
+        }
     }
 
     private suspend fun fetchText(
@@ -461,6 +492,45 @@ class XtreamCodesApi @Inject constructor() {
     private fun enc(value: String): String = value.encodeURLParameter()
 
     /** Pull a field that may be a JSON string or number, as a String. */
+    /**
+     * Whether a response body is plausibly the JSON these endpoints return.
+     *
+     * Panels legitimately answer an EMPTY library with `false`, `null` or an
+     * object, and that is still treated as "no items". What must NOT be
+     * swallowed is a body that is not JSON at all -- a plain-text error, an
+     * HTML challenge page, a rate-limit notice -- because [fetchAndMapArray]
+     * turns any failure into an empty list, and On Demand then looks exactly
+     * like an account with no movies.
+     *
+     * Real case, 2026-08-10: a provider began answering every endpoint with
+     * `[Bot-Protection]: You are banned for repeated abuse`. It STARTS WITH
+     * `[`, so "does it begin like an array" is not a sufficient test - the
+     * character after the bracket has to be array-ish too.
+     */
+    private fun looksLikeJsonBody(head: String): Boolean {
+        val s = head.trimStart()
+        if (s.isEmpty()) return false
+        return when (s.first()) {
+            '{' -> true
+            'f' -> s.startsWith("false")
+            'n' -> s.startsWith("null")
+            '[' -> {
+                val rest = s.drop(1).trimStart()
+                rest.isEmpty() || rest.first() in "{]\"" || rest.first().isDigit()
+            }
+            else -> false
+        }
+    }
+
+    /** Carries what the server actually said, so the user sees the real reason. */
+    private fun notJsonError(action: String, head: String): XtreamServerError {
+        val snippet = head.take(200).trim()
+        return XtreamServerError(
+            if (snippet.isEmpty()) "The server returned an empty response for $action."
+            else "The server returned an error for $action: $snippet",
+        )
+    }
+
     private fun JsonObject.str(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
 
