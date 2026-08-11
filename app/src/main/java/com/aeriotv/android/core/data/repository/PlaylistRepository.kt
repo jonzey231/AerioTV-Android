@@ -1199,6 +1199,33 @@ class PlaylistRepository @Inject constructor(
     }
 
     /**
+     * [fetchViaTempFile] that retries once against [fallbackUrl] when the
+     * primary URL comes back 404. Used for XC `get.php`, where panels disagree
+     * about whether the `output` parameter is required or rejected; trying the
+     * standard form first and the legacy form only on a hard 404 means neither
+     * flavour of panel can break the other. Deliberately narrow: any other
+     * failure (timeout, 403, empty body, parse error) propagates untouched so
+     * a real problem is not masked by a second doomed download.
+     */
+    private suspend fun <T> fetchViaTempFileWithFallback(
+        primaryUrl: String,
+        fallbackUrl: String,
+        suffix: String,
+        parse: (java.io.File) -> T,
+    ): T = try {
+        fetchViaTempFile(primaryUrl, suffix, parse)
+    } catch (ce: kotlinx.coroutines.CancellationException) {
+        throw ce
+    } catch (e: Exception) {
+        if (e.message?.contains("HTTP 404") != true) throw e
+        android.util.Log.w(
+            "PlaylistRepository",
+            "get.php returned 404; retrying without the output parameter",
+        )
+        fetchViaTempFile(fallbackUrl, suffix, parse)
+    }
+
+    /**
      * Delete download temp files left behind by a process that died mid
      * fetch. [fetchViaTempFile] removes its own temp in a `finally`, but that
      * never runs when the app is force-stopped or killed for memory while a
@@ -1403,8 +1430,22 @@ class PlaylistRepository @Inject constructor(
             val user = username?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("Xtream Codes username is required")
             val b = base.trimEnd('/')
-            val m3uUrl = "$b/get.php?username=${xtreamEncode(user)}" +
-                "&password=${xtreamEncode(password.orEmpty())}&type=m3u_plus"
+            val creds = "username=${xtreamEncode(user)}" +
+                "&password=${xtreamEncode(password.orEmpty())}"
+            // `output` is part of the de-facto XC get.php contract and every
+            // mainstream client sends it. We used to omit it and rely on the
+            // panel defaulting, which most do - but not all: crx.watch answers
+            // `type=m3u_plus` with a bare HTTP 404 and no body, so adding the
+            // playlist failed at the very first fetch with "HTTP 404 from
+            // .../get.php" (Discord report + Logan's emulator repro, 2026-08-10).
+            // Measured against that panel: no `output` = 404, `output=ts` = 200,
+            // `output=m3u8` = 200. `ts` matches the stream flavour this app
+            // prefers everywhere else (see StreamingAPIs.streamURLs: .ts first).
+            val m3uUrl = "$b/get.php?$creds&type=m3u_plus&output=ts"
+            // Belt and braces for the mirror-image panel: one that serves the
+            // no-`output` form but 404s on `output=ts`. Only a 404 retries, so
+            // a panel that already works keeps working either way.
+            val m3uUrlNoOutput = "$b/get.php?$creds&type=m3u_plus"
             // GH #31: a full XC-panel m3u_plus runs 100-200MB; fetchBytes
             // materialized the whole thing as ONE ByteArray and OOM'd a 256MB
             // heap on add (the exact 155MB allocation Skryzie reported). The
@@ -1422,7 +1463,7 @@ class PlaylistRepository @Inject constructor(
             val catchupByStreamId = runCatching {
                 xtreamApi.getLiveCatchupInfo(b, user, password.orEmpty())
             }.getOrDefault(emptyMap())
-            fetchViaTempFile(m3uUrl, ".m3u") { file ->
+            fetchViaTempFileWithFallback(m3uUrl, m3uUrlNoOutput, ".m3u") { file ->
                 val out = ArrayList<M3UChannel>()
                 var droppedVodSeries = 0
                 M3UParser.parseFile(file) { ch ->
