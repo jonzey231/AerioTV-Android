@@ -879,7 +879,20 @@ fun VODPlayerScreen(
                             }
                         })
                         playWhenReady = true
-                        setMediaItem(MediaItem.fromUri(streamUrl))
+                        // "Watch from Beginning" on an in-progress recording
+                        // pins the START POSITION at prepare time rather than
+                        // seeking afterwards. Media3 resolves a live HLS to its
+                        // DEFAULT position (the live edge) the moment the window
+                        // is known, so a seek issued from a LaunchedEffect was
+                        // racing that resolution and losing - the user landed at
+                        // live and had to rewind by hand (Logan 2026-08-10).
+                        // An explicit start position means the default is never
+                        // consulted, so there is no race to lose.
+                        if (isDvr && !startAtLiveEdge) {
+                            setMediaItem(MediaItem.fromUri(streamUrl), 0L)
+                        } else {
+                            setMediaItem(MediaItem.fromUri(streamUrl))
+                        }
                         prepare()
                     }
 
@@ -948,19 +961,38 @@ fun VODPlayerScreen(
             }
         }
 
-        // DVR catch-up seek. Media3 auto-starts a live HLS at the live edge,
-        // so 'Watch Live' (startAtLiveEdge=true) needs nothing. For 'Watch
-        // from Beginning' seek to window start once the timeline is known.
+        // DVR catch-up backstop. The start position is already pinned to 0 at
+        // setMediaItem time (see the player builder above), which is what
+        // actually fixes "Watch from Beginning"; this only corrects the case
+        // where the live window resolves LATER and drags playback forward.
+        //
+        // It waits on isCurrentMediaItemSeekable, not merely a non-empty
+        // timeline: Media3 publishes a placeholder window while the playlist
+        // is still loading, and the old code seeked against that, so the real
+        // window then resolved to its default position (the live edge) and the
+        // user landed at live. Only nudges when we are actually near the edge,
+        // so it can never fight a deliberate user seek.
         LaunchedEffect(exoPlayer, isDvr) {
             if (!isDvr || startAtLiveEdge) return@LaunchedEffect
             val player = exoPlayer ?: return@LaunchedEffect
             var waited = 0L
-            while (player.currentTimeline.isEmpty && waited < 6_000L) {
+            while (!player.isCurrentMediaItemSeekable && waited < 6_000L) {
                 delay(200L)
                 waited += 200L
             }
-            runCatching { player.seekTo(player.currentMediaItemIndex, 0L) }
-            Log.i(TAG, "DVR catch-up: seeking to window start")
+            if (!player.isCurrentMediaItemSeekable) {
+                Log.w(TAG, "DVR from-beginning: window never became seekable after ${waited}ms")
+                return@LaunchedEffect
+            }
+            val dur = player.contentDuration
+            val pos = player.contentPosition
+            // Within 10s of the end of the window == the live edge.
+            if (dur > 0L && pos > dur - 10_000L) {
+                player.seekTo(player.currentMediaItemIndex, 0L)
+                Log.i(TAG, "DVR from-beginning: window resolved at live edge (${pos}/${dur}ms), corrected to start")
+            } else {
+                Log.i(TAG, "DVR from-beginning: started at ${pos}ms, no correction needed")
+            }
         }
 
         // Periodic save. Mirrors iOS NowPlayingManager.currentWatchProgress's
