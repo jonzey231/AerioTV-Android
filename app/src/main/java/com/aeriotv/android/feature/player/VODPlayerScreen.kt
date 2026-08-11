@@ -1368,12 +1368,35 @@ fun VODPlayerScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.72f),
                 )
+                // TV: nothing else on this overlay is focusable, so without an
+                // explicit request the remote can never reach these buttons --
+                // they render, look active, and simply do not respond. Logan hit
+                // exactly that on the Android TV emulator (2026-08-10): "I can't
+                // navigate to Retry Now or Close". Focusing Retry when the card
+                // appears puts both in the focus order (Close is one step right).
+                //
+                // The live-TV card (PlayerScreen) solves the same problem the
+                // other way, by hiding its button on TV and pointing at the
+                // transport controls. Here there ARE no controls behind the
+                // overlay to point at, so the buttons have to be reachable.
+                val errorRetryFocus = remember { FocusRequester() }
+                if (isTvForm) {
+                    LaunchedEffect(errMsg, errorReconnecting) {
+                        // runCatching: requesting focus on a node that is not yet
+                        // attached throws, and a transient failure here must not
+                        // take down the error overlay itself.
+                        runCatching { errorRetryFocus.requestFocus() }
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = {
-                        errorReconnecting = true
-                        errorRetrySerial += 1
-                        doErrorRetry()
-                    }) {
+                    Button(
+                        onClick = {
+                            errorReconnecting = true
+                            errorRetrySerial += 1
+                            doErrorRetry()
+                        },
+                        modifier = Modifier.focusRequester(errorRetryFocus),
+                    ) {
                         Text("Retry Now")
                     }
                     Button(onClick = onClose) {
