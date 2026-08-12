@@ -310,6 +310,17 @@ class XtreamCodesApi @Inject constructor() {
         val categoryId: String,
         /** Archive retention in days; 0 when the channel has no catch-up. */
         val catchupDays: Int,
+        /**
+         * The panel's own `direct_source` URL when it publishes one.
+         * DELIBERATELY NOT PLAYED: AerioTV builds the standard /live/ form on
+         * both platforms, and panels routinely put unreachable internal IPs
+         * in this field, so honoring it blindly breaks more than it fixes.
+         * Carried so the repository can LOG when a panel looks
+         * direct_source-only - the one shape where the rebuilt /live/ URL may
+         * 404 - which turns a future "channels load, nothing plays" report
+         * into a one-line diagnosis.
+         */
+        val directSource: String,
     )
 
     /**
@@ -347,6 +358,7 @@ class XtreamCodesApi @Inject constructor() {
                 epgChannelId = o.str("epg_channel_id").orEmpty(),
                 categoryId = o.str("category_id").orEmpty(),
                 catchupDays = if (hasArchive && days > 0) days else 0,
+                directSource = o.str("direct_source").orEmpty(),
             )
         }
 

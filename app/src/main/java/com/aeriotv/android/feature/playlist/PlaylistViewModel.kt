@@ -765,7 +765,13 @@ class PlaylistViewModel @Inject constructor(
         // tried and is unusable: a single channel with forward data satisfies
         // it while hundreds have none, which is exactly the poisoned shape.
         // One stamped refetch per epoch bump is deterministic and verifiable.
-        val cacheEpoch = runCatching { appPreferences.epgCacheEpoch.first() }.getOrDefault(0)
+        // Per-playlist (0.4.11 review fix): the cache is per-playlist, so a
+        // global stamp let the active playlist's refetch "clear" every OTHER
+        // playlist's still-poisoned cache; switching to a second playlist
+        // inside its freshness TTL trusted the poisoned rows. Each playlist
+        // now proves ITS OWN cache was rebuilt (old global stamps read as 0
+        // here, which forces exactly the one refetch those playlists need).
+        val cacheEpoch = runCatching { appPreferences.epgCacheEpochFor(playlist.id) }.getOrDefault(0)
         val staleEpoch = cacheEpoch < EPG_CACHE_EPOCH
         if (staleEpoch) {
             Log.w(
@@ -814,7 +820,13 @@ class PlaylistViewModel @Inject constructor(
                 // (MutableStateFlow.update is thread-safe either way).
                 val channelsNow = _state.value.channels
                 val (programmes, grouped) = withContext(Dispatchers.Default) {
+                    // Same degenerate-programme rule the persistence chokepoint
+                    // applies (EpgProgrammeDao.mergeForPlaylist, >= 30s). These
+                    // rows used to reach the in-memory guide UNFILTERED while
+                    // only the DB got the clean set, so sliver cells showed in
+                    // the session that fetched and vanished after a relaunch.
                     val bridged = bridgeChannelIds(rawProgrammes, channelsNow)
+                        .filter { it.endMillis - it.startMillis >= 30_000L }
                     bridged to withChannelNamePlaceholders(
                         groupByChannel(bridged), channelsNow,
                     )
@@ -833,8 +845,16 @@ class PlaylistViewModel @Inject constructor(
                 // bump exists to distrust. Without this the epoch check turns
                 // into a refetch-on-every-launch loop (observed on the TV
                 // emulator: three cold starts, three full fetches).
-                runCatching { appPreferences.setEpgCacheEpoch(EPG_CACHE_EPOCH) }
+                // Save FIRST, stamp SECOND: the stamp certifies "this
+                // playlist's on-disk cache was rebuilt clean", so writing it
+                // before (or despite) a failed save would leave poisoned rows
+                // behind a clean stamp — the state the epoch exists to detect.
                 runCatching { repository.saveEpgToCache(playlist.id, programmes) }
+                    .onSuccess {
+                        runCatching {
+                            appPreferences.setEpgCacheEpochFor(playlist.id, EPG_CACHE_EPOCH)
+                        }
+                    }
                     .onFailure { Log.w(TAG, "saveEpgToCache failed", it) }
                 // iOS parity: fire-and-forget category enrichment for
                 // Dispatcharr's bulk grid (which strips the category).

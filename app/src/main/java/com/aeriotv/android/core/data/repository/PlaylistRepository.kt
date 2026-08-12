@@ -1245,17 +1245,36 @@ class PlaylistRepository @Inject constructor(
                 "${categoryNames.size} categories, " +
                 "${streams.count { it.epgChannelId.isNotBlank() }} with EPG ids",
         )
-        return streams.map { s ->
+        // See XtreamLiveStream.directSource: not played, but a panel where
+        // most channels publish one is the shape where our rebuilt /live/
+        // URLs may 404 across the board. One line here turns that report
+        // into a diagnosis instead of a hunt.
+        val directSourceCount = streams.count { it.directSource.isNotBlank() }
+        if (directSourceCount > streams.size / 2) {
+            android.util.Log.w(
+                "PlaylistRepository",
+                "XC panel publishes direct_source on $directSourceCount/${streams.size} " +
+                    "channels; if channels list but do not play, this panel may be " +
+                    "direct_source-only and the standard /live/ URL form will 404",
+            )
+        }
+        // Same id formula as M3UParser ("m3u:" + tvg-id, else the URL) AND the
+        // same duplicate handling. epg_channel_id is routinely SHARED across
+        // streams (HD/FHD/SD variants of one channel all carry "espn.us"), and
+        // M3UParser has always disambiguated repeats by appending "|url".
+        // Skipping that here shipped duplicate ids straight into id-keyed UI
+        // (LazyColumn keys throw on duplicates - a crash in the player's
+        // channel overlay) and made favoriting one variant flag them all.
+        val seenIds = HashSet<String>()
+        val channels = streams.map { s ->
             val url = xtreamApi.liveStreamUrl(b, user, pass, s.streamId)
+            var id = "m3u:${s.epgChannelId.ifBlank { url }}"
+            if (!seenIds.add(id)) {
+                id = "$id|$url"
+                seenIds.add(id)
+            }
             M3UChannel(
-                // Same id formula as M3UParser ("m3u:" + tvg-id, else the
-                // URL). Deliberate: the URL rebuilt above is byte-identical
-                // to the one m3u_plus served, and a panel that DID publish
-                // tvg-id publishes the same value as epg_channel_id. So ids
-                // are unchanged by this switch and favourites, recents,
-                // hidden groups and collections keep pointing at the right
-                // channels for existing installs.
-                id = "m3u:${s.epgChannelId.ifBlank { url }}",
+                id = id,
                 name = s.name,
                 url = url,
                 groupTitle = categoryNames[s.categoryId].orEmpty(),
@@ -1265,6 +1284,93 @@ class PlaylistRepository @Inject constructor(
                 channelNumber = s.num?.toString(),
                 catchupDays = s.catchupDays,
                 catchupStreamId = if (s.catchupDays > 0) s.streamId.toString() else null,
+            )
+        }
+        migrateUrlKeyedChannelIds(channels)
+        return channels
+    }
+
+    /**
+     * Heal favorites and recents that still point at URL-keyed channel ids.
+     *
+     * The switch to player_api JSON claimed ids were unchanged for existing
+     * installs because "a panel that publishes tvg-id publishes the same value
+     * as epg_channel_id". True - but the panel that MOTIVATED the switch emits
+     * tvg-id="" on every M3U entry while epg_channel_id is populated, so on
+     * that class of panel the old M3U path keyed those channels by URL and
+     * this path keys them by epg id. Without this pass, updating the app
+     * silently emptied those users' Favorites and recents.
+     *
+     * The URL is the stable half of both schemes, so the mapping is exact: a
+     * channel whose new id is epg-keyed may have old rows under "m3u:<url>".
+     * Idempotent - after the first run nothing is left under a URL-keyed id
+     * that has an epg-keyed replacement - and cheap (favorites and recents
+     * are both small), so it simply runs on every XC fetch.
+     */
+    /**
+     * The pre-0.4.11 XC live fetch, kept as the fallback for panels whose
+     * player_api is broken while get.php still works. Same streaming
+     * temp-file parse (GH #31 memory discipline), same VOD/series row drop,
+     * same output=ts-then-bare 404 retry (5a8a605, both directions). No
+     * catch-up enrichment: that data came from get_live_streams, which is
+     * exactly the endpoint that just failed.
+     */
+    private suspend fun xtreamLiveChannelsViaM3uPlus(
+        b: String,
+        user: String,
+        pass: String,
+    ): List<M3UChannel> {
+        val creds = "username=${xtreamEncode(user)}&password=${xtreamEncode(pass)}"
+        val m3uUrl = "$b/get.php?$creds&type=m3u_plus&output=ts"
+        val m3uUrlNoOutput = "$b/get.php?$creds&type=m3u_plus"
+        return fetchViaTempFileWithFallback(m3uUrl, m3uUrlNoOutput, ".m3u") { file ->
+            val out = ArrayList<M3UChannel>()
+            var droppedVodSeries = 0
+            M3UParser.parseFile(file) { ch ->
+                if (isXtreamVodOrSeriesUrl(ch.url)) {
+                    droppedVodSeries++
+                    return@parseFile
+                }
+                out.add(ch)
+            }
+            if (droppedVodSeries > 0) {
+                android.util.Log.i(
+                    "PlaylistRepository",
+                    "XC m3u_plus fallback: dropped $droppedVodSeries VOD/series entries; " +
+                        "kept ${out.size} live channels",
+                )
+            }
+            out
+        }
+    }
+
+    private suspend fun migrateUrlKeyedChannelIds(channels: List<M3UChannel>) {
+        val renames = HashMap<String, String>()
+        for (ch in channels) {
+            val urlKeyed = "m3u:${ch.url}"
+            if (ch.id != urlKeyed) renames[urlKeyed] = ch.id
+        }
+        if (renames.isEmpty()) return
+
+        val favoriteDao = database.favoriteChannelDao()
+        var migratedFavorites = 0
+        for (fav in favoriteDao.allOnce()) {
+            val newId = renames[fav.channelId] ?: continue
+            // Keep displayOrder/addedAt; skip the insert if the new id already
+            // exists (the user re-favorited it by hand after the update).
+            if (favoriteDao.getOnce(newId) == null) {
+                favoriteDao.upsert(fav.copy(channelId = newId))
+            }
+            favoriteDao.delete(fav.channelId)
+            migratedFavorites++
+        }
+
+        val migratedRecents = appPreferences.renameRecentChannelIds(renames)
+        if (migratedFavorites > 0 || migratedRecents > 0) {
+            android.util.Log.i(
+                "PlaylistRepository",
+                "Channel-id migration: rewrote $migratedFavorites favorite(s) and " +
+                    "$migratedRecents recent(s) from URL-keyed to EPG-keyed ids",
             )
         }
     }
@@ -1409,11 +1515,25 @@ class PlaylistRepository @Inject constructor(
                     "PlaylistRepository",
                     "M3U URL is an Xtream get.php link; loading via player_api instead",
                 )
-                return@withContext xtreamLiveChannels(
-                    pastedXtream.base,
-                    pastedXtream.username,
-                    pastedXtream.password,
-                )
+                // The reroute is a URL-shape guess, not a probe. Middleware
+                // that serves get.php with player_api disabled, broken, or
+                // separately IP-locked exists, and for those users the pasted
+                // M3U worked before the reroute did - so a player_api failure
+                // falls through to fetching the M3U they actually pasted
+                // instead of failing a previously-working playlist outright.
+                try {
+                    return@withContext xtreamLiveChannels(
+                        pastedXtream.base,
+                        pastedXtream.username,
+                        pastedXtream.password,
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.w(
+                        "PlaylistRepository",
+                        "player_api failed for the get.php link (${e.message}); " +
+                            "falling back to the pasted M3U itself",
+                    )
+                }
             }
             val isXtreamGetPhp = base.contains("get.php", ignoreCase = true)
             // Some panels 404 a get.php URL that omits `output` (measured
@@ -1561,7 +1681,24 @@ class PlaylistRepository @Inject constructor(
         SourceType.XtreamCodes -> {
             val user = username?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("Xtream Codes username is required")
-            xtreamLiveChannels(base.trimEnd('/'), user, password.orEmpty())
+            try {
+                xtreamLiveChannels(base.trimEnd('/'), user, password.orEmpty())
+            } catch (e: Exception) {
+                // Until 0.4.10 this source type fetched get.php m3u_plus, so
+                // panels with a broken, disabled, or separately IP-locked
+                // player_api WORKED - restreamers and aggregators that only
+                // emulate get.php exist. A player_api failure must not turn a
+                // previously-working playlist into a permanent "check the
+                // username and password" error; fall back to the m3u_plus
+                // fetch this branch used to be. Catch-up enrichment is
+                // deliberately absent here: it came from get_live_streams,
+                // which is exactly what just failed.
+                android.util.Log.w(
+                    "PlaylistRepository",
+                    "XC player_api failed (${e.message}); falling back to get.php m3u_plus",
+                )
+                xtreamLiveChannelsViaM3uPlus(base.trimEnd('/'), user, password.orEmpty())
+            }
         }
     } }
 }

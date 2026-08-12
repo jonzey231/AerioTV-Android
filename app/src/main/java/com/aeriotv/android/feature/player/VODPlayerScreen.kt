@@ -1382,10 +1382,20 @@ fun VODPlayerScreen(
                 val errorRetryFocus = remember { FocusRequester() }
                 if (isTvForm) {
                     LaunchedEffect(errMsg, errorReconnecting) {
-                        // runCatching: requesting focus on a node that is not yet
-                        // attached throws, and a transient failure here must not
-                        // take down the error overlay itself.
-                        runCatching { errorRetryFocus.requestFocus() }
+                        // runCatching: requesting focus on a node that is not
+                        // yet attached throws, and a transient failure here
+                        // must not take down the error overlay itself. Retry
+                        // across a few frames rather than giving up on the
+                        // first throw - a single swallowed attempt left the
+                        // buttons unreachable (the original bug) whenever the
+                        // node attached a frame late, and nothing re-ran until
+                        // errMsg changed.
+                        repeat(5) {
+                            if (runCatching { errorRetryFocus.requestFocus() }.isSuccess) {
+                                return@LaunchedEffect
+                            }
+                            kotlinx.coroutines.delay(50)
+                        }
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

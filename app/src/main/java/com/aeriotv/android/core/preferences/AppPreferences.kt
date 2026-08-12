@@ -510,6 +510,29 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Rewrite recents entries whose id appears in [renames] (old id -> new
+     * id), preserving order and de-duplicating in case both forms are somehow
+     * present. Returns how many entries changed. Used by the URL-keyed ->
+     * EPG-keyed channel-id migration in PlaylistRepository.
+     */
+    suspend fun renameRecentChannelIds(renames: Map<String, String>): Int {
+        var changed = 0
+        store.edit { prefs ->
+            val existing = (prefs[KEY_RECENT_CHANNEL_IDS] ?: "")
+                .split('\n')
+                .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            if (existing.isEmpty()) return@edit
+            val rewritten = existing.map { id ->
+                renames[id]?.also { changed++ } ?: id
+            }.distinct()
+            if (changed > 0) {
+                prefs[KEY_RECENT_CHANNEL_IDS] = rewritten.joinToString("\n")
+            }
+        }
+        return changed
+    }
+
+    /**
      * Hidden group titles from Manage Groups. Newline-delimited list since
      * group names can include any character except newline. Empty string =
      * "no groups hidden", which is the default and matches iOS canon (all
@@ -653,6 +676,22 @@ class AppPreferences @Inject constructor(
     val epgCacheEpoch: Flow<Int> = store.data.map { it[KEY_EPG_CACHE_EPOCH] ?: 0 }
     suspend fun setEpgCacheEpoch(value: Int) {
         store.edit { it[KEY_EPG_CACHE_EPOCH] = value }
+    }
+
+    /**
+     * Per-playlist variant of the epoch stamp. The EPG cache itself is
+     * per-playlist, so a single global stamp was wrong-by-scope: the active
+     * playlist's successful refetch stamped the epoch for EVERY playlist,
+     * and a second, still-poisoned playlist inside its freshness TTL was then
+     * trusted — the exact history-only guide the epoch exists to purge. Each
+     * playlist now proves ITS cache was rebuilt. Reading defaults to 0, so
+     * playlists stamped only by the old global key refetch once and re-stamp.
+     */
+    suspend fun epgCacheEpochFor(playlistId: String): Int =
+        store.data.first()[intPreferencesKey("epg_cache_epoch.$playlistId")] ?: 0
+
+    suspend fun setEpgCacheEpochFor(playlistId: String, value: Int) {
+        store.edit { it[intPreferencesKey("epg_cache_epoch.$playlistId")] = value }
     }
 
     // ── Multiview ────────────────────────────────────────────────────────

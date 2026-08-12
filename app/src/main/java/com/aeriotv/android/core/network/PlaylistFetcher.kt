@@ -164,6 +164,15 @@ class PlaylistFetcher @Inject constructor() {
         }
         var total = 0L
         var nextMark = PROGRESS_LOG_BYTES
+        // Minimum-throughput floor. socketTimeoutMillis only fails TOTAL
+        // silence; a wedged middlebox trickling a few bytes every 25 seconds
+        // resets it forever, and with no total cap that hang is unbounded
+        // (538MB at 1KB per 25s is ~160 days). Requiring 256KB of progress
+        // per 2-minute window fails those pathological connections in
+        // minutes while sitting far below any link a playlist could actually
+        // finish over (256KB/120s is ~17 kbit/s).
+        var windowStart = System.currentTimeMillis()
+        var windowBytes = 0L
         response.bodyAsChannel().toInputStream().use { input ->
             dest.outputStream().use { out ->
                 val buf = ByteArray(64 * 1024)
@@ -172,6 +181,20 @@ class PlaylistFetcher @Inject constructor() {
                     if (n < 0) break
                     out.write(buf, 0, n)
                     total += n
+                    windowBytes += n
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - windowStart >= THROUGHPUT_WINDOW_MS) {
+                        if (windowBytes < THROUGHPUT_FLOOR_BYTES) {
+                            throw IllegalStateException(
+                                "Download stalled: only ${windowBytes / 1024}KB arrived in the " +
+                                    "last ${THROUGHPUT_WINDOW_MS / 1000}s " +
+                                    "(${total / 1_000_000}MB downloaded so far). " +
+                                    "The server is barely responding; try again later.",
+                            )
+                        }
+                        windowStart = nowMs
+                        windowBytes = 0L
+                    }
                     // Coarse progress so "stuck adding a playlist" reports come
                     // with evidence of whether bytes were actually moving,
                     // without logging inside a hot loop.
@@ -207,5 +230,8 @@ class PlaylistFetcher @Inject constructor() {
         const val PROGRESS_LOG_BYTES = 32L * 1_000_000
         /** Slack left on the partition beyond the payload itself. */
         const val SPACE_HEADROOM_BYTES = 64L * 1_000_000
+        /** Minimum-throughput floor: see the comment in fetchToFile. */
+        const val THROUGHPUT_WINDOW_MS = 120_000L
+        const val THROUGHPUT_FLOOR_BYTES = 256L * 1024
     }
 }
