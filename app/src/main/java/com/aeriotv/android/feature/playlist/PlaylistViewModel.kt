@@ -7,6 +7,7 @@ import com.aeriotv.android.DeepLinkTarget
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.debug.LogSanitizer
 import com.aeriotv.android.core.data.bridgeChannelIds
@@ -1567,10 +1568,20 @@ class PlaylistViewModel @Inject constructor(
             repository.switchActive(playlistId).fold(
                 onSuccess = { (entity, channels) ->
                     _state.update {
+                        // A group selected under the old playlist may not exist in
+                        // the new one; keeping it would filter the guide/list down
+                        // to nothing with no visible reason. Reset to All when the
+                        // selection has no match. Collection tokens are exempt:
+                        // collections are cross-playlist and GuideScreen already
+                        // guards deleted ones.
+                        val keepGroup = it.selectedGroup == ALL_GROUPS ||
+                            it.selectedGroup.startsWith(ChannelCollection.TOKEN_PREFIX) ||
+                            channels.any { ch -> ch.groupTitle.equals(it.selectedGroup, ignoreCase = true) }
                         it.copy(
                             phase = Phase.ChannelsReady,
                             playlist = entity,
                             channels = channels,
+                            selectedGroup = if (keepGroup) it.selectedGroup else ALL_GROUPS,
                             isLoading = false,
                             error = if (channels.isEmpty()) "No channels found." else null,
                         )
