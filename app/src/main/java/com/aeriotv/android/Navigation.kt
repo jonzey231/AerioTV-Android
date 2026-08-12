@@ -466,8 +466,16 @@ fun AerioTVNavHost(
                 val consentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                     contract = androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
                 ) { result ->
-                    syncVm.acceptConsentResult(result.data)
                     scope.launch {
+                        // Task #256: AWAIT the consent grant before restoring.
+                        // The fire-and-forget form raced tryRestoreAndAdvance:
+                        // applying the consent suspends on the encrypted token
+                        // save before status flips to SignedIn, so the pull on
+                        // a fresh install saw "not signed in", returned
+                        // nothing, and the user was told "No playlists in
+                        // Drive yet" while the background worker restored them
+                        // minutes later with nobody watching.
+                        syncVm.acceptConsentResultNow(result.data)
                         tryRestoreAndAdvance(null)
                         googleSignInInFlight = false
                     }
@@ -494,6 +502,28 @@ fun AerioTVNavHost(
                         restoreOverlayVisible = false
                         restoreActivatedPlaylist = false
                         syncVm.clearRestoreProgress()
+                    }
+                }
+
+                // Task #256 safety net: playlists can land in the DB from the
+                // periodic DriveSyncWorker (armed by setMasterEnabled in the
+                // restore closure) AFTER a restore attempt came up empty.
+                // Historically nothing observed the table from onboarding, so
+                // the data was silently restored while the user stayed parked
+                // on Welcome until an app restart. If rows appear while we sit
+                // at NeedsUrl with no restore or sign-in in flight, activate
+                // them; the phase watcher above advances to MAIN. One-shot so
+                // a failing channel load can't retrigger in a loop.
+                var autoActivatedFromDb by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    vm.allPlaylists.collect { rows ->
+                        if (rows.isNotEmpty() && !autoActivatedFromDb &&
+                            state.phase == PlaylistViewModel.Phase.NeedsUrl &&
+                            !restoreOverlayVisible && !googleSignInInFlight
+                        ) {
+                            autoActivatedFromDb = true
+                            vm.loadActivePlaylistIfAvailable()
+                        }
                     }
                 }
 

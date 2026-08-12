@@ -112,6 +112,16 @@ class SyncSettingsViewModel @Inject constructor(
         viewModelScope.launch { sync.acceptConsentResult(data) }
     }
 
+    /** Suspend variant for callers that must not proceed until the consent
+     *  grant is fully applied (status flipped to SignedIn). The onboarding
+     *  restore reads sync.status right after the consent launcher returns;
+     *  the fire-and-forget form above races it because acceptConsentResult
+     *  suspends on the encrypted token save BEFORE setting SignedIn, so a
+     *  fresh install's first restore saw "not signed in" and pulled nothing
+     *  (task #256). */
+    suspend fun acceptConsentResultNow(data: android.content.Intent?) =
+        sync.acceptConsentResult(data)
+
     /**
      * Silently restore the Drive session from the persisted token (or refresh
      * with no UI when it has lapsed) so the screen reflects signed-in and the
