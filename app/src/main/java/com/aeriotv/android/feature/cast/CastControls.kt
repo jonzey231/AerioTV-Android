@@ -128,9 +128,15 @@ fun CastIconButton(
  * receiver selector (active-scan while open) and, when connected, offers a stop
  * action. Selecting a route hands off to the Cast framework's SessionManager,
  * which starts the session; [AerioCastSender] then loads the pending content.
+ *
+ * Shared with MainScaffold's floating "Control a TV" button (task #255): the
+ * guide entry point used to show a companion-only list while this one showed
+ * cast routes too, so the same TV appeared in one picker but not the other.
+ * Nothing here needs a playing item -- selecting a route just connects, and
+ * content follows from the next tune.
  */
 @Composable
-private fun CastRouteChooserDialog(
+fun CastRouteChooserDialog(
     sender: AerioCastSender,
     companionRemote: CompanionRemoteController?,
     companionDiscovery: CompanionDiscovery?,

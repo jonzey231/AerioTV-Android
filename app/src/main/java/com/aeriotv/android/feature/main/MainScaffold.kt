@@ -809,10 +809,13 @@ fun MainScaffold(
                 }
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
-                // is discovered on the LAN so the phone can be a remote without
-                // opening a channel first. Hidden while already controlling /
-                // casting (their cards take over).
-                if (companionDevices.isNotEmpty() &&
+                // is discovered on the LAN OR a Google Cast route exists, so the
+                // phone can be a remote / start a cast without opening a channel
+                // first (task #255: this used to be companion-only while the
+                // player's picker also listed cast devices). Hidden while
+                // already controlling / casting (their cards take over).
+                if ((companionDevices.isNotEmpty() ||
+                        castState !is com.aeriotv.android.core.cast.AerioCastSender.State.Unavailable) &&
                     companionConn !is com.aeriotv.android.core.cast.companion
                         .CompanionRemoteController.Conn.Connected &&
                     !casting && !isTv
@@ -931,21 +934,27 @@ fun MainScaffold(
       }
     }
 
-    // GH #33: companion device picker opened from the floating "Control TV" pill.
+    // Task #255: the floating "Control TV" pill opens the SAME unified picker
+    // as the player's cast button (Google Cast routes + AerioTV companion TVs
+    // with inline pairing), replacing the old companion-only dialog that made
+    // cast targets invisible outside the player.
     if (showCompanionPicker) {
         // Force a fresh query sweep the moment the picker opens: the Fold's
         // WiFi misses mid-browse announcements, so a long-running browse can
         // be stale-by-omission (a TV that came up after the browse started).
         LaunchedEffect(Unit) { companionDiscovery.refresh() }
-        CompanionControlPickerDialog(
-            devices = companionDevices,
-            connection = companionConn,
-            onConnect = { companionRemote.connect(it) },
-            onSubmitCode = { companionRemote.submitPairingCode(it) },
+        com.aeriotv.android.feature.cast.CastRouteChooserDialog(
+            sender = castSender,
+            companionRemote = companionRemote,
+            companionDiscovery = companionDiscovery,
             onDismiss = {
-                // Abandon an in-flight/unpaired attempt so it doesn't linger.
+                // Abandon an in-flight/unpaired companion attempt so it
+                // doesn't linger.
                 if (companionConn !is com.aeriotv.android.core.cast.companion
-                        .CompanionRemoteController.Conn.Connected) {
+                        .CompanionRemoteController.Conn.Connected &&
+                    companionConn !is com.aeriotv.android.core.cast.companion
+                        .CompanionRemoteController.Conn.Idle
+                ) {
                     companionRemote.disconnect()
                 }
                 showCompanionPicker = false
@@ -988,81 +997,6 @@ private fun CompanionControlFab(onClick: () -> Unit) {
             tint = MaterialTheme.colorScheme.primary,
         )
     }
-}
-
-/** GH #33: picks a discovered AerioTV TV to control; inline 6-digit pairing. */
-@Composable
-private fun CompanionControlPickerDialog(
-    devices: List<com.aeriotv.android.core.cast.companion.CompanionDiscovery.Tv>,
-    connection: com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn,
-    onConnect: (com.aeriotv.android.core.cast.companion.CompanionDiscovery.Tv) -> Unit,
-    onSubmitCode: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val needsPairing = connection is
-        com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.NeedsPairing
-    val connecting = connection is
-        com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connecting
-    var code by remember { mutableStateOf("") }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            if (needsPairing) {
-                androidx.compose.material3.TextButton(
-                    onClick = { onSubmitCode(code); code = "" },
-                    enabled = code.trim().length >= 6,
-                ) { Text("Pair") }
-            }
-        },
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Close") }
-        },
-        title = { Text("Control a TV") },
-        text = {
-            Column {
-                when {
-                    needsPairing -> {
-                        Text("Enter the code shown on the TV")
-                        Spacer(Modifier.height(8.dp))
-                        androidx.compose.material3.OutlinedTextField(
-                            value = code,
-                            onValueChange = { code = it.filter(Char::isDigit).take(6) },
-                            singleLine = true,
-                            label = { Text("6-digit code") },
-                        )
-                    }
-                    connecting -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text("Connecting…")
-                        }
-                    }
-                    devices.isEmpty() -> Text(
-                        "No AerioTV devices found. Open AerioTV on your TV, then check again.",
-                    )
-                    else -> Column {
-                        devices.forEach { tv ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { onConnect(tv) }
-                                    .padding(vertical = 12.dp, horizontal = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Icon(Icons.Filled.Tv, contentDescription = null)
-                                Text(tv.name, style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                    }
-                }
-            }
-        },
-    )
 }
 
 /**
