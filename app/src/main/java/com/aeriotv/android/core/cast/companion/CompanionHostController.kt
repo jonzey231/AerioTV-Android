@@ -92,6 +92,16 @@ class CompanionHostController @Inject constructor(
 
     private var started = false
     @Volatile private var advertising = false
+    /** GH #61: `advertising` only means the server is up and registration was
+     *  ATTEMPTED. This flips true solely in onServiceRegistered - some devices
+     *  (reporter's Chromecast) deliver neither success nor failure callback,
+     *  leaving the host reachable but undiscoverable. The watchdog re-registers
+     *  with bounded backoff until this confirms. */
+    @Volatile private var nsdConfirmed = false
+    /** Consecutive unconfirmed NSD attempts (backoff exponent). */
+    @Volatile private var nsdAttempts = 0
+    /** Wall-clock gate for the next NSD retry. */
+    @Volatile private var nsdNextRetryAtMs = 0L
     private var server: io.ktor.server.engine.EmbeddedServer<*, *>? = null
     private var boundPort = 0
     private var nsd: NsdManager? = null
@@ -185,6 +195,16 @@ class CompanionHostController @Inject constructor(
                 if (!advertising && isForeground()) {
                     Log.i(TAG, "watchdog: foreground but not advertising -> restart")
                     startAdvertising()
+                } else if (advertising && !nsdConfirmed && isForeground() &&
+                    System.currentTimeMillis() >= nsdNextRetryAtMs
+                ) {
+                    // GH #61: server is up but Android never confirmed the NSD
+                    // record (no callback at all on the reporter's Chromecast,
+                    // or a failure that was previously discarded). Re-register
+                    // with bounded backoff; a manual client can still connect
+                    // by port in the meantime.
+                    Log.i(TAG, "watchdog: NSD unconfirmed (attempt ${nsdAttempts + 1}) -> re-registering")
+                    registerNsd(boundPort)
                 }
             }
         }
@@ -237,6 +257,9 @@ class CompanionHostController @Inject constructor(
         advertising = false
         runCatching { regListener?.let { nsd?.unregisterService(it) } }
         regListener = null
+        nsdConfirmed = false
+        nsdAttempts = 0
+        nsdNextRetryAtMs = 0L
         runCatching { server?.stop(500L, 1000L) }
         server = null
         multicastLock?.let { lock -> runCatching { if (lock.isHeld) lock.release() } }
@@ -249,8 +272,20 @@ class CompanionHostController @Inject constructor(
     // ---- NSD advertise ----
 
     private fun registerNsd(port: Int) {
+        if (port <= 0) return
         val mgr = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
         nsd = mgr
+        // GH #61: a retry replaces any earlier attempt - drop the stale
+        // listener first so Android does not hold two registrations for us
+        // (re-registering an in-flight listener throws IllegalArgumentException).
+        regListener?.let { old -> runCatching { mgr.unregisterService(old) } }
+        regListener = null
+        nsdConfirmed = false
+        // Bounded backoff: 15s watchdog cadence doubled per unconfirmed
+        // attempt, capped at 5 minutes; reset on success or stop.
+        nsdNextRetryAtMs = System.currentTimeMillis() +
+            (15_000L shl nsdAttempts.coerceAtMost(5)).coerceAtMost(300_000L)
+        nsdAttempts++
         val info = NsdServiceInfo().apply {
             serviceName = deviceName()
             serviceType = CompanionProtocol.SERVICE_TYPE
@@ -259,13 +294,27 @@ class CompanionHostController @Inject constructor(
             runCatching { setAttribute(CompanionProtocol.TXT_DEVICE_ID, deviceId()) }
         }
         val listener = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(s: NsdServiceInfo) { Log.i(TAG, "NSD registered ${s.serviceName}") }
-            override fun onRegistrationFailed(s: NsdServiceInfo, err: Int) { Log.w(TAG, "NSD reg failed $err") }
+            override fun onServiceRegistered(s: NsdServiceInfo) {
+                // The only place discoverability is considered real (GH #61).
+                nsdConfirmed = true
+                nsdAttempts = 0
+                Log.i(TAG, "NSD registered ${s.serviceName}")
+            }
+            override fun onRegistrationFailed(s: NsdServiceInfo, err: Int) {
+                // Leave nsdConfirmed false; the watchdog retries after backoff.
+                Log.w(TAG, "NSD reg failed $err (watchdog will retry)")
+            }
             override fun onServiceUnregistered(s: NsdServiceInfo) {}
             override fun onUnregistrationFailed(s: NsdServiceInfo, err: Int) {}
         }
         regListener = listener
         runCatching { mgr.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener) }
+            .onFailure {
+                // Previously discarded: a synchronous throw left `advertising`
+                // true with no record and no retry (GH #61 root cause).
+                Log.w(TAG, "NSD registerService threw (watchdog will retry)", it)
+                regListener = null
+            }
     }
 
     private fun acquireMulticastLock() {
