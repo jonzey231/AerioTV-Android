@@ -401,7 +401,36 @@ class AerioExoPlayerHolder @Inject constructor(
             if (isTimeshifting || isCatchup) return
             val ts = timeshift.get()
             if (ts.activeWriter == null) return
-            if (playWhenReady) ts.onLiveResumedAtEdge() else ts.onLivePaused()
+            if (playWhenReady) {
+                // GH #62: a MediaSession resume (remote play/pause key, QS
+                // card, notification, Bluetooth) after a LONG pause used to
+                // resume the DIRECT pipeline at the edge of the player's own
+                // read-ahead. The provider had usually killed that idle
+                // connection during the pause, so the runway ran dry within
+                // seconds and the terminal-error re-prime jumped to LIVE,
+                // discarding the pause buffer the recorder kept for exactly
+                // this moment. Mirror the chrome transport's long-pause
+                // branch: past the same 6s threshold, switch onto the buffer
+                // at the pause point (clamped into the ring). Short pauses
+                // keep the untouched-pipeline resume. The chrome long-pause
+                // path is unaffected: it enters timeshift BEFORE this
+                // callback runs, so isTimeshifting already returned above.
+                val pausedAt = mediaPauseWallMs
+                mediaPauseWallMs = 0L
+                val w = ts.activeWriter
+                if (pausedAt > 0 &&
+                    System.currentTimeMillis() - pausedAt > 6_000 &&
+                    w != null && !w.closed &&
+                    playTimeshift((pausedAt - 1_000).coerceAtLeast(w.tailWallMs))
+                ) {
+                    Log.i(TAG, "[REWIND] media-key long-pause resume -> buffer at pause point")
+                } else {
+                    ts.onLiveResumedAtEdge()
+                }
+            } else {
+                mediaPauseWallMs = System.currentTimeMillis()
+                ts.onLivePaused()
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -933,6 +962,13 @@ class AerioExoPlayerHolder @Inject constructor(
     /** Consecutive timeshift-error recoveries this rewind stint; reset on
      *  every fresh direct tune. Caps the error->tail retry loop. */
     private var timeshiftErrorRetries = 0
+
+    /** Wall-clock of the last MediaSession pause on direct live (GH #62).
+     *  The watchdog listener's resume branch uses it to mirror the chrome
+     *  transport's long-pause switch onto the rewind buffer. Cleared on
+     *  every resume; a chrome pause ALSO stamps it harmlessly (the chrome
+     *  resume enters timeshift first, so the callback never consumes it). */
+    private var mediaPauseWallMs = 0L
 
     /** Live Rewind can only buffer what the tee mirrors: raw MPEG-TS.
      *  PlayerScreen gates session start on this so HLS/DASH live channels
