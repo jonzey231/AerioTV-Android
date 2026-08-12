@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.aeriotv.android.ui.tvDpadScrollable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -110,10 +111,14 @@ private fun ColumnScope.WhatsNewBody(
         color = MaterialTheme.colorScheme.onBackground,
     )
     Spacer(Modifier.height(16.dp))
+    // GH #59: share the scroll state with the TV D-pad handler so long
+    // release notes are scrollable from the remote.
+    val notesScroll = androidx.compose.foundation.rememberScrollState()
     Column(
         modifier = Modifier
             .weight(1f, fill = false)
-            .verticalScroll(rememberScrollState()),
+            .tvDpadScrollable(notesScroll)
+            .verticalScroll(notesScroll),
     ) {
         items.forEach { item ->
             Text(

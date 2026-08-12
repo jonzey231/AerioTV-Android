@@ -137,12 +137,19 @@ internal fun GroupSidebarPanel(
     // focus, Up falls through to the inherited escape so the nav bar is still
     // one press away.
     var manageFocused by remember { mutableStateOf(false) }
+    // GH #60: the intercept below must fire ONLY when the TOP row is focused.
+    // The first cut grabbed EVERY Up press inside the panel, so moving up the
+    // list from row N jumped straight to the Manage Groups button instead of
+    // row N-1 (lpukatch, 0.4.10). Track which row holds focus and let the
+    // ordinary focus search handle row-to-row travel.
+    var focusedRowIndex by remember { mutableStateOf(-1) }
     Column(
         modifier = modifier
             .width(panelWidth)
             .onPreviewKeyEvent { event ->
                 if (onManageGroups == null ||
                     manageFocused ||
+                    focusedRowIndex != 0 ||
                     event.key != androidx.compose.ui.input.key.Key.DirectionUp ||
                     event.type != androidx.compose.ui.input.key.KeyEventType.KeyDown
                 ) {
@@ -189,7 +196,10 @@ internal fun GroupSidebarPanel(
                     label = groupSidebarLabel(token),
                     isActive = token == selectedToken,
                     onClick = { onSelect(token) },
-                    onFocused = { onRowFocused(token) },
+                    onFocused = {
+                        focusedRowIndex = index
+                        onRowFocused(token)
+                    },
                     modifier = if (index == selectedIndex && initialFocus != null) {
                         Modifier.focusRequester(initialFocus)
                     } else {
