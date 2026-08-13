@@ -779,12 +779,30 @@ fun AerioTVNavHost(
                         // the Now-Casting mini controller card.
                         val castDevice = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
                             ?.deviceName
+                        // Casting rework P1: the URL now feeds the phone-local
+                        // HLS proxy's ingest, which must present the same
+                        // Dispatcharr identity headers the player would (same
+                        // header recipe as the mini-tune block below).
+                        val castTuneHeaders = run {
+                            val pl = state.playlist
+                            val key = pl?.apiKey?.takeIf { it.isNotBlank() }
+                            val isDispatcharr =
+                                pl?.sourceType == SourceType.DispatcharrApiKey.name ||
+                                    pl?.sourceType == SourceType.DispatcharrUserPass.name
+                            if (isDispatcharr && key != null) {
+                                mapOf(
+                                    "X-API-Key" to key,
+                                    "Authorization" to "ApiKey $key",
+                                )
+                            } else emptyMap()
+                        }
                         if (castTapStaysOnList && castDevice != null &&
                             castSenderNav.tuneLiveChannel(
                                 channelId = channel.id,
                                 title = channel.name,
                                 artUri = channel.tvgLogo.takeIf { it.isNotBlank() },
                                 localUrl = channel.url,
+                                headers = castTuneHeaders,
                             )
                         ) {
                             android.widget.Toast.makeText(
