@@ -154,6 +154,13 @@
       // Required when not using <cast-media-player>, so smart displays don't
       // paint their own default controls/scrim over this page.
       uiConfig: { touchScreenOptimizedApp: true },
+      // The phone-local HLS proxy (casting rework P1) serves live HLS with
+      // fMP4/CMAF segments. The legacy MPL player CAF picks for HLS by
+      // default fails it with PLAYBACK/104 even though the same fetches and
+      // MSE appends succeed from this page (device-verified via DevTools on
+      // a Google TV Streamer); Shaka plays it. Progressive/DASH loads are
+      // unaffected by this flag.
+      useShakaForHls: true,
     });
   </script>
 </body>
