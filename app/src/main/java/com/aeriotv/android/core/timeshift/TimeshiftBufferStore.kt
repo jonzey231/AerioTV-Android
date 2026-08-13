@@ -156,6 +156,30 @@ data class TimeshiftSegment(
     val bytes: Long,
 )
 
+/**
+ * GH #65: a byte position in the buffer where the written content skips
+ * FORWARD in time - a splice that resynced past missing content, a
+ * forced-gap splice, or a dropped-chunk resync. The bytes on either
+ * side are each well formed TS, but the PTS jumps across the boundary.
+ * Media3 1.4.1's TsExtractor ignores the in-band discontinuity
+ * indicator (verified against the 1.4.1 sources), so the reader uses
+ * these markers instead: [TimeshiftDataSource] refuses to read across
+ * one, the holder catches the typed error and re-enters the buffer AT
+ * the gap, and the re-open resets the extractor and flushes the
+ * renderers - the jump becomes a fresh timeline instead of the
+ * mid-stream AudioSink UnexpectedDiscontinuityException storm in
+ * Destro706's logs.
+ */
+data class TimeshiftGap(
+    /** Segment file the post-gap content starts in. */
+    val segName: String,
+    /** Byte offset within that segment of the first post-gap byte. */
+    val byteOffset: Long,
+    /** Wall time the post-gap content was committed; what the holder
+     *  re-enters at (and reports as the new playhead). */
+    val resumeWallMs: Long,
+)
+
 /** GH #51: packet count of the head fingerprint the splice trimmer hunts for. */
 private const val OVERLAP_RUN = 16
 
@@ -189,6 +213,25 @@ private const val OVERLAP_PCR_SEARCH_MS = 15_000L
 /** PCR is a 33-bit 90 kHz counter; it wraps roughly every 26.5 hours. */
 private const val PCR_WRAP = 1L shl 33
 
+/** GH #65: a clock-resynced splice whose forward skip is at least this
+ *  large gets a [TimeshiftGap] marker. Below it the audio sink's own
+ *  200 ms tolerance-plus-resync absorbs the jump more smoothly than a
+ *  source re-open would. */
+private const val GAP_MARK_MIN_MS = 1_000L
+
+/** GH #65: PCRs seen on a PID other than the splice anchor (with none
+ *  yet on the anchor) before concluding the incoming connection is a
+ *  DIFFERENT mux and the anchor's clock will never appear. */
+private const val FOREIGN_PCR_LIMIT = 3
+
+/** GH #65: how long the live tee is allowed to wait for a writer
+ *  admission permit before dropping. Bounded so live playback can never
+ *  be stalled meaningfully (ExoPlayer holds seconds of buffer-ahead;
+ *  network jitter routinely costs more than this), but long enough to
+ *  ride out a rollSegment eviction pass on slow eMMC, which is what was
+ *  actually filling the queue in Destro706's v0.4.12 logs. */
+private const val LIVE_ADMIT_WAIT_MS = 500L
+
 /** Writer queue depth, in chunks. Also the permit count of the
  *  admission semaphore that fronts it. */
 private const val WRITE_SLOTS = 256
@@ -198,9 +241,11 @@ private const val WRITE_SLOTS = 256
  *
  * Threading: [append] is called from ExoPlayer's loading thread via
  * [TeeDataSource]. Writes are handed to a single-thread executor with
- * a bounded queue so a slow disk can NEVER stall live playback; on
- * overflow the incoming chunk is dropped (a small hole in the rewind
- * buffer beats a stalled live picture).
+ * a bounded queue so a slow disk can NEVER stall live playback; the
+ * tee waits at most [LIVE_ADMIT_WAIT_MS] for a slot, the filler waits
+ * for as long as the writer lives, and a chunk refused even then is
+ * dropped WITH a gap marker so the hole can be hopped instead of
+ * crashing the audio sink (GH #65).
  */
 class TimeshiftWriter(
     val sessionDir: File,
@@ -266,6 +311,26 @@ class TimeshiftWriter(
     /** Set once the discard scan sees any PCR on the anchor PID; while
      *  false the byte cap is still the only available bound. */
     private var sawAnchorPcr = false
+    /** GH #65: PCRs seen on some OTHER PID while [sawAnchorPcr] is still
+     *  false. A few of these with zero anchor sightings means the mux
+     *  changed under us and the anchor clock will never appear. */
+    private var foreignPcrCount = 0
+
+    // GH #65 gap markers. Written by the writer thread (and, for the
+    // pending flag, by producer threads on a drop), read by the
+    // timeshift reader thread.
+    /** Positions where buffered content skips forward in time. */
+    private val gapList = ArrayDeque<TimeshiftGap>()
+    /** Set when the NEXT committed bytes follow a time skip: commit
+     *  records a [TimeshiftGap] there and arms the in-band flag. */
+    @Volatile private var pendingGap = false
+    /** True while waiting for the first PCR-carrying packet after a gap
+     *  to stamp its discontinuity_indicator bit (in-band correctness;
+     *  the marker above is what the player actually acts on). */
+    private var pendingDiscFlag = false
+
+    /** Snapshot of gap markers, oldest first. */
+    fun gaps(): List<TimeshiftGap> = synchronized(gapList) { gapList.toList() }
 
     /** Chunks the writer had to refuse because the queue was full.
      *  Reported once per session close: a nonzero count means the buffer
@@ -296,6 +361,10 @@ class TimeshiftWriter(
      *  never recovers. Silently dropping was never safe. */
     private fun onChunkDropped() {
         needResync = true
+        // GH #65: a hole is also a forward time skip for any reader that
+        // later crosses it; mark it so the player hops it cleanly
+        // instead of feeding the audio sink a PTS discontinuity.
+        pendingGap = true
         val n = droppedChunks.incrementAndGet()
         if (n == 1L || n % 64L == 0L) {
             Log.w("TimeshiftBuffer", "writer queue full, dropped $n chunk(s); buffer will resync")
@@ -318,7 +387,14 @@ class TimeshiftWriter(
      *  or a different-content connection) falls back to the old splice
      *  behavior. */
     fun markDiscontinuity() {
-        submit(blocking = false) {
+        // GH #65 finding 1 (part): this control message used to take a
+        // queue permit like any data chunk, so the same pressure that
+        // drops chunks could silently drop the SPLICE ARMING itself and
+        // the join replay then landed raw (backwards PTS, no trim,
+        // nothing in the log). The executor queue is sized WRITE_SLOTS
+        // + 16 above the permit count precisely so permit-free control
+        // tasks always fit; submit directly.
+        val task = Runnable {
             synchronized(lock) {
                 carry = ByteArray(0)
                 needResync = true
@@ -337,14 +413,25 @@ class TimeshiftWriter(
                 // still tells us where the replay ends.
                 discardActive = spliceTarget != null || spliceAnchorPcr >= 0
                 matchLen = 0
+                foreignPcrCount = 0
                 discardedBytes = 0L
                 discardStartMs = 0L
             }
         }
+        runCatching { executor.execute(task) }.onFailure {
+            // Executor gone or queue truly saturated: realign at minimum
+            // so the fresh connection cannot misalign every later packet.
+            synchronized(lock) {
+                carry = ByteArray(0)
+                needResync = true
+            }
+        }
     }
 
-    /** Append from the live tee. Playback owns this thread, so a full
-     *  queue drops the chunk rather than stalling the picture. */
+    /** Append from the live tee. Playback owns this thread, so the wait
+     *  for a slot is bounded; a chunk refused even after the bounded
+     *  wait is dropped (with a gap marker) rather than stalling the
+     *  picture. */
     fun append(data: ByteArray, offset: Int, length: Int) {
         if (closed || length <= 0) return
         val copy = data.copyOfRange(offset, offset + length)
@@ -366,13 +453,41 @@ class TimeshiftWriter(
         submit(blocking = true) { writeChunk(copy) }
     }
 
-    /** Take an admission permit (waiting only for non-playback
-     *  producers), then hand the work to the writer thread. */
+    /** Take an admission permit, then hand the work to the writer
+     *  thread.
+     *
+     *  GH #65 finding 1: the old policy still dropped in both modes.
+     *  The filler's "blocking" wait was capped at 2 s, which a
+     *  Streamer-class eMMC busy in a rollSegment eviction pass exceeds
+     *  exactly when the join burst arrives, and the live tee never
+     *  waited at all, so ExoPlayer's tune-in read-ahead burst (network
+     *  speed, far above realtime) shredded the queue while the writer
+     *  was stuck on disk. Now the filler waits for as long as the
+     *  writer is alive (nothing renders off its thread; a drop is
+     *  never the better trade), and the tee gets one bounded
+     *  [LIVE_ADMIT_WAIT_MS] wait, which converts the burst into brief
+     *  backpressure that ExoPlayer's own buffer absorbs. A tee drop is
+     *  now the last resort, and it leaves a gap marker (see
+     *  [onChunkDropped]) so it cannot break playback later. */
     private fun submit(blocking: Boolean, work: () -> Unit) {
         val admitted = if (blocking) {
-            runCatching { slots.tryAcquire(2, TimeUnit.SECONDS) }.getOrDefault(false)
+            var got = false
+            while (!closed) {
+                try {
+                    if (slots.tryAcquire(500, TimeUnit.MILLISECONDS)) {
+                        got = true
+                        break
+                    }
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            got
         } else {
-            slots.tryAcquire()
+            slots.tryAcquire() || runCatching {
+                slots.tryAcquire(LIVE_ADMIT_WAIT_MS, TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
         }
         if (!admitted) {
             onChunkDropped()
@@ -434,21 +549,45 @@ class TimeshiftWriter(
         if (current == null || now - currentStartWallMs >= TimeshiftBufferStore.SEGMENT_MS) {
             rollSegment(now)
         }
-        current?.write(buf, from, len)
-        currentBytes += len
-        headWallMs = now
+        // GH #65: these bytes follow a time skip. Record exactly where
+        // they start so the reader can hop the boundary instead of
+        // feeding the PTS jump to the demuxer mid-stream.
+        if (pendingGap) {
+            pendingGap = false
+            pendingDiscFlag = true
+            currentFile?.name?.let { name ->
+                val gap = TimeshiftGap(name, currentBytes, now)
+                synchronized(gapList) { gapList.addLast(gap) }
+                Log.i("TimeshiftBuffer", "gap marker at $name+$currentBytes")
+            }
+        }
         var p = from
         val end = from + len
         while (p < end) {
+            val pcr = packetPcr(buf, p)
+            if (pendingDiscFlag && pcr >= 0) {
+                // First clock-carrying packet after a time skip: stamp
+                // the adaptation-field discontinuity_indicator so the
+                // stream itself declares the clock break. Media3 1.4.1's
+                // TsExtractor ignores the bit (the gap marker above is
+                // what drives recovery today), but the buffer is then
+                // spec-correct for any future extractor upgrade, and the
+                // patch happens BEFORE hashing/writing so disk bytes and
+                // fingerprint hashes stay consistent.
+                buf[p + 5] = (buf[p + 5].toInt() or 0x80).toByte()
+                pendingDiscFlag = false
+            }
             recentHashes.addLast(packetHash(buf, p))
             while (recentHashes.size > OVERLAP_RUN) recentHashes.removeFirst()
-            val pcr = packetPcr(buf, p)
             if (pcr >= 0) {
                 headPcr = pcr
                 headPcrPid = packetPid(buf, p)
             }
             p += TimeshiftBufferStore.TS_PACKET
         }
+        current?.write(buf, from, len)
+        currentBytes += len
+        headWallMs = now
     }
 
     /**
@@ -527,12 +666,41 @@ class TimeshiftWriter(
                     val aheadMs = pcrDelta(pcr, anchorPcr) / 90
                     if (aheadMs > 0) {
                         // Caught up with our head. This packet and
-                        // everything after it is new material.
+                        // everything after it is new material. GH #65:
+                        // a nonzero skip is still MISSING content, and
+                        // byte-splicing it says nothing to the player;
+                        // mark the gap so the reader hops it instead of
+                        // hitting the AudioSink discontinuity ~7 s later
+                        // (Destro706's tablet log: clean 15520 ms resync,
+                        // then the exact same crash).
                         endDiscard()
+                        if (aheadMs >= GAP_MARK_MIN_MS) pendingGap = true
                         Log.i(
                             "TimeshiftBuffer",
                             "splice resynced on stream clock ${aheadMs}ms past head after " +
                                 "discarding ${discardedBytes + packetStart} bytes",
+                        )
+                        commitPackets(merged, packetStart, whole - packetStart, now)
+                        return
+                    }
+                } else if (pcr >= 0 && !sawAnchorPcr && spliceAnchorPid >= 0) {
+                    // GH #65 finding 2: the incoming connection carries a
+                    // clock, just never on the PID we anchored. That is a
+                    // DIFFERENT mux (Dispatcharr failover swaps the
+                    // upstream feed), so neither the fingerprint nor the
+                    // anchor clock can ever appear; scanning on just binned
+                    // the whole 8 MiB cap of good video on the Streamer
+                    // and spliced a giant hole. Keep the new feed from the
+                    // first few foreign clocks and mark the gap.
+                    foreignPcrCount++
+                    if (foreignPcrCount >= FOREIGN_PCR_LIMIT) {
+                        endDiscard()
+                        pendingGap = true
+                        Log.w(
+                            "TimeshiftBuffer",
+                            "splice clock moved to pid ${packetPid(merged, packetStart)}; " +
+                                "treating as a new feed after discarding " +
+                                "${discardedBytes + packetStart} bytes",
                         )
                         commitPackets(merged, packetStart, whole - packetStart, now)
                         return
@@ -547,6 +715,9 @@ class TimeshiftWriter(
             // discarded is content we hold. Only a runaway trips this.
             if (elapsed > OVERLAP_PCR_SEARCH_MS) {
                 endDiscard()
+                // GH #65: a forced gap must be survivable; mark it so the
+                // reader hops it instead of crashing the audio sink.
+                pendingGap = true
                 Log.w(
                     "TimeshiftBuffer",
                     "splice clock never passed the head in ${elapsed}ms " +
@@ -555,6 +726,8 @@ class TimeshiftWriter(
             }
         } else if (discardedBytes > OVERLAP_SEARCH_CAP || elapsed > OVERLAP_SEARCH_MS) {
             endDiscard()
+            // GH #65: same survivability marker for the no-signal cap.
+            pendingGap = true
             Log.w(
                 "TimeshiftBuffer",
                 "splice found no head fingerprint and no stream clock within " +
@@ -569,6 +742,7 @@ class TimeshiftWriter(
         spliceAnchorPcr = -1L
         spliceAnchorPid = -1
         sawAnchorPcr = false
+        foreignPcrCount = 0
     }
 
     /**
@@ -664,6 +838,8 @@ class TimeshiftWriter(
                 total -= seg.length()
                 dropped++
                 seg.delete()
+                // GH #65: markers for evicted segments are dead weight.
+                synchronized(gapList) { gapList.removeAll { it.segName == seg.name } }
             } else if (!pastDepth && total <= budgetBytes) {
                 break
             }

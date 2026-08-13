@@ -465,6 +465,32 @@ class AerioExoPlayerHolder @Inject constructor(
             if (isTimeshifting) {
                 val ts = timeshift.get()
                 val w = ts.activeWriter
+                // GH #65: a recorded splice gap is a KNOWN, positioned
+                // time skip, not a failure. The reader refuses to feed
+                // across it (TimeshiftDiscontinuityException) precisely
+                // so we can re-open the buffer AT the gap: the re-open
+                // resets TsExtractor and flushes the renderers, so the
+                // forward PTS jump becomes a fresh timeline instead of
+                // the mid-stream AudioSink discontinuity that storms the
+                // audio renderer. Bounded per gap so a pathological
+                // marker cannot loop; repeats fall through to the
+                // ordinary tail/live recovery below.
+                var cause: Throwable? = error
+                var gapEx: com.aeriotv.android.core.timeshift.TimeshiftDiscontinuityException? = null
+                while (cause != null && gapEx == null) {
+                    gapEx = cause as? com.aeriotv.android.core.timeshift.TimeshiftDiscontinuityException
+                    cause = cause.cause
+                }
+                if (gapEx != null && w != null && !w.closed) {
+                    val key = "${gapEx.segName}+${gapEx.byteOffset}"
+                    gapHops = if (key == lastGapKey) gapHops + 1 else 1
+                    lastGapKey = key
+                    if (gapHops <= 2) {
+                        Log.i(TAG, "[REWIND] crossing recorded splice gap at $key; re-entering past it")
+                        isTimeshifting = false
+                        if (playTimeshiftAt(gapEx.segName, gapEx.byteOffset, gapEx.resumeWallMs)) return
+                    }
+                }
                 timeshiftErrorRetries += 1
                 // Triage: "evicted behind me" (position fell off the ring)
                 // recovers at the tail; "stalled at the frozen head" (the
@@ -963,6 +989,11 @@ class AerioExoPlayerHolder @Inject constructor(
      *  every fresh direct tune. Caps the error->tail retry loop. */
     private var timeshiftErrorRetries = 0
 
+    /** GH #65: last splice-gap marker hopped and how many consecutive
+     *  times, so a pathological marker cannot loop the gap re-open. */
+    private var lastGapKey: String? = null
+    private var gapHops = 0
+
     /** Wall-clock of the last MediaSession pause on direct live (GH #62).
      *  The watchdog listener's resume branch uses it to mirror the chrome
      *  transport's long-pause switch onto the rewind buffer. Cleared on
@@ -992,6 +1023,38 @@ class AerioExoPlayerHolder @Inject constructor(
         p.playWhenReady = true
         ts.onEnterTimeshift(fromWallMs)
         Log.i(TAG, "[REWIND] entered timeshift at $fromWallMs")
+        return true
+    }
+
+    /**
+     * GH #65: re-enter the buffer at an EXACT byte position; used to hop
+     * a recorded splice gap. A wall-time entry interpolates within the
+     * segment and could land back BEFORE the gap byte, re-throwing the
+     * same discontinuity forever; the byte-addressed URI opens exactly
+     * at the first post-gap byte (and the reader knows not to re-fire
+     * markers at or before it).
+     */
+    private fun playTimeshiftAt(segName: String, byteOffset: Long, resumeWallMs: Long): Boolean {
+        val p = player ?: return false
+        val ts = timeshift.get()
+        if (ts.activeWriter == null) return false
+        isTimeshifting = true
+        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory { ts.activeWriter }
+        val item = MediaItem.Builder()
+            .setUri(
+                com.aeriotv.android.core.timeshift.TimeshiftDataSource.uriAt(
+                    segName, byteOffset, resumeWallMs,
+                ),
+            )
+            .setMediaId("live-rewind")
+            .build()
+        val source = ProgressiveMediaSource.Factory(factory, tsOnlyExtractorsFactory())
+            .createMediaSource(item)
+        p.setMediaSource(source)
+        p.prepare()
+        p.playWhenReady = true
+        ts.onEnterTimeshift(resumeWallMs)
+        Log.i(TAG, "[REWIND] entered timeshift at $segName+$byteOffset (wall $resumeWallMs)")
         return true
     }
 
@@ -1084,6 +1147,8 @@ class AerioExoPlayerHolder @Inject constructor(
         }
         isCatchup = true
         timeshiftErrorRetries = 0
+        lastGapKey = null
+        gapHops = 0
         if (!catchupRetryPass) catchupDecodeRetries = 0
         lastCatchupUrl = url
         lastCatchupTitle = title
@@ -1151,6 +1216,8 @@ class AerioExoPlayerHolder @Inject constructor(
         isTimeshifting = false
         isCatchup = false
         timeshiftErrorRetries = 0
+        lastGapKey = null
+        gapHops = 0
         lastPlayUrl = url
         lastPlayTitle = title
         lastPlaySubtitle = subtitle
