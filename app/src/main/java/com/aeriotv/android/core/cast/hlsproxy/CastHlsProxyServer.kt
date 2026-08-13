@@ -224,6 +224,41 @@ class CastHlsProxyServer(
 
     // ---- playlist ----
 
+    /** Master playlist wrapping the media playlist. Exists for exactly one
+     *  reason: CLOSED-CAPTIONS=NONE. With a media-only playlist Shaka turns
+     *  on closed-caption detection and runs Mp4CeaParser over every video
+     *  segment; that parser walks our muxed two-traf segments as if the
+     *  whole mdat were video NALs and dies with BUFFER_READ_OUT_OF_BOUNDS
+     *  (Shaka Error 3000), killing playback tens of seconds in
+     *  (device-verified on a Google TV Streamer, reproduced on desktop
+     *  Shaka 4.9.2 debug with the symbolized stack). NONE disables the
+     *  detection entirely (HlsParser.getClosedCaptions_). */
+    internal fun masterPlaylistText(): String {
+        val codecs = synchronized(lock) {
+            inits[generation]?.let { avcCodecString(it) }
+        } ?: "avc1.640028"
+        return "#EXTM3U\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=12000000,CODECS=\"$codecs,mp4a.40.2\",CLOSED-CAPTIONS=NONE\n" +
+            "live.m3u8\n"
+    }
+
+    /** avc1.PPCCLL from the avcC box inside an init segment (profile,
+     *  constraint flags, level right after the configuration version). */
+    private fun avcCodecString(init: ByteArray): String? {
+        for (i in 0..init.size - 8) {
+            if (init[i] == 'a'.code.toByte() && init[i + 1] == 'v'.code.toByte() &&
+                init[i + 2] == 'c'.code.toByte() && init[i + 3] == 'C'.code.toByte() &&
+                i + 8 < init.size
+            ) {
+                val p = init[i + 5].toInt() and 0xFF
+                val c = init[i + 6].toInt() and 0xFF
+                val l = init[i + 7].toInt() and 0xFF
+                return String.format(java.util.Locale.US, "avc1.%02X%02X%02X", p, c, l)
+            }
+        }
+        return null
+    }
+
     internal fun playlistText(): String = synchronized(lock) {
         val window = ring.takeLast(WINDOW_SIZE)
         val sb = StringBuilder(512)
@@ -301,6 +336,10 @@ class CastHlsProxyServer(
             val body: ByteArray?
             val mime: String
             when {
+                path == "/master.m3u8" -> {
+                    body = masterPlaylistText().toByteArray(Charsets.UTF_8)
+                    mime = MIME_PLAYLIST
+                }
                 path == "/live.m3u8" -> {
                     body = playlistText().toByteArray(Charsets.UTF_8)
                     mime = MIME_PLAYLIST

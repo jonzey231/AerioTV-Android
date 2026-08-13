@@ -157,7 +157,10 @@ class CastHlsProxySession @Inject constructor(
             if (activeUrl == rawTsUrl) stop()
             throw t
         }
-        return "http://$lanIp:$port/live.m3u8"
+        // Load the MASTER playlist: its CLOSED-CAPTIONS=NONE keeps Shaka's
+        // Mp4CeaParser away from our muxed segments (fatal Error 3000
+        // otherwise; see masterPlaylistText).
+        return "http://$lanIp:$port/master.m3u8"
     }
 
     /** Full teardown: ingest, ring, server socket, foreground service.
