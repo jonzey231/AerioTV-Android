@@ -13,7 +13,11 @@ import kotlin.math.abs
  * contract: init emitted once config is known, segments cut on keyframe
  * boundaries at the ~3 s target, baseMediaDecodeTime carried from PES
  * PTS including across the 33-bit wraparound, and the typed refusal for
- * codecs the pure remux cannot serve.
+ * codecs the pure remux cannot serve. P2 adds the audio transcode
+ * integration checks with a faked CastAudioTranscoder (MediaCodec does
+ * not exist on the JVM): AC-3 routes to the transcoder instead of
+ * refusing, the encoder csd gates the init segment, and the no-decoder
+ * case still refuses by name.
  */
 class TsToFmp4RemuxerTest {
 
@@ -309,8 +313,108 @@ class TsToFmp4RemuxerTest {
     }
 
     @Test
-    fun `ac3 audio is refused with the codec name`() {
-        val thrown = refusalFor(videoType = 0x1B, audioType = 0x81)
+    fun `dts audio is refused with the codec name`() {
+        val thrown = refusalFor(videoType = 0x1B, audioType = 0x82)
+        assertTrue(thrown is UnsupportedCodecException)
+        assertEquals("DTS audio", (thrown as UnsupportedCodecException).codecName)
+    }
+
+    // ---- P2: audio transcode integration (faked codecs) ----
+
+    /** Minimal syncframe: 48 kHz, 32 kbps (64 words = 128 bytes),
+     *  acmod 2 (stereo), lfeon 0. */
+    private fun ac3Frame(): ByteArray {
+        val frame = ByteArray(128)
+        frame[0] = 0x0B; frame[1] = 0x77
+        frame[4] = 0x00 // fscod 0, frmsizecod 0
+        frame[5] = 0x40 // bsid 8, bsmod 0
+        frame[6] = 0x40 // acmod 2, dsurmod 0, lfeon 0
+        return frame
+    }
+
+    private fun ac3AudioPes(pts: Long, frames: Int = 2): ByteArray {
+        val body = ByteArrayOutputStream().apply { repeat(frames) { write(ac3Frame()) } }.toByteArray()
+        return packetize(0x0102, pes(0xBD, body, pts)) // private_stream_1, the AC-3 norm
+    }
+
+    /** Fake transcoder: config on the first feed, then one echo "AAC"
+     *  frame per source frame carrying the source PTS through. */
+    private class FakeTranscoder(
+        source: CastAudioTranscoder.SourceCodec,
+        private val l: CastAudioTranscoder.Listener,
+    ) : CastAudioTranscoder(source, l, {}) {
+        var fed = 0
+        var flushed = 0
+        var released = 0
+        private var configSent = false
+        override fun feed(frame: ByteArray, offset: Int, length: Int, ptsTicks: Long, info: EsFrameInfo) {
+            if (!configSent) {
+                configSent = true
+                l.onEncoderConfig(byteArrayOf(0x11, 0x90.toByte()), 48_000) // AAC-LC 48 kHz stereo asc
+            }
+            fed++
+            l.onAacFrame(ByteArray(24) { (it * 5).toByte() }, ptsTicks)
+        }
+        override fun flush() { flushed++ }
+        override fun release() { released++ }
+    }
+
+    @Test
+    fun `ac3 audio transcodes instead of refusing`() {
+        val cap = Capture()
+        var fake: FakeTranscoder? = null
+        val remuxer = TsToFmp4Remuxer(
+            listener = cap,
+            transcoderFactory = { source, l -> FakeTranscoder(source, l).also { fake = it } },
+        )
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x81)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+
+        val t0 = 900_000L
+        // Warm audio first so the encoder csd exists before the first
+        // usable keyframe (a PES only completes when the next PUSI on
+        // its PID flushes it, so interleaving is what makes it flow).
+        val warm = ac3AudioPes(t0 - frameTicks)
+        remuxer.feed(warm, 0, warm.size)
+        for (f in 0 until 121) {
+            val pts = t0 + f * frameTicks
+            val keyframe = f % 30 == 0
+            val au = videoAu(pts, pts, keyframe, withParamSets = keyframe)
+            remuxer.feed(au, 0, au.size)
+            if (f % 3 == 0) {
+                val ap = ac3AudioPes(pts)
+                remuxer.feed(ap, 0, ap.size)
+            }
+        }
+
+        assertTrue("transcoder created", fake != null)
+        assertTrue("frames fed through the transcoder", fake!!.fed > 0)
+        assertEquals("init emitted exactly once", 1, cap.initCount)
+        val init = cap.init!!
+        assertTrue("audio track present", containsBox(init, "mp4a"))
+        assertTrue("esds carries the encoder csd", containsBox(init, "esds"))
+        assertTrue("segments produced", cap.segments.isNotEmpty())
+
+        remuxer.release()
+        assertEquals("release reaches the transcoder", 1, fake!!.released)
+    }
+
+    @Test
+    fun `ac3 without a device decoder still refuses by name`() {
+        val remuxer = TsToFmp4Remuxer(
+            listener = Capture(),
+            transcoderFactory = { _, _ -> throw UnsupportedCodecException("AC-3 audio") },
+        )
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x81)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+        // Two PES packets: the second's PUSI flushes the first through
+        // the assembler and into the transcoder factory.
+        val ap = ac3AudioPes(900_000L) + ac3AudioPes(902_880L)
+        val thrown = runCatching { remuxer.feed(ap, 0, ap.size) }.exceptionOrNull()
         assertTrue(thrown is UnsupportedCodecException)
         assertEquals("AC-3 audio", (thrown as UnsupportedCodecException).codecName)
     }

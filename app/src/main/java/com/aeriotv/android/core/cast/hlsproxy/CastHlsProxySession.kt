@@ -96,8 +96,10 @@ class CastHlsProxySession @Inject constructor(
      * [READY_SEGMENTS] segments. Returns the playlist URL to hand to
      * MediaInfo.contentUrl.
      *
-     * Throws [UnsupportedCodecException] for a mux the pure remux
-     * refuses, [IllegalStateException] when the phone has no Wi-Fi LAN
+     * Throws [UnsupportedCodecException] for a mux the proxy cannot
+     * serve (non-H.264 video, audio outside AAC passthrough and the
+     * AC-3/E-AC-3/MP2 transcode set, or a device with no decoder for a
+     * transcodable codec), [IllegalStateException] when the phone has no Wi-Fi LAN
      * address (a Chromecast cannot fetch from a cellular interface), and
      * kotlinx.coroutines.TimeoutCancellationException when segments never
      * materialize.
@@ -216,7 +218,7 @@ class CastHlsProxySession @Inject constructor(
                             rollupTicks = 0
                         }
                     }
-                })
+                }, log = { msg -> debugLog(context, TAG, msg) })
                 try {
                     val req = Request.Builder().url(url).apply {
                         headers.forEach { (k, v) -> header(k, v) }
@@ -244,15 +246,24 @@ class CastHlsProxySession @Inject constructor(
                         }
                     }
                 } catch (e: UnsupportedCodecException) {
-                    // Terminal by design: P1 never re-encodes. Surfaced to
-                    // the sender's ready wait as the cast failure.
+                    // Terminal by design: video is never re-encoded and
+                    // the P2 audio transcode covers AC-3/E-AC-3/MP2 only
+                    // (and needs a device decoder). Surfaced to the
+                    // sender's ready wait as the cast failure.
                     debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
                     sessionError.value = e
                     return@launch
                 } catch (t: Throwable) {
+                    // Includes mid-stream MediaCodec failures from the
+                    // audio transcode: the reconnect below builds a fresh
+                    // remuxer and transcoder rather than killing the proxy.
                     if (currentCoroutineContext().isActive) {
                         debugLogWarn(context, TAG, "ingest stream error: $t")
                     }
+                } finally {
+                    // The transcode owns MediaCodec instances; every exit
+                    // from a connection attempt must release them.
+                    remuxer.release()
                 }
                 if (!currentCoroutineContext().isActive) break
                 consecutiveFailures++
