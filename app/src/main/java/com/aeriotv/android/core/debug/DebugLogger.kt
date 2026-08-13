@@ -73,6 +73,8 @@ class DebugLogger @Inject constructor(
         // in the persistent file that survives the process death AND a reboot,
         // which is exactly what a "the app crashes often" bug report needs.
         installCrashHandler()
+        // Transport-change lines are no-ops while logging is off.
+        watchConnectionChanges()
     }
 
     /** Top-level on/off; flipped by Settings -> Developer -> Debug Logging. */
@@ -85,9 +87,91 @@ class DebugLogger @Inject constructor(
             // Mark the moment logging came on so a future bug report has a
             // visible start-of-session anchor.
             log("DebugLogger", Level.INFO, "Debug logging ENABLED")
+            // Logan 2026-08-12: every log opens with the answers we always
+            // end up asking reporters for -- device model and connection
+            // type. General details only; no identifiers, SSIDs, or IPs.
+            logEnvironmentHeader()
             startLogcatCapture()
         } else {
             stopLogcatCapture()
+        }
+    }
+
+    /** One-line device + build + connection summary at the top of a session. */
+    private fun logEnvironmentHeader() {
+        runCatching {
+            val isTv = context.packageManager.hasSystemFeature(
+                android.content.pm.PackageManager.FEATURE_LEANBACK,
+            )
+            log(
+                TAG, Level.INFO,
+                "Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} " +
+                    "(${android.os.Build.DEVICE}), Android ${android.os.Build.VERSION.RELEASE} " +
+                    "(API ${android.os.Build.VERSION.SDK_INT}), ${if (isTv) "TV" else "mobile"}",
+            )
+            log(
+                TAG, Level.INFO,
+                "App: ${com.aeriotv.android.BuildConfig.VERSION_NAME} " +
+                    "(${com.aeriotv.android.BuildConfig.VERSION_CODE}) " +
+                    com.aeriotv.android.BuildConfig.FLAVOR,
+            )
+            log(TAG, Level.INFO, "Connection: ${describeConnection()}")
+        }
+    }
+
+    /** Human summary of the active network: transport + coarse link speed.
+     *  Deliberately no SSID, no IPs -- the file gets attached to public
+     *  GitHub issues. */
+    private fun describeConnection(): String {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? android.net.ConnectivityManager ?: return "unknown"
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            ?: return "none"
+        val transport = when {
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            else -> "other"
+        }
+        val vpn = if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) " +vpn" else ""
+        val down = caps.linkDownstreamBandwidthKbps / 1000
+        val up = caps.linkUpstreamBandwidthKbps / 1000
+        val speed = if (down > 0) ", link ~${down}/${up} Mbps" else ""
+        return "$transport$vpn$speed"
+    }
+
+    /** Re-log the connection summary when the transport actually changes
+     *  (ethernet unplugged -> wifi, wifi -> cellular) while logging is on.
+     *  A stutter report where the box silently flapped networks mid-stream
+     *  is unreadable without this line. */
+    private var lastConnectionSummary: String? = null
+    private fun watchConnectionChanges() {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? android.net.ConnectivityManager ?: return
+        runCatching {
+            cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(
+                    network: android.net.Network,
+                    caps: android.net.NetworkCapabilities,
+                ) {
+                    if (!enabled.get()) return
+                    // Summarize WITHOUT link speed: bandwidth estimates
+                    // fluctuate constantly and would spam a line per tick.
+                    val summary = describeConnection().substringBefore(", link")
+                    if (summary != lastConnectionSummary) {
+                        lastConnectionSummary = summary
+                        log(TAG, Level.INFO, "Connection changed: ${describeConnection()}")
+                    }
+                }
+
+                override fun onLost(network: android.net.Network) {
+                    if (!enabled.get()) return
+                    if (lastConnectionSummary != "none") {
+                        lastConnectionSummary = "none"
+                        log(TAG, Level.INFO, "Connection changed: none")
+                    }
+                }
+            })
         }
     }
 
