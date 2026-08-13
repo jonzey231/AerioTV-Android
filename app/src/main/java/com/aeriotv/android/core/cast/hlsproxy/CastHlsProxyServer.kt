@@ -34,10 +34,12 @@ import kotlinx.coroutines.flow.asStateFlow
  * as a playlist discontinuity, so the receiver resets its timeline
  * instead of chasing a clock that jumped.
  *
- * One channel at a time: [beginGeneration] with clearRing=true (channel
- * change) empties the ring but keeps the listening socket, so the
- * receiver's next playlist poll simply sees a new discontinuous window
- * at the same URL.
+ * One channel at a time: [beginGeneration] (channel change or ingest
+ * reconnect) keeps the listening socket AND the ring, so the receiver's
+ * next playlist poll sees a window that still lists the old-generation
+ * segments it was promised, then a discontinuity into the new
+ * generation at the same URL. Sequence numbers are claimed only at
+ * publish time, so a splice can never leave a numbering gap.
  */
 class CastHlsProxyServer(
     private val log: (String) -> Unit,
@@ -50,6 +52,11 @@ class CastHlsProxyServer(
          *  lets a receiver that is a poll behind still fetch what the
          *  previous playlist advertised. */
         private const val RING_SIZE = 8
+
+        /** Bound on holding a segment GET that names the imminent next
+         *  sequence (the receiver racing the live edge); segments land
+         *  every ~3 s, so 6 s covers a slow cut without pinning threads. */
+        private const val NEXT_SEGMENT_WAIT_MS = 6_000L
 
         private const val MIME_PLAYLIST = "application/vnd.apple.mpegurl"
         private const val MIME_MP4 = "video/mp4"
@@ -64,8 +71,12 @@ class CastHlsProxyServer(
         val discontinuity: Boolean,
     )
 
-    private val lock = Any()
+    /** Guards the store; also the monitor held segment fetches wait on
+     *  (Object, not Any, for wait/notifyAll). */
+    private val lock = Object()
     private val ring = ArrayDeque<SegmentEntry>()
+    /** False after [stop]; wakes and fails any held segment fetch. */
+    private var storeOpen = true
     private val inits = HashMap<Int, ByteArray>()
     private var nextSeq = 0
     private var generation = 0
@@ -100,6 +111,7 @@ class CastHlsProxyServer(
         val socket = ServerSocket(0, 8, null as InetAddress?)
         serverSocket = socket
         boundPort = socket.localPort
+        synchronized(lock) { storeOpen = true }
         running.set(true)
         acceptThread = Thread({ acceptLoop(socket) }, "cast-hls-http").apply {
             isDaemon = true
@@ -117,6 +129,8 @@ class CastHlsProxyServer(
             ring.clear()
             inits.clear()
             _segmentsInGeneration.value = 0
+            storeOpen = false
+            lock.notifyAll()
         }
         firstPlaylistServed.set(false)
     }
@@ -125,21 +139,26 @@ class CastHlsProxyServer(
 
     // ---- store (called from the ingest thread) ----
 
-    /** Start a new ingest generation. [clearRing] on a channel change
-     *  (the old channel's segments must never be served again); false on
-     *  a same-channel reconnect, where the old segments remain valid and
-     *  the discontinuity tag alone covers the clock jump. */
-    fun beginGeneration(clearRing: Boolean): Int = synchronized(lock) {
+    /** Start a new ingest generation (channel change or same-channel
+     *  reconnect). The ring is deliberately NOT cleared: the receiver's
+     *  cached playlist still promises the old-generation segments, and
+     *  wiping them mid-splice is exactly the 404 -> Shaka 1001 ->
+     *  CLIP_ENDED reload this server exists to avoid. Old segments (and
+     *  their init) age out of the ring naturally; the discontinuity tag
+     *  plus the new EXT-X-MAP cover the timeline and codec change, and
+     *  [addSegment]'s generation gate keeps a stale ingest from ever
+     *  claiming a sequence number, so numbering stays gap-free. */
+    fun beginGeneration(): Int = synchronized(lock) {
+        val oldGen = generation
         generation++
-        pendingDiscontinuity = ring.isNotEmpty() || !clearRing
-        if (clearRing) {
-            // Segments flagged as discontinuities that get wiped here never
-            // roll out one by one, so account for them in the sequence now.
-            discontinuitySequence += ring.count { it.discontinuity }
-            ring.clear()
-            inits.keys.retainAll(setOf(generation))
-        }
+        pendingDiscontinuity = ring.isNotEmpty()
         _segmentsInGeneration.value = 0
+        if (oldGen > 0) {
+            log(
+                "splice oldGen=$oldGen newGen=$generation " +
+                    "lastSeq=${nextSeq - 1} firstNewSeq=$nextSeq",
+            )
+        }
         generation
     }
 
@@ -170,12 +189,42 @@ class CastHlsProxyServer(
                 }
             }
             _segmentsInGeneration.value += 1
+            // Wake any held fetch for the sequence just published.
+            lock.notifyAll()
+        }
+    }
+
+    /** Init segment for [gen], or null when no longer retained. */
+    internal fun initSegment(gen: Int): ByteArray? = synchronized(lock) { inits[gen] }
+
+    /**
+     * Segment [seq]'s bytes. A fetch naming the imminent NEXT sequence
+     * (newest+1, the receiver racing the live edge) is held up to
+     * [timeoutMs] for the ingest to publish it instead of 404ing;
+     * anything already evicted from the ring or further in the future
+     * fails immediately.
+     */
+    internal fun awaitSegment(seq: Int, timeoutMs: Long = NEXT_SEGMENT_WAIT_MS): ByteArray? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        synchronized(lock) {
+            while (true) {
+                ring.firstOrNull { it.seq == seq }?.let { return it.data }
+                if (!storeOpen || seq != nextSeq) return null
+                val remaining = deadline - System.currentTimeMillis()
+                if (remaining <= 0) return null
+                try {
+                    lock.wait(remaining)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+            }
         }
     }
 
     // ---- playlist ----
 
-    private fun playlistText(): String = synchronized(lock) {
+    internal fun playlistText(): String = synchronized(lock) {
         val window = ring.takeLast(WINDOW_SIZE)
         val sb = StringBuilder(512)
         sb.append("#EXTM3U\n")
@@ -261,12 +310,14 @@ class CastHlsProxyServer(
                 }
                 path.startsWith("/init") && path.endsWith(".mp4") -> {
                     val gen = path.removePrefix("/init").removeSuffix(".mp4").toIntOrNull()
-                    body = gen?.let { g -> synchronized(lock) { inits[g] } }
+                    body = gen?.let { g -> initSegment(g) }
                     mime = MIME_MP4
                 }
                 path.startsWith("/seg") && path.endsWith(".m4s") -> {
                     val seq = path.removePrefix("/seg").removeSuffix(".m4s").toIntOrNull()
-                    body = seq?.let { s -> synchronized(lock) { ring.firstOrNull { it.seq == s }?.data } }
+                    // Thread-per-connection, so holding the live-edge
+                    // fetch here blocks nobody else.
+                    body = seq?.let { s -> awaitSegment(s) }
                     mime = MIME_SEGMENT
                 }
                 else -> {

@@ -123,9 +123,11 @@ class CastHlsProxySession @Inject constructor(
         stopIngest()
         activeUrl = rawTsUrl
         sessionError.value = null
-        // Channel change wipes the ring (the old channel must never be
-        // served again) and flags the discontinuity between channels.
-        val gen = server.beginGeneration(clearRing = true)
+        // Channel change keeps the ring: the receiver's cached playlist
+        // still promises the old channel's last segments, so they stay
+        // fetchable until the ring evicts them, and the new generation
+        // splices in behind a discontinuity with no sequence gap.
+        val gen = server.beginGeneration()
         debugLog(
             context, TAG,
             "server on $lanIp:$port; ${if (isChannelChange) "channel change" else "session start"} " +
@@ -282,7 +284,7 @@ class CastHlsProxySession @Inject constructor(
                 debugLog(context, TAG, "ingest reconnect in ${backoffMs}ms")
                 delay(backoffMs)
                 if (!currentCoroutineContext().isActive) break
-                currentGen = server.beginGeneration(clearRing = false)
+                currentGen = server.beginGeneration()
             }
         }
     }
