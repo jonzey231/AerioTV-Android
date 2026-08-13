@@ -517,6 +517,9 @@ fun PlayerScreen(
         // session (it would show a transport over a permanently empty
         // buffer and error-loop on the first pause/rewind).
         if (exoHolder.canBufferLiveRewind(url)) {
+            // GH #65 follow-on (VPS migration): the filler must chase the
+            // holder's post-failover URL, not the stored channel row's.
+            timeshiftController.currentPlayUrlProvider = { exoHolder.currentPlayUrl }
             timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders)
         } else {
             timeshiftController.onFullscreenLiveStopped()

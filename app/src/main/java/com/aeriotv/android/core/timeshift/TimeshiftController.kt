@@ -93,6 +93,17 @@ class TimeshiftController @Inject constructor(
      *  start so the independent filler can reconnect on its own. */
     @Volatile private var liveUrl: String? = null
     @Volatile private var liveHeaders: Map<String, String> = emptyMap()
+
+    /** The URL the player is ACTUALLY playing right now (post LAN/WAN
+     *  failover), supplied by the holder via PlayerScreen. The tune-time
+     *  [liveUrl] comes from the stored channel row, whose embedded base
+     *  can be stale after a server move (2026-08-13 VPS migration: live
+     *  video failed over to WAN but the filler kept dialing the dead LAN
+     *  address, so pause/resume stalled at head forever). The filler
+     *  prefers this provider's http(s) result; buffer playback leaves the
+     *  holder's lastPlayUrl on the live URL, so the value is valid exactly
+     *  when the filler starts. */
+    @Volatile var currentPlayUrlProvider: (() -> String?)? = null
     private var fillJob: kotlinx.coroutines.Job? = null
 
     private val fillClient by lazy {
@@ -187,7 +198,12 @@ class TimeshiftController @Inject constructor(
      * splice overlap), which matters for single-connection accounts.
      */
     private fun startIndependentFill() {
-        val url = liveUrl ?: return
+        val playing = currentPlayUrlProvider?.invoke()
+            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        val url = playing ?: liveUrl ?: return
+        if (playing != null && playing != liveUrl) {
+            Log.i(TAG, "fill using player's active URL (failover happened since tune)")
+        }
         val writer = activeWriter ?: return
         if (fillJob?.isActive == true) return
         // New connection joining the proxy mid-packet: realign before
