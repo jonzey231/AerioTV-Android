@@ -765,9 +765,13 @@ fun PlayerScreen(
     // /proxy/ts/status), so the deep live buffer absorbs the splice and ExoPlayer
     // never self-flushes. Poll status.url while steadily playing a Dispatcharr
     // channel in the foreground; on a confirmed divergence re-prime (keepalive-held)
-    // onto the new stream. Gated on reachedSteadyPlayback so it can never overlap
-    // the cold-start no-data watchdog, and parked during a manual switch / any
-    // in-flight re-prime. repeatOnLifecycle(RESUMED) pauses it when backgrounded/PiP.
+    // onto the new stream. Gated on an ever-reached-steady LATCH (GH #63): blind
+    // through a true cold start so it can never overlap the cold-start no-data
+    // watchdog, but once the tune has played it keeps watching THROUGH an outage,
+    // because a wedging failover drops the live steady flag at exactly the moment
+    // the switch/dead-session detection is needed. Parked during a manual switch,
+    // any in-flight re-prime, and while the unavailable overlay's own retry loop
+    // owns recovery. repeatOnLifecycle(RESUMED) pauses it when backgrounded/PiP.
     val followLifecycleOwner = LocalLifecycleOwner.current
     val isDispatcharrLive = !isCatchupMode && currentChannel?.dispatcharrChannelId != null &&
         currentChannel?.id?.startsWith("disp:") == true
@@ -780,16 +784,28 @@ fun PlayerScreen(
             var baseline: String? = null     // last-known status.url for this channel/foreground session
             var backoffMs = 4_000L
             var deadStatusCount = 0           // consecutive 404/dead-session polls (GH #33 freeze recovery)
+            // GH #63: latch, not a live gate. The poller must stay blind through
+            // a TRUE cold start (the no-data watchdog owns that), but once this
+            // tune has played it must keep watching THROUGH an outage: a
+            // failover that wedges the stream drops the steady flag, and gating
+            // on the live value parked the poller at the exact moment its
+            // switch/dead-session detection was needed. That was the reporter's
+            // "never recovers until I close and reopen".
+            var everSteady = false
             while (isActive) {
                 delay(backoffMs)
                 if (currentChannel?.id != ch.id) break
-                // a manual switch, any re-prime, or an active rewind owns the
-                // player -> park, re-seed after (a re-prime mid-rewind would
-                // silently yank playback to live)
+                // a manual switch, any re-prime, an active rewind, or the
+                // unavailable overlay (whose own 5s retry loop owns recovery)
+                // owns the player -> park, re-seed after (a re-prime
+                // mid-rewind would silently yank playback to live)
                 if (switchStream != null || exoHolder.isReprimeInFlight ||
-                    exoHolder.isTimeshifting) { baseline = null; continue }
-                // only while steady: mutually exclusive with the cold-start no-data watchdog
-                if (!exoHolder.reachedSteadyPlayback.value) { baseline = null; continue }
+                    exoHolder.isTimeshifting ||
+                    exoHolder.streamUnavailable.value) { baseline = null; continue }
+                if (exoHolder.reachedSteadyPlayback.value) everSteady = true
+                // cold-start mutual exclusion with the no-data watchdog: park
+                // only until the stream has been steady ONCE this tune
+                if (!everSteady) { baseline = null; continue }
                 // OFF the main thread: the GET + JSON parse + auth-retry must never run on
                 // Main or it drops frames every tick (a periodic judder with no rebuffer).
                 // Tri-state (review 2026-07-15): null = transport/auth failure
@@ -845,9 +861,11 @@ fun PlayerScreen(
                     // confirm with one re-read so a momentary mid-switch blip can't trip us
                     val confirm = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
                     if (confirm != statusUrl) continue
+                    // GH #63: no live-steady recheck here. everSteady already
+                    // gates the loop, and a wedged (buffering) stream is
+                    // EXACTLY when this reprime is needed.
                     if (switchStream != null || exoHolder.isReprimeInFlight ||
-                        exoHolder.isTimeshifting ||
-                        !exoHolder.reachedSteadyPlayback.value || currentChannel?.id != ch.id) continue
+                        exoHolder.isTimeshifting || currentChannel?.id != ch.id) continue
                     android.util.Log.w(
                         "DispatcharrSwitch",
                         "[FOLLOW] external switch ch=${ch.id} re-priming onto $statusUrl",

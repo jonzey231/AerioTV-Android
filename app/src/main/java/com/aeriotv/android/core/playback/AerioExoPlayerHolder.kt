@@ -1580,7 +1580,22 @@ class AerioExoPlayerHolder @Inject constructor(
         val backoffMs = reloadCooldownMs shl consecutiveReloads.coerceAtMost(3)
         if (now - lastForcedReloadAtMs < backoffMs) return false
         if (consecutiveReloads >= maxConsecutiveReloads) {
-            Log.w(TAG, "[MPV-RELOAD] giving up after $consecutiveReloads attempts ch=$currentChannelId reason=$reason")
+            // GH #63: do NOT dead-end here. Giving up used to leave the player
+            // frozen forever with every recovery net disarmed: this watchdog
+            // capped out, the follow-poller parked on the cleared steady flag,
+            // and the cold-start net never re-arms for an in-place reload. A
+            // Dispatcharr failover that takes longer than the three reload
+            // attempts (~35s of backoff) hit exactly that hole and only a
+            // manual close/reopen recovered. Escalate to the standard
+            // unavailable overlay instead: it stops playback, tells the user,
+            // and auto-retries a FRESH connection every 5 seconds until the
+            // server actually comes back.
+            Log.w(
+                TAG,
+                "[MPV-RELOAD] in-place reloads exhausted ($consecutiveReloads) " +
+                    "ch=$currentChannelId reason=$reason; escalating to unavailable overlay",
+            )
+            markStreamUnavailable()
             return false
         }
         lastForcedReloadAtMs = now
