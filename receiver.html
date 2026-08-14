@@ -123,6 +123,20 @@
       () => {
         idle.classList.add('hidden');
         const info = playerManager.getMediaInformation();
+        // Live: drop SEEK (and queue skipping) from the advertised commands.
+        // Google TV's system cast panel pins a timeline overlay permanently
+        // when a live stream advertises SEEK: the sliding HLS window grows on
+        // every playlist refresh, each media status update re-wakes the
+        // panel, and it never times out (device-observed on a Google TV
+        // Streamer; the position marker freezes while the bar grows). The
+        // proxy's ~25 s window is not worth seeking anyway. Done AFTER load
+        // completes: mutating supported commands mid-load killed the session
+        // when tried live.
+        if (info && info.streamType === cast.framework.messages.StreamType.LIVE) {
+          const C = cast.framework.messages.Command;
+          playerManager.removeSupportedMediaCommands(
+            C.SEEK | C.QUEUE_NEXT | C.QUEUE_PREV, true);
+        }
         const md = info && info.metadata;
         flashBanner(md && md.title, md && md.subtitle);
       });
