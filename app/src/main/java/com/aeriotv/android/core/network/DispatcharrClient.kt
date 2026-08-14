@@ -1985,6 +1985,9 @@ data class DispatcharrVODSeries(
     val id: Int,
     val uuid: String = "",
     val name: String = "",
+    /** ISO-8601 server add time; drives the Date Added sort (Movies & TV B3). */
+    @SerialName("created_at")
+    val createdAt: String? = null,
     val title: String? = null,
     val plot: String? = null,
     val genre: String? = null,
@@ -2022,6 +2025,9 @@ data class DispatcharrVODMovie(
     val id: Int,
     val uuid: String,
     val title: String = "",
+    /** ISO-8601 server add time; drives the Date Added sort (Movies & TV B3). */
+    @SerialName("created_at")
+    val createdAt: String? = null,
     val name: String? = null,
     val plot: String? = null,
     val genre: String? = null,

@@ -41,6 +41,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setAppearanceMode(mode) }
     }
 
+    val moviesTvSort: Flow<String> = prefs.moviesTvSort
+    fun setMoviesTvSort(key: String) {
+        viewModelScope.launch { prefs.setMoviesTvSort(key) }
+    }
+
     val displayScaleMovies: Flow<Float> = prefs.displayScaleMovies
     fun setDisplayScaleMovies(value: Float) {
         viewModelScope.launch { prefs.setDisplayScaleMovies(value) }

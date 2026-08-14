@@ -166,6 +166,16 @@ class AppPreferences @Inject constructor(
         }
     }
 
+    /** iOS `moviesTV.sort` parity (MediaBrowseModel.sortKey): the Movies & TV
+     *  grid sort, stored as the MediaSort key string so enum reordering can
+     *  never silently change a returning user's ordering. Default "title". */
+    val moviesTvSort: Flow<String> = store.data.map {
+        it[KEY_MOVIES_TV_SORT] ?: "title"
+    }
+    suspend fun setMoviesTvSort(key: String) {
+        store.edit { it[KEY_MOVIES_TV_SORT] = key }
+    }
+
     /** iOS `displayScaleMovies` parity. 0.85 .. 1.25. Default 1.0. */
     val displayScaleMovies: Flow<Float> = store.data.map {
         (it[KEY_DISPLAY_SCALE_MOVIES] ?: 1.0).toFloat()
@@ -1410,6 +1420,7 @@ class AppPreferences @Inject constructor(
         val KEY_HIDDEN_MOVIE_GROUPS = stringPreferencesKey("hidden_movie_groups")
         val KEY_HIDDEN_SERIES_GROUPS = stringPreferencesKey("hidden_series_groups")
         val KEY_DISPLAY_SCALE_MOVIES = doublePreferencesKey("display_scale_movies")
+        val KEY_MOVIES_TV_SORT = stringPreferencesKey("movies_tv_sort")
         val KEY_DISPLAY_SCALE_LIVE_TV = doublePreferencesKey("display_scale_live_tv")
         val KEY_GUIDE_SCALE = doublePreferencesKey("guide_scale")
         val KEY_DEFAULT_TAB = stringPreferencesKey("default_tab")

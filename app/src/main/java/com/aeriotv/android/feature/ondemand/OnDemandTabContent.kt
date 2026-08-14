@@ -108,6 +108,11 @@ import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import com.aeriotv.android.core.data.vod.MediaLibraryAdapter
 import com.aeriotv.android.ui.scale.LocalDisplayScale
 import com.aeriotv.android.ui.scale.WithDisplayScale
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -170,6 +175,14 @@ fun OnDemandTabContent(
     val scale by settingsVm.displayScaleMovies.collectAsStateWithLifecycle(initialValue = 1.0f)
 
     val tabIsTv = rememberLiveTvFormFactor().isTv
+    // Movies & TV B3: grid sort, shared between the pill (here, outside the
+    // sub-screens) and the two grids it drives -- the Android mirror of
+    // Apple's MediaBrowseModel. Persisted as the MediaSort key string.
+    val sortKey by settingsVm.moviesTvSort.collectAsStateWithLifecycle(initialValue = "title")
+    val sort = MediaSort.fromKey(sortKey)
+    // Random's seed lives for the life of the tab, like Apple's: persisted
+    // Random is just an arbitrary fixed order, per-scroll Random is unusable.
+    val randomSeed = remember { kotlin.random.Random.Default.nextLong() }
     // Grid scroll state is hoisted out of the sub-screens so (a) BOTH the
     // chrome-collapse logic here and the per-grid BringIntoViewSpec / BACK
     // handling can observe it, and (b) the Movies scroll position survives a
@@ -244,6 +257,10 @@ fun OnDemandTabContent(
                 sections = availableSections,
                 current = section,
                 onSelect = { section = it },
+                // The Sort pill rides in the pill row (Apple parity) and only
+                // on the grids -- Home is curated rows, sorting it is nonsense.
+                sort = if (section != OnDemandSection.Home) sort else null,
+                onSortSelect = { settingsVm.setMoviesTvSort(it.key) },
             )
         }
 
@@ -264,6 +281,8 @@ fun OnDemandTabContent(
                 onMovieClick = onMovieClick,
                 gridState = moviesGridState,
                 onOpenSearch = onOpenSearch,
+                sort = sort,
+                randomSeed = randomSeed,
             )
             OnDemandSection.Series -> SeriesSubScreen(
                 viewModel = viewModel,
@@ -271,17 +290,26 @@ fun OnDemandTabContent(
                 onEpisodeResume = onEpisodeResume,
                 gridState = seriesGridState,
                 onOpenSearch = onOpenSearch,
+                sort = sort,
+                randomSeed = randomSeed,
             )
         }
     }
     }
 }
 
+/** ISO-8601 -> epoch millis, null-tolerant; Dispatcharr sends fractional
+ *  seconds + offset, java.time handles both forms. */
+private fun parseVodTimestamp(raw: String?): Long? =
+    raw?.let { runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
+
 @Composable
 private fun SegmentPills(
     sections: List<OnDemandSection>,
     current: OnDemandSection,
     onSelect: (OnDemandSection) -> Unit,
+    sort: MediaSort? = null,
+    onSortSelect: (MediaSort) -> Unit = {},
 ) {
     // tvOS parity: the Movies / TV Shows segmented control sits in the
     // CENTER of the header, not stretched edge-to-edge. Each pill claims
@@ -315,6 +343,75 @@ private fun SegmentPills(
                     Modifier.weight(1f)
                 },
             )
+        }
+        if (sort != null) {
+            Spacer(Modifier.width(12.dp))
+            SortPill(sort = sort, onSelect = onSortSelect)
+        }
+    }
+}
+
+/**
+ * "Sort: Title" pill + dropdown, in the pill row next to the section pills
+ * (Apple A3 placement). The label states the ACTION, not just the value: a
+ * bare "Title" pill in a row of one-word section pills reads as a fourth
+ * section (Logan, A3 device pass). Hidden on Home via the null sort.
+ */
+@Composable
+private fun SortPill(
+    sort: MediaSort,
+    onSelect: (MediaSort) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    var pillFocused by remember { mutableStateOf(false) }
+    val bg = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+    Box {
+        Row(
+            modifier = Modifier
+                .onFocusChanged { pillFocused = it.isFocused }
+                .clip(RoundedCornerShape(50))
+                .background(bg)
+                .then(
+                    if (pillFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(50))
+                    else Modifier,
+                )
+                .clickable { menuOpen = true }
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.SwapVert,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                text = "Sort: ${sort.label}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            MediaSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    trailingIcon = {
+                        if (option == sort) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Selected",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelect(option)
+                        menuOpen = false
+                    },
+                )
+            }
         }
     }
 }
@@ -527,6 +624,8 @@ private fun MoviesSubScreen(
     onMovieClick: (DispatcharrVODMovie) -> Unit,
     gridState: LazyGridState,
     onOpenSearch: () -> Unit = {},
+    sort: MediaSort = MediaSort.TITLE,
+    randomSeed: Long = 0L,
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -600,9 +699,27 @@ private fun MoviesSubScreen(
     // Apply the hide filter once at this point in the pipeline; everything
     // below renders from `visibleFiltered`. The total still reflects the
     // server count so the user can see how many they've hidden.
-    val visibleFiltered = remember(state.visible, hiddenMovieGroups) {
+    val visibleUnsorted = remember(state.visible, hiddenMovieGroups) {
         if (hiddenMovieGroups.isEmpty()) state.visible
         else state.visible.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenMovieGroups }
+    }
+    // Movies & TV B3: order through the shared pure sort layer so both
+    // platforms rank identically (nulls last, id tiebreak, seeded Random).
+    val visibleFiltered = remember(visibleUnsorted, sort, randomSeed) {
+        MediaGridQuery.apply(
+            sort = sort,
+            rows = visibleUnsorted.map { movie ->
+                MediaGridQuery.Row(
+                    item = movie,
+                    id = movie.uuid,
+                    sortTitle = MediaLibraryAdapter.sortTitle(movie.displayName),
+                    createdAt = parseVodTimestamp(movie.createdAt),
+                    releaseYear = movie.year,
+                    rating = movie.rating?.toDoubleOrNull(),
+                )
+            },
+            seed = randomSeed,
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -743,6 +860,8 @@ private fun SeriesSubScreen(
     onEpisodeResume: (String) -> Unit = {},
     gridState: LazyGridState,
     onOpenSearch: () -> Unit = {},
+    sort: MediaSort = MediaSort.TITLE,
+    randomSeed: Long = 0L,
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -799,9 +918,26 @@ private fun SeriesSubScreen(
         return
     }
 
-    val visibleSeriesFiltered = remember(state.visibleSeries, hiddenSeriesGroups) {
+    val visibleSeriesUnsorted = remember(state.visibleSeries, hiddenSeriesGroups) {
         if (hiddenSeriesGroups.isEmpty()) state.visibleSeries
         else state.visibleSeries.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenSeriesGroups }
+    }
+    // Movies & TV B3: same shared sort layer as the Movies grid.
+    val visibleSeriesFiltered = remember(visibleSeriesUnsorted, sort, randomSeed) {
+        MediaGridQuery.apply(
+            sort = sort,
+            rows = visibleSeriesUnsorted.map { series ->
+                MediaGridQuery.Row(
+                    item = series,
+                    id = series.uuid.ifBlank { series.id.toString() },
+                    sortTitle = MediaLibraryAdapter.sortTitle(series.title ?: series.name),
+                    createdAt = parseVodTimestamp(series.createdAt),
+                    releaseYear = series.year,
+                    rating = series.rating?.toDoubleOrNull(),
+                )
+            },
+            seed = randomSeed,
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
