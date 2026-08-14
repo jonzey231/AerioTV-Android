@@ -176,6 +176,23 @@
       // unaffected by this flag.
       useShakaForHls: true,
     });
+
+    // touchScreenOptimizedApp makes CAF inject a fullscreen <touch-controls>
+    // element into this page. On touch devices (smart displays) it is the
+    // only way to pause, so it stays. On remote-driven TVs it renders the
+    // permanent bottom-third title/timeline panel that never auto-hides
+    // (device-observed on a Google TV Streamer: pinned across hours of live
+    // playback; hiding the element live made it vanish instantly with
+    // playback unaffected). Capabilities are readable once the system is
+    // ready.
+    context.addEventListener(cast.framework.system.EventType.READY, () => {
+      const caps = context.getDeviceCapabilities();
+      if (!caps || !caps[cast.framework.system.DeviceCapabilities.TOUCH_INPUT_SUPPORTED]) {
+        const st = document.createElement('style');
+        st.textContent = 'touch-controls { display: none !important; }';
+        document.head.appendChild(st);
+      }
+    });
   </script>
 </body>
 </html>
