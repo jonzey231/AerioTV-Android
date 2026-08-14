@@ -397,48 +397,73 @@ private fun SegmentPills(
     // MoviesView / TVShowsView shows the same instinct: tvOS uses a
     // compact, centered Segmented Picker; iOS uses a full-width one.
     val isTv = rememberLiveTvFormFactor().isTv
+    if (isTv) {
+        // The pill group stays CENTERED regardless of the trailing controls
+        // (Logan, B3 device pass): pills center in the full width, the sort
+        // and filter circles pin to the right edge on their own layer.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+        ) {
+            Row(
+                modifier = Modifier.align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                sections.forEachIndexed { index, entry ->
+                    if (index > 0) Spacer(Modifier.width(12.dp))
+                    SegmentPill(
+                        label = entry.label,
+                        icon = entry.icon,
+                        selected = entry == current,
+                        onClick = { onSelect(entry) },
+                        // Just enough room for the longest label + icon + a
+                        // bit of breathing room for the focus border.
+                        modifier = Modifier.widthIn(min = 160.dp),
+                    )
+                }
+            }
+            if (sort != null) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 32.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SortCircleButton(sort = sort, onSelect = onSortSelect)
+                    if (onOpenFilter != null) {
+                        Spacer(Modifier.width(12.dp))
+                        TvHeaderIconButton(
+                            icon = Icons.Filled.FilterList,
+                            contentDescription = "Filter groups",
+                            tint = if (filterActive) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            onClick = onOpenFilter,
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = if (isTv) 4.dp else 8.dp),
-        horizontalArrangement = if (isTv) Arrangement.Center else Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        sections.forEachIndexed { index, entry ->
-            if (isTv && index > 0) Spacer(Modifier.width(12.dp))
+        sections.forEach { entry ->
             SegmentPill(
                 label = entry.label,
                 icon = entry.icon,
                 selected = entry == current,
                 onClick = { onSelect(entry) },
-                modifier = if (isTv) {
-                    // Just enough room for the longest label + icon + a bit
-                    // of breathing room for the focus border.
-                    Modifier.widthIn(min = 160.dp)
-                } else {
-                    Modifier.weight(1f)
-                },
+                modifier = Modifier.weight(1f),
             )
         }
         if (sort != null) {
-            Spacer(Modifier.width(12.dp))
-            if (isTv) {
-                // Guide-chrome circles right of the pills (Logan, B3 device
-                // pass): compact at 10 feet, matching the nav-bar circles.
-                SortCircleButton(sort = sort, onSelect = onSortSelect)
-                if (onOpenFilter != null) {
-                    Spacer(Modifier.width(12.dp))
-                    TvHeaderIconButton(
-                        icon = Icons.Filled.FilterList,
-                        contentDescription = "Filter groups",
-                        tint = if (filterActive) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        onClick = onOpenFilter,
-                    )
-                }
-            } else {
-                SortPill(sort = sort, onSelect = onSortSelect)
-            }
+            SortPill(sort = sort, onSelect = onSortSelect)
         }
     }
 }
