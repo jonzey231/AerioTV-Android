@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -295,6 +296,57 @@ fun OnDemandTabContent(
             )
         }
     }
+    }
+}
+
+/**
+ * The 10-foot letter rail on the grids' left edge (Movies & TV B3; the
+ * defining large-library affordance, per the dossier). D-pad LEFT from the
+ * grid's first column lands here by geometric traversal -- the rail is the
+ * only focusable thing to the grid's left -- and RIGHT exits back to the
+ * grid the same way. FOCUSING a letter jumps (Apple A3 behavior); OK/tap
+ * also works for touch. Only rendered under a Title sort, where the letters
+ * correspond to the on-screen order.
+ */
+@Composable
+private fun AlphaJumpRail(
+    buckets: List<Pair<String, Int>>,
+    onJump: (Int) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(36.dp * LocalDisplayScale.current)
+            .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        items(buckets, key = { it.first }) { (letter, index) ->
+            var letterFocused by remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged {
+                        letterFocused = it.isFocused
+                        if (it.isFocused) onJump(index)
+                    }
+                    .clip(RoundedCornerShape(6.dp))
+                    .then(
+                        if (letterFocused) Modifier.background(Color.White.copy(alpha = 0.22f))
+                        else Modifier,
+                    )
+                    .clickable { onJump(index) }
+                    .padding(vertical = 3.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = letter,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (letterFocused) Color.White
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }
 
@@ -705,21 +757,27 @@ private fun MoviesSubScreen(
     }
     // Movies & TV B3: order through the shared pure sort layer so both
     // platforms rank identically (nulls last, id tiebreak, seeded Random).
-    val visibleFiltered = remember(visibleUnsorted, sort, randomSeed) {
-        MediaGridQuery.apply(
-            sort = sort,
-            rows = visibleUnsorted.map { movie ->
-                MediaGridQuery.Row(
-                    item = movie,
-                    id = movie.uuid,
-                    sortTitle = MediaLibraryAdapter.sortTitle(movie.displayName),
-                    createdAt = parseVodTimestamp(movie.createdAt),
-                    releaseYear = movie.year,
-                    rating = movie.rating?.toDoubleOrNull(),
-                )
-            },
-            seed = randomSeed,
-        )
+    // The alpha buckets are computed from the rows REORDERED to match the
+    // displayed list, so a rail index can never point at the wrong poster.
+    val (visibleFiltered, alphaBuckets) = remember(visibleUnsorted, sort, randomSeed) {
+        val rows = visibleUnsorted.map { movie ->
+            MediaGridQuery.Row(
+                item = movie,
+                id = movie.uuid,
+                sortTitle = MediaLibraryAdapter.sortTitle(movie.displayName),
+                createdAt = parseVodTimestamp(movie.createdAt),
+                releaseYear = movie.year,
+                rating = movie.rating?.toDoubleOrNull(),
+            )
+        }
+        val sorted = MediaGridQuery.apply(sort = sort, rows = rows, seed = randomSeed)
+        val buckets = if (sort.supportsAlphaJump) {
+            val rowByItem = rows.associateBy { it.item }
+            MediaGridQuery.alphaIndex(sorted.mapNotNull { rowByItem[it] })
+        } else {
+            emptyList()
+        }
+        sorted to buckets
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -791,6 +849,15 @@ private fun MoviesSubScreen(
         val bringIntoViewSpec =
             if (isTv) com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec
             else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        val railScope = rememberCoroutineScope()
+        val showRail = isTv && sort.supportsAlphaJump && alphaBuckets.size > 1
+        Row(modifier = Modifier.fillMaxSize()) {
+        if (showRail) {
+            AlphaJumpRail(
+                buckets = alphaBuckets,
+                onJump = { index -> railScope.launch { gridState.scrollToItem(index) } },
+            )
+        }
         CompositionLocalProvider(
             androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
         ) {
@@ -799,10 +866,11 @@ private fun MoviesSubScreen(
             // keeps the compact grid whose 104dp bottom clears the bottom
             // NavigationBar (TV has top tabs, so it needs far less bottom inset).
             columns = GridCells.Adaptive(minSize = (if (isTv) 108.dp else 120.dp) * LocalDisplayScale.current),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             state = gridState,
             contentPadding = PaddingValues(
-                start = if (isTv) 48.dp else 12.dp,
+                // The rail replaces most of the left overscan gutter when shown.
+                start = if (showRail) 12.dp else if (isTv) 48.dp else 12.dp,
                 end = if (isTv) 48.dp else 12.dp,
                 top = if (isTv) 16.dp else 8.dp,
                 bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
@@ -838,6 +906,7 @@ private fun MoviesSubScreen(
                     },
                 )
             }
+        }
         }
         }
     }
@@ -922,22 +991,26 @@ private fun SeriesSubScreen(
         if (hiddenSeriesGroups.isEmpty()) state.visibleSeries
         else state.visibleSeries.filter { (it.categoryName ?: UNCATEGORIZED) !in hiddenSeriesGroups }
     }
-    // Movies & TV B3: same shared sort layer as the Movies grid.
-    val visibleSeriesFiltered = remember(visibleSeriesUnsorted, sort, randomSeed) {
-        MediaGridQuery.apply(
-            sort = sort,
-            rows = visibleSeriesUnsorted.map { series ->
-                MediaGridQuery.Row(
-                    item = series,
-                    id = series.uuid.ifBlank { series.id.toString() },
-                    sortTitle = MediaLibraryAdapter.sortTitle(series.title ?: series.name),
-                    createdAt = parseVodTimestamp(series.createdAt),
-                    releaseYear = series.year,
-                    rating = series.rating?.toDoubleOrNull(),
-                )
-            },
-            seed = randomSeed,
-        )
+    // Movies & TV B3: same shared sort layer + rail buckets as Movies.
+    val (visibleSeriesFiltered, seriesAlphaBuckets) = remember(visibleSeriesUnsorted, sort, randomSeed) {
+        val rows = visibleSeriesUnsorted.map { series ->
+            MediaGridQuery.Row(
+                item = series,
+                id = series.uuid.ifBlank { series.id.toString() },
+                sortTitle = MediaLibraryAdapter.sortTitle(series.title ?: series.name),
+                createdAt = parseVodTimestamp(series.createdAt),
+                releaseYear = series.year,
+                rating = series.rating?.toDoubleOrNull(),
+            )
+        }
+        val sorted = MediaGridQuery.apply(sort = sort, rows = rows, seed = randomSeed)
+        val buckets = if (sort.supportsAlphaJump) {
+            val rowByItem = rows.associateBy { it.item }
+            MediaGridQuery.alphaIndex(sorted.mapNotNull { rowByItem[it] })
+        } else {
+            emptyList()
+        }
+        sorted to buckets
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1008,16 +1081,26 @@ private fun SeriesSubScreen(
         val bringIntoViewSpec =
             if (isTv) com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec
             else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        val railScope = rememberCoroutineScope()
+        val showRail = isTv && sort.supportsAlphaJump && seriesAlphaBuckets.size > 1
+        Row(modifier = Modifier.fillMaxSize()) {
+        if (showRail) {
+            AlphaJumpRail(
+                buckets = seriesAlphaBuckets,
+                onJump = { index -> railScope.launch { gridState.scrollToItem(index) } },
+            )
+        }
         CompositionLocalProvider(
             androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
         ) {
         LazyVerticalGrid(
             // Series tab matches the Movies tab's TV / phone grid metrics.
             columns = GridCells.Adaptive(minSize = (if (isTv) 108.dp else 120.dp) * LocalDisplayScale.current),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             state = gridState,
             contentPadding = PaddingValues(
-                start = if (isTv) 48.dp else 12.dp,
+                // The rail replaces most of the left overscan gutter when shown.
+                start = if (showRail) 12.dp else if (isTv) 48.dp else 12.dp,
                 end = if (isTv) 48.dp else 12.dp,
                 top = if (isTv) 16.dp else 8.dp,
                 bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
@@ -1050,6 +1133,7 @@ private fun SeriesSubScreen(
                     },
                 )
             }
+        }
         }
         }
     }
