@@ -108,6 +108,7 @@ import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
+import com.aeriotv.android.ui.scale.LocalDisplayScale
 import com.aeriotv.android.ui.scale.WithDisplayScale
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.launch
@@ -680,7 +681,7 @@ private fun MoviesSubScreen(
             // Larger posters + overscan-safe padding on the 10-foot TV; phone
             // keeps the compact grid whose 104dp bottom clears the bottom
             // NavigationBar (TV has top tabs, so it needs far less bottom inset).
-            columns = GridCells.Adaptive(minSize = if (isTv) 108.dp else 120.dp),
+            columns = GridCells.Adaptive(minSize = (if (isTv) 108.dp else 120.dp) * LocalDisplayScale.current),
             modifier = Modifier.fillMaxSize(),
             state = gridState,
             contentPadding = PaddingValues(
@@ -876,7 +877,7 @@ private fun SeriesSubScreen(
         ) {
         LazyVerticalGrid(
             // Series tab matches the Movies tab's TV / phone grid metrics.
-            columns = GridCells.Adaptive(minSize = if (isTv) 108.dp else 120.dp),
+            columns = GridCells.Adaptive(minSize = (if (isTv) 108.dp else 120.dp) * LocalDisplayScale.current),
             modifier = Modifier.fillMaxSize(),
             state = gridState,
             contentPadding = PaddingValues(
@@ -1289,7 +1290,7 @@ private fun MediaShelfCard(
     onClick: () -> Unit,
 ) {
     val isTv = rememberLiveTvFormFactor().isTv
-    val width = if (isTv) 150.dp else 108.dp
+    val width = (if (isTv) 150.dp else 108.dp) * LocalDisplayScale.current
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
@@ -1385,7 +1386,7 @@ private fun ContinueWatchingCard(
     val tvGuard = rememberTvMenuGuard()
     Column(
         modifier = Modifier
-            .width(140.dp)
+            .width(140.dp * LocalDisplayScale.current)
             .then(
                 if (focusRequester != null) Modifier.focusRequester(focusRequester)
                 else Modifier,
@@ -1602,7 +1603,7 @@ private fun SeriesContinueWatchingCard(
     val tvGuard = rememberTvMenuGuard()
     Column(
         modifier = Modifier
-            .width(140.dp)
+            .width(140.dp * LocalDisplayScale.current)
             .then(
                 if (focusRequester != null) Modifier.focusRequester(focusRequester)
                 else Modifier,
