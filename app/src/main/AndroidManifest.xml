@@ -128,6 +128,19 @@
             android:foregroundServiceType="mediaPlayback" />
 
         <!--
+            Cast HLS proxy keep-alive (GH #33 web-receiver rework). While a
+            web/styled cast session is active the phone ingests the raw TS and
+            serves it to the Chromecast as live HLS; this FGS is the only thing
+            keeping the process alive once the app leaves the foreground (the
+            media FGS is deliberately stopped while casting, see
+            CastNotificationController).
+        -->
+        <service
+            android:name=".core.cast.hlsproxy.CastHlsProxyService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!--
             Media3 MediaLibraryService: background audio + lock-screen controls
             AND the Android Auto browse tree. exported=true so Android Auto can
             bind to it. The android.media.browse.MediaBrowserService action is

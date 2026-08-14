@@ -93,6 +93,17 @@ class TimeshiftController @Inject constructor(
      *  start so the independent filler can reconnect on its own. */
     @Volatile private var liveUrl: String? = null
     @Volatile private var liveHeaders: Map<String, String> = emptyMap()
+
+    /** The URL the player is ACTUALLY playing right now (post LAN/WAN
+     *  failover), supplied by the holder via PlayerScreen. The tune-time
+     *  [liveUrl] comes from the stored channel row, whose embedded base
+     *  can be stale after a server move (2026-08-13 VPS migration: live
+     *  video failed over to WAN but the filler kept dialing the dead LAN
+     *  address, so pause/resume stalled at head forever). The filler
+     *  prefers this provider's http(s) result; buffer playback leaves the
+     *  holder's lastPlayUrl on the live URL, so the value is valid exactly
+     *  when the filler starts. */
+    @Volatile var currentPlayUrlProvider: (() -> String?)? = null
     private var fillJob: kotlinx.coroutines.Job? = null
 
     private val fillClient by lazy {
@@ -187,7 +198,12 @@ class TimeshiftController @Inject constructor(
      * splice overlap), which matters for single-connection accounts.
      */
     private fun startIndependentFill() {
-        val url = liveUrl ?: return
+        val playing = currentPlayUrlProvider?.invoke()
+            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        val url = playing ?: liveUrl ?: return
+        if (playing != null && playing != liveUrl) {
+            Log.i(TAG, "fill using player's active URL (failover happened since tune)")
+        }
         val writer = activeWriter ?: return
         if (fillJob?.isActive == true) return
         // New connection joining the proxy mid-packet: realign before
@@ -324,7 +340,35 @@ class TimeshiftController @Inject constructor(
 
     private fun stopSessionInternal() {
         stopIndependentFill()
-        activeWriter?.close()
+        val finished = activeWriter
+        finished?.close()
         activeWriter = null
+        // Discord (di5cord20, Formuler Z11): app storage past 3 GB. A closed
+        // session's directory is DEAD BYTES - every read path in
+        // TimeshiftDataSources goes through writerProvider(), i.e. the ACTIVE
+        // writer, and startSession() always mints a fresh `sess_<now>` dir, so
+        // nothing in the app can open a session again once it has ended. They
+        // were nevertheless kept for the full FIXED_RETENTION_MS hour and
+        // measured against a "budget" of totalBytes() + (free - 2 GB), which on
+        // a box with a large disk is not a budget at all. Every channel change
+        // therefore stranded up to a depth's worth of transport stream - 30
+        // minutes of HD runs to a gigabyte or two - for an hour, on the slow
+        // eMMC of exactly the devices least able to afford it.
+        //
+        // Delete it here instead. No feature is lost, because no feature could
+        // ever have used it. pruneExpired/enforceBudget stay as the
+        // crash-recovery net for a process that dies mid-session, which is now
+        // the only way a directory can be left behind.
+        //
+        // Deleting files another thread may still hold open is safe here: the
+        // unlink leaves existing descriptors valid, so a data source racing the
+        // teardown reads to its natural end instead of faulting.
+        finished?.let { w ->
+            runCatching {
+                if (w.sessionDir.deleteRecursively()) {
+                    Log.i(TAG, "released buffer ${w.sessionDir.name}")
+                }
+            }.onFailure { Log.w(TAG, "session cleanup failed: $it") }
+        }
     }
 }

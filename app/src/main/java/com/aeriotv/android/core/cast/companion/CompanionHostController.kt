@@ -83,6 +83,9 @@ class CompanionHostController @Inject constructor(
         const val TICK_MS = 1000L
         /** Wrong-code guesses tolerated on one socket before it is closed. */
         const val MAX_CODE_ATTEMPTS = 5
+        /** GH #64: pause between dropping a stale NSD registration and adding its
+         *  replacement, so the platform advertiser can process the removal first. */
+        const val NSD_SETTLE_MS = 1_500L
     }
 
     /** Player commands executed on the single ExoPlayer thread (Main), like the Cast receiver. */
@@ -92,6 +95,27 @@ class CompanionHostController @Inject constructor(
 
     private var started = false
     @Volatile private var advertising = false
+    /** GH #61: `advertising` only means the server is up and registration was
+     *  ATTEMPTED. This flips true solely in onServiceRegistered - some devices
+     *  (reporter's Chromecast) deliver neither success nor failure callback,
+     *  leaving the host reachable but undiscoverable. The watchdog re-registers
+     *  with bounded backoff until this confirms. */
+    @Volatile private var nsdConfirmed = false
+    /** Consecutive unconfirmed NSD attempts (backoff exponent). */
+    @Volatile private var nsdAttempts = 0
+    /** Wall-clock gate for the next NSD retry. */
+    @Volatile private var nsdNextRetryAtMs = 0L
+    /** GH #64: rename generation for retries. Android 14's MdnsAdvertiser does not
+     *  release an unconfirmed registration's name immediately on removal, so every
+     *  retry under the SAME name dies to an internal NameConflictException that is
+     *  never delivered to the app's listener. Each retry therefore advertises a
+     *  fresh "<device> (n)" variant; clients discover by TYPE, not name, so a
+     *  renamed instance stays fully discoverable. Never reset within the process:
+     *  a name once used may still be held by the platform. */
+    @Volatile private var nsdNameGen = 1
+    /** Instance name Android actually confirmed; reused verbatim for the rest of
+     *  the process lifetime (no attempt to reclaim the base name). */
+    @Volatile private var nsdConfirmedName: String? = null
     private var server: io.ktor.server.engine.EmbeddedServer<*, *>? = null
     private var boundPort = 0
     private var nsd: NsdManager? = null
@@ -185,6 +209,16 @@ class CompanionHostController @Inject constructor(
                 if (!advertising && isForeground()) {
                     Log.i(TAG, "watchdog: foreground but not advertising -> restart")
                     startAdvertising()
+                } else if (advertising && !nsdConfirmed && isForeground() &&
+                    System.currentTimeMillis() >= nsdNextRetryAtMs
+                ) {
+                    // GH #61: server is up but Android never confirmed the NSD
+                    // record (no callback at all on the reporter's Chromecast,
+                    // or a failure that was previously discarded). Re-register
+                    // with bounded backoff; a manual client can still connect
+                    // by port in the meantime.
+                    Log.i(TAG, "watchdog: NSD unconfirmed (attempt ${nsdAttempts + 1}) -> re-registering")
+                    registerNsd(boundPort)
                 }
             }
         }
@@ -237,6 +271,9 @@ class CompanionHostController @Inject constructor(
         advertising = false
         runCatching { regListener?.let { nsd?.unregisterService(it) } }
         regListener = null
+        nsdConfirmed = false
+        nsdAttempts = 0
+        nsdNextRetryAtMs = 0L
         runCatching { server?.stop(500L, 1000L) }
         server = null
         multicastLock?.let { lock -> runCatching { if (lock.isHeld) lock.release() } }
@@ -248,24 +285,73 @@ class CompanionHostController @Inject constructor(
 
     // ---- NSD advertise ----
 
-    private fun registerNsd(port: Int) {
+    private suspend fun registerNsd(port: Int) {
+        if (port <= 0) return
         val mgr = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
         nsd = mgr
+        // GH #61: a retry replaces any earlier attempt - drop the stale
+        // listener first so Android does not hold two registrations for us
+        // (re-registering an in-flight listener throws IllegalArgumentException).
+        val hadStale = regListener != null
+        regListener?.let { old -> runCatching { mgr.unregisterService(old) } }
+        regListener = null
+        nsdConfirmed = false
+        if (hadStale) {
+            // GH #64: removal is asynchronous inside the platform advertiser;
+            // adding the replacement in the same breath races it.
+            delay(NSD_SETTLE_MS)
+        }
+        // Bounded backoff: 15s watchdog cadence doubled per unconfirmed
+        // attempt, capped at 5 minutes; reset on success or stop.
+        nsdNextRetryAtMs = System.currentTimeMillis() +
+            (15_000L shl nsdAttempts.coerceAtMost(5)).coerceAtMost(300_000L)
+        // GH #64: first attempt uses the base name (or the name Android already
+        // confirmed this process); every retry advertises a never-before-used
+        // "<device> (n)" variant so a half-dead prior registration the platform
+        // still holds can never NameConflictException the replacement.
+        val instanceName = if (nsdAttempts == 0) {
+            nsdConfirmedName ?: deviceName()
+        } else {
+            nsdNameGen++
+            "${deviceName()} ($nsdNameGen)"
+        }
+        if (nsdAttempts > 0) {
+            Log.i(TAG, "NSD retry under renamed instance \"$instanceName\" (attempt ${nsdAttempts + 1})")
+        }
+        nsdAttempts++
         val info = NsdServiceInfo().apply {
-            serviceName = deviceName()
+            serviceName = instanceName
             serviceType = CompanionProtocol.SERVICE_TYPE
             setPort(port)
             runCatching { setAttribute(CompanionProtocol.TXT_VERSION, CompanionProtocol.VERSION.toString()) }
             runCatching { setAttribute(CompanionProtocol.TXT_DEVICE_ID, deviceId()) }
         }
         val listener = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(s: NsdServiceInfo) { Log.i(TAG, "NSD registered ${s.serviceName}") }
-            override fun onRegistrationFailed(s: NsdServiceInfo, err: Int) { Log.w(TAG, "NSD reg failed $err") }
+            override fun onServiceRegistered(s: NsdServiceInfo) {
+                // The only place discoverability is considered real (GH #61).
+                nsdConfirmed = true
+                nsdAttempts = 0
+                // GH #64: keep whatever name Android confirmed (ours, renamed or
+                // not, or one Android itself de-conflicted) for the rest of the
+                // process; re-requesting the base name would just re-collide.
+                nsdConfirmedName = s.serviceName
+                Log.i(TAG, "NSD registered ${s.serviceName}")
+            }
+            override fun onRegistrationFailed(s: NsdServiceInfo, err: Int) {
+                // Leave nsdConfirmed false; the watchdog retries after backoff.
+                Log.w(TAG, "NSD reg failed $err (watchdog will retry)")
+            }
             override fun onServiceUnregistered(s: NsdServiceInfo) {}
             override fun onUnregistrationFailed(s: NsdServiceInfo, err: Int) {}
         }
         regListener = listener
         runCatching { mgr.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener) }
+            .onFailure {
+                // Previously discarded: a synchronous throw left `advertising`
+                // true with no record and no retry (GH #61 root cause).
+                Log.w(TAG, "NSD registerService threw (watchdog will retry)", it)
+                regListener = null
+            }
     }
 
     private fun acquireMulticastLock() {

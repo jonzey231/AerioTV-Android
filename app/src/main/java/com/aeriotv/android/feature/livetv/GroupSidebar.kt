@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -79,8 +81,17 @@ internal fun GroupSidebarPanel(
      *  for live group preview (Logan 2026-08-06); the player's channel-list
      *  overlay leaves it a no-op. */
     onRowFocused: (String) -> Unit = {},
+    /** GH #57 (Logan 2026-08-10): opens Manage Groups from the round button
+     *  beside the "Groups" header. Sidebar mode hides the pill row, and with
+     *  it the only entry into hide/reorder, so the sidebar has to carry its
+     *  own. Null on the player's channel-list overlay, which is a transient
+     *  tuning surface with no settings affordances. */
+    onManageGroups: (() -> Unit)? = null,
+    /** Warning dot on that button when groups are currently hidden. */
+    hiddenGroupCount: Int = 0,
 ) {
     val listState = rememberLazyListState()
+    val manageFocus = remember { FocusRequester() }
     val selectedIndex = groups.indexOf(selectedToken).coerceAtLeast(0)
     LaunchedEffect(Unit) {
         // Land with the active group visible + focused, like the common
@@ -109,15 +120,72 @@ internal fun GroupSidebarPanel(
         // Row padding each side + 2dp focus border each side + a little
         // breathing room past the text.
         with(density) { widestPx.toDp() } + 44.dp
-    }.coerceIn(160.dp, 340.dp)
-    Column(modifier = modifier.width(panelWidth)) {
-        Text(
-            text = "Groups",
-            style = settingsTitleStyle(),
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
+    }.coerceIn(
+        // GH #57: the header now carries the Manage Groups button beside the
+        // title, so a short group list must not squeeze it off the panel.
+        // 10dp lead + "Groups" + 12dp gap + the 30dp circle + 10dp trail.
+        if (onManageGroups != null) 200.dp else 160.dp,
+        340.dp,
+    )
+    // GH #57 focus routing, learned on the Streamer. GuideScreen pins
+    // `focusProperties { up = <top nav pills> }` on an ancestor (audit task
+    // #57 escape hatch) and that ancestor wins over an override placed on the
+    // sidebar's list, so a plain D-pad Up from a group row sailed past the
+    // header button and landed on "Live TV" - the button rendered, took no
+    // focus, and OK went to the nav bar. Intercept Up here instead, BEFORE the
+    // focus engine sees it, and hand it to the button; once the button holds
+    // focus, Up falls through to the inherited escape so the nav bar is still
+    // one press away.
+    var manageFocused by remember { mutableStateOf(false) }
+    // GH #60: the intercept below must fire ONLY when the TOP row is focused.
+    // The first cut grabbed EVERY Up press inside the panel, so moving up the
+    // list from row N jumped straight to the Manage Groups button instead of
+    // row N-1 (lpukatch, 0.4.10). Track which row holds focus and let the
+    // ordinary focus search handle row-to-row travel.
+    var focusedRowIndex by remember { mutableStateOf(-1) }
+    Column(
+        modifier = modifier
+            .width(panelWidth)
+            .onPreviewKeyEvent { event ->
+                if (onManageGroups == null ||
+                    manageFocused ||
+                    focusedRowIndex != 0 ||
+                    event.key != androidx.compose.ui.input.key.Key.DirectionUp ||
+                    event.type != androidx.compose.ui.input.key.KeyEventType.KeyDown
+                ) {
+                    false
+                } else {
+                    runCatching { manageFocus.requestFocus() }.isSuccess
+                }
+            },
+    ) {
+        Row(
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(start = 10.dp, bottom = if (isTv) 8.dp else 10.dp),
-        )
+        ) {
+            Text(
+                text = "Groups",
+                style = settingsTitleStyle(),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            // GH #57: the sidebar's own entry into hide/reorder. It sits in
+            // the header rather than the list so a D-pad Right out of a row
+            // still commits and closes the pane (Compose's two-dimensional
+            // focus search looks within the focused row's own horizontal
+            // band, and this button is above every row); Up from the top row
+            // is what reaches it.
+            onManageGroups?.let { open ->
+                TvManageGroupsCircle(
+                    hiddenGroupsCount = hiddenGroupCount,
+                    onClick = open,
+                    modifier = Modifier
+                        .focusRequester(manageFocus)
+                        .onFocusChanged { manageFocused = it.isFocused },
+                )
+            }
+        }
         LazyColumn(
             state = listState,
             verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -128,7 +196,10 @@ internal fun GroupSidebarPanel(
                     label = groupSidebarLabel(token),
                     isActive = token == selectedToken,
                     onClick = { onSelect(token) },
-                    onFocused = { onRowFocused(token) },
+                    onFocused = {
+                        focusedRowIndex = index
+                        onRowFocused(token)
+                    },
                     modifier = if (index == selectedIndex && initialFocus != null) {
                         Modifier.focusRequester(initialFocus)
                     } else {
@@ -249,6 +320,9 @@ internal fun GuideGroupSidebarPane(
     /** OK or Right: keep this group and close the sidebar. */
     onCommit: (String) -> Unit,
     topOffset: Dp = 0.dp,
+    /** GH #57: opens Manage Groups from the header button. */
+    onManageGroups: (() -> Unit)? = null,
+    hiddenGroupCount: Int = 0,
 ) {
     val focus = remember { FocusRequester() }
     // The row focus currently rests on; commits use it directly so a Right
@@ -283,6 +357,8 @@ internal fun GuideGroupSidebarPane(
                 onSelect = onCommit,
                 initialFocus = focus,
                 onRowFocused = { focusedToken = it },
+                onManageGroups = onManageGroups,
+                hiddenGroupCount = hiddenGroupCount,
             )
         }
         // Hairline separating the menu from the shifted guide; same token as

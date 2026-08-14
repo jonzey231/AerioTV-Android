@@ -383,6 +383,10 @@ fun AerioTVNavHost(
                 val scope = androidx.compose.runtime.rememberCoroutineScope()
                 var googleSignInInFlight by remember { mutableStateOf(false) }
                 var welcomeNotConfiguredDialog by remember { mutableStateOf(false) }
+                // Sync-category chooser shown before the first Drive pull.
+                var welcomeSyncChooser by remember { mutableStateOf(false) }
+                var welcomeSyncChoicesMade by remember { mutableStateOf(false) }
+                var pendingSignIn by remember { mutableStateOf(false) }
                 // Restore-progress screen state (replaces the old silent
                 // wait between sign-in success and the auto-advance to MAIN).
                 // While visible it REPLACES WelcomeScreen entirely -- an
@@ -402,6 +406,27 @@ fun AerioTVNavHost(
                 // regardless of whether the user had granted Drive scope
                 // on a previous session.
                 val tryRestoreAndAdvance: suspend (String?) -> Unit = { signedInEmail ->
+                    // Logan 2026-08-10: signing in here IS the opt-in, so turn
+                    // sync on for good rather than treating this as a one-shot
+                    // import.
+                    //
+                    // syncMasterEnabled defaults to FALSE and nothing in this
+                    // flow ever set it, while DriveSyncWorker.enqueuePeriodic
+                    // is only ever called from setMasterEnabled. So a new user
+                    // who signed into Drive during setup got their restore and
+                    // then never synced again: Settings showed the master
+                    // toggle off and the periodic worker had never been
+                    // scheduled. Worst for the exact case Logan raised - a
+                    // brand-new account with nothing to restore, where the
+                    // import is a no-op and the ONLY thing that mattered was
+                    // being switched on from here forward.
+                    //
+                    // Set before the pull, not after, so an import that throws
+                    // still leaves the user syncing. Idempotent, and it runs on
+                    // both entry paths (already-Authorized and post-consent)
+                    // because both funnel through here.
+                    syncVm.setMasterEnabled(true)
+
                     // Surface the restore-progress screen for the whole pull
                     // + bootstrap stretch. Clear any stale steps first so a
                     // second sign-in attempt doesn't flash the previous run's
@@ -441,8 +466,16 @@ fun AerioTVNavHost(
                 val consentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                     contract = androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
                 ) { result ->
-                    syncVm.acceptConsentResult(result.data)
                     scope.launch {
+                        // Task #256: AWAIT the consent grant before restoring.
+                        // The fire-and-forget form raced tryRestoreAndAdvance:
+                        // applying the consent suspends on the encrypted token
+                        // save before status flips to SignedIn, so the pull on
+                        // a fresh install saw "not signed in", returned
+                        // nothing, and the user was told "No playlists in
+                        // Drive yet" while the background worker restored them
+                        // minutes later with nobody watching.
+                        syncVm.acceptConsentResultNow(result.data)
                         tryRestoreAndAdvance(null)
                         googleSignInInFlight = false
                     }
@@ -469,6 +502,83 @@ fun AerioTVNavHost(
                         restoreOverlayVisible = false
                         restoreActivatedPlaylist = false
                         syncVm.clearRestoreProgress()
+                    }
+                }
+
+                // Task #256 safety net: playlists can land in the DB from the
+                // periodic DriveSyncWorker (armed by setMasterEnabled in the
+                // restore closure) AFTER a restore attempt came up empty.
+                // Historically nothing observed the table from onboarding, so
+                // the data was silently restored while the user stayed parked
+                // on Welcome until an app restart. If rows appear while we sit
+                // at NeedsUrl with no restore or sign-in in flight, activate
+                // them; the phase watcher above advances to MAIN. One-shot so
+                // a failing channel load can't retrigger in a loop.
+                var autoActivatedFromDb by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    vm.allPlaylists.collect { rows ->
+                        if (rows.isNotEmpty() && !autoActivatedFromDb &&
+                            state.phase == PlaylistViewModel.Phase.NeedsUrl &&
+                            !restoreOverlayVisible && !googleSignInInFlight
+                        ) {
+                            autoActivatedFromDb = true
+                            vm.loadActivePlaylistIfAvailable()
+                        }
+                    }
+                }
+
+                // Sign-in body, hoisted so both the button tap AND the
+                // resume-after-chooser path run exactly the same flow.
+                val startGoogleSignIn: () -> Unit = start@{
+                    val activity = context.findActivity()
+                    if (activity == null) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Sign-in needs a foreground activity. Try again.",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        return@start
+                    }
+                    googleSignInInFlight = true
+                    scope.launch {
+                        val email = syncVm.signInWithGoogle(activity)
+                        if (email == null) {
+                            googleSignInInFlight = false
+                            android.widget.Toast.makeText(
+                                context,
+                                "Sign-in cancelled or failed.",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                            return@launch
+                        }
+                        when (val driveResult = syncVm.requestDriveScope()) {
+                            is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Authorized -> {
+                                tryRestoreAndAdvance(email)
+                                googleSignInInFlight = false
+                            }
+                            is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.NeedsConsent -> {
+                                consentLauncher.launch(
+                                    androidx.activity.result.IntentSenderRequest.Builder(driveResult.intentSender).build(),
+                                )
+                            }
+                            com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Failed, null -> {
+                                googleSignInInFlight = false
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Drive authorization failed.",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    }
+                }
+
+                // Chooser confirmed -> continue into the sign-in the user
+                // already asked for.
+                androidx.compose.runtime.LaunchedEffect(pendingSignIn) {
+                    if (pendingSignIn) {
+                        pendingSignIn = false
+                        startGoogleSignIn()
                     }
                 }
 
@@ -501,49 +611,39 @@ fun AerioTVNavHost(
                             welcomeNotConfiguredDialog = true
                             return@WelcomeScreen
                         }
-                        val activity = context.findActivity()
-                        if (activity == null) {
-                            android.widget.Toast.makeText(
-                                context,
-                                "Sign-in needs a foreground activity. Try again.",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
+                        // Logan 2026-08-10: ask what should come in BEFORE any
+                        // of it does. Apple's onboarding chooser, same idea:
+                        // the per-category toggles already existed in Settings,
+                        // but by the time a user goes looking for them the
+                        // restore has already landed (Discord: Glitzbr, whose
+                        // second Apple TV inherited a remote map meant for a
+                        // different remote). Deferring sign-in behind the sheet
+                        // means a declined category is never fetched at all.
+                        if (!welcomeSyncChoicesMade) {
+                            welcomeSyncChooser = true
                             return@WelcomeScreen
                         }
-                        googleSignInInFlight = true
-                        scope.launch {
-                            val email = syncVm.signInWithGoogle(activity)
-                            if (email == null) {
-                                googleSignInInFlight = false
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Sign-in cancelled or failed.",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                                return@launch
-                            }
-                            when (val driveResult = syncVm.requestDriveScope()) {
-                                is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Authorized -> {
-                                    tryRestoreAndAdvance(email)
-                                    googleSignInInFlight = false
-                                }
-                                is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.NeedsConsent -> {
-                                    consentLauncher.launch(
-                                        androidx.activity.result.IntentSenderRequest.Builder(driveResult.intentSender).build(),
-                                    )
-                                }
-                                com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Failed, null -> {
-                                    googleSignInInFlight = false
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        "Drive authorization failed.",
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
-                            }
-                        }
+                        startGoogleSignIn()
                     },
                 )
+
+                if (welcomeSyncChooser) {
+                    com.aeriotv.android.feature.onboarding.OnboardingSyncCategoryChooser(
+                        onConfirm = { choices ->
+                            scope.launch {
+                                choices.forEach { (category, enabled) ->
+                                    syncVm.setCategoryEnabled(category, enabled)
+                                }
+                                welcomeSyncChoicesMade = true
+                                welcomeSyncChooser = false
+                                // Re-enter the sign-in path the user already
+                                // asked for, now that the choices are stored.
+                                pendingSignIn = true
+                            }
+                        },
+                        onDismiss = { welcomeSyncChooser = false },
+                    )
+                }
 
                 if (welcomeNotConfiguredDialog) {
                     androidx.compose.material3.AlertDialog(
@@ -679,12 +779,30 @@ fun AerioTVNavHost(
                         // the Now-Casting mini controller card.
                         val castDevice = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
                             ?.deviceName
+                        // Casting rework P1: the URL now feeds the phone-local
+                        // HLS proxy's ingest, which must present the same
+                        // Dispatcharr identity headers the player would (same
+                        // header recipe as the mini-tune block below).
+                        val castTuneHeaders = run {
+                            val pl = state.playlist
+                            val key = pl?.apiKey?.takeIf { it.isNotBlank() }
+                            val isDispatcharr =
+                                pl?.sourceType == SourceType.DispatcharrApiKey.name ||
+                                    pl?.sourceType == SourceType.DispatcharrUserPass.name
+                            if (isDispatcharr && key != null) {
+                                mapOf(
+                                    "X-API-Key" to key,
+                                    "Authorization" to "ApiKey $key",
+                                )
+                            } else emptyMap()
+                        }
                         if (castTapStaysOnList && castDevice != null &&
                             castSenderNav.tuneLiveChannel(
                                 channelId = channel.id,
                                 title = channel.name,
                                 artUri = channel.tvgLogo.takeIf { it.isNotBlank() },
                                 localUrl = channel.url,
+                                headers = castTuneHeaders,
                             )
                         ) {
                             android.widget.Toast.makeText(

@@ -269,7 +269,17 @@ fun SyncSettingsScreen(
                 }
 
             item {
-                SettingsSection(header = "Categories", footer = "Choose what syncs across your devices.") {
+                SettingsSection(
+                    header = "Categories",
+                    // Glitzbr had to ask what triggers a sync, so say it.
+                    // Android is NOT Apple's model: no live KVS push, just
+                    // DriveSyncWorker every PERIOD_HOURS on an unmetered
+                    // connection, plus the manual buttons below.
+                    footer = "Choose what syncs across your devices. Syncing runs " +
+                        "automatically about every 6 hours while you are on Wi-Fi and " +
+                        "the battery is not low. Use Push or Pull below when you want " +
+                        "it to happen right now.",
+                ) {
                     SyncCategory.entries.forEach { category ->
                         val enabled by viewModel.categoryEnabled(category).collectAsStateWithLifecycle(initialValue = true)
                         SettingsToggleRow(
@@ -278,6 +288,23 @@ fun SyncSettingsScreen(
                             checked = enabled,
                             onCheckedChange = { viewModel.setCategoryEnabled(category, it) },
                         )
+                        // Slice of App Preferences rather than a category of
+                        // its own: the map rides preferences.v1.json and each
+                        // SyncCategory owns exactly one Drive file, so a second
+                        // category pointing at that file would upload it twice.
+                        // Sits directly under its parent so the nesting reads.
+                        if (category == SyncCategory.Preferences) {
+                            val shareRemoteMap by viewModel.syncRemoteControlMap
+                                .collectAsStateWithLifecycle(initialValue = true)
+                            SettingsToggleRow(
+                                title = "Remote Button Map",
+                                subtitle = "Part of App Preferences. Turn off on a device whose " +
+                                    "remote differs from your others. This choice stays on this " +
+                                    "device and is not shared.",
+                                checked = shareRemoteMap,
+                                onCheckedChange = { viewModel.setSyncRemoteControlMap(it) },
+                            )
+                        }
                     }
                 }
             }

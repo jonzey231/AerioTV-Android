@@ -258,6 +258,27 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Whether THIS device shares its remote button map through Drive sync.
+     *
+     * Discord (Glitzbr, reported on Apple, same shape here): a customised map
+     * from one TV landed on another whose remote is a different model, and the
+     * only escape was turning off App Preferences sync entirely, losing theme,
+     * default tab and the rest with it. The map rides preferences.v1.json, and
+     * Android couples one SyncCategory to one Drive file, so this is a slice
+     * toggle inside that category rather than a category of its own.
+     *
+     * Deliberately NOT synced. The whole point is "this device is different",
+     * so a device that opts out must not propagate that opt-out and silence
+     * the other devices' maps too. Gates BOTH directions: an opted-out device
+     * stops publishing its map AND stops accepting one.
+     */
+    val syncRemoteControlMap: Flow<Boolean> =
+        store.data.map { it[KEY_SYNC_REMOTE_CONTROL_MAP] ?: true }
+    suspend fun setSyncRemoteControlMap(value: Boolean) {
+        store.edit { it[KEY_SYNC_REMOTE_CONTROL_MAP] = value }
+    }
+
+    /**
      * TV guide group-selector style (Logan 2026-07-20): "pills" = the top
      * group-pill row (the original layout), "sidebar" = a docked left menu
      * opened with a Left press from the currently-airing column. Mutually
@@ -489,6 +510,29 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Rewrite recents entries whose id appears in [renames] (old id -> new
+     * id), preserving order and de-duplicating in case both forms are somehow
+     * present. Returns how many entries changed. Used by the URL-keyed ->
+     * EPG-keyed channel-id migration in PlaylistRepository.
+     */
+    suspend fun renameRecentChannelIds(renames: Map<String, String>): Int {
+        var changed = 0
+        store.edit { prefs ->
+            val existing = (prefs[KEY_RECENT_CHANNEL_IDS] ?: "")
+                .split('\n')
+                .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            if (existing.isEmpty()) return@edit
+            val rewritten = existing.map { id ->
+                renames[id]?.also { changed++ } ?: id
+            }.distinct()
+            if (changed > 0) {
+                prefs[KEY_RECENT_CHANNEL_IDS] = rewritten.joinToString("\n")
+            }
+        }
+        return changed
+    }
+
+    /**
      * Hidden group titles from Manage Groups. Newline-delimited list since
      * group names can include any character except newline. Empty string =
      * "no groups hidden", which is the default and matches iOS canon (all
@@ -615,6 +659,39 @@ class AppPreferences @Inject constructor(
     val epgWindowHours: Flow<Int> = store.data.map { it[KEY_EPG_WINDOW_HOURS] ?: 24 }
     suspend fun setEpgWindowHours(value: Int) {
         store.edit { it[KEY_EPG_WINDOW_HOURS] = value }
+    }
+
+    /**
+     * Generation stamp for the on-disk EPG cache. Bump
+     * PlaylistViewModel.EPG_CACHE_EPOCH whenever a defect could have left
+     * existing caches corrupt: the next launch forces one full refetch and
+     * re-stamps, so a bad cache cannot outlive the build that produced it.
+     *
+     * Added for the 0.4.10 per-source merge bug, where each upstream feed
+     * deleted the previous one's present+future and the survivor was still
+     * recent enough to suppress the network on every relaunch. A heuristic
+     * ("does the cache reach past now?") was tried first and proved unusable:
+     * one channel with forward data satisfied it while hundreds had none.
+     */
+    val epgCacheEpoch: Flow<Int> = store.data.map { it[KEY_EPG_CACHE_EPOCH] ?: 0 }
+    suspend fun setEpgCacheEpoch(value: Int) {
+        store.edit { it[KEY_EPG_CACHE_EPOCH] = value }
+    }
+
+    /**
+     * Per-playlist variant of the epoch stamp. The EPG cache itself is
+     * per-playlist, so a single global stamp was wrong-by-scope: the active
+     * playlist's successful refetch stamped the epoch for EVERY playlist,
+     * and a second, still-poisoned playlist inside its freshness TTL was then
+     * trusted — the exact history-only guide the epoch exists to purge. Each
+     * playlist now proves ITS cache was rebuilt. Reading defaults to 0, so
+     * playlists stamped only by the old global key refetch once and re-stamp.
+     */
+    suspend fun epgCacheEpochFor(playlistId: String): Int =
+        store.data.first()[intPreferencesKey("epg_cache_epoch.$playlistId")] ?: 0
+
+    suspend fun setEpgCacheEpochFor(playlistId: String, value: Int) {
+        store.edit { it[intPreferencesKey("epg_cache_epoch.$playlistId")] = value }
     }
 
     // ── Multiview ────────────────────────────────────────────────────────
@@ -969,7 +1046,11 @@ class AppPreferences @Inject constructor(
         // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
         data[KEY_SKIP_LOADING_SCREEN]?.let { out["skipLoadingScreen"] = it.toString() }
         data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
-        data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
+        // Slice gate (see syncRemoteControlMap). Absent key reads as true, so
+        // existing installs are unchanged.
+        if (data[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
+            data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
+        }
         data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
         data[KEY_CAST_TAP_STAYS_ON_LIST]?.let { out["castTapStaysOnList"] = it.toString() }
@@ -1017,7 +1098,9 @@ class AppPreferences @Inject constructor(
             // never re-clobber this device's form-factor default.
             keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN] = it }
             keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
-            keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
+            if (prefs[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
+                keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
+            }
             keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
             keys["castTapStaysOnList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CAST_TAP_STAYS_ON_LIST] = it }
@@ -1294,6 +1377,7 @@ class AppPreferences @Inject constructor(
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
         val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")
+        val KEY_SYNC_REMOTE_CONTROL_MAP = booleanPreferencesKey("sync_remote_control_map")
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
@@ -1333,6 +1417,7 @@ class AppPreferences @Inject constructor(
         val KEY_MAX_RETRIES = intPreferencesKey("max_retries")
         val KEY_STREAM_BUFFER_SIZE = stringPreferencesKey("stream_buffer_size")
         val KEY_EPG_WINDOW_HOURS = intPreferencesKey("epg_window_hours")
+        val KEY_EPG_CACHE_EPOCH = intPreferencesKey("epg_cache_epoch")
         val KEY_MULTIVIEW_AUDIO_FOCUS_STYLE = stringPreferencesKey("multiview_audio_focus_style")
         val KEY_MULTIVIEW_TILE_PADDING = booleanPreferencesKey("multiview_tile_padding")
         val KEY_MULTIVIEW_TILE_CORNERS_ROUNDED = booleanPreferencesKey("multiview_tile_corners_rounded")

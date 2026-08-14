@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.aeriotv.android.ui.tvDpadScrollable
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -252,13 +253,17 @@ private fun UpdatePromptBody(
     )
     if (notes.isNotBlank()) {
         Spacer(Modifier.height(10.dp))
+        // GH #59: share the scroll state with the TV D-pad handler so the
+        // changelog is scrollable from the remote, not just by touch.
+        val notesScroll = rememberScrollState()
         Text(
             text = notes,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .heightIn(max = 180.dp)
-                .verticalScroll(rememberScrollState()),
+                .tvDpadScrollable(notesScroll)
+                .verticalScroll(notesScroll),
         )
     }
     progressPercent?.let { pct ->

@@ -879,7 +879,20 @@ fun VODPlayerScreen(
                             }
                         })
                         playWhenReady = true
-                        setMediaItem(MediaItem.fromUri(streamUrl))
+                        // "Watch from Beginning" on an in-progress recording
+                        // pins the START POSITION at prepare time rather than
+                        // seeking afterwards. Media3 resolves a live HLS to its
+                        // DEFAULT position (the live edge) the moment the window
+                        // is known, so a seek issued from a LaunchedEffect was
+                        // racing that resolution and losing - the user landed at
+                        // live and had to rewind by hand (Logan 2026-08-10).
+                        // An explicit start position means the default is never
+                        // consulted, so there is no race to lose.
+                        if (isDvr && !startAtLiveEdge) {
+                            setMediaItem(MediaItem.fromUri(streamUrl), 0L)
+                        } else {
+                            setMediaItem(MediaItem.fromUri(streamUrl))
+                        }
                         prepare()
                     }
 
@@ -948,19 +961,47 @@ fun VODPlayerScreen(
             }
         }
 
-        // DVR catch-up seek. Media3 auto-starts a live HLS at the live edge,
-        // so 'Watch Live' (startAtLiveEdge=true) needs nothing. For 'Watch
-        // from Beginning' seek to window start once the timeline is known.
+        // DVR catch-up backstop. The start position is already pinned to 0 at
+        // setMediaItem time (see the player builder above), which is what
+        // actually fixes "Watch from Beginning"; this only corrects the case
+        // where the live window resolves LATER and drags playback forward.
+        //
+        // It waits on isCurrentMediaItemSeekable, not merely a non-empty
+        // timeline: Media3 publishes a placeholder window while the playlist
+        // is still loading, and the old code seeked against that, so the real
+        // window then resolved to its default position (the live edge) and the
+        // user landed at live. Only nudges when we are actually near the edge,
+        // so it can never fight a deliberate user seek.
         LaunchedEffect(exoPlayer, isDvr) {
             if (!isDvr || startAtLiveEdge) return@LaunchedEffect
             val player = exoPlayer ?: return@LaunchedEffect
             var waited = 0L
-            while (player.currentTimeline.isEmpty && waited < 6_000L) {
+            while (!player.isCurrentMediaItemSeekable && waited < 6_000L) {
                 delay(200L)
                 waited += 200L
             }
-            runCatching { player.seekTo(player.currentMediaItemIndex, 0L) }
-            Log.i(TAG, "DVR catch-up: seeking to window start")
+            if (!player.isCurrentMediaItemSeekable) {
+                Log.w(TAG, "DVR from-beginning: window never became seekable after ${waited}ms")
+                return@LaunchedEffect
+            }
+            // Seek on POSITION alone. The first cut of this gated on
+            // contentDuration ("are we within 10s of the end?"), which is
+            // TIME_UNSET on a live HLS window - so the guard was always false
+            // and the correction never ran. Measured on the emulator against a
+            // 43-minute in-progress recording: the window resolved to
+            // 2597147ms (the live edge) and the seek was skipped.
+            //
+            // The user explicitly asked to start from the beginning, and this
+            // runs once before they can seek, so any non-trivial offset is
+            // Media3's live-edge default and should be corrected. The 2s
+            // threshold only avoids a pointless seek when 0 already stuck.
+            val pos = player.contentPosition
+            if (pos > 2_000L) {
+                player.seekTo(player.currentMediaItemIndex, 0L)
+                Log.i(TAG, "DVR from-beginning: resolved to ${pos}ms (live edge), seeking to window start")
+            } else {
+                Log.i(TAG, "DVR from-beginning: already at ${pos}ms, nothing to correct")
+            }
         }
 
         // Periodic save. Mirrors iOS NowPlayingManager.currentWatchProgress's
@@ -1327,12 +1368,45 @@ fun VODPlayerScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.72f),
                 )
+                // TV: nothing else on this overlay is focusable, so without an
+                // explicit request the remote can never reach these buttons --
+                // they render, look active, and simply do not respond. Logan hit
+                // exactly that on the Android TV emulator (2026-08-10): "I can't
+                // navigate to Retry Now or Close". Focusing Retry when the card
+                // appears puts both in the focus order (Close is one step right).
+                //
+                // The live-TV card (PlayerScreen) solves the same problem the
+                // other way, by hiding its button on TV and pointing at the
+                // transport controls. Here there ARE no controls behind the
+                // overlay to point at, so the buttons have to be reachable.
+                val errorRetryFocus = remember { FocusRequester() }
+                if (isTvForm) {
+                    LaunchedEffect(errMsg, errorReconnecting) {
+                        // runCatching: requesting focus on a node that is not
+                        // yet attached throws, and a transient failure here
+                        // must not take down the error overlay itself. Retry
+                        // across a few frames rather than giving up on the
+                        // first throw - a single swallowed attempt left the
+                        // buttons unreachable (the original bug) whenever the
+                        // node attached a frame late, and nothing re-ran until
+                        // errMsg changed.
+                        repeat(5) {
+                            if (runCatching { errorRetryFocus.requestFocus() }.isSuccess) {
+                                return@LaunchedEffect
+                            }
+                            kotlinx.coroutines.delay(50)
+                        }
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = {
-                        errorReconnecting = true
-                        errorRetrySerial += 1
-                        doErrorRetry()
-                    }) {
+                    Button(
+                        onClick = {
+                            errorReconnecting = true
+                            errorRetrySerial += 1
+                            doErrorRetry()
+                        },
+                        modifier = Modifier.focusRequester(errorRetryFocus),
+                    ) {
                         Text("Retry Now")
                     }
                     Button(onClick = onClose) {

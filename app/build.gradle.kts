@@ -52,8 +52,8 @@ android {
         applicationId = "com.aeriotv.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 37
-        versionName = "0.4.9"
+        versionCode = 42
+        versionName = "0.4.14"
         vectorDrawables { useSupportLibrary = true }
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -194,6 +194,9 @@ dependencies {
     implementation(libs.play.services.cast.framework)
     implementation(libs.play.services.cast.tv)
     implementation(libs.androidx.mediarouter)
+
+    // Pure-JVM unit tests for the cast HLS proxy remuxer (test scope only).
+    testImplementation(libs.junit)
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.ktor.client.core)

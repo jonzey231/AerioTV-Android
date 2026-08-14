@@ -401,7 +401,36 @@ class AerioExoPlayerHolder @Inject constructor(
             if (isTimeshifting || isCatchup) return
             val ts = timeshift.get()
             if (ts.activeWriter == null) return
-            if (playWhenReady) ts.onLiveResumedAtEdge() else ts.onLivePaused()
+            if (playWhenReady) {
+                // GH #62: a MediaSession resume (remote play/pause key, QS
+                // card, notification, Bluetooth) after a LONG pause used to
+                // resume the DIRECT pipeline at the edge of the player's own
+                // read-ahead. The provider had usually killed that idle
+                // connection during the pause, so the runway ran dry within
+                // seconds and the terminal-error re-prime jumped to LIVE,
+                // discarding the pause buffer the recorder kept for exactly
+                // this moment. Mirror the chrome transport's long-pause
+                // branch: past the same 6s threshold, switch onto the buffer
+                // at the pause point (clamped into the ring). Short pauses
+                // keep the untouched-pipeline resume. The chrome long-pause
+                // path is unaffected: it enters timeshift BEFORE this
+                // callback runs, so isTimeshifting already returned above.
+                val pausedAt = mediaPauseWallMs
+                mediaPauseWallMs = 0L
+                val w = ts.activeWriter
+                if (pausedAt > 0 &&
+                    System.currentTimeMillis() - pausedAt > 6_000 &&
+                    w != null && !w.closed &&
+                    playTimeshift((pausedAt - 1_000).coerceAtLeast(w.tailWallMs))
+                ) {
+                    Log.i(TAG, "[REWIND] media-key long-pause resume -> buffer at pause point")
+                } else {
+                    ts.onLiveResumedAtEdge()
+                }
+            } else {
+                mediaPauseWallMs = System.currentTimeMillis()
+                ts.onLivePaused()
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -436,6 +465,32 @@ class AerioExoPlayerHolder @Inject constructor(
             if (isTimeshifting) {
                 val ts = timeshift.get()
                 val w = ts.activeWriter
+                // GH #65: a recorded splice gap is a KNOWN, positioned
+                // time skip, not a failure. The reader refuses to feed
+                // across it (TimeshiftDiscontinuityException) precisely
+                // so we can re-open the buffer AT the gap: the re-open
+                // resets TsExtractor and flushes the renderers, so the
+                // forward PTS jump becomes a fresh timeline instead of
+                // the mid-stream AudioSink discontinuity that storms the
+                // audio renderer. Bounded per gap so a pathological
+                // marker cannot loop; repeats fall through to the
+                // ordinary tail/live recovery below.
+                var cause: Throwable? = error
+                var gapEx: com.aeriotv.android.core.timeshift.TimeshiftDiscontinuityException? = null
+                while (cause != null && gapEx == null) {
+                    gapEx = cause as? com.aeriotv.android.core.timeshift.TimeshiftDiscontinuityException
+                    cause = cause.cause
+                }
+                if (gapEx != null && w != null && !w.closed) {
+                    val key = "${gapEx.segName}+${gapEx.byteOffset}"
+                    gapHops = if (key == lastGapKey) gapHops + 1 else 1
+                    lastGapKey = key
+                    if (gapHops <= 2) {
+                        Log.i(TAG, "[REWIND] crossing recorded splice gap at $key; re-entering past it")
+                        isTimeshifting = false
+                        if (playTimeshiftAt(gapEx.segName, gapEx.byteOffset, gapEx.resumeWallMs)) return
+                    }
+                }
                 timeshiftErrorRetries += 1
                 // Triage: "evicted behind me" (position fell off the ring)
                 // recovers at the tail; "stalled at the frozen head" (the
@@ -636,11 +691,20 @@ class AerioExoPlayerHolder @Inject constructor(
         //     keeps mid-stream rebuffer recovery snappy.
         // (Multiview + VOD have their own LoadControls; this governs only the
         // single live player.)
+        // The 4s floor stays: it is the measured minimum that suppresses the
+        // micro-stutter described above. The Buffer Size ladder no longer
+        // offers anything below it - Small, Default and Large all used to
+        // collapse onto this same value, which is why a user switching
+        // between them measured no difference at all (see BUFFER_OPTIONS).
         val minBufferMs = maxOf(4_000, bufferFloorMs)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ minBufferMs,
-                /* maxBufferMs = */ maxOf(8_000, minBufferMs),
+                // Real headroom between the bounds at EVERY rung. The old
+                // maxOf(8_000, minBufferMs) degenerated to min == max once the
+                // floor reached 8s, leaving the load control nothing to work
+                // with on precisely the setting chosen for poor networks.
+                /* maxBufferMs = */ minBufferMs * 2,
                 /* bufferForPlaybackMs = */ 1_200,
                 /* bufferForPlaybackAfterRebufferMs = */ 2_000,
             )
@@ -925,6 +989,18 @@ class AerioExoPlayerHolder @Inject constructor(
      *  every fresh direct tune. Caps the error->tail retry loop. */
     private var timeshiftErrorRetries = 0
 
+    /** GH #65: last splice-gap marker hopped and how many consecutive
+     *  times, so a pathological marker cannot loop the gap re-open. */
+    private var lastGapKey: String? = null
+    private var gapHops = 0
+
+    /** Wall-clock of the last MediaSession pause on direct live (GH #62).
+     *  The watchdog listener's resume branch uses it to mirror the chrome
+     *  transport's long-pause switch onto the rewind buffer. Cleared on
+     *  every resume; a chrome pause ALSO stamps it harmlessly (the chrome
+     *  resume enters timeshift first, so the callback never consumes it). */
+    private var mediaPauseWallMs = 0L
+
     /** Live Rewind can only buffer what the tee mirrors: raw MPEG-TS.
      *  PlayerScreen gates session start on this so HLS/DASH live channels
      *  never show a transport over a permanently empty buffer. */
@@ -947,6 +1023,38 @@ class AerioExoPlayerHolder @Inject constructor(
         p.playWhenReady = true
         ts.onEnterTimeshift(fromWallMs)
         Log.i(TAG, "[REWIND] entered timeshift at $fromWallMs")
+        return true
+    }
+
+    /**
+     * GH #65: re-enter the buffer at an EXACT byte position; used to hop
+     * a recorded splice gap. A wall-time entry interpolates within the
+     * segment and could land back BEFORE the gap byte, re-throwing the
+     * same discontinuity forever; the byte-addressed URI opens exactly
+     * at the first post-gap byte (and the reader knows not to re-fire
+     * markers at or before it).
+     */
+    private fun playTimeshiftAt(segName: String, byteOffset: Long, resumeWallMs: Long): Boolean {
+        val p = player ?: return false
+        val ts = timeshift.get()
+        if (ts.activeWriter == null) return false
+        isTimeshifting = true
+        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory { ts.activeWriter }
+        val item = MediaItem.Builder()
+            .setUri(
+                com.aeriotv.android.core.timeshift.TimeshiftDataSource.uriAt(
+                    segName, byteOffset, resumeWallMs,
+                ),
+            )
+            .setMediaId("live-rewind")
+            .build()
+        val source = ProgressiveMediaSource.Factory(factory, tsOnlyExtractorsFactory())
+            .createMediaSource(item)
+        p.setMediaSource(source)
+        p.prepare()
+        p.playWhenReady = true
+        ts.onEnterTimeshift(resumeWallMs)
+        Log.i(TAG, "[REWIND] entered timeshift at $segName+$byteOffset (wall $resumeWallMs)")
         return true
     }
 
@@ -1039,6 +1147,8 @@ class AerioExoPlayerHolder @Inject constructor(
         }
         isCatchup = true
         timeshiftErrorRetries = 0
+        lastGapKey = null
+        gapHops = 0
         if (!catchupRetryPass) catchupDecodeRetries = 0
         lastCatchupUrl = url
         lastCatchupTitle = title
@@ -1106,6 +1216,8 @@ class AerioExoPlayerHolder @Inject constructor(
         isTimeshifting = false
         isCatchup = false
         timeshiftErrorRetries = 0
+        lastGapKey = null
+        gapHops = 0
         lastPlayUrl = url
         lastPlayTitle = title
         lastPlaySubtitle = subtitle
@@ -1535,7 +1647,22 @@ class AerioExoPlayerHolder @Inject constructor(
         val backoffMs = reloadCooldownMs shl consecutiveReloads.coerceAtMost(3)
         if (now - lastForcedReloadAtMs < backoffMs) return false
         if (consecutiveReloads >= maxConsecutiveReloads) {
-            Log.w(TAG, "[MPV-RELOAD] giving up after $consecutiveReloads attempts ch=$currentChannelId reason=$reason")
+            // GH #63: do NOT dead-end here. Giving up used to leave the player
+            // frozen forever with every recovery net disarmed: this watchdog
+            // capped out, the follow-poller parked on the cleared steady flag,
+            // and the cold-start net never re-arms for an in-place reload. A
+            // Dispatcharr failover that takes longer than the three reload
+            // attempts (~35s of backoff) hit exactly that hole and only a
+            // manual close/reopen recovered. Escalate to the standard
+            // unavailable overlay instead: it stops playback, tells the user,
+            // and auto-retries a FRESH connection every 5 seconds until the
+            // server actually comes back.
+            Log.w(
+                TAG,
+                "[MPV-RELOAD] in-place reloads exhausted ($consecutiveReloads) " +
+                    "ch=$currentChannelId reason=$reason; escalating to unavailable overlay",
+            )
+            markStreamUnavailable()
             return false
         }
         lastForcedReloadAtMs = now

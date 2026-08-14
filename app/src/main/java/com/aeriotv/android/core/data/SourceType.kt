@@ -13,9 +13,17 @@ package com.aeriotv.android.core.data
  *    flow exchanges them for a JWT pair, then runs API calls with Bearer auth.
  *    Wired in Phase 4b.
  *  - [XtreamCodes]: server base URL + Xtream username/password. Live channels
- *    come from `/get.php?type=m3u_plus&username=&password=` (parsed by
- *    M3UParser); EPG from `/xmltv.php` (or a user-supplied XMLTV override).
- *    The full fetch/EPG/refresh pipeline lives in PlaylistRepository.
+ *    come from `player_api.php?action=get_live_streams` (+ get_live_categories
+ *    for group names); EPG from `/xmltv.php` (or a user-supplied XMLTV
+ *    override). NOT from `get.php?type=m3u_plus`: that endpoint flattens live
+ *    + all VOD + all series into one file (538MB on a provider measured
+ *    2026-08-10, versus 23.7MB of JSON for the same channels) and routinely
+ *    omits tvg-id entirely, which leaves the guide unmatchable. The full
+ *    fetch/EPG/refresh pipeline lives in PlaylistRepository.
+ *
+ * Note that [M3uUrl] and [XtreamCodes] converge when a user pastes a
+ * provider's `get.php` link as a plain M3U URL: PlaylistRepository detects
+ * that shape and loads it through the XC JSON path too.
  */
 enum class SourceType(val displayName: String, val isImplemented: Boolean) {
     M3uUrl("M3U URL", true),

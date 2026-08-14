@@ -25,6 +25,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -174,7 +176,6 @@ fun PlayerScreen(
     val castSender = remember { playerEntry.castSender() }
     val castReceiver = remember { playerEntry.castReceiver() }
     val castState by castSender.state.collectAsStateWithLifecycle()
-    val castPosition by castSender.position.collectAsStateWithLifecycle()
     val isCasting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
     // GH #33 companion remote (second-screen): while connected to an AerioTV TV
     // over the LAN, this screen behaves EXACTLY like the cast flow -- local
@@ -208,7 +209,8 @@ fun PlayerScreen(
     // exits the player, so the prime effect (which re-fires when isCompanion flips
     // false) does NOT resume LOCAL playback on the phone -- that left the channel
     // playing on BOTH the phone and the TV (device report 2026-07-15).
-    var remoteStopping by remember { mutableStateOf(false) }
+    val remoteStoppingState = remember { mutableStateOf(false) }
+    var remoteStopping by remoteStoppingState
 
     // Channel-flip state. The MPV view stays alive across flips; only the
     // current channel index changes and we call playFile again with the new URL.
@@ -220,7 +222,8 @@ fun PlayerScreen(
     val initialIndex = remember(channels, initialChannelId) {
         channels.indexOfFirst { it.id == initialChannelId }
     }
-    var currentIndex by remember(channels) { mutableIntStateOf(initialIndex) }
+    val currentIndexState = remember(channels) { mutableIntStateOf(initialIndex) }
+    var currentIndex by currentIndexState
     val currentChannel = channels.getOrNull(currentIndex)
 
     // Task #148 milestone B: catch-up mode state. scrubTargetWallMs (below)
@@ -231,7 +234,8 @@ fun PlayerScreen(
     val catchupDurationMs = (catchupEndMillis - catchupStartMillis).coerceAtLeast(0L)
     var catchupCurrentUrl by remember { mutableStateOf(catchupUrl) }
     var catchupOffsetMs by remember { mutableStateOf(0L) }
-    var catchupPositionMs by remember { mutableStateOf(0L) }
+    val catchupPositionMsState = remember { mutableStateOf(0L) }
+    var catchupPositionMs by catchupPositionMsState
     // Task #149: serialized native re-mints (rapid skips coalesce to the
     // latest target; see VODPlayerScreen's twin for the rationale).
     var nativeRemintInFlight by remember { mutableStateOf(false) }
@@ -252,31 +256,7 @@ fun PlayerScreen(
                     "(n=${channels.size}) -- surfacing not-found instead of idling",
             )
         }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .padding(32.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = "Channel Not Available",
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White,
-            )
-            Text(
-                text = "This channel isn't in the active playlist. If you just " +
-                    "switched playlists, go back and pick it again from the " +
-                    "refreshed guide.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.72f),
-                textAlign = TextAlign.Center,
-            )
-            Button(onClick = onClose) {
-                Text("Go Back")
-            }
-        }
+        ChannelNotAvailableCard(onClose = onClose)
         return
     }
     // Same treatment for a channel with no stream URL (event channels whose
@@ -284,30 +264,7 @@ fun PlayerScreen(
     // url; without this the user sat on a silent black screen. A later
     // channels refresh that fills the url recomposes straight into playback.
     if (currentChannel != null && currentChannel.url.isBlank()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .padding(32.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = "No Stream Assigned",
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White,
-            )
-            Text(
-                text = "This channel doesn't have a stream yet. Event channels " +
-                    "usually get one shortly before air time.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.72f),
-                textAlign = TextAlign.Center,
-            )
-            Button(onClick = onClose) {
-                Text("Go Back")
-            }
-        }
+        NoStreamAssignedCard(onClose = onClose)
         return
     }
     // Focus target that holds D-pad focus during fullscreen playback (chrome
@@ -514,7 +471,14 @@ fun PlayerScreen(
                 title = ch.name,
                 subtitle = nowProgramme?.title,
                 artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
-                localUrl = url,
+                // Casting rework P1: this URL feeds the phone-local HLS
+                // proxy's ingest. Prefer the holder's post-failover URL when
+                // it is still this channel's (same discipline as the
+                // timeshift filler: the stored channel URL can embed a dead
+                // base after a LAN/WAN failover or server move).
+                localUrl = exoHolder.currentPlayUrl
+                    ?.takeIf { exoHolder.currentChannelId == ch.id } ?: url,
+                headers = httpHeaders,
             )
             return@LaunchedEffect
         }
@@ -560,6 +524,9 @@ fun PlayerScreen(
         // session (it would show a transport over a permanently empty
         // buffer and error-loop on the first pause/rewind).
         if (exoHolder.canBufferLiveRewind(url)) {
+            // GH #65 follow-on (VPS migration): the filler must chase the
+            // holder's post-failover URL, not the stored channel row's.
+            timeshiftController.currentPlayUrlProvider = { exoHolder.currentPlayUrl }
             timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders)
         } else {
             timeshiftController.onFullscreenLiveStopped()
@@ -664,16 +631,19 @@ fun PlayerScreen(
     // Remote Control (Logan spec 2026-07-20): hold-Up "Recently Watched"
     // overlay. While open, Back dismisses it (guard below) and channel-flip
     // keys are blocked so Up/Down walk the overlay list instead.
-    var recentsOverlayVisible by remember { mutableStateOf(false) }
+    val recentsOverlayVisibleState = remember { mutableStateOf(false) }
+    var recentsOverlayVisible by recentsOverlayVisibleState
     val recentChannelIds by settingsVm.recentChannelIds.collectAsStateWithLifecycle(
         initialValue = emptyList(),
     )
     // Remote Control (Logan spec 2026-07-20 / GH #54): Left-press Channels
     // overlay + its group sidebar stage. Group choice is overlay-local,
     // seeded from the guide's active group (initialGroup) on first open.
-    var channelListVisible by remember { mutableStateOf(false) }
-    var channelListSidebarOpen by remember { mutableStateOf(false) }
-    var channelListGroup by remember { mutableStateOf<String?>(null) }
+    val channelListVisibleState = remember { mutableStateOf(false) }
+    var channelListVisible by channelListVisibleState
+    val channelListSidebarOpenState = remember { mutableStateOf(false) }
+    var channelListSidebarOpen by channelListSidebarOpenState
+    val channelListGroupState = remember { mutableStateOf<String?>(null) }
     // Same visible-group derivation as the guide pills (source order ->
     // Manage Groups sort -> hidden filter), so both surfaces always agree.
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
@@ -781,16 +751,22 @@ fun PlayerScreen(
         launchHintActive = false
     }
     val pillVisible = chromeVisible || launchHintActive
-    var audioOnly by remember { mutableStateOf(false) }
-    var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
-    var streamInfo by remember { mutableStateOf<StreamInfoSnapshot?>(null) }
-    var subtitles by remember { mutableStateOf<SubtitlesState?>(null) }
-    var audioTracks by remember { mutableStateOf<AudioTracksState?>(null) }
-    var switchStream by remember { mutableStateOf<SwitchStreamState?>(null) }
+    val audioOnlyState = remember { mutableStateOf(false) }
+    var audioOnly by audioOnlyState
+    val recordTargetState = remember { mutableStateOf<ProgramInfoTarget?>(null) }
+    var recordTarget by recordTargetState
+    val streamInfoState = remember { mutableStateOf<StreamInfoSnapshot?>(null) }
+    var streamInfo by streamInfoState
+    val subtitlesState = remember { mutableStateOf<SubtitlesState?>(null) }
+    var subtitles by subtitlesState
+    val audioTracksState = remember { mutableStateOf<AudioTracksState?>(null) }
+    var audioTracks by audioTracksState
+    val switchStreamState = remember { mutableStateOf<SwitchStreamState?>(null) }
+    var switchStream by switchStreamState
     // Marked-current stream id for the Switch Stream sheet. We don't cheaply
     // know the proxy's active stream, so track the last one the user switched
     // to (reset on channel change) to radio-mark it on re-open.
-    var switchedStreamId by remember(currentChannel?.id) { mutableStateOf<Int?>(null) }
+    val switchedStreamIdState = remember(currentChannel?.id) { mutableStateOf<Int?>(null) }
 
     // Follow EXTERNAL upstream switches we didn't initiate: a stream changed from
     // the Dispatcharr WebUI Stats page, OR Dispatcharr's automatic server-side
@@ -799,9 +775,13 @@ fun PlayerScreen(
     // /proxy/ts/status), so the deep live buffer absorbs the splice and ExoPlayer
     // never self-flushes. Poll status.url while steadily playing a Dispatcharr
     // channel in the foreground; on a confirmed divergence re-prime (keepalive-held)
-    // onto the new stream. Gated on reachedSteadyPlayback so it can never overlap
-    // the cold-start no-data watchdog, and parked during a manual switch / any
-    // in-flight re-prime. repeatOnLifecycle(RESUMED) pauses it when backgrounded/PiP.
+    // onto the new stream. Gated on an ever-reached-steady LATCH (GH #63): blind
+    // through a true cold start so it can never overlap the cold-start no-data
+    // watchdog, but once the tune has played it keeps watching THROUGH an outage,
+    // because a wedging failover drops the live steady flag at exactly the moment
+    // the switch/dead-session detection is needed. Parked during a manual switch,
+    // any in-flight re-prime, and while the unavailable overlay's own retry loop
+    // owns recovery. repeatOnLifecycle(RESUMED) pauses it when backgrounded/PiP.
     val followLifecycleOwner = LocalLifecycleOwner.current
     val isDispatcharrLive = !isCatchupMode && currentChannel?.dispatcharrChannelId != null &&
         currentChannel?.id?.startsWith("disp:") == true
@@ -814,16 +794,28 @@ fun PlayerScreen(
             var baseline: String? = null     // last-known status.url for this channel/foreground session
             var backoffMs = 4_000L
             var deadStatusCount = 0           // consecutive 404/dead-session polls (GH #33 freeze recovery)
+            // GH #63: latch, not a live gate. The poller must stay blind through
+            // a TRUE cold start (the no-data watchdog owns that), but once this
+            // tune has played it must keep watching THROUGH an outage: a
+            // failover that wedges the stream drops the steady flag, and gating
+            // on the live value parked the poller at the exact moment its
+            // switch/dead-session detection was needed. That was the reporter's
+            // "never recovers until I close and reopen".
+            var everSteady = false
             while (isActive) {
                 delay(backoffMs)
                 if (currentChannel?.id != ch.id) break
-                // a manual switch, any re-prime, or an active rewind owns the
-                // player -> park, re-seed after (a re-prime mid-rewind would
-                // silently yank playback to live)
+                // a manual switch, any re-prime, an active rewind, or the
+                // unavailable overlay (whose own 5s retry loop owns recovery)
+                // owns the player -> park, re-seed after (a re-prime
+                // mid-rewind would silently yank playback to live)
                 if (switchStream != null || exoHolder.isReprimeInFlight ||
-                    exoHolder.isTimeshifting) { baseline = null; continue }
-                // only while steady: mutually exclusive with the cold-start no-data watchdog
-                if (!exoHolder.reachedSteadyPlayback.value) { baseline = null; continue }
+                    exoHolder.isTimeshifting ||
+                    exoHolder.streamUnavailable.value) { baseline = null; continue }
+                if (exoHolder.reachedSteadyPlayback.value) everSteady = true
+                // cold-start mutual exclusion with the no-data watchdog: park
+                // only until the stream has been steady ONCE this tune
+                if (!everSteady) { baseline = null; continue }
                 // OFF the main thread: the GET + JSON parse + auth-retry must never run on
                 // Main or it drops frames every tick (a periodic judder with no rebuffer).
                 // Tri-state (review 2026-07-15): null = transport/auth failure
@@ -879,9 +871,11 @@ fun PlayerScreen(
                     // confirm with one re-read so a momentary mid-switch blip can't trip us
                     val confirm = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamUrl(uuid) }.getOrNull() }
                     if (confirm != statusUrl) continue
+                    // GH #63: no live-steady recheck here. everSteady already
+                    // gates the loop, and a wedged (buffering) stream is
+                    // EXACTLY when this reprime is needed.
                     if (switchStream != null || exoHolder.isReprimeInFlight ||
-                        exoHolder.isTimeshifting ||
-                        !exoHolder.reachedSteadyPlayback.value || currentChannel?.id != ch.id) continue
+                        exoHolder.isTimeshifting || currentChannel?.id != ch.id) continue
                     android.util.Log.w(
                         "DispatcharrSwitch",
                         "[FOLLOW] external switch ch=${ch.id} re-priming onto $statusUrl",
@@ -935,18 +929,24 @@ fun PlayerScreen(
             }
         }
     }
-    var playbackSpeedSheet by remember { mutableStateOf<Float?>(null) }
-    var multiviewPickerOpen by remember { mutableStateOf(false) }
+    val playbackSpeedSheetState = remember { mutableStateOf<Float?>(null) }
+    var playbackSpeedSheet by playbackSpeedSheetState
+    val multiviewPickerOpenState = remember { mutableStateOf(false) }
+    var multiviewPickerOpen by multiviewPickerOpenState
     // True while the chrome's Options menu or Sleep sheet is open; pauses the
     // auto-hide timer so the chrome does not fade mid-interaction.
-    var chromeMenuOpen by remember { mutableStateOf(false) }
+    val chromeMenuOpenState = remember { mutableStateOf(false) }
+    var chromeMenuOpen by chromeMenuOpenState
     // GH #33: the cast/companion device chooser (rendered inside the auto-hiding
     // chrome's castSlot) pins the chrome open via interactionLocked below.
-    var castChooserOpen by remember { mutableStateOf(false) }
+    val castChooserOpenState = remember { mutableStateOf(false) }
+    var castChooserOpen by castChooserOpenState
 
     // Sleep timer: stores the wall-clock millis at which the player should close.
-    var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
-    var sleepRemainingMillis by remember { mutableStateOf<Long?>(null) }
+    val sleepEndsAtState = remember { mutableStateOf<Long?>(null) }
+    var sleepEndsAt by sleepEndsAtState
+    val sleepRemainingMillisState = remember { mutableStateOf<Long?>(null) }
+    var sleepRemainingMillis by sleepRemainingMillisState
 
     // Phase 165: mpvView is now derived from mpvHolder.view (single
     // persistent View at root). Kept as a local val inside the chrome
@@ -980,7 +980,8 @@ fun PlayerScreen(
     val streamUnavailable by exoHolder.streamUnavailable.collectAsStateWithLifecycle()
     // Task #150: escalation counter for the unavailable overlay's auto-retry
     // (5s doubling to a 30s cap). Bumped per retry; reset on channel change.
-    var unavailableRetrySerial by remember(currentChannel?.id) { mutableIntStateOf(0) }
+    val unavailableRetrySerialState = remember(currentChannel?.id) { mutableIntStateOf(0) }
+    var unavailableRetrySerial by unavailableRetrySerialState
 
     // Returning to the foreground player must always restore video unless the
     // user explicitly chose Audio Only. A media-session controller (or the old
@@ -1047,9 +1048,11 @@ fun PlayerScreen(
     // Live Rewind transport state (declared before the chrome canvas so
     // the root key handler below can reach it).
     val tsState by timeshiftController.state.collectAsStateWithLifecycle()
-    var tsPositionWallMs by remember { mutableStateOf(0L) }
-    var tsPaused by remember { mutableStateOf(false) }
-    var livePauseWallMs by remember { mutableStateOf(0L) }
+    val tsPositionWallMsState = remember { mutableStateOf(0L) }
+    var tsPositionWallMs by tsPositionWallMsState
+    val tsPausedState = remember { mutableStateOf(false) }
+    var tsPaused by tsPausedState
+    val livePauseWallMsState = remember { mutableStateOf(0L) }
 
     // Shared D-pad LEFT/RIGHT scrub for the live rewind buffer (task
     // #148, tvOS parity; catch-up joins when it unifies into this
@@ -1059,8 +1062,10 @@ fun PlayerScreen(
     // 1x..12x on native key repeats (10s base step). Active with the
     // chrome hidden (band-only HUD renders) or with the timeline band
     // focused (UP from the pill row).
-    var scrubTargetWallMs by remember { mutableStateOf<Long?>(null) }
-    var scrubHudVisible by remember { mutableStateOf(false) }
+    val scrubTargetWallMsState = remember { mutableStateOf<Long?>(null) }
+    var scrubTargetWallMs by scrubTargetWallMsState
+    val scrubHudVisibleState = remember { mutableStateOf(false) }
+    var scrubHudVisible by scrubHudVisibleState
     var scrubAccelCount by remember { mutableStateOf(0) }
     var scrubLastDirection by remember { mutableStateOf(0) }
     var scrubLastStepAt by remember { mutableStateOf(0L) }
@@ -1446,371 +1451,73 @@ fun PlayerScreen(
         // up/down still bubbles to the root key handler so channel flips keep
         // working (a flip clears the flag and resets the escalation).
         if (streamUnavailable && isCatchupMode) {
-            // Task #148 milestone B: a catch-up 4xx means the provider has no
-            // archive for this window (flag-but-no-archive class). Retrying
-            // can't conjure one, so no auto-reconnect - show why + Go Back.
-            val lastErrorText by exoHolder.lastErrorText.collectAsStateWithLifecycle()
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.72f))
-                    .padding(32.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = "Catch-up Unavailable",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
-                )
-                // A 4xx really means "no archive"; anything else (decoder,
-                // network) gets neutral copy so we don't blame the provider
-                // for a local failure.
-                val noArchive = lastErrorText.orEmpty().let {
-                    it.contains("404") || it.contains("Not Found", ignoreCase = true) ||
-                        it.contains("BAD_HTTP_STATUS")
-                }
-                Text(
-                    text = if (noArchive) {
-                        "Your provider doesn't have an archive for this programme."
-                    } else {
-                        "Playback of this programme's archive failed."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.72f),
-                    textAlign = TextAlign.Center,
-                )
-                if (!lastErrorText.isNullOrBlank()) {
-                    Text(
-                        text = lastErrorText.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.6f),
-                        textAlign = TextAlign.Center,
-                    )
-                }
-                Button(onClick = {
-                    exoHolder.stop()
-                    onClose()
-                }) {
-                    Text("Go Back")
-                }
-            }
+            CatchupUnavailableCard(
+                exoHolder = exoHolder,
+                onClose = onClose,
+            )
         } else if (streamUnavailable) {
-            val lastErrorText by exoHolder.lastErrorText.collectAsStateWithLifecycle()
-            var retryCountdown by remember { mutableIntStateOf(0) }
-            var reconnecting by remember { mutableStateOf(false) }
-            LaunchedEffect(unavailableRetrySerial) {
-                reconnecting = false
-                // Flat 5s between every auto-retry (Archie, 2026-07-12).
-                var remaining = 5
-                while (remaining > 0) {
-                    retryCountdown = remaining
-                    kotlinx.coroutines.delay(1_000)
-                    remaining -= 1
-                }
-                retryCountdown = 0
-                reconnecting = true
-                unavailableRetrySerial += 1
-                exoHolder.retryUnavailable()
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.72f))
-                    .padding(32.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = "Channel Unavailable",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
-                )
-                if (!lastErrorText.isNullOrBlank()) {
-                    Text(
-                        text = lastErrorText.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.85f),
-                        textAlign = TextAlign.Center,
-                    )
-                }
-                Text(
-                    text = when {
-                        reconnecting -> "Reconnecting…"
-                        retryCountdown > 0 -> "Retrying in ${retryCountdown}s"
-                        else -> " "
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.72f),
-                )
-                // Phone/tablet: tappable Retry on the card itself. On TV the
-                // Retry lives in the standard controls (focusable via the
-                // remote) - the card stays informational there.
-                if (!isTvForm) {
-                    Button(onClick = {
-                        reconnecting = true
-                        unavailableRetrySerial += 1
-                        exoHolder.retryUnavailable()
-                    }) {
-                        Text("Retry Now")
-                    }
-                }
-                Text(
-                    text = if (isTvForm) {
-                        "Retry is highlighted below - press Select. Back to exit, or D-pad up/down to change channels."
-                    } else {
-                        "Press Back to exit, or use the D-pad up/down to change channels."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center,
-                )
-            }
+            StreamUnavailableCard(
+                exoHolder = exoHolder,
+                isTvForm = isTvForm,
+                unavailableRetrySerialState = unavailableRetrySerialState,
+            )
         }
 
-        // Live Rewind: the ticker that keeps the buffer window and
-        // playback wall-position fresh while a session is rolling. Wall
-        // position = the wall time playback entered the buffer + the
-        // player's position within that open (each re-open resets
-        // contentPosition to 0, so the sum stays correct across scrub
-        // re-opens). State declarations moved above the chrome-canvas
-        // Box so the root key handler can drive the D-pad scrub.
-        val tickerLifecycleOwner = LocalLifecycleOwner.current
-        LaunchedEffect(tsState.buffering) {
-            if (!tsState.buffering) return@LaunchedEffect
-            // STARTED-gated: without this the 500ms wakeup ran for the
-            // whole time the app sat backgrounded behind PiP.
-            tickerLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (tsState.buffering) {
-                timeshiftController.refreshWindow()
-                tsPaused = exoHolder.isPaused()
-                if (tsState.timeshifting) {
-                    val pos = exoHolder.player?.currentPosition ?: 0L
-                    tsPositionWallMs = tsState.baseWallMs + pos
-                    // Cable-DVR catch-up snap: riding the write head keeps
-                    // ExoPlayer in perpetual BUFFERING (it can never build
-                    // its minimum buffer against a source that grows in
-                    // real time). When playback closes to within a few
-                    // seconds of the head, return to the direct stream.
-                    // READY gate: a freshly-prepared buffer source reports
-                    // meaningless positions while BUFFERING, which made
-                    // the snap bounce straight back to live on entry
-                    // (Streamer field test).
-                    if (!exoHolder.isPaused() &&
-                        exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_READY &&
-                        tsPositionWallMs >= tsState.headWallMs - 4_000
-                    ) {
-                        exoHolder.goLive()
-                    }
-                }
-                kotlinx.coroutines.delay(500)
-            }
-            }
-        }
-
-        PlayerChromeOverlay(
-            channel = currentChannel,
+        // Live Rewind ticker + chrome overlay live in their own composable
+        // (task #257): the buffer-window head/tail advance every couple of
+        // seconds while a session rolls, and reading that ticking state HERE
+        // recomposed the whole PlayerScreen body each time. The extracted
+        // section reads the ticking state itself so only it recomposes.
+        LiveRewindChromeSection(
+            exoHolder = exoHolder,
+            timeshiftController = timeshiftController,
+            settingsVm = settingsVm,
+            miniPlayerVm = miniPlayerVm,
+            exoWindowState = exoWindowState,
+            castSender = castSender,
+            companionRemote = companionRemote,
+            companionDiscovery = companionDiscovery,
+            scope = scope,
+            currentChannel = currentChannel,
             nowProgramme = nowProgramme,
-            timeshiftState = if (tsState.buffering) tsState else null,
-            timeshiftPositionWallMs = tsPositionWallMs,
-            // Live TV with pause/rewind OFF: the transport comes from Live Rewind,
-            // so hint that it's a setting rather than silently showing no controls.
-            // Only when the channel COULD buffer (raw TS) -- not HLS/DASH live.
-            showLiveRewindHint = !isCatchupMode && !liveRewindEnabled &&
-                currentChannel?.url?.takeIf { it.isNotBlank() }
-                    ?.let { exoHolder.canBufferLiveRewind(it) } == true,
-            // Task #148 milestone B: catch-up transport context.
-            catchupMode = isCatchupMode,
+            channels = channels,
+            remoteMap = remoteMap,
+            appleTVChannelFlip = appleTVChannelFlip,
+            liveRewindEnabled = liveRewindEnabled,
+            aspectMode = aspectMode,
+            isTvForm = isTvForm,
+            isCatchupMode = isCatchupMode,
             catchupTitle = catchupTitle,
-            catchupPositionMs = catchupPositionMs,
             catchupDurationMs = catchupDurationMs,
-            onCatchupSeekTo = { target -> commitScrubCatchup(target) },
-            isPlayerPaused = tsPaused,
-            onRewindTogglePause = {
-                when {
-                    exoHolder.isTimeshifting -> {
-                        exoHolder.setPaused(!exoHolder.isPaused())
-                    }
-                    tsState.buffering && !exoHolder.isPaused() -> {
-                        // Cable-seamless pause: nothing switches, the frame
-                        // just freezes. The controller quietly brings up the
-                        // independent filler so the buffer keeps growing
-                        // underneath a long pause.
-                        livePauseWallMs = System.currentTimeMillis()
-                        exoHolder.setPaused(true)
-                        timeshiftController.onLivePaused()
-                    }
-                    tsState.buffering && exoHolder.isPaused() && livePauseWallMs > 0 -> {
-                        val pausedForMs = System.currentTimeMillis() - livePauseWallMs
-                        if (pausedForMs <= 6_000) {
-                            // Short pause: resume the untouched live
-                            // pipeline. Zero switch, zero glitch.
-                            exoHolder.setPaused(false)
-                            timeshiftController.onLiveResumedAtEdge()
-                        } else {
-                            // Long pause: one switch onto the buffer at the
-                            // pause point; the filler covered the gap.
-                            exoHolder.setPaused(false)
-                            exoHolder.playTimeshift(livePauseWallMs - 1_000)
-                        }
-                        livePauseWallMs = 0L
-                    }
-                    else -> exoHolder.setPaused(!exoHolder.isPaused())
-                }
-            },
-            onRewindSeekWall = { target ->
-                // Read the buffer window FRESH from the writer at action
-                // time: the composed state snapshot can lag (the Streamer
-                // test turned a -30s skip into -122s off a stale head).
-                val w = timeshiftController.activeWriter
-                val head = w?.headWallMs ?: tsState.headWallMs
-                val tail = w?.tailWallMs ?: tsState.tailWallMs
-                if (target >= head - 5_000) {
-                    exoHolder.goLive()
-                } else {
-                    exoHolder.playTimeshift(target.coerceAtLeast(tail))
-                }
-            },
-            onGoLive = { exoHolder.goLive() },
-            scrubPreviewWallMs = scrubTargetWallMs,
-            scrubHudVisible = scrubHudVisible,
-            onScrubStep = scrubStep,
-            onScrubCommit = {
-                // OK on the focused timeline: commit the pending scrub
-                // immediately instead of waiting out the debounce.
-                scrubTargetWallMs?.let { target ->
-                    if (isCatchupMode) commitScrubCatchup(target) else commitScrubWall(target)
-                    scrubTargetWallMs = null
-                }
-            },
             chromeVisible = chromeVisible,
             pillVisible = pillVisible,
-            isTv = isTvForm,
-            // Cast Connect (GH #33): phone/tablet Cast button, only on a build
-            // with a registered Cast App ID. Live channels cast their identity to
-            // the Android-TV receiver.
-            castSlot = if (!isTvForm && castSender.castConfigured) {
-                {
-                    com.aeriotv.android.feature.cast.CastIconButton(
-                        sender = castSender,
-                        companionRemote = companionRemote,
-                        companionDiscovery = companionDiscovery,
-                        onChooserOpenChange = { castChooserOpen = it },
-                    )
-                }
-            } else {
-                null
-            },
-            // Focusable Retry in the standard controls while the stream is
-            // unavailable (the center card's button can't take remote focus).
-            connectionIssue = streamUnavailable,
-            onRetry = {
-                unavailableRetrySerial += 1
-                exoHolder.retryUnavailable()
-            },
-            // #10 player gesture hints: only advertise Up/Down channel-flip when
-            // it can actually do something (setting on + more than one channel).
-            showChannelFlipHint = appleTVChannelFlip && channels.size >= 2 &&
-                com.aeriotv.android.core.remote.RemoteControlHints.verticalFlipMapped(remoteMap),
-            selectHint = com.aeriotv.android.core.remote.RemoteControlHints.selectHint(remoteMap),
-            horizontalHint = com.aeriotv.android.core.remote.RemoteControlHints
-                .playerHorizontalHint(remoteMap),
-            // Explicit X tap = user is done with this channel; clear the mini-player
-            // session, destroy the held MPV instance, and stop the background
-            // PlaybackService so the notification disappears. System back keeps
-            // the session + service alive instead (handled by BackHandler above).
-            // Phase 172: stop() rather than destroy() so the persistent
-            // SurfaceView mounted at MainActivity root stays alive --
-            // the next channel tap plays instantly on the existing
-            // handle. destroy() set holder.view=null and the next
-            // LaunchedEffect(currentChannel.id) couldn't find a view to
-            // playFile on, leaving subsequent channels permanently
-            // stuck.
-            onClose = {
-                miniPlayerVm.dismiss()
-                exoWindowState.hide()
-                exoHolder.stop()
-                com.aeriotv.android.core.playback.AerioMediaPlaybackService
-                    .stop(context)
-                onClose()
-            },
-            onAddToMultiview = { multiviewPickerOpen = true },
-            onShowRecord = { target -> recordTarget = target },
-            onShowStreamInfo = {
-                streamInfo = exoHolder.player?.captureStreamInfo() ?: StreamInfoSnapshot(
-                    videoLines = listOf("(player not ready)"),
-                    audioLines = emptyList(),
-                    cacheLines = emptyList(),
-                    syncLines = emptyList(),
-                )
-            },
-            onShowSwitchStream = {
-                val ch = currentChannel ?: return@PlayerChromeOverlay
-                val chPk = ch.dispatcharrChannelId ?: return@PlayerChromeOverlay
-                val uuid = ch.id.removePrefix("disp:")
-                scope.launch {
-                    val streams = onLoadChannelStreams(chPk)
-                    // Prefer the in-session selection for the radio mark: after an
-                    // event-apply switch the server leaves /proxy/ts/status's stream_id
-                    // stale (it only refreshes url), so switchedStreamId is the truthful
-                    // "what we last switched to". Fall back to status stream_id when we
-                    // haven't switched anything this session (correct on first read).
-                    val current = onLoadCurrentStreamId(uuid)
-                    switchStream = SwitchStreamState(
-                        streams = streams,
-                        currentStreamId = switchedStreamId ?: current,
-                    )
-                }
-            },
-            onShowSubtitles = {
-                val player = exoHolder.player ?: return@PlayerChromeOverlay
-                subtitles = SubtitlesState(
-                    tracks = player.readSubtitleTracks(),
-                    currentSid = player.readCurrentSid(),
-                )
-            },
-            onShowAudioTracks = {
-                val player = exoHolder.player ?: return@PlayerChromeOverlay
-                audioTracks = AudioTracksState(
-                    tracks = player.readAudioTracks(),
-                    currentAid = player.readCurrentAid(),
-                )
-            },
-            onShowPlaybackSpeed = {
-                val player = exoHolder.player ?: return@PlayerChromeOverlay
-                playbackSpeedSheet = player.readSpeed()
-            },
-            aspectModeLabel = when (aspectMode) {
-                "zoom" -> "Zoom"
-                "fill" -> "Fill"
-                else -> "Fit"
-            },
-            onCycleAspect = { settingsVm.cyclePlayerAspectMode(aspectMode) },
-            onToggleAudioOnly = {
-                audioOnly = !audioOnly
-                val player = exoHolder.player
-                if (audioOnly) {
-                    // Disable the video track on the current selection.
-                    // The audio renderer keeps running -- this is the
-                    // Media3 equivalent of libmpv `vid=no` without the
-                    // need to reload the stream when toggling back.
-                    player?.trackSelectionParameters = player?.trackSelectionParameters
-                        ?.buildUpon()
-                        ?.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, true)
-                        ?.build() ?: return@PlayerChromeOverlay
-                } else {
-                    player?.trackSelectionParameters = player?.trackSelectionParameters
-                        ?.buildUpon()
-                        ?.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, false)
-                        ?.build() ?: return@PlayerChromeOverlay
-                }
-            },
-            audioOnly = audioOnly,
-            onSetSleepMinutes = { minutes ->
-                sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
-            },
-            sleepRemainingMillis = sleepRemainingMillis,
-            onInteractingChange = { chromeMenuOpen = it },
+            streamUnavailable = streamUnavailable,
+            catchupPositionMsState = catchupPositionMsState,
+            tsPositionWallMsState = tsPositionWallMsState,
+            tsPausedState = tsPausedState,
+            livePauseWallMsState = livePauseWallMsState,
+            scrubTargetWallMsState = scrubTargetWallMsState,
+            scrubHudVisibleState = scrubHudVisibleState,
+            unavailableRetrySerialState = unavailableRetrySerialState,
+            recordTargetState = recordTargetState,
+            streamInfoState = streamInfoState,
+            subtitlesState = subtitlesState,
+            audioTracksState = audioTracksState,
+            switchStreamState = switchStreamState,
+            switchedStreamIdState = switchedStreamIdState,
+            playbackSpeedSheetState = playbackSpeedSheetState,
+            multiviewPickerOpenState = multiviewPickerOpenState,
+            chromeMenuOpenState = chromeMenuOpenState,
+            castChooserOpenState = castChooserOpenState,
+            audioOnlyState = audioOnlyState,
+            sleepEndsAtState = sleepEndsAtState,
+            sleepRemainingMillisState = sleepRemainingMillisState,
+            commitScrubCatchup = commitScrubCatchup,
+            commitScrubWall = commitScrubWall,
+            scrubStep = scrubStep,
+            onLoadChannelStreams = onLoadChannelStreams,
+            onLoadCurrentStreamId = onLoadCurrentStreamId,
+            onClose = onClose,
         )
 
         // GH #33 full-parity cast remote: while a Cast Connect session is live the
@@ -1819,179 +1526,56 @@ fun PlayerScreen(
         // speed/aspect controls, all driving the Android-TV receiver over the
         // custom control channel. Drawn last = on top of the (now-idle) chrome.
         if (isRemote) {
-            // One overlay, two transports (GH #33): the SAME full remote drives a
-            // Cast Connect session or a LAN companion-paired AerioTV TV; only the
-            // command sink + state source switch.
-            val remoteState by (if (isCompanion) companionRemote.remoteState else castSender.remoteState)
-                .collectAsStateWithLifecycle()
-            val remoteIsPlaying by (if (isCompanion) companionRemote.isPlaying else castSender.isPlaying)
-                .collectAsStateWithLifecycle()
-            val companionPosition by companionRemote.position.collectAsStateWithLifecycle()
-            com.aeriotv.android.feature.cast.CastRemoteOverlay(
-                deviceName = if (isCompanion) {
-                    (companionConn as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected)?.name
-                } else {
-                    (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName
-                },
-                channelTitle = currentChannel?.name.orEmpty(),
-                programmeTitle = nowProgramme?.title,
-                remoteState = remoteState,
-                isPlaying = remoteIsPlaying,
-                statusVerb = if (isCompanion) "Controlling" else "Casting to",
-                stopLabel = if (isCompanion) "Disconnect" else "Stop casting",
-                onTogglePlayPause = {
-                    if (isCompanion) companionRemote.togglePlayPause() else castSender.togglePlayPause()
-                },
-                onChannelUp = {
-                    if (channels.isNotEmpty() && currentIndex >= 0) {
-                        currentIndex = (currentIndex + 1).coerceIn(0, channels.lastIndex)
-                    }
-                },
-                onChannelDown = {
-                    if (channels.isNotEmpty() && currentIndex >= 0) {
-                        currentIndex = (currentIndex - 1).coerceIn(0, channels.lastIndex)
-                    }
-                },
-                onStopCasting = {
-                    if (isCompanion) {
-                        // Companion Disconnect: stop controlling the TV and LEAVE
-                        // the player. Do NOT resume local playback (remoteStopping
-                        // gates the prime effect) -- resuming here left the channel
-                        // playing on BOTH the phone and the TV (device report). The
-                        // TV keeps playing (it's the user's own device); the
-                        // scaffold's card is gone once disconnected.
-                        remoteStopping = true
-                        companionRemote.disconnect()
-                        onClose()
-                    } else {
-                        // Cast: end the session; local playback resumes via the
-                        // isRemote effects (standard "bring it back to my phone").
-                        castSender.stopCasting()
-                    }
-                },
-                onSetAudioTrack = { id ->
-                    if (isCompanion) companionRemote.setRemoteAudioTrack(id) else castSender.setRemoteAudioTrack(id)
-                },
-                onSetTextTrack = { id ->
-                    if (isCompanion) companionRemote.setRemoteTextTrack(id) else castSender.setRemoteTextTrack(id)
-                },
-                onSetSpeed = { s ->
-                    if (isCompanion) companionRemote.setRemoteSpeed(s) else castSender.setRemoteSpeed(s)
-                },
-                onSetAspect = { mode ->
-                    if (isCompanion) companionRemote.setRemoteAspect(mode) else castSender.setRemoteAspect(mode)
-                },
-                onSetAudioOnly = { on ->
-                    if (isCompanion) companionRemote.setRemoteAudioOnly(on) else castSender.setRemoteAudioOnly(on)
-                },
-                onSwitchStream = {
-                    // Reuse the live Switch Stream flow: it POSTs change_stream
-                    // server-side (works while casting); the sheet's onSelect also
-                    // re-tunes the receiver when casting (see below).
-                    val ch = currentChannel
-                    val chPk = ch?.dispatcharrChannelId
-                    if (ch != null && chPk != null) {
-                        val uuid = ch.id.removePrefix("disp:")
-                        scope.launch {
-                            val streams = onLoadChannelStreams(chPk)
-                            val current = onLoadCurrentStreamId(uuid)
-                            switchStream = SwitchStreamState(
-                                streams = streams,
-                                currentStreamId = switchedStreamId ?: current,
-                            )
-                        }
-                    }
-                },
-                onRecord = {
-                    // Server-side scheduling: works whether playing locally or cast.
-                    // A default 1-hour live window (the sheet lets the user adjust);
-                    // the current programme title is used when known.
-                    currentChannel?.let { ch ->
-                        val now = System.currentTimeMillis()
-                        recordTarget = ProgramInfoTarget(
-                            channelName = ch.name,
-                            title = nowProgramme?.title?.takeIf { it.isNotBlank() }
-                                ?: "${ch.name} live recording",
-                            startMillis = now,
-                            endMillis = now + 3_600_000L,
-                            description = "",
-                            category = "",
-                            channelDispatcharrId = ch.dispatcharrChannelId,
-                        )
-                    }
-                },
-                onSleepMinutes = { minutes ->
-                    sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
-                },
-                onSeekBy = { delta ->
-                    if (isCompanion) companionRemote.seekBy(delta) else castSender.seekBy(delta)
-                },
-                onSeekToWall = { target ->
-                    if (isCompanion) companionRemote.seekToWall(target) else castSender.seekToWall(target)
-                },
-                onGoLive = {
-                    if (isCompanion) companionRemote.goLiveRemote() else castSender.goLiveRemote()
-                },
-                // GH #33: minimize returns to the tabs (the session stays alive;
-                // the Now-Casting / Controlling mini controller is the re-entry).
-                onMinimize = { onClose() },
-                position = if (isCompanion) companionPosition else castPosition,
-                canSwitchStream = isDispatcharrLive,
-                canRecord = currentChannel?.dispatcharrChannelId != null,
-                onRefreshState = {
-                    if (isCompanion) companionRemote.requestRemoteState() else castSender.requestRemoteState()
-                },
+            CastRemoteSection(
+                isCompanion = isCompanion,
+                castState = castState,
+                companionConn = companionConn,
+                castSender = castSender,
+                companionRemote = companionRemote,
+                currentChannel = currentChannel,
+                nowProgramme = nowProgramme,
+                channels = channels,
+                currentIndexState = currentIndexState,
+                remoteStoppingState = remoteStoppingState,
+                switchStreamState = switchStreamState,
+                switchedStreamIdState = switchedStreamIdState,
+                recordTargetState = recordTargetState,
+                sleepEndsAtState = sleepEndsAtState,
+                isDispatcharrLive = isDispatcharrLive,
+                scope = scope,
+                onLoadChannelStreams = onLoadChannelStreams,
+                onLoadCurrentStreamId = onLoadCurrentStreamId,
+                onClose = onClose,
             )
         }
 
         // Remote Control: Left-press Channels overlay (GH #54), drawn above
         // the video and all chrome.
         if (channelListVisible) {
-            val active = channelListGroup
-                ?: initialGroup.takeIf { it in overlayGroups }
-                ?: com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS
-            ChannelListOverlay(
-                groups = overlayGroups,
-                activeGroup = active,
-                channelsFor = { token ->
-                    if (token == com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS) {
-                        channels.filter { it.groupTitle !in hiddenGroups }
-                    } else {
-                        channels.filter { it.groupTitle.equals(token, ignoreCase = true) }
-                    }
-                },
-                currentChannelId = currentChannel?.id,
-                nowTitleFor = { ch -> epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title },
-                sidebarOpen = channelListSidebarOpen,
-                onSidebarOpenChange = { channelListSidebarOpen = it },
-                onGroupChange = { channelListGroup = it },
-                onSelect = { ch ->
-                    channelListVisible = false
-                    channelListSidebarOpen = false
-                    val idx = channels.indexOfFirst { it.id == ch.id }
-                    if (idx >= 0 && idx != currentIndex) currentIndex = idx
-                },
-                onDismiss = {
-                    channelListVisible = false
-                    channelListSidebarOpen = false
-                },
+            ChannelListOverlaySection(
+                initialGroup = initialGroup,
+                overlayGroups = overlayGroups,
+                hiddenGroups = hiddenGroups,
+                channels = channels,
+                currentChannel = currentChannel,
+                epgByChannel = epgByChannel,
+                channelListGroupState = channelListGroupState,
+                channelListVisibleState = channelListVisibleState,
+                channelListSidebarOpenState = channelListSidebarOpenState,
+                currentIndexState = currentIndexState,
             )
         }
 
         // Remote Control: hold-Up Recently Watched overlay, drawn above the
         // video and all chrome (last child of the root Box).
         if (recentsOverlayVisible) {
-            RecentChannelsOverlay(
-                recentIds = recentChannelIds,
+            RecentsOverlaySection(
+                recentChannelIds = recentChannelIds,
                 channels = channels,
-                currentChannelId = currentChannel?.id,
-                nowTitleFor = { ch -> epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title },
-                onSelect = { ch ->
-                    recentsOverlayVisible = false
-                    val idx = channels.indexOfFirst { it.id == ch.id }
-                    if (idx >= 0 && idx != currentIndex) currentIndex = idx
-                },
-                onDismiss = { recentsOverlayVisible = false },
+                currentChannel = currentChannel,
+                epgByChannel = epgByChannel,
+                recentsOverlayVisibleState = recentsOverlayVisibleState,
+                currentIndexState = currentIndexState,
             )
         }
     }
@@ -2227,6 +1811,309 @@ fun PlayerScreen(
         }
     }
 
+    PlayerSheets(
+        exoHolder = exoHolder,
+        exoWindowState = exoWindowState,
+        miniPlayerVm = miniPlayerVm,
+        castSender = castSender,
+        companionRemote = companionRemote,
+        isCasting = isCasting,
+        isCompanion = isCompanion,
+        currentChannel = currentChannel,
+        nowProgramme = nowProgramme,
+        recordTargetState = recordTargetState,
+        multiviewPickerOpenState = multiviewPickerOpenState,
+        streamInfoState = streamInfoState,
+        subtitlesState = subtitlesState,
+        audioTracksState = audioTracksState,
+        switchStreamState = switchStreamState,
+        switchedStreamIdState = switchedStreamIdState,
+        playbackSpeedSheetState = playbackSpeedSheetState,
+        scope = scope,
+        onSwitchChannelStream = onSwitchChannelStream,
+        onLoadCurrentStreamUrl = onLoadCurrentStreamUrl,
+        onLaunchMultiview = onLaunchMultiview,
+    )
+
+    DisposableEffect(Unit) {
+        onDispose { /* AndroidView.onRelease handles native cleanup. */ }
+    }
+}
+
+
+// GH #33 full-parity cast remote (task #257 extraction): while a Cast
+// Connect session is live the local codec is stopped, so replace the
+// (black) player with the phone remote -- transport, channel up/down,
+// stop, and the same audio/subtitle/speed/aspect controls, all driving
+// the Android-TV receiver over the custom control channel.
+@Composable
+private fun CastRemoteSection(
+    isCompanion: Boolean,
+    castState: com.aeriotv.android.core.cast.AerioCastSender.State,
+    companionConn: com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn,
+    castSender: com.aeriotv.android.core.cast.AerioCastSender,
+    companionRemote: com.aeriotv.android.core.cast.companion.CompanionRemoteController,
+    currentChannel: M3UChannel?,
+    nowProgramme: EPGProgramme?,
+    channels: List<M3UChannel>,
+    currentIndexState: MutableIntState,
+    remoteStoppingState: MutableState<Boolean>,
+    switchStreamState: MutableState<SwitchStreamState?>,
+    switchedStreamIdState: MutableState<Int?>,
+    recordTargetState: MutableState<ProgramInfoTarget?>,
+    sleepEndsAtState: MutableState<Long?>,
+    isDispatcharrLive: Boolean,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onLoadChannelStreams: suspend (Int) -> List<StreamOption>,
+    onLoadCurrentStreamId: suspend (String) -> Int?,
+    onClose: () -> Unit,
+) {
+    var currentIndex by currentIndexState
+    var remoteStopping by remoteStoppingState
+    var switchStream by switchStreamState
+    var switchedStreamId by switchedStreamIdState
+    var recordTarget by recordTargetState
+    var sleepEndsAt by sleepEndsAtState
+    // One overlay, two transports (GH #33): the SAME full remote drives a
+    // Cast Connect session or a LAN companion-paired AerioTV TV; only the
+    // command sink + state source switch.
+    val remoteState by (if (isCompanion) companionRemote.remoteState else castSender.remoteState)
+        .collectAsStateWithLifecycle()
+    val remoteIsPlaying by (if (isCompanion) companionRemote.isPlaying else castSender.isPlaying)
+        .collectAsStateWithLifecycle()
+    val companionPosition by companionRemote.position.collectAsStateWithLifecycle()
+    val castPosition by castSender.position.collectAsStateWithLifecycle()
+    com.aeriotv.android.feature.cast.CastRemoteOverlay(
+        deviceName = if (isCompanion) {
+            (companionConn as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected)?.name
+        } else {
+            (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName
+        },
+        channelTitle = currentChannel?.name.orEmpty(),
+        programmeTitle = nowProgramme?.title,
+        remoteState = remoteState,
+        isPlaying = remoteIsPlaying,
+        statusVerb = if (isCompanion) "Controlling" else "Casting to",
+        stopLabel = if (isCompanion) "Disconnect" else "Stop casting",
+        onTogglePlayPause = {
+            if (isCompanion) companionRemote.togglePlayPause() else castSender.togglePlayPause()
+        },
+        onChannelUp = {
+            if (channels.isNotEmpty() && currentIndex >= 0) {
+                currentIndex = (currentIndex + 1).coerceIn(0, channels.lastIndex)
+            }
+        },
+        onChannelDown = {
+            if (channels.isNotEmpty() && currentIndex >= 0) {
+                currentIndex = (currentIndex - 1).coerceIn(0, channels.lastIndex)
+            }
+        },
+        onStopCasting = {
+            if (isCompanion) {
+                // Companion Disconnect: stop controlling the TV and LEAVE
+                // the player. Do NOT resume local playback (remoteStopping
+                // gates the prime effect) -- resuming here left the channel
+                // playing on BOTH the phone and the TV (device report). The
+                // TV keeps playing (it's the user's own device); the
+                // scaffold's card is gone once disconnected.
+                remoteStopping = true
+                companionRemote.disconnect()
+                onClose()
+            } else {
+                // Cast: end the session; local playback resumes via the
+                // isRemote effects (standard "bring it back to my phone").
+                castSender.stopCasting()
+            }
+        },
+        onSetAudioTrack = { id ->
+            if (isCompanion) companionRemote.setRemoteAudioTrack(id) else castSender.setRemoteAudioTrack(id)
+        },
+        onSetTextTrack = { id ->
+            if (isCompanion) companionRemote.setRemoteTextTrack(id) else castSender.setRemoteTextTrack(id)
+        },
+        onSetSpeed = { s ->
+            if (isCompanion) companionRemote.setRemoteSpeed(s) else castSender.setRemoteSpeed(s)
+        },
+        onSetAspect = { mode ->
+            if (isCompanion) companionRemote.setRemoteAspect(mode) else castSender.setRemoteAspect(mode)
+        },
+        onSetAudioOnly = { on ->
+            if (isCompanion) companionRemote.setRemoteAudioOnly(on) else castSender.setRemoteAudioOnly(on)
+        },
+        onSwitchStream = {
+            // Reuse the live Switch Stream flow: it POSTs change_stream
+            // server-side (works while casting); the sheet's onSelect also
+            // re-tunes the receiver when casting (see below).
+            val ch = currentChannel
+            val chPk = ch?.dispatcharrChannelId
+            if (ch != null && chPk != null) {
+                val uuid = ch.id.removePrefix("disp:")
+                scope.launch {
+                    val streams = onLoadChannelStreams(chPk)
+                    val current = onLoadCurrentStreamId(uuid)
+                    switchStream = SwitchStreamState(
+                        streams = streams,
+                        currentStreamId = switchedStreamId ?: current,
+                    )
+                }
+            }
+        },
+        onRecord = {
+            // Server-side scheduling: works whether playing locally or cast.
+            // A default 1-hour live window (the sheet lets the user adjust);
+            // the current programme title is used when known.
+            currentChannel?.let { ch ->
+                val now = System.currentTimeMillis()
+                recordTarget = ProgramInfoTarget(
+                    channelName = ch.name,
+                    title = nowProgramme?.title?.takeIf { it.isNotBlank() }
+                        ?: "${ch.name} live recording",
+                    startMillis = now,
+                    endMillis = now + 3_600_000L,
+                    description = "",
+                    category = "",
+                    channelDispatcharrId = ch.dispatcharrChannelId,
+                )
+            }
+        },
+        onSleepMinutes = { minutes ->
+            sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
+        },
+        onSeekBy = { delta ->
+            if (isCompanion) companionRemote.seekBy(delta) else castSender.seekBy(delta)
+        },
+        onSeekToWall = { target ->
+            if (isCompanion) companionRemote.seekToWall(target) else castSender.seekToWall(target)
+        },
+        onGoLive = {
+            if (isCompanion) companionRemote.goLiveRemote() else castSender.goLiveRemote()
+        },
+        // GH #33: minimize returns to the tabs (the session stays alive;
+        // the Now-Casting / Controlling mini controller is the re-entry).
+        onMinimize = { onClose() },
+        position = if (isCompanion) companionPosition else castPosition,
+        canSwitchStream = isDispatcharrLive,
+        canRecord = currentChannel?.dispatcharrChannelId != null,
+        onRefreshState = {
+            if (isCompanion) companionRemote.requestRemoteState() else castSender.requestRemoteState()
+        },
+    )
+}
+
+// Remote Control: Left-press Channels overlay (GH #54), drawn above
+// the video and all chrome (task #257 extraction).
+@Composable
+private fun ChannelListOverlaySection(
+    initialGroup: String,
+    overlayGroups: List<String>,
+    hiddenGroups: Set<String>,
+    channels: List<M3UChannel>,
+    currentChannel: M3UChannel?,
+    epgByChannel: Map<String, List<EPGProgramme>>,
+    channelListGroupState: MutableState<String?>,
+    channelListVisibleState: MutableState<Boolean>,
+    channelListSidebarOpenState: MutableState<Boolean>,
+    currentIndexState: MutableIntState,
+) {
+    var channelListGroup by channelListGroupState
+    var channelListVisible by channelListVisibleState
+    var channelListSidebarOpen by channelListSidebarOpenState
+    var currentIndex by currentIndexState
+    val active = channelListGroup
+        ?: initialGroup.takeIf { it in overlayGroups }
+        ?: com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS
+    ChannelListOverlay(
+        groups = overlayGroups,
+        activeGroup = active,
+        channelsFor = { token ->
+            if (token == com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS) {
+                channels.filter { it.groupTitle !in hiddenGroups }
+            } else {
+                channels.filter { it.groupTitle.equals(token, ignoreCase = true) }
+            }
+        },
+        currentChannelId = currentChannel?.id,
+        nowTitleFor = { ch -> epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title },
+        sidebarOpen = channelListSidebarOpen,
+        onSidebarOpenChange = { channelListSidebarOpen = it },
+        onGroupChange = { channelListGroup = it },
+        onSelect = { ch ->
+            channelListVisible = false
+            channelListSidebarOpen = false
+            val idx = channels.indexOfFirst { it.id == ch.id }
+            if (idx >= 0 && idx != currentIndex) currentIndex = idx
+        },
+        onDismiss = {
+            channelListVisible = false
+            channelListSidebarOpen = false
+        },
+    )
+}
+
+// Remote Control: hold-Up Recently Watched overlay, drawn above the
+// video and all chrome (task #257 extraction).
+@Composable
+private fun RecentsOverlaySection(
+    recentChannelIds: List<String>,
+    channels: List<M3UChannel>,
+    currentChannel: M3UChannel?,
+    epgByChannel: Map<String, List<EPGProgramme>>,
+    recentsOverlayVisibleState: MutableState<Boolean>,
+    currentIndexState: MutableIntState,
+) {
+    var recentsOverlayVisible by recentsOverlayVisibleState
+    var currentIndex by currentIndexState
+    RecentChannelsOverlay(
+        recentIds = recentChannelIds,
+        channels = channels,
+        currentChannelId = currentChannel?.id,
+        nowTitleFor = { ch -> epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title },
+        onSelect = { ch ->
+            recentsOverlayVisible = false
+            val idx = channels.indexOfFirst { it.id == ch.id }
+            if (idx >= 0 && idx != currentIndex) currentIndex = idx
+        },
+        onDismiss = { recentsOverlayVisible = false },
+    )
+}
+
+// Modal sheets + pickers hosted by PlayerScreen (task #257 extraction:
+// record, multiview picker, stream info, subtitles, audio tracks, switch
+// stream, playback speed). Bodies moved verbatim; state objects are the
+// parent's so reads/writes hit identical snapshots.
+@Composable
+private fun PlayerSheets(
+    exoHolder: com.aeriotv.android.core.playback.AerioExoPlayerHolder,
+    exoWindowState: ExoWindowState,
+    miniPlayerVm: MiniPlayerViewModel,
+    castSender: com.aeriotv.android.core.cast.AerioCastSender,
+    companionRemote: com.aeriotv.android.core.cast.companion.CompanionRemoteController,
+    isCasting: Boolean,
+    isCompanion: Boolean,
+    currentChannel: M3UChannel?,
+    nowProgramme: EPGProgramme?,
+    recordTargetState: MutableState<ProgramInfoTarget?>,
+    multiviewPickerOpenState: MutableState<Boolean>,
+    streamInfoState: MutableState<StreamInfoSnapshot?>,
+    subtitlesState: MutableState<SubtitlesState?>,
+    audioTracksState: MutableState<AudioTracksState?>,
+    switchStreamState: MutableState<SwitchStreamState?>,
+    switchedStreamIdState: MutableState<Int?>,
+    playbackSpeedSheetState: MutableState<Float?>,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onSwitchChannelStream: suspend (String, Int) -> String?,
+    onLoadCurrentStreamUrl: suspend (String) -> String?,
+    onLaunchMultiview: () -> Unit,
+) {
+    val context = LocalContext.current
+    var recordTarget by recordTargetState
+    var multiviewPickerOpen by multiviewPickerOpenState
+    var streamInfo by streamInfoState
+    var subtitles by subtitlesState
+    var audioTracks by audioTracksState
+    var switchStream by switchStreamState
+    var switchedStreamId by switchedStreamIdState
+    var playbackSpeedSheet by playbackSpeedSheetState
     recordTarget?.let { target ->
         RecordProgramSheet(
             target = target,
@@ -2415,9 +2302,533 @@ fun PlayerScreen(
             onDismiss = { playbackSpeedSheet = null },
         )
     }
+}
 
-    DisposableEffect(Unit) {
-        onDispose { /* AndroidView.onRelease handles native cleanup. */ }
+// Live Rewind ticker + the chrome overlay (task #257). Extracted from the
+// PlayerScreen body so the ticking reads (buffer window head/tail, wall
+// position, catch-up position) recompose ONLY this section instead of the
+// whole screen. Same-file private composable; all state objects are the
+// parent's, passed as MutableState so reads/writes hit identical snapshots.
+@Composable
+private fun LiveRewindChromeSection(
+    exoHolder: com.aeriotv.android.core.playback.AerioExoPlayerHolder,
+    timeshiftController: com.aeriotv.android.core.timeshift.TimeshiftController,
+    settingsVm: SettingsViewModel,
+    miniPlayerVm: MiniPlayerViewModel,
+    exoWindowState: ExoWindowState,
+    castSender: com.aeriotv.android.core.cast.AerioCastSender,
+    companionRemote: com.aeriotv.android.core.cast.companion.CompanionRemoteController,
+    companionDiscovery: com.aeriotv.android.core.cast.companion.CompanionDiscovery,
+    scope: kotlinx.coroutines.CoroutineScope,
+    currentChannel: M3UChannel?,
+    nowProgramme: EPGProgramme?,
+    channels: List<M3UChannel>,
+    remoteMap: com.aeriotv.android.core.remote.RemoteControlMap,
+    appleTVChannelFlip: Boolean,
+    liveRewindEnabled: Boolean,
+    aspectMode: String,
+    isTvForm: Boolean,
+    isCatchupMode: Boolean,
+    catchupTitle: String,
+    catchupDurationMs: Long,
+    chromeVisible: Boolean,
+    pillVisible: Boolean,
+    streamUnavailable: Boolean,
+    catchupPositionMsState: MutableState<Long>,
+    tsPositionWallMsState: MutableState<Long>,
+    tsPausedState: MutableState<Boolean>,
+    livePauseWallMsState: MutableState<Long>,
+    scrubTargetWallMsState: MutableState<Long?>,
+    scrubHudVisibleState: MutableState<Boolean>,
+    unavailableRetrySerialState: MutableIntState,
+    recordTargetState: MutableState<ProgramInfoTarget?>,
+    streamInfoState: MutableState<StreamInfoSnapshot?>,
+    subtitlesState: MutableState<SubtitlesState?>,
+    audioTracksState: MutableState<AudioTracksState?>,
+    switchStreamState: MutableState<SwitchStreamState?>,
+    switchedStreamIdState: MutableState<Int?>,
+    playbackSpeedSheetState: MutableState<Float?>,
+    multiviewPickerOpenState: MutableState<Boolean>,
+    chromeMenuOpenState: MutableState<Boolean>,
+    castChooserOpenState: MutableState<Boolean>,
+    audioOnlyState: MutableState<Boolean>,
+    sleepEndsAtState: MutableState<Long?>,
+    sleepRemainingMillisState: MutableState<Long?>,
+    commitScrubCatchup: (Long) -> Unit,
+    commitScrubWall: (Long) -> Unit,
+    scrubStep: (Int, Boolean) -> Unit,
+    onLoadChannelStreams: suspend (Int) -> List<StreamOption>,
+    onLoadCurrentStreamId: suspend (String) -> Int?,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    // Own collector: this section is where the ticking window state is READ
+    // at composition, so its emissions invalidate only this scope.
+    val tsState by timeshiftController.state.collectAsStateWithLifecycle()
+    var catchupPositionMs by catchupPositionMsState
+    var tsPositionWallMs by tsPositionWallMsState
+    var tsPaused by tsPausedState
+    var livePauseWallMs by livePauseWallMsState
+    var scrubTargetWallMs by scrubTargetWallMsState
+    var scrubHudVisible by scrubHudVisibleState
+    var unavailableRetrySerial by unavailableRetrySerialState
+    var recordTarget by recordTargetState
+    var streamInfo by streamInfoState
+    var subtitles by subtitlesState
+    var audioTracks by audioTracksState
+    var switchStream by switchStreamState
+    var switchedStreamId by switchedStreamIdState
+    var playbackSpeedSheet by playbackSpeedSheetState
+    var multiviewPickerOpen by multiviewPickerOpenState
+    var chromeMenuOpen by chromeMenuOpenState
+    var castChooserOpen by castChooserOpenState
+    var audioOnly by audioOnlyState
+    var sleepEndsAt by sleepEndsAtState
+    var sleepRemainingMillis by sleepRemainingMillisState
+    // Live Rewind: the ticker that keeps the buffer window and
+    // playback wall-position fresh while a session is rolling. Wall
+    // position = the wall time playback entered the buffer + the
+    // player's position within that open (each re-open resets
+    // contentPosition to 0, so the sum stays correct across scrub
+    // re-opens). State declarations live in PlayerScreen so the root
+    // key handler can drive the D-pad scrub.
+    val tickerLifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(tsState.buffering) {
+        if (!tsState.buffering) return@LaunchedEffect
+        // STARTED-gated: without this the 500ms wakeup ran for the
+        // whole time the app sat backgrounded behind PiP.
+        tickerLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        while (tsState.buffering) {
+            timeshiftController.refreshWindow()
+            tsPaused = exoHolder.isPaused()
+            if (tsState.timeshifting) {
+                val pos = exoHolder.player?.currentPosition ?: 0L
+                tsPositionWallMs = tsState.baseWallMs + pos
+                // Cable-DVR catch-up snap: riding the write head keeps
+                // ExoPlayer in perpetual BUFFERING (it can never build
+                // its minimum buffer against a source that grows in
+                // real time). When playback closes to within a few
+                // seconds of the head, return to the direct stream.
+                // READY gate: a freshly-prepared buffer source reports
+                // meaningless positions while BUFFERING, which made
+                // the snap bounce straight back to live on entry
+                // (Streamer field test).
+                if (!exoHolder.isPaused() &&
+                    exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_READY &&
+                    tsPositionWallMs >= tsState.headWallMs - 4_000
+                ) {
+                    exoHolder.goLive()
+                }
+            }
+            kotlinx.coroutines.delay(500)
+        }
+        }
+    }
+
+    PlayerChromeOverlay(
+        channel = currentChannel,
+        nowProgramme = nowProgramme,
+        timeshiftState = if (tsState.buffering) tsState else null,
+        timeshiftPositionWallMs = tsPositionWallMs,
+        // Live TV with pause/rewind OFF: the transport comes from Live Rewind,
+        // so hint that it's a setting rather than silently showing no controls.
+        // Only when the channel COULD buffer (raw TS) -- not HLS/DASH live.
+        showLiveRewindHint = !isCatchupMode && !liveRewindEnabled &&
+            currentChannel?.url?.takeIf { it.isNotBlank() }
+                ?.let { exoHolder.canBufferLiveRewind(it) } == true,
+        // Task #148 milestone B: catch-up transport context.
+        catchupMode = isCatchupMode,
+        catchupTitle = catchupTitle,
+        catchupPositionMs = catchupPositionMs,
+        catchupDurationMs = catchupDurationMs,
+        onCatchupSeekTo = { target -> commitScrubCatchup(target) },
+        isPlayerPaused = tsPaused,
+        onRewindTogglePause = {
+            when {
+                exoHolder.isTimeshifting -> {
+                    exoHolder.setPaused(!exoHolder.isPaused())
+                }
+                tsState.buffering && !exoHolder.isPaused() -> {
+                    // Cable-seamless pause: nothing switches, the frame
+                    // just freezes. The controller quietly brings up the
+                    // independent filler so the buffer keeps growing
+                    // underneath a long pause.
+                    livePauseWallMs = System.currentTimeMillis()
+                    exoHolder.setPaused(true)
+                    timeshiftController.onLivePaused()
+                }
+                tsState.buffering && exoHolder.isPaused() && livePauseWallMs > 0 -> {
+                    val pausedForMs = System.currentTimeMillis() - livePauseWallMs
+                    if (pausedForMs <= 6_000) {
+                        // Short pause: resume the untouched live
+                        // pipeline. Zero switch, zero glitch.
+                        exoHolder.setPaused(false)
+                        timeshiftController.onLiveResumedAtEdge()
+                    } else {
+                        // Long pause: one switch onto the buffer at the
+                        // pause point; the filler covered the gap.
+                        exoHolder.setPaused(false)
+                        exoHolder.playTimeshift(livePauseWallMs - 1_000)
+                    }
+                    livePauseWallMs = 0L
+                }
+                else -> exoHolder.setPaused(!exoHolder.isPaused())
+            }
+        },
+        onRewindSeekWall = { target ->
+            // Read the buffer window FRESH from the writer at action
+            // time: the composed state snapshot can lag (the Streamer
+            // test turned a -30s skip into -122s off a stale head).
+            val w = timeshiftController.activeWriter
+            val head = w?.headWallMs ?: tsState.headWallMs
+            val tail = w?.tailWallMs ?: tsState.tailWallMs
+            if (target >= head - 5_000) {
+                exoHolder.goLive()
+            } else {
+                exoHolder.playTimeshift(target.coerceAtLeast(tail))
+            }
+        },
+        onGoLive = { exoHolder.goLive() },
+        scrubPreviewWallMs = scrubTargetWallMs,
+        scrubHudVisible = scrubHudVisible,
+        onScrubStep = scrubStep,
+        onScrubCommit = {
+            // OK on the focused timeline: commit the pending scrub
+            // immediately instead of waiting out the debounce.
+            scrubTargetWallMs?.let { target ->
+                if (isCatchupMode) commitScrubCatchup(target) else commitScrubWall(target)
+                scrubTargetWallMs = null
+            }
+        },
+        chromeVisible = chromeVisible,
+        pillVisible = pillVisible,
+        isTv = isTvForm,
+        // Cast Connect (GH #33): phone/tablet Cast button, only on a build
+        // with a registered Cast App ID. Live channels cast their identity to
+        // the Android-TV receiver.
+        castSlot = if (!isTvForm && castSender.castConfigured) {
+            {
+                com.aeriotv.android.feature.cast.CastIconButton(
+                    sender = castSender,
+                    companionRemote = companionRemote,
+                    companionDiscovery = companionDiscovery,
+                    onChooserOpenChange = { castChooserOpen = it },
+                )
+            }
+        } else {
+            null
+        },
+        // Focusable Retry in the standard controls while the stream is
+        // unavailable (the center card's button can't take remote focus).
+        connectionIssue = streamUnavailable,
+        onRetry = {
+            unavailableRetrySerial += 1
+            exoHolder.retryUnavailable()
+        },
+        // #10 player gesture hints: only advertise Up/Down channel-flip when
+        // it can actually do something (setting on + more than one channel).
+        showChannelFlipHint = appleTVChannelFlip && channels.size >= 2 &&
+            com.aeriotv.android.core.remote.RemoteControlHints.verticalFlipMapped(remoteMap),
+        selectHint = com.aeriotv.android.core.remote.RemoteControlHints.selectHint(remoteMap),
+        horizontalHint = com.aeriotv.android.core.remote.RemoteControlHints
+            .playerHorizontalHint(remoteMap),
+        // Explicit X tap = user is done with this channel; clear the mini-player
+        // session, destroy the held MPV instance, and stop the background
+        // PlaybackService so the notification disappears. System back keeps
+        // the session + service alive instead (handled by BackHandler above).
+        // Phase 172: stop() rather than destroy() so the persistent
+        // SurfaceView mounted at MainActivity root stays alive --
+        // the next channel tap plays instantly on the existing
+        // handle. destroy() set holder.view=null and the next
+        // LaunchedEffect(currentChannel.id) couldn't find a view to
+        // playFile on, leaving subsequent channels permanently
+        // stuck.
+        onClose = {
+            miniPlayerVm.dismiss()
+            exoWindowState.hide()
+            exoHolder.stop()
+            com.aeriotv.android.core.playback.AerioMediaPlaybackService
+                .stop(context)
+            onClose()
+        },
+        onAddToMultiview = { multiviewPickerOpen = true },
+        onShowRecord = { target -> recordTarget = target },
+        onShowStreamInfo = {
+            streamInfo = exoHolder.player?.captureStreamInfo() ?: StreamInfoSnapshot(
+                videoLines = listOf("(player not ready)"),
+                audioLines = emptyList(),
+                cacheLines = emptyList(),
+                syncLines = emptyList(),
+            )
+        },
+        onShowSwitchStream = {
+            val ch = currentChannel ?: return@PlayerChromeOverlay
+            val chPk = ch.dispatcharrChannelId ?: return@PlayerChromeOverlay
+            val uuid = ch.id.removePrefix("disp:")
+            scope.launch {
+                val streams = onLoadChannelStreams(chPk)
+                // Prefer the in-session selection for the radio mark: after an
+                // event-apply switch the server leaves /proxy/ts/status's stream_id
+                // stale (it only refreshes url), so switchedStreamId is the truthful
+                // "what we last switched to". Fall back to status stream_id when we
+                // haven't switched anything this session (correct on first read).
+                val current = onLoadCurrentStreamId(uuid)
+                switchStream = SwitchStreamState(
+                    streams = streams,
+                    currentStreamId = switchedStreamId ?: current,
+                )
+            }
+        },
+        onShowSubtitles = {
+            val player = exoHolder.player ?: return@PlayerChromeOverlay
+            subtitles = SubtitlesState(
+                tracks = player.readSubtitleTracks(),
+                currentSid = player.readCurrentSid(),
+            )
+        },
+        onShowAudioTracks = {
+            val player = exoHolder.player ?: return@PlayerChromeOverlay
+            audioTracks = AudioTracksState(
+                tracks = player.readAudioTracks(),
+                currentAid = player.readCurrentAid(),
+            )
+        },
+        onShowPlaybackSpeed = {
+            val player = exoHolder.player ?: return@PlayerChromeOverlay
+            playbackSpeedSheet = player.readSpeed()
+        },
+        aspectModeLabel = when (aspectMode) {
+            "zoom" -> "Zoom"
+            "fill" -> "Fill"
+            else -> "Fit"
+        },
+        onCycleAspect = { settingsVm.cyclePlayerAspectMode(aspectMode) },
+        onToggleAudioOnly = {
+            audioOnly = !audioOnly
+            val player = exoHolder.player
+            if (audioOnly) {
+                // Disable the video track on the current selection.
+                // The audio renderer keeps running -- this is the
+                // Media3 equivalent of libmpv `vid=no` without the
+                // need to reload the stream when toggling back.
+                player?.trackSelectionParameters = player?.trackSelectionParameters
+                    ?.buildUpon()
+                    ?.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, true)
+                    ?.build() ?: return@PlayerChromeOverlay
+            } else {
+                player?.trackSelectionParameters = player?.trackSelectionParameters
+                    ?.buildUpon()
+                    ?.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, false)
+                    ?.build() ?: return@PlayerChromeOverlay
+            }
+        },
+        audioOnly = audioOnly,
+        onSetSleepMinutes = { minutes ->
+            sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
+        },
+        sleepRemainingMillis = sleepRemainingMillis,
+        onInteractingChange = { chromeMenuOpen = it },
+    )
+}
+
+// Task #148 milestone B: a catch-up 4xx means the provider has no
+// archive for this window (flag-but-no-archive class). Retrying
+// can't conjure one, so no auto-reconnect - show why + Go Back.
+@Composable
+private fun CatchupUnavailableCard(
+    exoHolder: com.aeriotv.android.core.playback.AerioExoPlayerHolder,
+    onClose: () -> Unit,
+) {
+    val lastErrorText by exoHolder.lastErrorText.collectAsStateWithLifecycle()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.72f))
+            .padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "Catch-up Unavailable",
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+        )
+        // A 4xx really means "no archive"; anything else (decoder,
+        // network) gets neutral copy so we don't blame the provider
+        // for a local failure.
+        val noArchive = lastErrorText.orEmpty().let {
+            it.contains("404") || it.contains("Not Found", ignoreCase = true) ||
+                it.contains("BAD_HTTP_STATUS")
+        }
+        Text(
+            text = if (noArchive) {
+                "Your provider doesn't have an archive for this programme."
+            } else {
+                "Playback of this programme's archive failed."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.72f),
+            textAlign = TextAlign.Center,
+        )
+        if (!lastErrorText.isNullOrBlank()) {
+            Text(
+                text = lastErrorText.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.6f),
+                textAlign = TextAlign.Center,
+            )
+        }
+        Button(onClick = {
+            exoHolder.stop()
+            onClose()
+        }) {
+            Text("Go Back")
+        }
+    }
+}
+
+// Dead-upstream net: the holder's no-data watchdog reconnected once and
+// still got zero bytes, so it flagged the channel unavailable + stopped.
+// Task #150 (iOS parity): show WHAT failed, keep auto-retrying on an
+// escalating 5s->30s delay, and offer a manual Retry button.
+@Composable
+private fun StreamUnavailableCard(
+    exoHolder: com.aeriotv.android.core.playback.AerioExoPlayerHolder,
+    isTvForm: Boolean,
+    unavailableRetrySerialState: MutableIntState,
+) {
+    var unavailableRetrySerial by unavailableRetrySerialState
+    val lastErrorText by exoHolder.lastErrorText.collectAsStateWithLifecycle()
+    var retryCountdown by remember { mutableIntStateOf(0) }
+    var reconnecting by remember { mutableStateOf(false) }
+    LaunchedEffect(unavailableRetrySerial) {
+        reconnecting = false
+        // Flat 5s between every auto-retry (Archie, 2026-07-12).
+        var remaining = 5
+        while (remaining > 0) {
+            retryCountdown = remaining
+            kotlinx.coroutines.delay(1_000)
+            remaining -= 1
+        }
+        retryCountdown = 0
+        reconnecting = true
+        unavailableRetrySerial += 1
+        exoHolder.retryUnavailable()
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.72f))
+            .padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "Channel Unavailable",
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+        )
+        if (!lastErrorText.isNullOrBlank()) {
+            Text(
+                text = lastErrorText.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.85f),
+                textAlign = TextAlign.Center,
+            )
+        }
+        Text(
+            text = when {
+                reconnecting -> "Reconnecting…"
+                retryCountdown > 0 -> "Retrying in ${retryCountdown}s"
+                else -> " "
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.72f),
+        )
+        // Phone/tablet: tappable Retry on the card itself. On TV the
+        // Retry lives in the standard controls (focusable via the
+        // remote) - the card stays informational there.
+        if (!isTvForm) {
+            Button(onClick = {
+                reconnecting = true
+                unavailableRetrySerial += 1
+                exoHolder.retryUnavailable()
+            }) {
+                Text("Retry Now")
+            }
+        }
+        Text(
+            text = if (isTvForm) {
+                "Retry is highlighted below - press Select. Back to exit, or D-pad up/down to change channels."
+            } else {
+                "Press Back to exit, or use the D-pad up/down to change channels."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.6f),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+// GH #22: a tapped id that is NOT in the active playlist's channel list --
+// surface it and offer the way out instead of dying quietly (see the call
+// site for the full rationale).
+@Composable
+private fun ChannelNotAvailableCard(onClose: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "Channel Not Available",
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+        )
+        Text(
+            text = "This channel isn't in the active playlist. If you just " +
+                "switched playlists, go back and pick it again from the " +
+                "refreshed guide.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.72f),
+            textAlign = TextAlign.Center,
+        )
+        Button(onClick = onClose) {
+            Text("Go Back")
+        }
+    }
+}
+
+// Event channels whose stream isn't assigned yet render this instead of a
+// silent black screen (see the call site for the full rationale).
+@Composable
+private fun NoStreamAssignedCard(onClose: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "No Stream Assigned",
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+        )
+        Text(
+            text = "This channel doesn't have a stream yet. Event channels " +
+                "usually get one shortly before air time.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.72f),
+            textAlign = TextAlign.Center,
+        )
+        Button(onClick = onClose) {
+            Text("Go Back")
+        }
     }
 }
 

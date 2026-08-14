@@ -114,6 +114,30 @@ class TeeDataSource(
 }
 
 /**
+ * GH #65: thrown by [TimeshiftDataSource.read] when playback reaches a
+ * byte position where the writer recorded a forward time skip (splice
+ * gap, dropped-chunk resync). Media3 1.4.1's TsExtractor ignores the
+ * in-band discontinuity indicator, so reading straight across the skip
+ * fed the demuxer a mid-stream PTS jump and the audio sink threw
+ * UnexpectedDiscontinuityException ~7 s later. Instead the read REFUSES
+ * the boundary; AerioExoPlayerHolder recognizes this error and
+ * re-enters the buffer exactly at the gap ([segName]+[byteOffset]),
+ * which resets the extractor and flushes the renderers so the jump
+ * becomes a fresh timeline.
+ *
+ * Extends FileNotFoundException DELIBERATELY: Media3's
+ * DefaultLoadErrorHandlingPolicy surfaces FNFE to the player
+ * immediately (retry delay C.TIME_UNSET) instead of blind-retrying the
+ * load with backoff, and a retry would only re-open at the same byte
+ * and throw again.
+ */
+class TimeshiftDiscontinuityException(
+    val segName: String,
+    val byteOffset: Long,
+    val resumeWallMs: Long,
+) : java.io.FileNotFoundException("timeshift gap at $segName+$byteOffset")
+
+/**
  * Live Rewind: reads the growing timeshift buffer as one continuous
  * TS stream starting at a wall-clock time.
  *
@@ -139,6 +163,14 @@ class TimeshiftDataSource(
         const val SCHEME = "aeriotimeshift"
         fun uri(fromWallMs: Long): Uri =
             Uri.parse("$SCHEME://buffer?fromWallMs=$fromWallMs")
+
+        /** GH #65: open at an exact byte position, used to resume just
+         *  PAST a recorded splice gap (a wall-time open interpolates
+         *  and could land back BEFORE the gap, re-throwing forever). */
+        fun uriAt(segName: String, byteOffset: Long, wallMs: Long): Uri =
+            Uri.parse(
+                "$SCHEME://buffer?fromWallMs=$wallMs&atSeg=$segName&atOff=$byteOffset",
+            )
     }
 
     class Factory(
@@ -153,6 +185,10 @@ class TimeshiftDataSource(
     private var raf: RandomAccessFile? = null
     private var uri: Uri? = null
     private var opened = false
+    /** GH #65: gap markers at or before this position in [resumeSeg]
+     *  were deliberately resumed past; never re-throw for them. */
+    private var resumeSeg: String? = null
+    private var resumeOff = -1L
 
     override fun open(dataSpec: DataSpec): Long {
         val w = writerProvider() ?: throw IOException("timeshift buffer not active")
@@ -162,6 +198,21 @@ class TimeshiftDataSource(
             ?: w.tailWallMs
         segments = w.segments()
         if (segments.isEmpty()) throw IOException("timeshift buffer empty")
+
+        // GH #65: exact-position open (gap hop). Falls through to the
+        // wall-time path if the segment was evicted meanwhile.
+        val atSeg = dataSpec.uri.getQueryParameter("atSeg")
+        val atOff = dataSpec.uri.getQueryParameter("atOff")?.toLongOrNull()
+        if (atSeg != null && atOff != null) {
+            val idx = segments.indexOfFirst { it.file.name == atSeg }
+            if (idx >= 0) {
+                resumeSeg = atSeg
+                resumeOff = atOff
+                raf = openSegmentAt(idx, atOff + dataSpec.position)
+                opened = true
+                return C.LENGTH_UNSET.toLong()
+            }
+        }
 
         // Clamp into the available window, then locate the segment and
         // interpolate the byte offset inside it (TS is near-CBR over a
@@ -207,7 +258,31 @@ class TimeshiftDataSource(
         val w = writer ?: throw IOException("buffer gone")
         var waits = 0
         while (true) {
-            val n = raf?.read(buffer, offset, length) ?: -1
+            // GH #65: never read ACROSS a recorded time skip. Serve bytes
+            // up to the marker, then refuse the boundary itself with a
+            // typed error the holder turns into a clean re-open at the
+            // gap. Feeding straight through was the AudioSink
+            // UnexpectedDiscontinuityException in Destro706's logs.
+            var len = length
+            val curName = segments.getOrNull(segIndex)?.file?.name
+            if (curName != null) {
+                val pos = raf?.filePointer ?: 0L
+                val gap = w.gaps()
+                    .filter {
+                        it.segName == curName && it.byteOffset >= pos &&
+                            !(it.segName == resumeSeg && it.byteOffset <= resumeOff)
+                    }
+                    .minByOrNull { it.byteOffset }
+                if (gap != null) {
+                    if (gap.byteOffset == pos) {
+                        throw TimeshiftDiscontinuityException(
+                            gap.segName, gap.byteOffset, gap.resumeWallMs,
+                        )
+                    }
+                    len = minOf(length.toLong(), gap.byteOffset - pos).toInt()
+                }
+            }
+            val n = raf?.read(buffer, offset, len) ?: -1
             if (n > 0) return n
 
             // Current segment exhausted: advance if a newer one exists.

@@ -94,6 +94,14 @@ class SyncSettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setSyncCategoryEnabled(category, value) }
     }
 
+    /** Slice of App Preferences, not a category of its own - see
+     *  AppPreferences.syncRemoteControlMap for why. Per-device. */
+    val syncRemoteControlMap: Flow<Boolean> = prefs.syncRemoteControlMap
+
+    fun setSyncRemoteControlMap(value: Boolean) {
+        viewModelScope.launch { prefs.setSyncRemoteControlMap(value) }
+    }
+
     suspend fun signInWithGoogle(activity: Activity): String? =
         sync.signInWithGoogle(activity)
 
@@ -103,6 +111,16 @@ class SyncSettingsViewModel @Inject constructor(
     fun acceptConsentResult(data: android.content.Intent?) {
         viewModelScope.launch { sync.acceptConsentResult(data) }
     }
+
+    /** Suspend variant for callers that must not proceed until the consent
+     *  grant is fully applied (status flipped to SignedIn). The onboarding
+     *  restore reads sync.status right after the consent launcher returns;
+     *  the fire-and-forget form above races it because acceptConsentResult
+     *  suspends on the encrypted token save BEFORE setting SignedIn, so a
+     *  fresh install's first restore saw "not signed in" and pulled nothing
+     *  (task #256). */
+    suspend fun acceptConsentResultNow(data: android.content.Intent?) =
+        sync.acceptConsentResult(data)
 
     /**
      * Silently restore the Drive session from the persisted token (or refresh
@@ -225,11 +243,16 @@ class SyncSettingsViewModel @Inject constructor(
     suspend fun restoreFromDrive(): Map<SyncCategory, Boolean> {
         val token = (sync.status.value as? DriveSyncManager.Status.SignedIn)?.accessToken
             ?: return emptyMap()
-        // Pull everything regardless of the user's per-category toggles --
-        // first-launch restore wants the full snapshot. The toggles still
-        // gate subsequent SyncWorker passes once the user is settled. The
-        // tracked variant additionally publishes per-category progress via
-        // [restoreSteps] for the onboarding restore screen.
-        return sync.pullAllTracked(token, SyncCategory.entries.toSet())
+        // Honour the per-category toggles. This USED to pull everything
+        // regardless, on the reasoning that a first-launch restore wants the
+        // full snapshot - but onboarding now asks the user what should come in
+        // BEFORE sign-in (OnboardingSyncCategoryChooser, Logan 2026-08-10), and
+        // ignoring that answer here would fetch the very data they just
+        // declined. A declined category must never be pulled, not pulled and
+        // then ignored. The tracked variant still publishes per-category
+        // progress via [restoreSteps] for the onboarding restore screen.
+        val wanted = SyncCategory.entries.filter { prefs.syncCategoryEnabled(it).first() }.toSet()
+        if (wanted.isEmpty()) return emptyMap()
+        return sync.pullAllTracked(token, wanted)
     }
 }

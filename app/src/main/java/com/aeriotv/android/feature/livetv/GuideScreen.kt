@@ -500,7 +500,42 @@ fun GuideScreen(
     // history merge lands; 1h during cold-launch paint), then `epgWindowHours`
     // ahead. The forward span comes from Settings > Network > EPG Window
     // (6/12/24/36/48/72h or "All available"). iOS `epgWindowHours` parity.
-    val historyMs = state.epgHistoryHours.coerceAtLeast(1).toLong() * 3_600_000L
+    //
+    // HARD CEILING on the whole span (Discord: mehow, consistent crash on
+    // entering the guide, 0.4.9, phone). Compose packs a layout dimension into
+    // at most 18 bits: `bitsNeedForSizeUnchecked` returns a poison 255 for any
+    // size >= 262143px, and `createConstraints` then throws
+    // "Can't represent a width of N and height of M in Constraints". The
+    // guide's time axis is ONE fixed-width Row of hourWidth * totalHours, so
+    // the span and the zoom together decide whether the guide can be laid out
+    // at all. 320dp/hour on a density-3 phone is 960px, which puts the wall at
+    // about 273 hours - reachable today by EPG Window "All available" against a
+    // provider that ships two weeks of guide, or by 72h forward plus a long
+    // catch-up retention, or by pinch-zooming a span that was fine unzoomed.
+    // Past the wall the app does not degrade, it dies, every single time the
+    // user opens the Guide, which is exactly what was reported.
+    //
+    // The programme strip already clamped its own width (the Android TV
+    // display-scale case below), but a clamp on ONE of the two fixed-width
+    // rows cannot save the other and silently desyncs the time labels from the
+    // cells. So clamp the SPAN instead: every consumer - header, strip, cell
+    // offsets, the now-line, the D-pad page math - derives from
+    // windowDurationMs, so capping it there keeps them all consistent.
+    val guideHourWidthPx = with(LocalDensity.current) { scaledHourWidth.toPx() }
+    val maxAxisHours = remember(guideHourWidthPx) {
+        (GUIDE_MAX_STRIP_PX / guideHourWidthPx.coerceAtLeast(1f)).toInt().coerceAtLeast(6)
+    }
+    // History is capped only by what it would crowd out, so nobody already
+    // inside the budget sees their catch-up depth change: a long retention is
+    // trimmed just far enough to leave the forward window room, and the total
+    // cap below then trims the forward end if it is still too wide. Getting
+    // this order wrong would open the guide on nothing but the past.
+    val guideForwardReserveHours =
+        (if (epgWindowHours > 0) epgWindowHours else 12).coerceAtMost(maxAxisHours / 2)
+    val historyMs = state.epgHistoryHours
+        .coerceAtLeast(1)
+        .coerceAtMost((maxAxisHours - guideForwardReserveHours).coerceAtLeast(1))
+        .toLong() * 3_600_000L
     val windowStart = remember(nowMillis, historyMs) {
         // Floor `now` to the start of the current hour to keep header labels clean.
         val hourMs = 3_600_000L
@@ -510,14 +545,35 @@ fun GuideScreen(
     // programme end, clamped to a 6h floor so a thin EPG still scrolls. A
     // numeric hour value spans that many hours past "now" (the history span
     // is added on top so back-scroll never eats the forward window).
-    val windowDurationMs = remember(epgWindowHours, state.epgByChannel, windowStart, historyMs) {
-        if (epgWindowHours > 0) {
+    val windowDurationMs = remember(
+        epgWindowHours,
+        state.epgByChannel,
+        windowStart,
+        historyMs,
+        maxAxisHours,
+    ) {
+        val raw = if (epgWindowHours > 0) {
             historyMs + epgWindowHours.toLong() * 3_600_000L
         } else {
+            // "All available" is bounded only by what the provider sent, and a
+            // single programme with a garbage far-future end date would set it
+            // on its own, so this branch in particular needs the cap below.
             val latestEnd = state.epgByChannel.values.asSequence()
                 .flatten()
                 .maxOfOrNull { it.endMillis } ?: (windowStart + 24L * 3_600_000L)
             (latestEnd - windowStart).coerceAtLeast(6L * 3_600_000L)
+        }
+        val cap = maxAxisHours.toLong() * 3_600_000L
+        if (raw > cap) {
+            android.util.Log.w(
+                "GuideScreen",
+                "guide span ${raw / 3_600_000L}h exceeds the $maxAxisHours" +
+                    "h this zoom can lay out (Compose caps a fixed dimension at " +
+                    "262143px); clamping so the guide renders instead of throwing",
+            )
+            cap
+        } else {
+            raw
         }
     }
 
@@ -979,6 +1035,11 @@ fun GuideScreen(
                 groupSidebarOpen = false
                 if (isTv && token == sidebarOriginalGroup) sidebarFocusRestoreTick++
             },
+            // GH #57: sidebar mode hides the pill row, taking the only Manage
+            // Groups entry with it. The pane's header button restores it
+            // without making the user switch to List view to reach it.
+            onManageGroups = { showManageGroups = true },
+            hiddenGroupCount = hiddenGroups.size,
         )
     }
     Column(modifier = Modifier.weight(1f).fillMaxHeight().statusBarsPadding()) {
@@ -1172,8 +1233,10 @@ fun GuideScreen(
             // the two views match pixel-for-pixel (user report: the Tune
             // button and pills shifted slightly between views). Gated like
             // the List view: hidden when there is only the All group and no
-            // collections.
-            if (groups.size > 1 || collections.isNotEmpty()) {
+            // collections. Hidden groups count too (iOS parity): a user who
+            // hides everything down to a single group would otherwise lose
+            // the only control that can un-hide them.
+            if (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty()) {
                 LiveTvPillsRow(
                     groups = groups,
                     selectedGroup = state.selectedGroup,
@@ -1186,15 +1249,25 @@ fun GuideScreen(
             }
         }
         // Group-pills row (TV only). TV guide cleanup (Logan 2026-08-06): the
-        // control circles that used to lead this row are GONE - the List/Guide
-        // switcher is covered by Settings > Default Live TV View, both search
-        // circles by the nav bar's Search tab, and the filter circle by the
-        // groups/pills themselves (Manage Groups stays reachable from the List
-        // view's Tune circle). With them gone the row exists only for the
-        // pills, so it is skipped entirely in sidebar mode (and for a
-        // single-group playlist) instead of leaving an empty 44dp band above
-        // the time axis. Phone renders the shared LiveTvPillsRow above instead.
-        if (isTv && !sidebarGroupMode && (groups.size > 1 || collections.isNotEmpty())) {
+        // control circles that used to LEAD this row are GONE - the List/Guide
+        // switcher is covered by Settings > Default Live TV View, and both
+        // search circles by the nav bar's Search tab.
+        //
+        // GH #57 corrects the third one. That cleanup also dropped the filter
+        // circle, reasoning that the pills themselves cover filtering and that
+        // Manage Groups stayed reachable from the List view's Tune circle. But
+        // hiding and reordering groups are not filtering, and sending someone
+        // to a different VIEW to configure the one they are in reads as the
+        // feature being absent - especially with Guide as the default Live TV
+        // view. It comes back as a round button AFTER the last pill (Logan's
+        // placement), so the leading run stays clear for the hold-Left gesture.
+        //
+        // The row is still skipped entirely in sidebar mode - that mode has its
+        // own header button - rather than leaving an empty 44dp band above the
+        // time axis. Phone renders the shared LiveTvPillsRow above instead.
+        if (isTv && !sidebarGroupMode &&
+            (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty())
+        ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1351,6 +1424,17 @@ fun GuideScreen(
                         collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING },
                         key = { "coll_${it.id}" },
                     ) { c -> collectionPillItem(c) }
+                    // GH #57 (Logan 2026-08-10): round Manage Groups button
+                    // AFTER the last group. It is the last focusable item in
+                    // the row, so the hold-Left-to-"All" gesture never has to
+                    // step past it, and Right off the final pill lands
+                    // somewhere useful instead of dead-ending.
+                    item(key = "manage_groups") {
+                        TvManageGroupsCircle(
+                            hiddenGroupsCount = hiddenGroups.size,
+                            onClick = { showManageGroups = true },
+                        )
+                    }
                 }
             }
         }
@@ -2856,15 +2940,17 @@ private fun ChannelGuideRow(
         ) {
             val totalWidth = run {
                 val raw = hourWidth * (windowDurationMs / 3_600_000L).toInt()
-                // Compose caps a fixed layout dimension at ~262143px. A wide EPG
-                // window at a high display scale (Live TV List 150-175% on
-                // Android TV) pushes hourWidth x total-hours past that, which
-                // SILENTLY blanks the entire programme strip -- cells render
-                // nothing while the channel rail + time header (which don't hang
-                // off this giant box) survive. Clamp the scroll-range width to a
-                // safe px budget so the strip always measures; cells beyond it
-                // are simply unreachable by horizontal scroll (many days out at
-                // that zoom) while every visible / near-now cell still renders.
+                // BACKSTOP. windowDurationMs is now capped to the same px budget
+                // at source, so this branch should never fire; it stays because
+                // it is the last line before Compose's 262143px limit turns a
+                // measure into an IllegalArgumentException, and because a clamp
+                // HERE alone is not a fix - it leaves the time header (also one
+                // fixed-width Row) unbounded and desyncs the hour labels from
+                // the cells beneath them. Originally added for the Android TV
+                // display-scale case (Live TV List at 150-175%), where the
+                // symptom was a silently blank programme strip: cells rendered
+                // nothing while the rail and header, which do not hang off this
+                // giant box, survived.
                 val maxDp = with(LocalDensity.current) { GUIDE_MAX_STRIP_PX.toDp() }
                 if (raw > maxDp) {
                     android.util.Log.w(

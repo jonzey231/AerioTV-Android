@@ -1,5 +1,5 @@
 [versions]
-agp = "9.3.0"
+agp = "9.3.1"
 kotlin = "2.3.21"
 ksp = "2.3.7"
 coreKtx = "1.18.0"
@@ -93,6 +93,8 @@ androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.re
 play-services-cast-framework = { group = "com.google.android.gms", name = "play-services-cast-framework", version.ref = "castFramework" }
 play-services-cast-tv = { group = "com.google.android.gms", name = "play-services-cast-tv", version.ref = "castTv" }
 androidx-mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version.ref = "mediarouter" }
+# Local JVM unit tests only (cast HLS proxy remuxer); never packaged in the app.
+junit = { group = "junit", name = "junit", version = "4.13.2" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

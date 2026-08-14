@@ -724,7 +724,18 @@ class PlaylistRepository @Inject constructor(
         Log.i("PlaylistRepo", "loadEpg: base resolved, starting fetch")
         val programmes = when (sourceType) {
             SourceType.M3uUrl -> {
-                val epgUrl = playlist.epgUrl?.takeIf { it.isNotBlank() } ?: return@runCatching emptyList()
+                // A pasted XC get.php link now loads through player_api (see
+                // loadChannels), so its channels carry epg_channel_id and the
+                // panel's own xmltv.php will match them. Derive that URL when
+                // the user supplied no XMLTV, otherwise those playlists end up
+                // with guide ids and no guide to match against. An explicit
+                // epgUrl always wins -- the user chose it deliberately.
+                val epgUrl = playlist.epgUrl?.takeIf { it.isNotBlank() }
+                    ?: xtreamCredsFromGetPhpUrl(base)?.let { xc ->
+                        "${xc.base}/xmltv.php?username=${xtreamEncode(xc.username)}" +
+                            "&password=${xtreamEncode(xc.password)}"
+                    }
+                    ?: return@runCatching emptyList()
                 // GH #26: constant-memory download + parse (multi-hundred-MB
                 // provider XMLTVs OOM'd fetchBytes the same way big M3Us did).
                 fetchViaTempFile(epgUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
@@ -978,6 +989,19 @@ class PlaylistRepository @Inject constructor(
                     chunk.map { ch -> ch.toCacheEntity(playlistId, position++, now) },
                 )
             }
+            // Stamp the displayed count from the list ACTUALLY PERSISTED, in the
+            // same transaction that persists it.
+            //
+            // Callers used to set channelCount = channels.size from their own
+            // pre-dedup list while this function stored `distinctBy { url }`, so
+            // the number on the Playlists / playlist-detail screens was computed
+            // from a different list than the one the user then scrolls. Any
+            // provider that repeats a stream URL made the two disagree
+            // permanently, and every caller had to remember to stamp it at all.
+            // Doing it here means the count cannot drift from the snapshot by
+            // construction, for every write path (add, refresh, switch-active,
+            // background refresh worker).
+            dao.updateChannelCount(playlistId, channels.size)
         }
     }
 
@@ -1164,6 +1188,193 @@ class PlaylistRepository @Inject constructor(
      *  100-200MB+; buffering them as one ByteArray OOM'd constrained
      *  heaps). The temp file lives in cacheDir so the OS can reclaim it
      *  even if a crash skips the finally. */
+    /**
+     * The XC live channel list, shared by the XtreamCodes source type AND by
+     * an M3U playlist whose URL is really an XC `get.php` link (see
+     * [xtreamCredsFromGetPhpUrl]). Both end up wanting exactly the same thing:
+     * the compact JSON list rather than the provider's giant flattened M3U.
+     */
+    private suspend fun xtreamLiveChannels(
+        b: String,
+        user: String,
+        pass: String,
+    ): List<M3UChannel> {
+        // Live channels come from player_api.php get_live_streams, NOT
+        // from get.php?type=m3u_plus. Measured against a real provider on
+        // 2026-08-10 (Logan: panels this size are "very typical of any
+        // user that is NOT using Dispatcharr"):
+        //
+        //     get.php m3u_plus     538 MB
+        //     get_live_streams      23.7 MB   -- the same 53,599 channels
+        //
+        // m3u_plus is one flat dump of live + ALL VOD + ALL series, so
+        // ~95% of that 538MB was movie/episode rows this code parsed and
+        // then deliberately threw away, because On Demand loads them from
+        // the JSON endpoints anyway. We were ALSO already calling
+        // get_live_streams on every refresh just for catch-up flags, and
+        // then downloading the M3U on top of it.
+        //
+        // The M3U additionally CANNOT produce a guide on that panel: every
+        // m3u_plus entry carries tvg-id="" (2000/2000 sampled), so a
+        // perfectly good 32MB xmltv.php matched nothing and the app logged
+        // "EPG loaded: 0 programmes across 53306 channels".
+        // get_live_streams carries epg_channel_id. This is the shape Apple
+        // has always used (StreamingAPIs.getLiveStreams) and what other
+        // mainstream clients do.
+        // Group names are a separate 83KB call. A failure here costs only
+        // the group labels, so it must not fail the whole playlist.
+        val categoryNames = runCatching {
+            xtreamApi.getLiveCategories(b, user, pass).associate { it.id to it.name }
+        }.getOrDefault(emptyMap())
+        val streams = xtreamApi.getLiveStreams(b, user, pass)
+        if (streams.isEmpty()) {
+            // Same contract as PlaylistFetcher's empty-body guard: a
+            // playlist that resolves to zero channels is a failure to
+            // surface, not a legitimately empty source to store silently.
+            // fetchAndMapArray swallows transport/parse failures to an
+            // empty list, so this is also where a broken panel lands.
+            throw IllegalStateException(
+                "The server returned no live channels for these credentials. " +
+                    "Check the username and password, and that this device is " +
+                    "allowed to connect.",
+            )
+        }
+        android.util.Log.i(
+            "PlaylistRepository",
+            "XC live list: ${streams.size} channels from player_api, " +
+                "${categoryNames.size} categories, " +
+                "${streams.count { it.epgChannelId.isNotBlank() }} with EPG ids",
+        )
+        // See XtreamLiveStream.directSource: not played, but a panel where
+        // most channels publish one is the shape where our rebuilt /live/
+        // URLs may 404 across the board. One line here turns that report
+        // into a diagnosis instead of a hunt.
+        val directSourceCount = streams.count { it.directSource.isNotBlank() }
+        if (directSourceCount > streams.size / 2) {
+            android.util.Log.w(
+                "PlaylistRepository",
+                "XC panel publishes direct_source on $directSourceCount/${streams.size} " +
+                    "channels; if channels list but do not play, this panel may be " +
+                    "direct_source-only and the standard /live/ URL form will 404",
+            )
+        }
+        // Same id formula as M3UParser ("m3u:" + tvg-id, else the URL) AND the
+        // same duplicate handling. epg_channel_id is routinely SHARED across
+        // streams (HD/FHD/SD variants of one channel all carry "espn.us"), and
+        // M3UParser has always disambiguated repeats by appending "|url".
+        // Skipping that here shipped duplicate ids straight into id-keyed UI
+        // (LazyColumn keys throw on duplicates - a crash in the player's
+        // channel overlay) and made favoriting one variant flag them all.
+        val seenIds = HashSet<String>()
+        val channels = streams.map { s ->
+            val url = xtreamApi.liveStreamUrl(b, user, pass, s.streamId)
+            var id = "m3u:${s.epgChannelId.ifBlank { url }}"
+            if (!seenIds.add(id)) {
+                id = "$id|$url"
+                seenIds.add(id)
+            }
+            M3UChannel(
+                id = id,
+                name = s.name,
+                url = url,
+                groupTitle = categoryNames[s.categoryId].orEmpty(),
+                tvgID = s.epgChannelId,
+                tvgName = s.name,
+                tvgLogo = s.icon,
+                channelNumber = s.num?.toString(),
+                catchupDays = s.catchupDays,
+                catchupStreamId = if (s.catchupDays > 0) s.streamId.toString() else null,
+            )
+        }
+        migrateUrlKeyedChannelIds(channels)
+        return channels
+    }
+
+    /**
+     * Heal favorites and recents that still point at URL-keyed channel ids.
+     *
+     * The switch to player_api JSON claimed ids were unchanged for existing
+     * installs because "a panel that publishes tvg-id publishes the same value
+     * as epg_channel_id". True - but the panel that MOTIVATED the switch emits
+     * tvg-id="" on every M3U entry while epg_channel_id is populated, so on
+     * that class of panel the old M3U path keyed those channels by URL and
+     * this path keys them by epg id. Without this pass, updating the app
+     * silently emptied those users' Favorites and recents.
+     *
+     * The URL is the stable half of both schemes, so the mapping is exact: a
+     * channel whose new id is epg-keyed may have old rows under "m3u:<url>".
+     * Idempotent - after the first run nothing is left under a URL-keyed id
+     * that has an epg-keyed replacement - and cheap (favorites and recents
+     * are both small), so it simply runs on every XC fetch.
+     */
+    /**
+     * The pre-0.4.11 XC live fetch, kept as the fallback for panels whose
+     * player_api is broken while get.php still works. Same streaming
+     * temp-file parse (GH #31 memory discipline), same VOD/series row drop,
+     * same output=ts-then-bare 404 retry (5a8a605, both directions). No
+     * catch-up enrichment: that data came from get_live_streams, which is
+     * exactly the endpoint that just failed.
+     */
+    private suspend fun xtreamLiveChannelsViaM3uPlus(
+        b: String,
+        user: String,
+        pass: String,
+    ): List<M3UChannel> {
+        val creds = "username=${xtreamEncode(user)}&password=${xtreamEncode(pass)}"
+        val m3uUrl = "$b/get.php?$creds&type=m3u_plus&output=ts"
+        val m3uUrlNoOutput = "$b/get.php?$creds&type=m3u_plus"
+        return fetchViaTempFileWithFallback(m3uUrl, m3uUrlNoOutput, ".m3u") { file ->
+            val out = ArrayList<M3UChannel>()
+            var droppedVodSeries = 0
+            M3UParser.parseFile(file) { ch ->
+                if (isXtreamVodOrSeriesUrl(ch.url)) {
+                    droppedVodSeries++
+                    return@parseFile
+                }
+                out.add(ch)
+            }
+            if (droppedVodSeries > 0) {
+                android.util.Log.i(
+                    "PlaylistRepository",
+                    "XC m3u_plus fallback: dropped $droppedVodSeries VOD/series entries; " +
+                        "kept ${out.size} live channels",
+                )
+            }
+            out
+        }
+    }
+
+    private suspend fun migrateUrlKeyedChannelIds(channels: List<M3UChannel>) {
+        val renames = HashMap<String, String>()
+        for (ch in channels) {
+            val urlKeyed = "m3u:${ch.url}"
+            if (ch.id != urlKeyed) renames[urlKeyed] = ch.id
+        }
+        if (renames.isEmpty()) return
+
+        val favoriteDao = database.favoriteChannelDao()
+        var migratedFavorites = 0
+        for (fav in favoriteDao.allOnce()) {
+            val newId = renames[fav.channelId] ?: continue
+            // Keep displayOrder/addedAt; skip the insert if the new id already
+            // exists (the user re-favorited it by hand after the update).
+            if (favoriteDao.getOnce(newId) == null) {
+                favoriteDao.upsert(fav.copy(channelId = newId))
+            }
+            favoriteDao.delete(fav.channelId)
+            migratedFavorites++
+        }
+
+        val migratedRecents = appPreferences.renameRecentChannelIds(renames)
+        if (migratedFavorites > 0 || migratedRecents > 0) {
+            android.util.Log.i(
+                "PlaylistRepository",
+                "Channel-id migration: rewrote $migratedFavorites favorite(s) and " +
+                    "$migratedRecents recent(s) from URL-keyed to EPG-keyed ids",
+            )
+        }
+    }
+
     private suspend fun <T> fetchViaTempFile(
         url: String,
         suffix: String,
@@ -1196,6 +1407,36 @@ class PlaylistRepository @Inject constructor(
         } finally {
             tmp.delete()
         }
+    }
+
+    /**
+     * [fetchViaTempFile] that retries once against [fallbackUrl] when the
+     * primary URL comes back 404. Used for XC `get.php`, where panels disagree
+     * about whether the `output` parameter is required or rejected; trying the
+     * standard form first and the legacy form only on a hard 404 means neither
+     * flavour of panel can break the other. Deliberately narrow: any other
+     * failure (timeout, 403, empty body, parse error) propagates untouched so
+     * a real problem is not masked by a second doomed download.
+     */
+    private suspend fun <T> fetchViaTempFileWithFallback(
+        primaryUrl: String,
+        fallbackUrl: String,
+        suffix: String,
+        parse: (java.io.File) -> T,
+    ): T = try {
+        fetchViaTempFile(primaryUrl, suffix, parse)
+    } catch (ce: kotlinx.coroutines.CancellationException) {
+        throw ce
+    } catch (e: Exception) {
+        // Callers with nothing better to try pass the same URL twice; retrying
+        // an identical request would just burn a second doomed download.
+        if (fallbackUrl == primaryUrl) throw e
+        if (e.message?.contains("HTTP 404") != true) throw e
+        android.util.Log.w(
+            "PlaylistRepository",
+            "get.php returned 404; retrying without the output parameter",
+        )
+        fetchViaTempFile(fallbackUrl, suffix, parse)
     }
 
     /**
@@ -1264,8 +1505,51 @@ class PlaylistRepository @Inject constructor(
             // fetch. A normal M3U playlist (no get.php) keeps its VOD groups.
             // The streaming parseFile overload also detects charset up front
             // instead of the parse-then-retry double read.
+            // A pasted XC get.php link is really an Xtream playlist wearing an
+            // M3U hat. Use the panel's JSON endpoints instead: 23.7MB rather
+            // than 538MB on the panel measured 2026-08-10, and it carries the
+            // epg_channel_id the M3U omits entirely.
+            val pastedXtream = xtreamCredsFromGetPhpUrl(base)
+            if (pastedXtream != null) {
+                android.util.Log.i(
+                    "PlaylistRepository",
+                    "M3U URL is an Xtream get.php link; loading via player_api instead",
+                )
+                // The reroute is a URL-shape guess, not a probe. Middleware
+                // that serves get.php with player_api disabled, broken, or
+                // separately IP-locked exists, and for those users the pasted
+                // M3U worked before the reroute did - so a player_api failure
+                // falls through to fetching the M3U they actually pasted
+                // instead of failing a previously-working playlist outright.
+                try {
+                    return@withContext xtreamLiveChannels(
+                        pastedXtream.base,
+                        pastedXtream.username,
+                        pastedXtream.password,
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.w(
+                        "PlaylistRepository",
+                        "player_api failed for the get.php link (${e.message}); " +
+                            "falling back to the pasted M3U itself",
+                    )
+                }
+            }
             val isXtreamGetPhp = base.contains("get.php", ignoreCase = true)
-            fetchViaTempFile(base, ".m3u") { file ->
+            // Some panels 404 a get.php URL that omits `output` (measured
+            // 2026-08-10: crx.watch answers `type=m3u_plus` with a bare 404 and
+            // serves `output=ts` fine). Providers hand out links in both forms,
+            // so a pasted one can fail through no fault of the user. Try their
+            // URL exactly as given, and only on a 404 retry it once with
+            // `&output=ts` appended. The XtreamCodes source type no longer
+            // touches get.php at all, so this pasted-link case is the only
+            // place that still needs the retry.
+            val getPhpFallback = if (isXtreamGetPhp && !base.contains("output=", ignoreCase = true)) {
+                base + (if (base.contains("?")) "&" else "?") + "output=ts"
+            } else {
+                null
+            }
+            fetchViaTempFileWithFallback(base, getPhpFallback ?: base, ".m3u") { file ->
                 val out = ArrayList<M3UChannel>()
                 var droppedVodSeries = 0
                 M3UParser.parseFile(file) { ch ->
@@ -1395,86 +1679,29 @@ class PlaylistRepository @Inject constructor(
                 }
         }
         SourceType.XtreamCodes -> {
-            // Xtream Codes serves a standard M3U at get.php?type=m3u_plus with the
-            // real proxy stream URLs, group-title, tvg-id, and logos already in it
-            // (iOS StreamingAPIs notes the M3U carries the playable URLs). Reuse
-            // the M3U parser for live channels rather than the player_api JSON;
-            // VOD + series use the JSON client. EPG comes from xmltv.php (loadEpg).
             val user = username?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("Xtream Codes username is required")
-            val b = base.trimEnd('/')
-            val m3uUrl = "$b/get.php?username=${xtreamEncode(user)}" +
-                "&password=${xtreamEncode(password.orEmpty())}&type=m3u_plus"
-            // GH #31: a full XC-panel m3u_plus runs 100-200MB; fetchBytes
-            // materialized the whole thing as ONE ByteArray and OOM'd a 256MB
-            // heap on add (the exact 155MB allocation Skryzie reported). The
-            // GH #26 fix streamed the generic M3U + XMLTV paths but missed this
-            // XC-specific live-channel fetch. Stream it to a temp file and parse
-            // from disk in constant memory, exactly like the plain-M3U path.
-            // Catch-up (task #133): the M3U carries no archive flags; the panel's
-            // get_live_streams does (tv_archive + tv_archive_duration, loose types).
-            // Fetched BEFORE the parse so enrichment is applied PER CHANNEL during
-            // the streaming parse below (a failed/empty fetch just leaves catch-up
-            // off for this refresh). GH #31: the old code parsed the whole
-            // m3u_plus into one List then `channels.map { ch.copy() }` allocated a
-            // SECOND full copy of the ~100k-channel catalog — the streaming
-            // parseFile applies the copy inline instead, so only one list forms.
-            val catchupByStreamId = runCatching {
-                xtreamApi.getLiveCatchupInfo(b, user, password.orEmpty())
-            }.getOrDefault(emptyMap())
-            fetchViaTempFile(m3uUrl, ".m3u") { file ->
-                val out = ArrayList<M3UChannel>()
-                var droppedVodSeries = 0
-                M3UParser.parseFile(file) { ch ->
-                    // GH #31: some panels dump their ENTIRE VOD + series catalog into
-                    // the get.php?type=m3u_plus "live" fetch (one reporter's ran ~340k
-                    // entries). Those movie/episode rows are exact duplicates of what
-                    // On Demand already loads via player_api.php JSON (get_vod_streams /
-                    // get_series), just flattened into the live list with no poster or
-                    // season structure. Dropping them by the XC URL convention collapses
-                    // the live list to real channels, which is what clears the main-
-                    // thread ANR the memory work exposed. A clean live-only m3u_plus is
-                    // unaffected (live URLs carry no such segment), and this is scoped to
-                    // the XC fetch -- the plain-M3U path never runs this callback.
-                    if (isXtreamVodOrSeriesUrl(ch.url)) {
-                        droppedVodSeries++
-                        return@parseFile
-                    }
-                    out.add(
-                        if (catchupByStreamId.isEmpty()) {
-                            ch
-                        } else {
-                            val sid = xcStreamIdFromUrl(ch.url)
-                            val days = sid?.let { catchupByStreamId[it] } ?: 0
-                            if (days > 0) {
-                                ch.copy(catchupDays = days, catchupStreamId = sid.toString())
-                            } else {
-                                ch
-                            }
-                        },
-                    )
-                }
-                if (droppedVodSeries > 0) {
-                    android.util.Log.i(
-                        "PlaylistRepository",
-                        "XC m3u_plus: dropped $droppedVodSeries VOD/series entries from the live " +
-                            "list (already served by On Demand); kept ${out.size} live channels",
-                    )
-                }
-                out
+            try {
+                xtreamLiveChannels(base.trimEnd('/'), user, password.orEmpty())
+            } catch (e: Exception) {
+                // Until 0.4.10 this source type fetched get.php m3u_plus, so
+                // panels with a broken, disabled, or separately IP-locked
+                // player_api WORKED - restreamers and aggregators that only
+                // emulate get.php exist. A player_api failure must not turn a
+                // previously-working playlist into a permanent "check the
+                // username and password" error; fall back to the m3u_plus
+                // fetch this branch used to be. Catch-up enrichment is
+                // deliberately absent here: it came from get_live_streams,
+                // which is exactly what just failed.
+                android.util.Log.w(
+                    "PlaylistRepository",
+                    "XC player_api failed (${e.message}); falling back to get.php m3u_plus",
+                )
+                xtreamLiveChannelsViaM3uPlus(base.trimEnd('/'), user, password.orEmpty())
             }
         }
     } }
 }
-
-/**
- * XC live stream id from an M3U-delivered URL: the numeric last path segment
- * of "…/live/user/pass/123.ts" or the bare "…/user/pass/123" form. Null for
- * non-XC-shaped URLs, which safely disables catch-up for that channel.
- */
-private fun xcStreamIdFromUrl(url: String): Int? =
-    Regex("/(\\d+)(?:\\.[A-Za-z0-9]+)?(?:\\?.*)?$")
-        .find(url)?.groupValues?.get(1)?.toIntOrNull()
 
 /** Matches the reserved Xtream VOD/series path segment as a DELIMITED segment
  *  (leading + trailing slash), so a live channel merely NAMED "...movie..." in
@@ -1506,6 +1733,51 @@ private val XC_VOD_SERIES_SEGMENT = Regex("/(?:movie|series)/", RegexOption.IGNO
  */
 private fun isXtreamVodOrSeriesUrl(url: String): Boolean =
     !url.contains("/live/", ignoreCase = true) && XC_VOD_SERIES_SEGMENT.containsMatchIn(url)
+
+/**
+ * Xtream credentials recovered from a pasted `get.php` playlist URL.
+ *
+ * Providers hand users a link like
+ * `http://host:8080/get.php?username=U&password=P&type=m3u_plus&output=ts`
+ * and users paste it as a plain "M3U URL" playlist rather than choosing the
+ * Xtream Codes source type -- it is, after all, an M3U link. That lands them
+ * on the worst path we have: the provider flattens live + ALL VOD + ALL series
+ * into one file (538MB on a real panel measured 2026-08-10) and frequently
+ * emits `tvg-id=""` on every entry, so the guide can never populate. The XC
+ * JSON endpoints behind the SAME credentials are 23.7MB and carry
+ * epg_channel_id.
+ *
+ * So recognise the shape and use the better source. Returns null for anything
+ * that is not unambiguously an XC get.php URL with both credentials.
+ */
+private data class XtreamCredsFromUrl(val base: String, val username: String, val password: String)
+
+private fun xtreamCredsFromGetPhpUrl(rawUrl: String): XtreamCredsFromUrl? {
+    if (!rawUrl.contains("get.php", ignoreCase = true)) return null
+    val uri = runCatching { java.net.URI(rawUrl.trim()) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase() ?: return null
+    if (scheme != "http" && scheme != "https") return null
+    val host = uri.host ?: return null
+    val query = uri.rawQuery ?: return null
+    val params = query.split("&").mapNotNull { pair ->
+        val i = pair.indexOf('=')
+        if (i <= 0) return@mapNotNull null
+        val k = pair.substring(0, i).lowercase()
+        val v = runCatching {
+            java.net.URLDecoder.decode(pair.substring(i + 1), "UTF-8")
+        }.getOrNull() ?: return@mapNotNull null
+        k to v
+    }.toMap()
+    val user = params["username"]?.takeIf { it.isNotBlank() } ?: return null
+    val pass = params["password"] ?: return null
+    // Everything before the trailing "/get.php" is the panel base, so panels
+    // served from a subdirectory keep working.
+    val path = uri.rawPath.orEmpty()
+    val cut = path.lastIndexOf("/get.php", ignoreCase = true)
+    val basePath = if (cut >= 0) path.substring(0, cut) else ""
+    val port = if (uri.port > 0) ":${uri.port}" else ""
+    return XtreamCredsFromUrl("$scheme://$host$port$basePath", user, pass)
+}
 
 /** URL-encode an Xtream credential for use in a query string. */
 private fun xtreamEncode(value: String): String =

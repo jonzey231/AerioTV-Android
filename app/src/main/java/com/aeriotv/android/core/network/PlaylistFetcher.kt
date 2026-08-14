@@ -1,15 +1,19 @@
 package com.aeriotv.android.core.network
 
+import android.util.Log
 import com.aeriotv.android.core.debug.LogSanitizer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.readRawBytes
+import io.ktor.http.contentLength
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.jvm.javaio.toInputStream
 import java.io.File
@@ -43,6 +47,46 @@ class PlaylistFetcher @Inject constructor() {
         }
     }
 
+    /**
+     * Discord (di5cord20 + Matschi, 2026-08-09): a tuliprox Xtream Codes
+     * playlist connects, verifies, saves, and then shows ZERO channels, on
+     * two different boxes, surviving force-close / cache clear / reboot, while
+     * the same credentials load fully elsewhere.
+     *
+     * tuliprox answers ANY m3u failure with an empty 204. From
+     * `backend/src/api/endpoints/m3u_api.rs`:
+     *
+     *     Err(err) => {
+     *         error!("{}", sanitize_sensitive_info(&err.to_string()));
+     *         axum::http::StatusCode::NO_CONTENT.into_response()
+     *     }
+     *
+     * Ktor's `HttpStatusCode.isSuccess()` is `value in 200..299`, so 204 sailed
+     * through as a successful fetch: we wrote a zero-byte file, parsed zero
+     * channels, and stored a perfectly healthy-looking empty playlist. Nothing
+     * in the app could tell the user anything, which is why nothing the users
+     * tried made any difference.
+     *
+     * So a 2xx is not enough - the body has to actually contain something.
+     * Treat 204, and any empty body on a 2xx, as the failure it is. This is
+     * deliberately server-agnostic: it catches every proxy that reports "I
+     * could not build your playlist" as a polite empty success, not just this
+     * one. A legitimately empty source is not affected, because an empty M3U is
+     * still `#EXTM3U` and an empty guide is still a `<tv>` document; zero bytes
+     * always means something went wrong upstream.
+     */
+    private fun emptyBodyError(status: Int, url: String): IllegalStateException =
+        IllegalStateException(
+            if (status == 204) {
+                "The server accepted the request but returned no data (HTTP 204) from " +
+                    "${LogSanitizer.redactUrl(url)}. That usually means it could not build " +
+                    "the playlist for these credentials: check the username and password, " +
+                    "and that this device is allowed to connect."
+            } else {
+                "The server returned an empty response from ${LogSanitizer.redactUrl(url)}."
+            },
+        )
+
     suspend fun fetchBytes(
         url: String,
         userAgent: String? = null,
@@ -57,7 +101,10 @@ class PlaylistFetcher @Inject constructor() {
                 "HTTP ${response.status.value} ${response.status.description} from ${LogSanitizer.redactUrl(url)}",
             )
         }
-        return response.readRawBytes()
+        if (response.status.value == 204) throw emptyBodyError(204, url)
+        return response.readRawBytes().also {
+            if (it.isEmpty()) throw emptyBodyError(response.status.value, url)
+        }
     }
 
     /** GH #26: stream a large body straight to [dest] in constant memory.
@@ -71,6 +118,24 @@ class PlaylistFetcher @Inject constructor() {
         userAgent: String? = null,
         extraHeaders: Map<String, String> = emptyMap(),
     ): File = client.prepareGet(url) {
+        // NO total-request cap on a streamed download. The global
+        // requestTimeoutMillis budgets the ENTIRE body, so it silently becomes
+        // a MINIMUM BANDWIDTH requirement: at 300s a 538MB provider playlist
+        // (crx.watch - 53.6k live, 194k VOD, 44.7k series) demands ~14.3 Mbit/s
+        // sustained for five unbroken minutes or the add dies mid-stream.
+        // Logan hit exactly that on 2026-08-10: the same playlist "finally
+        // pulled on the third attempt". Raising the number just moves the
+        // cliff - it had already been raised 60s -> 300s for this same reason.
+        // A total cap is the wrong instrument for a download whose size is set
+        // by the provider, not by us.
+        //
+        // socketTimeoutMillis is the right instrument and still applies: 30s
+        // with no bytes arriving still fails a dead or wedged host fast. Bytes
+        // still moving means it is working, however slow the user's link is.
+        timeout {
+            requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+            socketTimeoutMillis = 30_000
+        }
         if (userAgent != null) header("User-Agent", userAgent)
         for ((k, v) in extraHeaders) header(k, v)
     }.execute { response ->
@@ -79,9 +144,94 @@ class PlaylistFetcher @Inject constructor() {
                 "HTTP ${response.status.value} ${response.status.description} from ${LogSanitizer.redactUrl(url)}",
             )
         }
+        // See [emptyBodyError]: a 2xx with nothing in it is a failure the caller
+        // must not mistake for an empty playlist.
+        if (response.status.value == 204) throw emptyBodyError(204, url)
+        // Fail early and legibly rather than dying with ENOSPC half a gigabyte
+        // in. Provider playlists are big enough that a cheap TV box with a
+        // nearly-full data partition is a real scenario, not a hypothetical.
+        val expected = response.contentLength() ?: -1L
+        val free = dest.parentFile?.usableSpace ?: Long.MAX_VALUE
+        if (expected > 0 && free < expected + SPACE_HEADROOM_BYTES) {
+            throw IllegalStateException(
+                "Not enough free space to download this playlist: it needs about " +
+                    "${expected / 1_000_000}MB but only ${free / 1_000_000}MB is free. " +
+                    "Free up some space and try again.",
+            )
+        }
+        if (expected > LARGE_DOWNLOAD_BYTES) {
+            Log.i(TAG, "large download starting: ~${expected / 1_000_000}MB")
+        }
+        var total = 0L
+        var nextMark = PROGRESS_LOG_BYTES
+        // Minimum-throughput floor. socketTimeoutMillis only fails TOTAL
+        // silence; a wedged middlebox trickling a few bytes every 25 seconds
+        // resets it forever, and with no total cap that hang is unbounded
+        // (538MB at 1KB per 25s is ~160 days). Requiring 256KB of progress
+        // per 2-minute window fails those pathological connections in
+        // minutes while sitting far below any link a playlist could actually
+        // finish over (256KB/120s is ~17 kbit/s).
+        var windowStart = System.currentTimeMillis()
+        var windowBytes = 0L
         response.bodyAsChannel().toInputStream().use { input ->
-            dest.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+            dest.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    total += n
+                    windowBytes += n
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - windowStart >= THROUGHPUT_WINDOW_MS) {
+                        if (windowBytes < THROUGHPUT_FLOOR_BYTES) {
+                            throw IllegalStateException(
+                                "Download stalled: only ${windowBytes / 1024}KB arrived in the " +
+                                    "last ${THROUGHPUT_WINDOW_MS / 1000}s " +
+                                    "(${total / 1_000_000}MB downloaded so far). " +
+                                    "The server is barely responding; try again later.",
+                            )
+                        }
+                        windowStart = nowMs
+                        windowBytes = 0L
+                    }
+                    // Coarse progress so "stuck adding a playlist" reports come
+                    // with evidence of whether bytes were actually moving,
+                    // without logging inside a hot loop.
+                    if (total >= nextMark) {
+                        Log.i(TAG, "download progress: ${total / 1_000_000}MB")
+                        nextMark += PROGRESS_LOG_BYTES
+                    }
+                }
+            }
+        }
+        if (dest.length() == 0L) throw emptyBodyError(response.status.value, url)
+        // A truncated body is worse than a failed one: it parses into a partial
+        // playlist that looks perfectly legitimate, so the user silently loses
+        // channels with no error anywhere. Content-Length disagreeing with what
+        // landed means the connection died mid-stream.
+        if (expected > 0 && total < expected) {
+            throw IllegalStateException(
+                "The playlist download ended early (${total / 1_000_000}MB of " +
+                    "${expected / 1_000_000}MB). The connection dropped part-way " +
+                    "through; please try again.",
+            )
+        }
+        if (expected > LARGE_DOWNLOAD_BYTES) {
+            Log.i(TAG, "large download complete: ${total / 1_000_000}MB")
         }
         dest
+    }
+
+    private companion object {
+        const val TAG = "PlaylistFetcher"
+        /** Only narrate downloads big enough to be worth narrating. */
+        const val LARGE_DOWNLOAD_BYTES = 32L * 1_000_000
+        const val PROGRESS_LOG_BYTES = 32L * 1_000_000
+        /** Slack left on the partition beyond the payload itself. */
+        const val SPACE_HEADROOM_BYTES = 64L * 1_000_000
+        /** Minimum-throughput floor: see the comment in fetchToFile. */
+        const val THROUGHPUT_WINDOW_MS = 120_000L
+        const val THROUGHPUT_FLOOR_BYTES = 256L * 1024
     }
 }

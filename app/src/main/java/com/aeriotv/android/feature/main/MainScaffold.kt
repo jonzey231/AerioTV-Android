@@ -42,6 +42,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -69,6 +70,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -434,6 +436,10 @@ fun MainScaffold(
             LocalTvChromeCollapsed provides chromeCollapsed,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
+            // Left edge the nav bar actually occupies. Declared at BOX scope,
+            // not inside the Column: the bar that reports it and the hint
+            // overlay that consumes it are siblings of each other here.
+            var navLeftEdgePx by remember { mutableIntStateOf(0) }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -470,6 +476,7 @@ fun MainScaffold(
                         focusRequester = topNavRequester,
                         lastUpKeyMs = lastUpKeyMs,
                         pillRequesters = pillRequesters,
+                        onLeftEdgeChanged = { navLeftEdgePx = it },
                     )
                 }
                 // Reserve a band below the nav for the top-left gesture hints so
@@ -557,19 +564,32 @@ fun MainScaffold(
             if (selectedTab == AppTab.LiveTV &&
                 miniPlayerState !is MiniPlayerSession.State.Pending
             ) {
+                // Hard width budget: the gutter between this column's start
+                // padding and the nav bar's measured left edge, less a 12dp
+                // gap. Logan 2026-08-10: a fixed 320dp cap let the chips run
+                // under the bar. Before the first measurement (and if the bar
+                // is ever absent) fall back to the old cap.
+                val hintStartPad = 24.dp
+                val density = LocalDensity.current
+                val hintMaxWidth = if (navLeftEdgePx > 0) {
+                    (with(density) { navLeftEdgePx.toDp() } - hintStartPad - 12.dp)
+                        .coerceAtLeast(160.dp)
+                } else {
+                    320.dp
+                }
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(start = 24.dp, top = if (anyBackgroundWork) 60.dp else 18.dp),
+                        .padding(start = hintStartPad, top = if (anyBackgroundWork) 60.dp else 18.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
                 ) {
                     // Compressed copy (Logan 2026-07-20: the chips were
                     // bleeding into the grid). Terse "gesture -> result"
                     // phrasing, capped to a couple of lines total.
                     if (miniPlayerState is MiniPlayerSession.State.Active) {
-                        TvGuideHintChip("Play/Pause resumes  ·  Hold Right closes mini")
+                        TvGuideHintChip("Play/Pause = resume  ·  Hold Right = close mini", hintMaxWidth)
                     }
-                    TvGuideHintChip("Double Back returns to top channel")
+                    TvGuideHintChip("Double Back = top channel", hintMaxWidth)
                     // Dynamic hints (Remote Control initiative): copy follows
                     // the user's effective map + guide selector mode, so a
                     // remapped button never advertises a stale gesture.
@@ -586,14 +606,16 @@ fun MainScaffold(
                     // advertised there - it never fires in that mode.
                     val navHints = buildList {
                         if (hintGroupSelector == "sidebar") {
-                            add("Hold Left = groups")
+                            // Short Left opens the sidebar too, so "Left" alone
+                            // is both true and shorter than "Left / Hold Left".
+                            add("Left = groups")
                         } else {
                             com.aeriotv.android.core.remote.RemoteControlHints
                                 .guideHoldLeftShort(hintMap)?.let { add(it) }
                         }
                     }
                     if (navHints.isNotEmpty()) {
-                        TvGuideHintChip(navHints.joinToString("  ·  "))
+                        TvGuideHintChip(navHints.joinToString("  ·  "), hintMaxWidth)
                     }
                 }
             }
@@ -787,10 +809,13 @@ fun MainScaffold(
                 }
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
-                // is discovered on the LAN so the phone can be a remote without
-                // opening a channel first. Hidden while already controlling /
-                // casting (their cards take over).
-                if (companionDevices.isNotEmpty() &&
+                // is discovered on the LAN OR a Google Cast route exists, so the
+                // phone can be a remote / start a cast without opening a channel
+                // first (task #255: this used to be companion-only while the
+                // player's picker also listed cast devices). Hidden while
+                // already controlling / casting (their cards take over).
+                if ((companionDevices.isNotEmpty() ||
+                        castState !is com.aeriotv.android.core.cast.AerioCastSender.State.Unavailable) &&
                     companionConn !is com.aeriotv.android.core.cast.companion
                         .CompanionRemoteController.Conn.Connected &&
                     !casting && !isTv
@@ -909,21 +934,27 @@ fun MainScaffold(
       }
     }
 
-    // GH #33: companion device picker opened from the floating "Control TV" pill.
+    // Task #255: the floating "Control TV" pill opens the SAME unified picker
+    // as the player's cast button (Google Cast routes + AerioTV companion TVs
+    // with inline pairing), replacing the old companion-only dialog that made
+    // cast targets invisible outside the player.
     if (showCompanionPicker) {
         // Force a fresh query sweep the moment the picker opens: the Fold's
         // WiFi misses mid-browse announcements, so a long-running browse can
         // be stale-by-omission (a TV that came up after the browse started).
         LaunchedEffect(Unit) { companionDiscovery.refresh() }
-        CompanionControlPickerDialog(
-            devices = companionDevices,
-            connection = companionConn,
-            onConnect = { companionRemote.connect(it) },
-            onSubmitCode = { companionRemote.submitPairingCode(it) },
+        com.aeriotv.android.feature.cast.CastRouteChooserDialog(
+            sender = castSender,
+            companionRemote = companionRemote,
+            companionDiscovery = companionDiscovery,
             onDismiss = {
-                // Abandon an in-flight/unpaired attempt so it doesn't linger.
+                // Abandon an in-flight/unpaired companion attempt so it
+                // doesn't linger.
                 if (companionConn !is com.aeriotv.android.core.cast.companion
-                        .CompanionRemoteController.Conn.Connected) {
+                        .CompanionRemoteController.Conn.Connected &&
+                    companionConn !is com.aeriotv.android.core.cast.companion
+                        .CompanionRemoteController.Conn.Idle
+                ) {
                     companionRemote.disconnect()
                 }
                 showCompanionPicker = false
@@ -966,81 +997,6 @@ private fun CompanionControlFab(onClick: () -> Unit) {
             tint = MaterialTheme.colorScheme.primary,
         )
     }
-}
-
-/** GH #33: picks a discovered AerioTV TV to control; inline 6-digit pairing. */
-@Composable
-private fun CompanionControlPickerDialog(
-    devices: List<com.aeriotv.android.core.cast.companion.CompanionDiscovery.Tv>,
-    connection: com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn,
-    onConnect: (com.aeriotv.android.core.cast.companion.CompanionDiscovery.Tv) -> Unit,
-    onSubmitCode: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val needsPairing = connection is
-        com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.NeedsPairing
-    val connecting = connection is
-        com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connecting
-    var code by remember { mutableStateOf("") }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            if (needsPairing) {
-                androidx.compose.material3.TextButton(
-                    onClick = { onSubmitCode(code); code = "" },
-                    enabled = code.trim().length >= 6,
-                ) { Text("Pair") }
-            }
-        },
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Close") }
-        },
-        title = { Text("Control a TV") },
-        text = {
-            Column {
-                when {
-                    needsPairing -> {
-                        Text("Enter the code shown on the TV")
-                        Spacer(Modifier.height(8.dp))
-                        androidx.compose.material3.OutlinedTextField(
-                            value = code,
-                            onValueChange = { code = it.filter(Char::isDigit).take(6) },
-                            singleLine = true,
-                            label = { Text("6-digit code") },
-                        )
-                    }
-                    connecting -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text("Connecting…")
-                        }
-                    }
-                    devices.isEmpty() -> Text(
-                        "No AerioTV devices found. Open AerioTV on your TV, then check again.",
-                    )
-                    else -> Column {
-                        devices.forEach { tv ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { onConnect(tv) }
-                                    .padding(vertical = 12.dp, horizontal = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Icon(Icons.Filled.Tv, contentDescription = null)
-                                Text(tv.name, style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                    }
-                }
-            }
-        },
-    )
 }
 
 /**
@@ -1170,16 +1126,19 @@ private fun FloatingTabBar(
  *  line clears the centered top-nav in the top-left corner (Android's TV density
  *  renders sp larger than tvOS points). Non-interactive; state-gated by the caller. */
 @Composable
-private fun TvGuideHintChip(text: String) {
+private fun TvGuideHintChip(text: String, maxWidth: Dp) {
     Text(
         text = text,
         fontSize = 8.sp,
         fontWeight = FontWeight.Medium,
         color = Color.White.copy(alpha = 0.9f),
-        maxLines = 1,
+        // Wrap rather than truncate: [maxWidth] is a hard cap measured off the
+        // nav bar, and there is empty height between the bar and the guide, so
+        // a long remapped hint should stay readable instead of losing its tail.
+        maxLines = 2,
         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         modifier = Modifier
-            .widthIn(max = 320.dp)
+            .widthIn(max = maxWidth)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.4f))
             .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -1291,6 +1250,11 @@ private fun TvTopTabBar(
      *  up without a trip through Settings > playlist. */
     onRefresh: () -> Unit = {},
     refreshing: Boolean = false,
+    /** Reports the leftmost pixel the bar actually occupies (the action
+     *  circles when shown, otherwise the centered capsule) so the top-left
+     *  gesture hints can size themselves to the real gutter instead of a
+     *  hard-coded guess. Logan 2026-08-10: the hint pill grew into the bar. */
+    onLeftEdgeChanged: (Int) -> Unit = {},
 ) {
     // Selection-follows-focus, but committed ONLY for focus moves BETWEEN pills
     // (real D-pad traversal of the bar), never for focus ENTERING the bar from
@@ -1442,10 +1406,12 @@ private fun TvTopTabBar(
         layout(width, height) {
             val capsuleX = (width - capsule.width) / 2
             capsule.placeRelative(capsuleX, (height - capsule.height) / 2)
-            circles?.placeRelative(
-                capsuleX - 10.dp.roundToPx() - circles.width,
-                (height - circles.height) / 2,
-            )
+            val circlesX = capsuleX - 10.dp.roundToPx() - (circles?.width ?: 0)
+            circles?.placeRelative(circlesX, (height - circles.height) / 2)
+            // Publish the real left edge for the hint chips. Writing snapshot
+            // state here is safe: it feeds a SIBLING overlay, never this bar,
+            // so it cannot drive a layout loop, and an equal write is a no-op.
+            onLeftEdgeChanged(if (circles != null) circlesX else capsuleX)
         }
     }
 }

@@ -7,6 +7,7 @@ import com.aeriotv.android.DeepLinkTarget
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.debug.LogSanitizer
 import com.aeriotv.android.core.data.bridgeChannelIds
@@ -160,6 +161,13 @@ class PlaylistViewModel @Inject constructor(
          * making quick app revisits zero-network.
          */
         private const val EPG_CACHE_TTL_MS = 30L * 60L * 1000L
+
+        /** Generation of the on-disk EPG cache this build trusts. BUMP THIS
+         *  whenever a shipped defect could have written a corrupt cache: the
+         *  next launch forces one full refetch, re-stamps, and resumes normal
+         *  TTL behaviour. 1 = the 0.4.10 per-source merge bug, where each
+         *  upstream feed deleted the previous one's present+future. */
+        private const val EPG_CACHE_EPOCH = 1
 
         /**
          * Channel snapshots refresh on a much slower cadence than the EPG (a
@@ -747,7 +755,33 @@ class PlaylistViewModel @Inject constructor(
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
-        if (!forceRefresh) {
+        // A cache written by a build with a known cache-corrupting defect must
+        // not be trusted no matter how recent it is. The 0.4.10 per-source
+        // merge (see EpgProgrammeDao.mergeForPlaylist) let each upstream feed
+        // delete the previous one's present+future; the survivor was still
+        // inside the TTL, so the network was skipped on every relaunch and the
+        // guide never healed - history only, nothing at or after "now".
+        //
+        // Deliberately NOT a heuristic. "Does the cache reach past now?" was
+        // tried and is unusable: a single channel with forward data satisfies
+        // it while hundreds have none, which is exactly the poisoned shape.
+        // One stamped refetch per epoch bump is deterministic and verifiable.
+        // Per-playlist (0.4.11 review fix): the cache is per-playlist, so a
+        // global stamp let the active playlist's refetch "clear" every OTHER
+        // playlist's still-poisoned cache; switching to a second playlist
+        // inside its freshness TTL trusted the poisoned rows. Each playlist
+        // now proves ITS OWN cache was rebuilt (old global stamps read as 0
+        // here, which forces exactly the one refetch those playlists need).
+        val cacheEpoch = runCatching { appPreferences.epgCacheEpochFor(playlist.id) }.getOrDefault(0)
+        val staleEpoch = cacheEpoch < EPG_CACHE_EPOCH
+        if (staleEpoch) {
+            Log.w(
+                TAG,
+                "loadEpgIfConfigured: cache epoch $cacheEpoch < $EPG_CACHE_EPOCH " +
+                    "(written by a build with a known EPG cache defect); forcing one refetch",
+            )
+        }
+        if (!forceRefresh && !staleEpoch) {
             val newest = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
             val fresh = newest != null &&
                 (System.currentTimeMillis() - newest) < EPG_CACHE_TTL_MS
@@ -787,7 +821,13 @@ class PlaylistViewModel @Inject constructor(
                 // (MutableStateFlow.update is thread-safe either way).
                 val channelsNow = _state.value.channels
                 val (programmes, grouped) = withContext(Dispatchers.Default) {
+                    // Same degenerate-programme rule the persistence chokepoint
+                    // applies (EpgProgrammeDao.mergeForPlaylist, >= 30s). These
+                    // rows used to reach the in-memory guide UNFILTERED while
+                    // only the DB got the clean set, so sliver cells showed in
+                    // the session that fetched and vanished after a relaunch.
                     val bridged = bridgeChannelIds(rawProgrammes, channelsNow)
+                        .filter { it.endMillis - it.startMillis >= 30_000L }
                     bridged to withChannelNamePlaceholders(
                         groupByChannel(bridged), channelsNow,
                     )
@@ -800,7 +840,22 @@ class PlaylistViewModel @Inject constructor(
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes across ${grouped.size} channels")
                 _state.update { it.copy(epgByChannel = grouped, isEpgLoading = false) }
                 // Persist the fresh guide so the next launch is instant.
+                // Re-stamp the cache generation only HERE, on a SUCCESSFUL
+                // network fetch: a failed one must leave the old epoch alone
+                // so the next launch retries instead of trusting a cache the
+                // bump exists to distrust. Without this the epoch check turns
+                // into a refetch-on-every-launch loop (observed on the TV
+                // emulator: three cold starts, three full fetches).
+                // Save FIRST, stamp SECOND: the stamp certifies "this
+                // playlist's on-disk cache was rebuilt clean", so writing it
+                // before (or despite) a failed save would leave poisoned rows
+                // behind a clean stamp — the state the epoch exists to detect.
                 runCatching { repository.saveEpgToCache(playlist.id, programmes) }
+                    .onSuccess {
+                        runCatching {
+                            appPreferences.setEpgCacheEpochFor(playlist.id, EPG_CACHE_EPOCH)
+                        }
+                    }
                     .onFailure { Log.w(TAG, "saveEpgToCache failed", it) }
                 // iOS parity: fire-and-forget category enrichment for
                 // Dispatcharr's bulk grid (which strips the category).
@@ -1513,10 +1568,20 @@ class PlaylistViewModel @Inject constructor(
             repository.switchActive(playlistId).fold(
                 onSuccess = { (entity, channels) ->
                     _state.update {
+                        // A group selected under the old playlist may not exist in
+                        // the new one; keeping it would filter the guide/list down
+                        // to nothing with no visible reason. Reset to All when the
+                        // selection has no match. Collection tokens are exempt:
+                        // collections are cross-playlist and GuideScreen already
+                        // guards deleted ones.
+                        val keepGroup = it.selectedGroup == ALL_GROUPS ||
+                            it.selectedGroup.startsWith(ChannelCollection.TOKEN_PREFIX) ||
+                            channels.any { ch -> ch.groupTitle.equals(it.selectedGroup, ignoreCase = true) }
                         it.copy(
                             phase = Phase.ChannelsReady,
                             playlist = entity,
                             channels = channels,
+                            selectedGroup = if (keepGroup) it.selectedGroup else ALL_GROUPS,
                             isLoading = false,
                             error = if (channels.isEmpty()) "No channels found." else null,
                         )

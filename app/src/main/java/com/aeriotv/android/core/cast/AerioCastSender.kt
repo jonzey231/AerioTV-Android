@@ -10,7 +10,10 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
 import com.aeriotv.android.BuildConfig
+import com.aeriotv.android.core.cast.hlsproxy.CastHlsProxySession
+import com.aeriotv.android.core.cast.hlsproxy.UnsupportedCodecException
 import com.google.android.gms.cast.Cast
+import com.google.android.gms.cast.HlsSegmentFormat
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
@@ -21,9 +24,15 @@ import com.google.android.gms.cast.framework.CastStateListener
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.google.android.gms.common.images.WebImage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,7 +51,9 @@ import javax.inject.Singleton
  * hides the Cast button.
  */
 @Singleton
-class AerioCastSender @Inject constructor() {
+class AerioCastSender @Inject constructor(
+    private val hlsProxy: CastHlsProxySession,
+) {
 
     /** Sender connection state, surfaced to the player chrome. */
     sealed interface State {
@@ -67,17 +78,20 @@ class AerioCastSender @Inject constructor() {
          * Web/Styled-receiver playback URL (GH #33). A directly-playable stream URL
          * for the devices Cast Connect can't launch the native app on: legacy
          * Chromecast dongles, Nest Hub, Google Home displays, any non-Android-TV
-         * Cast target. DEVICE-CONFIRMED (2026-07-15) that a Dispatcharr fMP4 stream
-         * (H.264 + AAC via ?output_format=fmp4&output_profile=<aac>) plays on
-         * Google's default web receiver over BOTH http (LAN) and https. NULL for a
-         * non-Dispatcharr channel (a direct source has nothing to transcode). When
+         * Cast target. Phase 1 of the casting rework: this is now the PHONE-LOCAL
+         * HLS proxy playlist (http://<phoneLanIp>:<port>/live.m3u8) built by
+         * [CastHlsProxySession], which ingests the channel's raw MPEG-TS and
+         * re-serves it as sliding-window live HLS with fMP4 segments. The previous
+         * Dispatcharr progressive-fMP4 URL stuttered every 10-15 s on the styled
+         * receiver because a progressive live stream has no manifest clock. When
          * set it rides in MediaInfo.contentUrl; the Android-TV Cast Connect receiver
          * IGNORES contentUrl and rebuilds its own raw-TS URL from customData/entity,
          * so this one payload serves both receiver types. See [webCastMime].
          */
         val webCastUrl: String? = null,
-        /** Content-Type for [webCastUrl]: "video/mp4" for fMP4, "application/x-mpegURL"
-         *  for a future HLS manifest. Ignored when [webCastUrl] is null. */
+        /** Content-Type for [webCastUrl]: "application/x-mpegURL" for the proxy's
+         *  HLS playlist, "video/mp4" for a progressive fMP4 (legacy path).
+         *  Ignored when [webCastUrl] is null. */
         val webCastMime: String = "video/mp4",
     )
 
@@ -311,31 +325,92 @@ class AerioCastSender @Inject constructor() {
         subtitle: String? = null,
         artUri: String? = null,
         localUrl: String = "",
+        /** HTTP headers the local player would send for [localUrl]; the
+         *  proxy's ingest must present the same identity to the provider. */
+        headers: Map<String, String> = emptyMap(),
     ): Boolean {
         if (state.value !is State.Connected) return false
         val cc = content.value
         val alreadyCastingThisChannel = cc?.mediaId == channelId || cc?.mediaId == title
         if (!alreadyCastingThisChannel) {
-            setContent(
-                Content(
-                    mediaId = channelId,
-                    kind = AerioCastReceiverController.Kind.LIVE,
-                    title = title,
-                    subtitle = subtitle,
-                    artUri = artUri,
-                    // Web/Styled-receiver path (GH #33): non-Android-TV Cast
-                    // targets get a directly-playable fMP4 URL; the ATV receiver
-                    // ignores it and rebuilds its own raw-TS URL.
-                    webCastUrl = localUrl.takeIf { it.isNotBlank() }?.let { webReceiverCastUrl(it) },
-                ),
+            val base = Content(
+                mediaId = channelId,
+                kind = AerioCastReceiverController.Kind.LIVE,
+                title = title,
+                subtitle = subtitle,
+                artUri = artUri,
             )
+            if (localUrl.isNotBlank()) {
+                // Web/Styled-receiver path, casting rework P1: point the
+                // phone-local HLS proxy at the channel's raw TS and load the
+                // proxy playlist once it has segments (see castLiveViaProxy).
+                castLiveViaProxy(base, localUrl, headers)
+            } else {
+                // No playable URL (event-style channel): identity-only load;
+                // only a Cast Connect receiver could act on it.
+                setContent(base)
+            }
             // The initial load launches the receiver via the entity deep link, but
             // Cast Connect won't re-deliver a second load() to an already-running
             // receiver -- so also push the channel over the reliable control
-            // channel, which re-tunes the TV in place on every flip.
+            // channel, which re-tunes the TV in place on every flip. A web
+            // receiver ignores this namespace; harmless there.
             setRemoteChannel(channelId)
         }
         return true
+    }
+
+    /** In-flight "wait for the proxy, then load" task; superseded by every
+     *  channel flip and cancelled when the session ends. */
+    private var proxyLoadJob: Job? = null
+    private val senderScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * Casting rework P1: start (or re-point) the local HLS proxy at
+     * [rawTsUrl], wait until the playlist has at least two segments, then
+     * fire the actual load with MediaInfo.contentUrl set to the proxy
+     * playlist. The delay matters: the styled receiver fetches the
+     * playlist the moment load() lands, and an empty live playlist is a
+     * hard receiver error, not a retry.
+     *
+     * The mini controller shows the channel immediately ([_content] is
+     * set before the wait) so the UI does not appear dead during the
+     * segment warm-up (~6 s of video plus provider join latency).
+     *
+     * On refusal (unsupported codec) or warm-up timeout the user gets the
+     * same Toast surface the cast tap paths already use, and the proxy is
+     * torn down; the content stays visible so Stop Casting still works.
+     */
+    private fun castLiveViaProxy(base: Content, rawTsUrl: String, headers: Map<String, String>) {
+        pending = base
+        _content.value = base
+        proxyLoadJob?.cancel()
+        proxyLoadJob = senderScope.launch {
+            val playlistUrl = try {
+                hlsProxy.startChannel(rawTsUrl, headers)
+            } catch (e: UnsupportedCodecException) {
+                surfaceCastFailure("Can't cast this channel: ${e.codecName} needs transcoding")
+                null
+            } catch (e: TimeoutCancellationException) {
+                surfaceCastFailure("Can't cast this channel: the stream never started")
+                null
+            } catch (t: Throwable) {
+                Log.w(TAG, "cast proxy start failed: $t")
+                surfaceCastFailure("Can't cast this channel right now")
+                null
+            } ?: return@launch
+            val ready = base.copy(webCastUrl = playlistUrl, webCastMime = "application/x-mpegURL")
+            pending = ready
+            _content.value = ready
+            currentSession()?.let { loadOnSession(it, ready) }
+        }
+    }
+
+    private fun surfaceCastFailure(message: String) {
+        val ctx = appContext ?: return
+        runCatching {
+            android.widget.Toast.makeText(ctx, message, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     fun setRemoteAudioTrack(id: String) =
@@ -443,9 +518,16 @@ class AerioCastSender @Inject constructor() {
     }
 
     /** Terminal teardown: the session truly ended (not a transient suspend), so
-     *  drop the cast content that drives the Now-Casting mini controller too. */
+     *  drop the cast content that drives the Now-Casting mini controller too.
+     *  The HLS proxy's lifetime is the cast session's: kill the ingest here so
+     *  the provider connection is released the moment casting stops. A transient
+     *  SUSPEND deliberately does NOT stop the proxy (refreshFromContext): the
+     *  receiver keeps fetching segments across the blip and resumes cleanly. */
     private fun endCleanup() {
         _content.value = null
+        proxyLoadJob?.cancel()
+        proxyLoadJob = null
+        hlsProxy.stop()
         refreshFromContext()
     }
 
@@ -509,12 +591,15 @@ class AerioCastSender @Inject constructor() {
         if (content.webCastUrl != null) {
             // Web/Styled receiver path (legacy Chromecast, Nest Hub, any non-ATV):
             // they can't launch the native app, so they need a directly-playable
-            // URL. DEVICE-CONFIRMED that a Dispatcharr fMP4 (H.264 + AAC) plays here
-            // over http and https. The Cast Connect ATV receiver ignores contentUrl
-            // and rebuilds its own raw-TS URL from customData/entity, so this one
-            // payload serves both receiver types.
+            // URL. Casting rework P1: the URL is the phone-local HLS proxy playlist
+            // (live HLS + fMP4/CMAF segments); declare the segment container so the
+            // receiver's HLS stack skips container sniffing.
             builder.setContentUrl(content.webCastUrl)
                 .setContentType(content.webCastMime)
+            if (content.webCastMime == "application/x-mpegURL") {
+                builder.setHlsSegmentFormat(HlsSegmentFormat.FMP4)
+                    .setHlsVideoSegmentFormat(com.google.android.gms.cast.HlsVideoSegmentFormat.FMP4)
+            }
         } else {
             // Cast Connect only: identity in customData, no playable URL.
             builder.setContentType(if (isVod) "video/mp4" else "video/mp2t")
@@ -528,25 +613,8 @@ class AerioCastSender @Inject constructor() {
     }
 }
 
-/**
- * Dispatcharr output-profile id that transcodes audio to AAC (H.264 video copied)
- * for the web/styled Cast receiver, which cannot DECODE AC-3 -- it only passes Dolby
- * through to an HDMI sink, so AC-3 is silent on Nest Hub / Home displays. Profile
- * ids are per-Dispatcharr-instance. TODO(GH#33): auto-detect via GET
- * /api/core/outputprofiles/ (pick the AAC profile) or expose a Cast output-profile
- * setting before shipping; hardcoded to the test server's "Web Player (AAC Audio)"
- * profile for the initial web-receiver integration.
- */
-const val CAST_WEB_OUTPUT_PROFILE_ID = 2
-
-/**
- * Build the web/styled-receiver cast URL from a channel's local proxy URL by asking
- * Dispatcharr for the fMP4 container + the AAC [outputProfileId]. Returns null when
- * [localUrl] is not a Dispatcharr /proxy/ts/stream URL (a direct source has nothing
- * to transcode), leaving Cast Connect as the only cast path for that channel.
- */
-fun webReceiverCastUrl(localUrl: String, outputProfileId: Int = CAST_WEB_OUTPUT_PROFILE_ID): String? {
-    if (!localUrl.contains("/proxy/ts/stream/", ignoreCase = true)) return null
-    val sep = if (localUrl.contains('?')) '&' else '?'
-    return "$localUrl${sep}output_format=fmp4&output_profile=$outputProfileId"
-}
+// Casting rework P1: the Dispatcharr progressive-fMP4 helper
+// (webReceiverCastUrl + CAST_WEB_OUTPUT_PROFILE_ID) that used to live here is
+// gone. The styled receiver stuttered on that URL every 10-15 s because a
+// progressive live stream has no manifest clock; the phone-local HLS proxy
+// (core/cast/hlsproxy) replaces it and works for NON-Dispatcharr sources too.

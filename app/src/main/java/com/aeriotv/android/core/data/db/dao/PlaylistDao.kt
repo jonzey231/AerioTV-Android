@@ -93,6 +93,15 @@ interface PlaylistDao {
     @Query("UPDATE playlists SET apiKey = :apiKey, username = :username, password = :password WHERE id = :id")
     suspend fun updateCredentials(id: String, apiKey: String?, username: String?, password: String?)
 
+    /**
+     * Targeted write of the channel count by id. Targeted rather than a full-row
+     * @Update for the same reason as [updateCredentials]: this is written from
+     * inside the channel-snapshot transaction, and a whole-row write there could
+     * clobber a concurrent targeted write landing in the same window.
+     */
+    @Query("UPDATE playlists SET channelCount = :count WHERE id = :id")
+    suspend fun updateChannelCount(id: String, count: Int)
+
     @Delete
     suspend fun delete(playlist: PlaylistEntity)
 
