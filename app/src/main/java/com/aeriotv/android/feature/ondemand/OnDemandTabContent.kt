@@ -184,6 +184,14 @@ fun OnDemandTabContent(
     // Random's seed lives for the life of the tab, like Apple's: persisted
     // Random is just an arbitrary fixed order, per-scroll Random is unusable.
     val randomSeed = remember { kotlin.random.Random.Default.nextLong() }
+    // Filter circle in the pill row -> the visible grid opens its own
+    // ManageGroupsSheet. A counter, not a flag: the sub-screen consumes it
+    // via LaunchedEffect so repeated presses keep working.
+    var filterRequests by remember { mutableStateOf(0) }
+    val hiddenMovieGroupsTop by settingsVm.hiddenMovieGroups
+        .collectAsStateWithLifecycle(initialValue = emptySet())
+    val hiddenSeriesGroupsTop by settingsVm.hiddenSeriesGroups
+        .collectAsStateWithLifecycle(initialValue = emptySet())
     // Grid scroll state is hoisted out of the sub-screens so (a) BOTH the
     // chrome-collapse logic here and the per-grid BringIntoViewSpec / BACK
     // handling can observe it, and (b) the Movies scroll position survives a
@@ -258,10 +266,22 @@ fun OnDemandTabContent(
                 sections = availableSections,
                 current = section,
                 onSelect = { section = it },
-                // The Sort pill rides in the pill row (Apple parity) and only
+                // Sort and Filter ride in the pill row (Apple parity) and only
                 // on the grids -- Home is curated rows, sorting it is nonsense.
+                // On TV they render as guide-chrome circles right of the pills
+                // (Logan, B3 device pass); the grid header search buttons are
+                // gone on TV because the global search circle by the nav bar
+                // covers it.
                 sort = if (section != OnDemandSection.Home) sort else null,
                 onSortSelect = { settingsVm.setMoviesTvSort(it.key) },
+                onOpenFilter = if (section != OnDemandSection.Home) {
+                    { filterRequests++ }
+                } else null,
+                filterActive = when (section) {
+                    OnDemandSection.Movies -> hiddenMovieGroupsTop.isNotEmpty()
+                    OnDemandSection.Series -> hiddenSeriesGroupsTop.isNotEmpty()
+                    else -> false
+                },
             )
         }
 
@@ -284,6 +304,7 @@ fun OnDemandTabContent(
                 onOpenSearch = onOpenSearch,
                 sort = sort,
                 randomSeed = randomSeed,
+                filterRequests = filterRequests,
             )
             OnDemandSection.Series -> SeriesSubScreen(
                 viewModel = viewModel,
@@ -293,6 +314,7 @@ fun OnDemandTabContent(
                 onOpenSearch = onOpenSearch,
                 sort = sort,
                 randomSeed = randomSeed,
+                filterRequests = filterRequests,
             )
         }
     }
@@ -362,6 +384,8 @@ private fun SegmentPills(
     onSelect: (OnDemandSection) -> Unit,
     sort: MediaSort? = null,
     onSortSelect: (MediaSort) -> Unit = {},
+    onOpenFilter: (() -> Unit)? = null,
+    filterActive: Boolean = false,
 ) {
     // tvOS parity: the Movies / TV Shows segmented control sits in the
     // CENTER of the header, not stretched edge-to-edge. Each pill claims
@@ -398,7 +422,60 @@ private fun SegmentPills(
         }
         if (sort != null) {
             Spacer(Modifier.width(12.dp))
-            SortPill(sort = sort, onSelect = onSortSelect)
+            if (isTv) {
+                // Guide-chrome circles right of the pills (Logan, B3 device
+                // pass): compact at 10 feet, matching the nav-bar circles.
+                SortCircleButton(sort = sort, onSelect = onSortSelect)
+                if (onOpenFilter != null) {
+                    Spacer(Modifier.width(12.dp))
+                    TvHeaderIconButton(
+                        icon = Icons.Filled.FilterList,
+                        contentDescription = "Filter groups",
+                        tint = if (filterActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        onClick = onOpenFilter,
+                    )
+                }
+            } else {
+                SortPill(sort = sort, onSelect = onSortSelect)
+            }
+        }
+    }
+}
+
+/** Round sort button + the same dropdown the pill uses. */
+@Composable
+private fun SortCircleButton(
+    sort: MediaSort,
+    onSelect: (MediaSort) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        TvHeaderIconButton(
+            icon = Icons.Filled.SwapVert,
+            contentDescription = "Sort: ${sort.label}",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { menuOpen = true },
+        )
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            MediaSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    trailingIcon = {
+                        if (option == sort) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Selected",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelect(option)
+                        menuOpen = false
+                    },
+                )
+            }
         }
     }
 }
@@ -692,6 +769,7 @@ private fun MoviesSubScreen(
     onOpenSearch: () -> Unit = {},
     sort: MediaSort = MediaSort.TITLE,
     randomSeed: Long = 0L,
+    filterRequests: Int = 0,
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -721,6 +799,9 @@ private fun MoviesSubScreen(
         }
     }
     var showManageGroups by rememberSaveable { mutableStateOf(false) }
+    // Pill-row filter circle (TV): each press bumps the counter; > 0 guard
+    // keeps the initial composition from opening the sheet.
+    LaunchedEffect(filterRequests) { if (filterRequests > 0) showManageGroups = true }
     // BACK from MovieDetail must land D-pad focus back on the poster / rail
     // card that opened it, not the top nav pills. See VodReturnFocusState.
     val returnFocus = rememberVodReturnFocus(isTv)
@@ -795,6 +876,19 @@ private fun MoviesSubScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // TV: the whole header row is gone (Logan, B3 device pass). Global
+        // search lives by the nav bar, Sort and Filter are circles in the
+        // pill row; only the library count remains.
+        if (isTv) {
+            state.totalCount.takeIf { it > 0 }?.let { total ->
+                Text(
+                    text = "${visibleFiltered.size} / $total",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 48.dp, vertical = 4.dp),
+                )
+            }
+        } else {
         VodHeaderRow(
             searchField = {
                 VodSearchField(
@@ -808,10 +902,9 @@ private fun MoviesSubScreen(
             onManageGroups = { showManageGroups = true },
             onOpenSearch = onOpenSearch,
             isTv = isTv,
-            countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
-                "${visibleFiltered.size} / $total"
-            },
+            countLabel = null,
         )
+        }
 
         val countLabel = state.totalCount.takeIf { it > 0 }?.let { total ->
             "${visibleFiltered.size} / $total"
@@ -945,6 +1038,7 @@ private fun SeriesSubScreen(
     onOpenSearch: () -> Unit = {},
     sort: MediaSort = MediaSort.TITLE,
     randomSeed: Long = 0L,
+    filterRequests: Int = 0,
     watchVm: WatchProgressViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -968,6 +1062,7 @@ private fun SeriesSubScreen(
         }
     }
     var showManageGroups by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(filterRequests) { if (filterRequests > 0) showManageGroups = true }
     // BACK from SeriesDetail / the episode player must land D-pad focus back
     // on the poster / rail card that opened it. See VodReturnFocusState.
     val returnFocus = rememberVodReturnFocus(isTv)
@@ -1028,6 +1123,17 @@ private fun SeriesSubScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // TV: header row gone, count only (see MoviesSubScreen).
+        if (isTv) {
+            state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
+                Text(
+                    text = "${visibleSeriesFiltered.size} / $total",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 48.dp, vertical = 4.dp),
+                )
+            }
+        } else {
         VodHeaderRow(
             searchField = {
                 VodSearchField(
@@ -1041,10 +1147,9 @@ private fun SeriesSubScreen(
             onManageGroups = { showManageGroups = true },
             onOpenSearch = onOpenSearch,
             isTv = isTv,
-            countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
-                "${visibleSeriesFiltered.size} / $total"
-            },
+            countLabel = null,
         )
+        }
 
         val countLabel = state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
             "${visibleSeriesFiltered.size} / $total"
