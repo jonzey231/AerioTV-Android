@@ -195,6 +195,9 @@ dependencies {
     implementation(libs.play.services.cast.tv)
     implementation(libs.androidx.mediarouter)
 
+    // Pure-JVM unit tests for the cast HLS proxy remuxer (test scope only).
+    testImplementation(libs.junit)
+
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)

@@ -471,7 +471,14 @@ fun PlayerScreen(
                 title = ch.name,
                 subtitle = nowProgramme?.title,
                 artUri = ch.tvgLogo.takeIf { it.isNotBlank() },
-                localUrl = url,
+                // Casting rework P1: this URL feeds the phone-local HLS
+                // proxy's ingest. Prefer the holder's post-failover URL when
+                // it is still this channel's (same discipline as the
+                // timeshift filler: the stored channel URL can embed a dead
+                // base after a LAN/WAN failover or server move).
+                localUrl = exoHolder.currentPlayUrl
+                    ?.takeIf { exoHolder.currentChannelId == ch.id } ?: url,
+                headers = httpHeaders,
             )
             return@LaunchedEffect
         }
