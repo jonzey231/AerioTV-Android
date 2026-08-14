@@ -746,6 +746,31 @@ class PlaylistViewModel @Inject constructor(
             bridgeChannelIds(cachedRaw, channelsForBridge)
         }
         val hasCache = cached.isNotEmpty()
+        // Identity gate: a cache that does not match the current channel
+        // identity is stale regardless of age. Rows are persisted under each
+        // channel's canonical guideMatchKey, so when the current channels'
+        // canonical keys barely intersect the cached keys (key derivation
+        // changed between builds, playlist re-keyed), the freshness TTL below
+        // must not skip the network: the cached rows are orphans no channel
+        // will ever look up, and the guide renders blank while reading as
+        // "fresh". Judged only when both sides are non-empty; an empty channel
+        // list (still hydrating) or an empty cache proves nothing about
+        // identity. In-memory pass over what loadCachedEpg already returned
+        // and the bridge that was built anyway; no extra queries.
+        val identityStale = withContext(Dispatchers.Default) {
+            if (!hasCache || channelsForBridge.isEmpty()) return@withContext false
+            val canonicalKeys = channelsForBridge.mapTo(HashSet()) { it.guideMatchKey }
+            val cachedKeys = cached.mapTo(HashSet()) { it.channelId }
+            val matched = cachedKeys.count { it in canonicalKeys }
+            matched == 0 || matched < cachedKeys.size * 0.2
+        }
+        if (identityStale) {
+            Log.w(
+                TAG,
+                "loadEpgIfConfigured: cached EPG keys do not match current channel " +
+                    "identity; treating cache as stale and refetching",
+            )
+        }
         if (hasCache) {
             Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
             val groupedCached = withContext(Dispatchers.Default) {
@@ -781,7 +806,7 @@ class PlaylistViewModel @Inject constructor(
                     "(written by a build with a known EPG cache defect); forcing one refetch",
             )
         }
-        if (!forceRefresh && !staleEpoch) {
+        if (!forceRefresh && !staleEpoch && !identityStale) {
             val newest = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
             val fresh = newest != null &&
                 (System.currentTimeMillis() - newest) < EPG_CACHE_TTL_MS
