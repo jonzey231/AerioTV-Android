@@ -542,6 +542,10 @@ private fun MediaHomeSubScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val seriesById = remember(state.series) { state.series.associateBy { it.id } }
+    // BACK from a detail must land D-pad focus on the originating shelf card,
+    // matching the grids (Movies & TV B3, dossier checklist item 4).
+    val homeIsTv = rememberLiveTvFormFactor().isTv
+    val returnFocus = rememberVodReturnFocus(homeIsTv)
 
     // Merge + dedup + order in the shared rule, then map the returned ids back
     // to their live rows. The builder deals in ids only, so it can never hold a
@@ -591,7 +595,9 @@ private fun MediaHomeSubScreen(
                 title = "Continue Watching",
                 items = continueRows,
                 seriesById = seriesById,
+                focusRequesterFor = { row -> returnFocus.requesterFor("cw:${row.videoId}") },
                 onItemClick = { row ->
+                    returnFocus.arm("cw:${row.videoId}")
                     if (row.vodType == "episode") onEpisodeResume(row.videoId)
                     else onResumeMovie(row.videoId)
                 },
@@ -608,7 +614,11 @@ private fun MediaHomeSubScreen(
                 items = shelf.items,
                 posterFor = { it.logo?.url },
                 labelFor = { it.displayName },
-                onItemClick = onMovieClick,
+                focusRequesterFor = { returnFocus.requesterFor("movie:${it.uuid}") },
+                onItemClick = { movie ->
+                    returnFocus.arm("movie:${movie.uuid}")
+                    onMovieClick(movie)
+                },
                 onSeeAll = onBrowseMovies,
             )
         }
@@ -618,7 +628,11 @@ private fun MediaHomeSubScreen(
                 items = shelf.items,
                 posterFor = { it.posterUrl },
                 labelFor = { it.displayName },
-                onItemClick = onSeriesClick,
+                focusRequesterFor = { returnFocus.requesterFor("series:${it.id}") },
+                onItemClick = { series ->
+                    returnFocus.arm("series:${series.id}")
+                    onSeriesClick(series)
+                },
                 onSeeAll = onBrowseSeries,
             )
         }
@@ -1458,6 +1472,9 @@ private fun <T : Any> MediaShelfRail(
     labelFor: (T) -> String,
     onItemClick: (T) -> Unit,
     onSeeAll: (() -> Unit)? = null,
+    // BACK-from-detail refocus (Movies & TV B3): the armed card's requester,
+    // null for every other card. Same contract as the grids' posters.
+    focusRequesterFor: (T) -> FocusRequester? = { null },
 ) {
     if (items.isEmpty()) return
     val isTv = rememberLiveTvFormFactor().isTv
@@ -1496,6 +1513,7 @@ private fun <T : Any> MediaShelfRail(
                 MediaShelfCard(
                     posterUrl = posterFor(item),
                     label = labelFor(item),
+                    focusRequester = focusRequesterFor(item),
                     onClick = { onItemClick(item) },
                 )
             }
@@ -1508,6 +1526,7 @@ private fun MediaShelfCard(
     posterUrl: String?,
     label: String,
     onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
 ) {
     val isTv = rememberLiveTvFormFactor().isTv
     val width = (if (isTv) 150.dp else 108.dp) * LocalDisplayScale.current
@@ -1515,6 +1534,10 @@ private fun MediaShelfCard(
     Column(
         modifier = Modifier
             .width(width)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier,
+            )
             .onFocusChanged { focused = it.isFocused }
             .tvFocusScale(focused)
             .clickable(onClick = onClick),
