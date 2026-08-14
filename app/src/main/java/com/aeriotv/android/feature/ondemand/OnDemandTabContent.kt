@@ -398,49 +398,42 @@ private fun SegmentPills(
     // compact, centered Segmented Picker; iOS uses a full-width one.
     val isTv = rememberLiveTvFormFactor().isTv
     if (isTv) {
-        // The pill group stays CENTERED regardless of the trailing controls
-        // (Logan, B3 device pass): pills center in the full width, the sort
-        // and filter circles pin to the right edge on their own layer.
-        Box(
+        // Sort + Filter ride just right of the TV Shows pill in nav-bar
+        // circle styling (Logan, B3 device pass). The leading spacer weighs
+        // the same as the trailing controls so the PILL GROUP stays
+        // optically centered in the full width.
+        val trailingWidth = 38.dp + 12.dp + 38.dp + 24.dp
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.align(Alignment.Center),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                sections.forEachIndexed { index, entry ->
-                    if (index > 0) Spacer(Modifier.width(12.dp))
-                    SegmentPill(
-                        label = entry.label,
-                        icon = entry.icon,
-                        selected = entry == current,
-                        onClick = { onSelect(entry) },
-                        // Just enough room for the longest label + icon + a
-                        // bit of breathing room for the focus border.
-                        modifier = Modifier.widthIn(min = 160.dp),
-                    )
-                }
+            if (sort != null) Spacer(Modifier.width(trailingWidth))
+            sections.forEachIndexed { index, entry ->
+                if (index > 0) Spacer(Modifier.width(12.dp))
+                SegmentPill(
+                    label = entry.label,
+                    icon = entry.icon,
+                    selected = entry == current,
+                    onClick = { onSelect(entry) },
+                    // Just enough room for the longest label + icon + a
+                    // bit of breathing room for the focus border.
+                    modifier = Modifier.widthIn(min = 160.dp),
+                )
             }
             if (sort != null) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 32.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SortCircleButton(sort = sort, onSelect = onSortSelect)
-                    if (onOpenFilter != null) {
-                        Spacer(Modifier.width(12.dp))
-                        TvHeaderIconButton(
-                            icon = Icons.Filled.FilterList,
-                            contentDescription = "Filter groups",
-                            tint = if (filterActive) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            onClick = onOpenFilter,
-                        )
-                    }
+                Spacer(Modifier.width(24.dp))
+                SortCircleButton(sort = sort, onSelect = onSortSelect)
+                if (onOpenFilter != null) {
+                    Spacer(Modifier.width(12.dp))
+                    VodCircleButton(
+                        icon = Icons.Filled.FilterList,
+                        contentDescription = "Filter groups",
+                        active = filterActive,
+                        onClick = onOpenFilter,
+                    )
                 }
             }
         }
@@ -468,6 +461,56 @@ private fun SegmentPills(
     }
 }
 
+/**
+ * The nav bar's circle-button look (MainScaffold.TvBarCircleButton), local
+ * to the Movies & TV pill row so its sort/filter controls read as the same
+ * family as the refresh and global-search circles by the tab bar.
+ */
+@Composable
+private fun VodCircleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Box(
+        modifier = Modifier
+            .tvFocusScale(focused, focusedScale = 1.04f)
+            .clip(CircleShape)
+            .background(
+                when {
+                    focused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+                    else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                },
+            )
+            .border(
+                width = 2.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = CircleShape,
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = when {
+                active -> MaterialTheme.colorScheme.primary
+                focused -> MaterialTheme.colorScheme.onSurface
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
 /** Round sort button + the same dropdown the pill uses. */
 @Composable
 private fun SortCircleButton(
@@ -476,10 +519,9 @@ private fun SortCircleButton(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
-        TvHeaderIconButton(
+        VodCircleButton(
             icon = Icons.Filled.SwapVert,
             contentDescription = "Sort: ${sort.label}",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             onClick = { menuOpen = true },
         )
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -903,17 +945,8 @@ private fun MoviesSubScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         // TV: the whole header row is gone (Logan, B3 device pass). Global
         // search lives by the nav bar, Sort and Filter are circles in the
-        // pill row; only the library count remains.
-        if (isTv) {
-            state.totalCount.takeIf { it > 0 }?.let { total ->
-                Text(
-                    text = "${visibleFiltered.size} / $total",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 48.dp, vertical = 4.dp),
-                )
-            }
-        } else {
+        // pill row, and the library count is not shown at all.
+        if (!isTv) {
         VodHeaderRow(
             searchField = {
                 VodSearchField(
@@ -1148,17 +1181,8 @@ private fun SeriesSubScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // TV: header row gone, count only (see MoviesSubScreen).
-        if (isTv) {
-            state.seriesTotalCount.takeIf { it > 0 }?.let { total ->
-                Text(
-                    text = "${visibleSeriesFiltered.size} / $total",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 48.dp, vertical = 4.dp),
-                )
-            }
-        } else {
+        // TV: header row gone entirely (see MoviesSubScreen).
+        if (!isTv) {
         VodHeaderRow(
             searchField = {
                 VodSearchField(
