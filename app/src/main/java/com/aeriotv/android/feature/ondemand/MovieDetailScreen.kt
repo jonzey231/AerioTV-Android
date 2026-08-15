@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -120,8 +121,16 @@ fun MovieDetailScreen(
     val info = movie?.id?.let { state.movieProviderInfo[it] }
 
     LaunchedEffect(movie?.id) {
-        movie?.id?.let { viewModel.loadMovieProviderInfo(it) }
+        movie?.id?.let {
+            viewModel.loadMovieProviderInfo(it)
+            // Version picker data (Dispatcharr Direct Connect only; the VM
+            // caches empty for every other source so the pill never renders).
+            viewModel.loadMovieProviders(it)
+        }
     }
+    val versionOptions = movie?.id?.let { state.movieProviders[it] }.orEmpty()
+    val selectedVersion = movie?.id?.let { state.selectedMovieVersion[it] }
+    var showVersionPicker by remember(movie?.id) { mutableStateOf(false) }
 
     // TMDB poster fallback (opt-in). Resolves ONLY when the server supplied no
     // artwork (no logo, no provider poster/backdrop) and provider-info has
@@ -258,6 +267,14 @@ fun MovieDetailScreen(
                         tmdbDetails = tmdbDetails,
                         isTv = isTv,
                         castPhotosVisible = castCrewPeople.isNotEmpty(),
+                        // Only offered when there is an actual choice (> 1
+                        // provider copy on a Dispatcharr Direct Connect source).
+                        versionLabel = if (versionOptions.size > 1) {
+                            selectedVersion?.label ?: "Auto"
+                        } else {
+                            null
+                        },
+                        onVersionClick = { showVersionPicker = true },
                         onOpenUrl = { label, url ->
                             if (isTv) {
                                 if (label == "Trailer" && youtubeResolvable) {
@@ -292,6 +309,18 @@ fun MovieDetailScreen(
                 }
             }
             }
+        }
+
+        if (showVersionPicker) {
+            VodVersionPickerSheet(
+                options = versionOptions,
+                selected = selectedVersion,
+                onSelect = { option ->
+                    movie?.id?.let { viewModel.selectMovieVersion(it, option) }
+                    showVersionPicker = false
+                },
+                onDismiss = { showVersionPicker = false },
+            )
         }
 
         qrLink?.let { link ->
@@ -617,6 +646,10 @@ private fun InfoSection(
     tmdbDetails: TmdbDetails?,
     isTv: Boolean,
     castPhotosVisible: Boolean,
+    // Non-null only when there is more than one provider copy to pick from
+    // (Dispatcharr Direct Connect); renders the "Version: {label}" pill.
+    versionLabel: String? = null,
+    onVersionClick: () -> Unit = {},
     onOpenUrl: (label: String, url: String) -> Unit,
 ) {
     // Server-provided values always win; TMDB backfills only the holes.
@@ -655,7 +688,7 @@ private fun InfoSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (trailerUrl != null || tmdbUrl != null) {
+        if (trailerUrl != null || tmdbUrl != null || versionLabel != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (trailerUrl != null) {
                     PillButton(
@@ -669,6 +702,13 @@ private fun InfoSection(
                         icon = Icons.Outlined.Info,
                         text = "View on TMDB",
                         onClick = { onOpenUrl("View on TMDB", tmdbUrl) },
+                    )
+                }
+                if (versionLabel != null) {
+                    PillButton(
+                        icon = Icons.Outlined.Tune,
+                        text = "Version: $versionLabel",
+                        onClick = onVersionClick,
                     )
                 }
             }

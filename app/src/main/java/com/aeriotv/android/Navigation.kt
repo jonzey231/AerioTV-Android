@@ -9,6 +9,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -1186,7 +1187,17 @@ fun AerioTVNavHost(
                 }
                 val playlistVm: PlaylistViewModel = hiltViewModel(parent)
                 val playlistState by playlistVm.state.collectAsStateWithLifecycle()
-                val onDemandVm: OnDemandViewModel = hiltViewModel()
+                // Share the MAIN-scoped OnDemand VM when it is on the stack so
+                // the episode cache AND the series' pinned Version selection
+                // carry into this route (see the VOD_PLAYER route below).
+                val vodMainEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(Routes.MAIN) }.getOrNull()
+                }
+                val onDemandVm: OnDemandViewModel = if (vodMainEntry != null) {
+                    hiltViewModel(vodMainEntry)
+                } else {
+                    hiltViewModel()
+                }
 
                 // Silence any LIVE session before VOD starts. A companion VodPlay
                 // deep link navigates player/... -> vod_episode_player/... directly
@@ -1233,14 +1244,31 @@ fun AerioTVNavHost(
 
                 // Series poster fallback for the episode (episodes don't carry
                 // their own poster on the wire). Look up which series contains
-                // this episode and reuse that show's poster.
-                val parentSeriesPoster = onDemandVm.state.collectAsStateWithLifecycle().value
-                    .let { st ->
-                        val parentSeriesId = st.episodesBySeries.entries
-                            .firstOrNull { (_, list) -> list.any { it.uuid == episodeUuid } }
-                            ?.key
-                        parentSeriesId?.let { id -> st.series.firstOrNull { it.id == id }?.posterUrl }
+                // this episode and reuse that show's poster. The same series id
+                // keys the Version selection the player's Switch Version uses.
+                val epOnDemandState = onDemandVm.state.collectAsStateWithLifecycle().value
+                val parentSeriesId = epOnDemandState.episodesBySeries.entries
+                    .firstOrNull { (_, list) -> list.any { it.uuid == episodeUuid } }
+                    ?.key
+                val parentSeriesPoster = parentSeriesId?.let { id ->
+                    epOnDemandState.series.firstOrNull { it.id == id }?.posterUrl
+                }
+                LaunchedEffect(parentSeriesId) {
+                    parentSeriesId?.let { onDemandVm.loadSeriesProviders(it) }
+                }
+                // An in-player Switch Version persists its own choice; re-read
+                // it when the player goes away so the series detail pill shows
+                // the copy that actually played (movie route parity).
+                DisposableEffect(parentSeriesId) {
+                    val versionSeriesId = parentSeriesId
+                    onDispose {
+                        versionSeriesId?.let { onDemandVm.refreshSelectedSeriesVersion(it) }
                     }
+                }
+                val versionOptions = parentSeriesId
+                    ?.let { epOnDemandState.seriesProviders[it] }.orEmpty()
+                val selectedVersion = parentSeriesId
+                    ?.let { epOnDemandState.selectedSeriesVersion[it] }
 
                 VODPlayerScreen(
                     streamUrl = resolved?.url.orEmpty(),
@@ -1252,6 +1280,15 @@ fun AerioTVNavHost(
                     loadingMessage = resolveError ?: if (resolved == null) "Loading…" else null,
                     videoId = episodeUuid,
                     posterUrl = parentSeriesPoster,
+                    versionOptions = versionOptions,
+                    selectedVersion = selectedVersion,
+                    onSelectVersion = { option ->
+                        // Episodes pin by m3u_account_id only (no per-copy
+                        // stream id); resolveEpisodeUrl reads the selection.
+                        parentSeriesId?.let { onDemandVm.selectSeriesVersion(it, option) }
+                        onDemandVm.resolveEpisodeUrl(episodeUuid, episode?.firstStreamId)
+                            .getOrNull()?.url
+                    },
                 )
             }
 
@@ -1361,7 +1398,18 @@ fun AerioTVNavHost(
                 }
                 val playlistVm: PlaylistViewModel = hiltViewModel(parent)
                 val playlistState by playlistVm.state.collectAsStateWithLifecycle()
-                val onDemandVm: OnDemandViewModel = hiltViewModel()
+                // Share the MAIN-scoped OnDemand VM when it is on the stack
+                // (normal detail -> player push) so the movie cache AND the
+                // user's pinned Version selection carry into this route; a
+                // deep-link entry without MAIN falls back to a fresh instance.
+                val vodMainEntry = remember(entry) {
+                    runCatching { navController.getBackStackEntry(Routes.MAIN) }.getOrNull()
+                }
+                val onDemandVm: OnDemandViewModel = if (vodMainEntry != null) {
+                    hiltViewModel(vodMainEntry)
+                } else {
+                    hiltViewModel()
+                }
                 val onDemandState by onDemandVm.state.collectAsStateWithLifecycle()
 
                 // Silence any live session first (see the episode route above).
@@ -1369,6 +1417,30 @@ fun AerioTVNavHost(
 
                 val movieUuid = Uri.decode(entry.arguments?.getString("movieUuid").orEmpty())
                 val movie = onDemandState.movies.firstOrNull { it.uuid == movieUuid }
+
+                // Version switching: make sure the provider copies are loaded
+                // for the in-player "Switch Version" sheet (idempotent; the
+                // detail screen usually primed this already).
+                LaunchedEffect(movie?.id) {
+                    movie?.id?.let { onDemandVm.loadMovieProviders(it) }
+                }
+                val versionOptions = movie?.id?.let { onDemandState.movieProviders[it] }.orEmpty()
+                val selectedVersion = movie?.id?.let { onDemandState.selectedMovieVersion[it] }
+                // Pick up whatever this session measured when the player goes
+                // away, so the detail screen's picker describes the copy that
+                // just played even if this route ran on its own VM instance.
+                // Same reason for the remembered pin: an in-player Switch
+                // Version is re-read off disk so the detail pill agrees with
+                // what actually played (iOS VODDetailView .onDisappear).
+                DisposableEffect(movie?.id) {
+                    val learnedMovieId = movie?.id
+                    onDispose {
+                        learnedMovieId?.let {
+                            onDemandVm.refreshLearnedStreams(it)
+                            onDemandVm.refreshSelectedMovieVersion(it)
+                        }
+                    }
+                }
 
                 val baseUrl = playlistState.playlist?.urlString.orEmpty()
                 val apiKey = playlistState.playlist?.apiKey
@@ -1406,6 +1478,21 @@ fun AerioTVNavHost(
                     loadingMessage = resolveError ?: if (resolved == null) "Loading…" else null,
                     videoId = movieUuid,
                     posterUrl = movie?.posterUrl,
+                    versionOptions = versionOptions,
+                    selectedVersion = selectedVersion,
+                    onSelectVersion = { option ->
+                        // Record the pin, then re-resolve: the proxy URL now
+                        // carries the chosen relation's stream_id +
+                        // m3u_account_id (or neither, for Auto).
+                        movie?.id?.let { onDemandVm.selectMovieVersion(it, option) }
+                        onDemandVm.resolveMovieUrl(movieUuid).getOrNull()?.url
+                    },
+                    // MOVIES ONLY (see the parameter's KDoc): the picker's
+                    // option id is a provider RELATION pk here, which names one
+                    // specific file. The episode route leaves this unwired.
+                    onLearnStream = { relationId, stream ->
+                        onDemandVm.recordLearnedStream(relationId, stream)
+                    },
                 )
             }
 

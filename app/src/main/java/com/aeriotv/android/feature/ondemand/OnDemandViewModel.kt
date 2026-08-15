@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.core.data.VodLearnedStream
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.debug.VodResetBus
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
@@ -12,6 +13,8 @@ import com.aeriotv.android.core.network.DispatcharrVODEpisode
 import com.aeriotv.android.core.network.DispatcharrVODLogo
 import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODProviderInfo
+import com.aeriotv.android.core.network.DispatcharrVODProviderMedia
+import com.aeriotv.android.core.network.DispatcharrVODProviderRelation
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.core.network.TMDBService
 import com.aeriotv.android.core.network.TmdbCredits
@@ -20,11 +23,15 @@ import com.aeriotv.android.core.network.TmdbKnownForItem
 import com.aeriotv.android.core.network.TmdbPersonBio
 import com.aeriotv.android.core.network.XtreamCodesApi
 import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.core.preferences.VodLearnedStreamStore
+import com.aeriotv.android.core.preferences.VodVersionItemType
+import com.aeriotv.android.core.preferences.VodVersionSelectionStore
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,6 +62,8 @@ class OnDemandViewModel @Inject constructor(
     private val appPreferences: AppPreferences,
     private val tmdbService: TMDBService,
     private val vodResetBus: VodResetBus,
+    private val learnedStreamStore: VodLearnedStreamStore,
+    private val versionSelectionStore: VodVersionSelectionStore,
 ) : ViewModel() {
 
     data class UiState(
@@ -113,6 +122,33 @@ class OnDemandViewModel @Inject constructor(
         // from the items themselves).
         val movieGroupNames: List<String> = emptyList(),
         val seriesGroupNames: List<String> = emptyList(),
+        // VOD version switching (Dispatcharr Direct Connect only): per-item
+        // provider copies from /api/vod/{movies,series}/<id>/providers/, keyed
+        // by the Dispatcharr int id like the provider-info cache above. Empty
+        // list = fetched, nothing to offer (the pill needs > 1 to render).
+        val movieProviders: Map<Int, List<VodProviderOption>> = emptyMap(),
+        val seriesProviders: Map<Int, List<VodProviderOption>> = emptyMap(),
+        val movieProvidersLoading: Set<Int> = emptySet(),
+        val seriesProvidersLoading: Set<Int> = emptySet(),
+        // MEASURED stream properties per provider copy, keyed by RELATION id
+        // (globally unique, so one map covers every movie). Fills in AFTER the
+        // picker renders, because a copy the server has not inspected costs an
+        // upstream round trip; missing entries just mean a shorter label.
+        val movieProviderMedia: Map<Int, DispatcharrVODProviderMedia> = emptyMap(),
+        // What THIS device measured while PLAYING each copy, same RELATION id
+        // key. Fills the fields the upstream panel left blank (many publish a
+        // bitrate and nothing else). Movies only: an episode option pins an
+        // account rather than a file, so its id describes nothing playable and
+        // the two id spaces would collide.
+        val movieLearnedStreams: Map<Int, VodLearnedStream> = emptyMap(),
+        // The user's pinned version per item. ABSENT = "Auto" (server priority
+        // + failover), which is the default and never stored explicitly.
+        // Persisted by VodVersionSelectionStore (playlist + type + item) and
+        // restored as each item's provider list lands, so reopening a title
+        // keeps the chosen copy. resetVodState() still drops the in-memory
+        // maps on a playlist switch; the new source restores its own rows.
+        val selectedMovieVersion: Map<Int, VodProviderOption> = emptyMap(),
+        val selectedSeriesVersion: Map<Int, VodProviderOption> = emptyMap(),
     ) {
         // While searching, render the server-side results (full library). While
         // browsing, render the progressively-paginated list. The search request
@@ -130,6 +166,12 @@ class OnDemandViewModel @Inject constructor(
     // only the final query in a fast burst of typing hits the network.
     private var searchMoviesJob: kotlinx.coroutines.Job? = null
     private var searchSeriesJob: kotlinx.coroutines.Job? = null
+
+    // The raw relation rows behind state.movieProviders, keyed by movie id.
+    // Kept out of UiState because the UI only ever consumes the derived
+    // options; they live here so labels can be REBUILT in place as each
+    // copy's measurements land. Main-thread confined (viewModelScope).
+    private val movieProviderRelations = mutableMapOf<Int, List<DispatcharrVODProviderRelation>>()
 
     init {
         refresh()
@@ -185,6 +227,7 @@ class OnDemandViewModel @Inject constructor(
         dispatcharrSeriesFallbackGroup = null
         dispatcharrEnabledMovieCats = emptyList()
         dispatcharrEnabledSeriesCats = emptyList()
+        movieProviderRelations.clear()
         _state.value = UiState()
     }
 
@@ -1095,6 +1138,293 @@ class OnDemandViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Lazy-load (idempotent within session) the provider copies of a movie for
+     * the Version picker. Dispatcharr Direct Connect only - the repository
+     * returns empty for every other source, which caches as "nothing to offer"
+     * so the pill never renders. Failures also cache empty (best-effort UI;
+     * label fields only in logs, never the raw payload).
+     */
+    fun loadMovieProviders(movieId: Int) {
+        val current = _state.value
+        if (current.movieProviders.containsKey(movieId) ||
+            current.movieProvidersLoading.contains(movieId)) return
+        viewModelScope.launch {
+            _state.update { it.copy(movieProvidersLoading = it.movieProvidersLoading + movieId) }
+            val relations = runCatching {
+                playlistRepository.listVodMovieProviders(movieId)
+            }.getOrElse { t ->
+                Log.w(TAG, "listVodMovieProviders($movieId) failed: ${t::class.simpleName}")
+                emptyList()
+            }
+            movieProviderRelations[movieId] = relations
+            // Whatever previous playbacks measured for these copies is already
+            // on disk, so the picker can open fully described even before the
+            // server's own provider-info round trips land.
+            val learned = learnedStreamStore.lookupAll(relations.map { it.id })
+            _state.update { st ->
+                val allLearned = st.movieLearnedStreams + learned
+                st.copy(
+                    movieLearnedStreams = allLearned,
+                    movieProviders = st.movieProviders +
+                        (movieId to relations.toVodProviderOptions(st.movieProviderMedia, allLearned)),
+                    movieProvidersLoading = st.movieProvidersLoading - movieId,
+                )
+            }
+            // AFTER the options are in state: the remembered pin is validated
+            // against this list, so it has to exist first.
+            restoreSelectedMovieVersion(movieId)
+            // Only worth measuring when there is an actual choice to make; a
+            // lone copy never renders the picker.
+            if (relations.size > 1) loadMovieProviderMedia(movieId, relations.map { it.id })
+        }
+    }
+
+    /**
+     * Fill in each copy's MEASURED stream properties and rebuild the picker
+     * labels around them. Runs AFTER the options are already in state because
+     * a copy the server has not inspected yet costs an upstream round trip;
+     * concurrency is capped so opening a detail page never fans out a burst at
+     * the provider. Failures just leave that row showing account + container.
+     *
+     * Movies only: the series /providers/ rows describe the show, not an
+     * episode file, so there is nothing measured to attach to them.
+     */
+    private suspend fun loadMovieProviderMedia(movieId: Int, relationIds: List<Int>) {
+        val pending = relationIds.filterNot { _state.value.movieProviderMedia.containsKey(it) }
+        pending.chunked(PROVIDER_MEDIA_CONCURRENCY).forEach { batch ->
+            val measured = coroutineScope {
+                batch.map { relationId ->
+                    async { relationId to playlistRepository.vodMovieProviderMedia(movieId, relationId) }
+                }.awaitAll()
+            }
+            // Only real measurements enter the map; a copy the server could not
+            // describe stays absent rather than contributing an empty label.
+            val fresh = measured.mapNotNull { (relationId, media) ->
+                media?.takeIf { it.hasAnyMeasurement }?.let { relationId to it }
+            }
+            if (fresh.isEmpty()) return@forEach
+            // Publish per batch so labels sharpen progressively instead of all
+            // at once behind the slowest copy.
+            _state.update { st ->
+                st.copy(movieProviderMedia = st.movieProviderMedia + fresh)
+                    .withRebuiltMovieOptions()
+            }
+        }
+    }
+
+    /**
+     * Remember what the PLAYER measured for one movie copy and re-label the
+     * picker around it. Called from the VOD player as tracks resolve, so the
+     * store elides a write when nothing changed; state only churns when the
+     * measurement is genuinely new.
+     *
+     * Movies only, by construction: [relationId] is a provider RELATION pk,
+     * and only the movie player route hands one over.
+     */
+    suspend fun recordLearnedStream(relationId: Int, stream: VodLearnedStream) {
+        if (stream.isEmpty) return
+        learnedStreamStore.record(relationId, stream)
+        _state.update { st ->
+            if (st.movieLearnedStreams[relationId] == stream) return@update st
+            st.copy(movieLearnedStreams = st.movieLearnedStreams + (relationId to stream))
+                .withRebuiltMovieOptions()
+        }
+    }
+
+    /**
+     * Re-read this movie's on-device measurements and re-label the picker.
+     * Runs when a player closes (iOS VODDetailView .onDisappear parity) so a
+     * copy that was just played reads with its real resolution and codecs.
+     * Normally a no-op on the shared VM, where [recordLearnedStream] already
+     * landed it live; it earns its keep on a deep-linked player that ran
+     * against its own VM instance.
+     */
+    fun refreshLearnedStreams(movieId: Int) {
+        val relationIds = movieProviderRelations[movieId]?.map { it.id }.orEmpty()
+        if (relationIds.isEmpty()) return
+        viewModelScope.launch {
+            val learned = learnedStreamStore.lookupAll(relationIds)
+            if (learned.isEmpty()) return@launch
+            _state.update { st ->
+                if (learned.all { (id, s) -> st.movieLearnedStreams[id] == s }) return@update st
+                st.copy(movieLearnedStreams = st.movieLearnedStreams + learned)
+                    .withRebuiltMovieOptions()
+            }
+        }
+    }
+
+    /**
+     * Rebuild every loaded movie's picker labels from the CURRENT server +
+     * learned measurements, keeping each pinned row's label in step with the
+     * picker (the detail pill and the player sheet both render it). Cheap: a
+     * handful of relations per opened item.
+     */
+    private fun UiState.withRebuiltMovieOptions(): UiState {
+        if (movieProviderRelations.isEmpty()) return this
+        val rebuilt = movieProviders.mapValues { (movieId, existing) ->
+            movieProviderRelations[movieId]
+                ?.toVodProviderOptions(movieProviderMedia, movieLearnedStreams)
+                ?: existing
+        }
+        val pinned = selectedMovieVersion.mapValues { (movieId, selected) ->
+            rebuilt[movieId]?.firstOrNull { it.relationId == selected.relationId } ?: selected
+        }
+        return copy(movieProviders = rebuilt, selectedMovieVersion = pinned)
+    }
+
+    /** Series equivalent of [loadMovieProviders]. */
+    fun loadSeriesProviders(seriesId: Int) {
+        val current = _state.value
+        if (current.seriesProviders.containsKey(seriesId) ||
+            current.seriesProvidersLoading.contains(seriesId)) return
+        viewModelScope.launch {
+            _state.update { it.copy(seriesProvidersLoading = it.seriesProvidersLoading + seriesId) }
+            val options = runCatching {
+                // Episodes pin by m3u_account_id only (the series relation's
+                // id does not address an episode row), so two relations from
+                // one account would be two rows that play the same thing.
+                // Collapse to one option per account BEFORE labelling.
+                playlistRepository.listVodSeriesProviders(seriesId)
+                    .distinctBy { it.m3uAccount?.id }
+                    .toVodProviderOptions()
+            }.getOrElse { t ->
+                Log.w(TAG, "listVodSeriesProviders($seriesId) failed: ${t::class.simpleName}")
+                emptyList()
+            }
+            _state.update { st ->
+                st.copy(
+                    seriesProviders = st.seriesProviders + (seriesId to options),
+                    seriesProvidersLoading = st.seriesProvidersLoading - seriesId,
+                )
+            }
+            // Same ordering rule as the movie path: validate the remembered pin
+            // against the list that just landed.
+            restoreSelectedSeriesVersion(seriesId)
+        }
+    }
+
+    /**
+     * Pin (or, with null, un-pin back to Auto) the movie's playback version.
+     * Read by [resolveMovieUrl] on the next resolve, and REMEMBERED so
+     * reopening the title keeps the chosen copy. Both pickers (the detail
+     * screen's and the player's Switch Version sheet) land here, so an
+     * in-player switch persists exactly like a detail-screen one; Auto clears
+     * the stored row rather than storing a sentinel.
+     */
+    fun selectMovieVersion(movieId: Int, option: VodProviderOption?) {
+        _state.update { st ->
+            st.copy(
+                selectedMovieVersion = if (option == null) {
+                    st.selectedMovieVersion - movieId
+                } else {
+                    st.selectedMovieVersion + (movieId to option)
+                },
+            )
+        }
+        // State moved synchronously above, so a resolve firing right behind
+        // this call already sees the pin; only the disk write is deferred.
+        viewModelScope.launch {
+            versionSelectionKey(VodVersionItemType.MOVIE, movieId)?.let { key ->
+                versionSelectionStore.setSelection(key, option?.relationId)
+            }
+        }
+    }
+
+    /** Series counterpart of [selectMovieVersion]; read by [resolveEpisodeUrl].
+     *  An episode option pins an m3u ACCOUNT, but the row stored is still the
+     *  relation id, so the restore validates against the same option list. */
+    fun selectSeriesVersion(seriesId: Int, option: VodProviderOption?) {
+        _state.update { st ->
+            st.copy(
+                selectedSeriesVersion = if (option == null) {
+                    st.selectedSeriesVersion - seriesId
+                } else {
+                    st.selectedSeriesVersion + (seriesId to option)
+                },
+            )
+        }
+        viewModelScope.launch {
+            versionSelectionKey(VodVersionItemType.SERIES, seriesId)?.let { key ->
+                versionSelectionStore.setSelection(key, option?.relationId)
+            }
+        }
+    }
+
+    /**
+     * Re-read the remembered pin for a movie and adopt it. Runs when a player
+     * closes (iOS VODDetailView .onDisappear parity) so the detail screen's
+     * "Version: ..." pill agrees with a Switch Version made inside the player.
+     * Normally a no-op: both routes resolve the MAIN-scoped VM, so
+     * [selectMovieVersion] already moved this state. It earns its keep on a
+     * deep-linked player that ran against its own VM instance.
+     */
+    fun refreshSelectedMovieVersion(movieId: Int) {
+        viewModelScope.launch { restoreSelectedMovieVersion(movieId) }
+    }
+
+    /** Series counterpart of [refreshSelectedMovieVersion], for the episode
+     *  player route. */
+    fun refreshSelectedSeriesVersion(seriesId: Int) {
+        viewModelScope.launch { restoreSelectedSeriesVersion(seriesId) }
+    }
+
+    /**
+     * Apply the remembered pin for [movieId], but ONLY when that copy is still
+     * in the current option list: a relation the provider dropped is cleared
+     * and the title falls back to Auto rather than pinning a dead id that would
+     * fail to play. Matching is by relation id, never by label, so measurements
+     * landing later and relabelling a row cannot lose the selection.
+     *
+     * Nothing stored leaves the current state alone, matching iOS: an explicit
+     * Auto is the absence of a row, not an instruction to un-pin.
+     */
+    private suspend fun restoreSelectedMovieVersion(movieId: Int) {
+        val key = versionSelectionKey(VodVersionItemType.MOVIE, movieId) ?: return
+        val savedId = versionSelectionStore.selection(key) ?: return
+        // An EMPTY list is "no copies loaded" -- an unsupported source, or a
+        // failed fetch that cached empty. Neither is evidence the pinned copy
+        // is gone, so the row survives to be validated against a real list.
+        val options = _state.value.movieProviders[movieId]?.takeIf { it.isNotEmpty() } ?: return
+        val match = options.firstOrNull { it.relationId == savedId }
+        if (match == null) {
+            versionSelectionStore.setSelection(key, null)
+            return
+        }
+        _state.update { st ->
+            if (st.selectedMovieVersion[movieId] == match) return@update st
+            st.copy(selectedMovieVersion = st.selectedMovieVersion + (movieId to match))
+        }
+    }
+
+    /** Series counterpart of [restoreSelectedMovieVersion], same empty-list
+     *  rule. */
+    private suspend fun restoreSelectedSeriesVersion(seriesId: Int) {
+        val key = versionSelectionKey(VodVersionItemType.SERIES, seriesId) ?: return
+        val savedId = versionSelectionStore.selection(key) ?: return
+        val options = _state.value.seriesProviders[seriesId]?.takeIf { it.isNotEmpty() } ?: return
+        val match = options.firstOrNull { it.relationId == savedId }
+        if (match == null) {
+            versionSelectionStore.setSelection(key, null)
+            return
+        }
+        _state.update { st ->
+            if (st.selectedSeriesVersion[seriesId] == match) return@update st
+            st.copy(selectedSeriesVersion = st.selectedSeriesVersion + (seriesId to match))
+        }
+    }
+
+    /**
+     * Storage key for one item's remembered version. iOS scopes these by the
+     * server's UUID; the active playlist id is that same identity here, so the
+     * same title on two sources keeps separate choices. Null with no active
+     * playlist, which is nothing to scope a choice to.
+     */
+    private suspend fun versionSelectionKey(type: VodVersionItemType, itemId: Int): String? {
+        val playlistId = playlistRepository.activePlaylist()?.id ?: return null
+        return VodVersionSelectionStore.storageKey(playlistId, type, itemId)
+    }
+
     /** Lazy-load (idempotent within session) episodes for a series. */
     fun loadEpisodes(seriesId: Int) {
         val current = _state.value
@@ -1182,6 +1512,13 @@ class OnDemandViewModel @Inject constructor(
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
+        // Version pinning: when the user picked a provider copy for the parent
+        // series, pin the episode to that account (episodes have no per-copy
+        // stream id; the account is the whole pin).
+        val parentSeriesId = _state.value.episodesBySeries.entries
+            .firstOrNull { (_, list) -> list.any { it.uuid == episodeUuid } }
+            ?.key
+        val selection = parentSeriesId?.let { _state.value.selectedSeriesVersion[it] }
         val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             val url = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -1190,6 +1527,7 @@ class OnDemandViewModel @Inject constructor(
                     apiKey = key,
                     episodeUuid = episodeUuid,
                     streamId = streamId,
+                    m3uAccountId = selection?.accountId,
                 )
             }
             ResolvedVod(url, authSafe = sameOrigin(base, url))
@@ -1215,6 +1553,11 @@ class OnDemandViewModel @Inject constructor(
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
         val movie = _state.value.movies.firstOrNull { it.uuid == movieUuid }
+        // Version pinning: a picked provider copy replaces the firstStreamId
+        // default entirely (its stream_id + m3u_account_id ride the proxy URL;
+        // stream_id wins server-side when both land). Absent selection = Auto,
+        // the server's priority + failover behavior.
+        val selection = movie?.id?.let { _state.value.selectedMovieVersion[it] }
         val base = playlistRepository.effectiveBaseUrl(playlist)
         return runCatching {
             val url = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -1222,7 +1565,9 @@ class OnDemandViewModel @Inject constructor(
                     baseUrl = base,
                     apiKey = key,
                     movieUuid = movieUuid,
-                    streamId = movie?.firstStreamId,
+                    streamId = if (selection != null) selection.streamId?.toIntOrNull()
+                    else movie?.firstStreamId,
+                    m3uAccountId = selection?.accountId,
                 )
             }
             ResolvedVod(url, authSafe = sameOrigin(base, url))
@@ -1525,6 +1870,11 @@ class OnDemandViewModel @Inject constructor(
         const val XC_EP_PREFIX = "xc-ep-"
         // Batch size for XC enumeration state flushes (see loadXtreamItemsIfNeeded).
         const val STATE_FLUSH_EVERY = 16
+
+        // In-flight cap for the per-copy measurement fetches (see
+        // loadMovieProviderMedia). Each uncached copy can cost the server an
+        // upstream fetch, so a wide fan-out would hammer the provider.
+        const val PROVIDER_MEDIA_CONCURRENCY = 3
 
         /**
          * Size of the eagerly-walked head of the VOD library. A large Dispatcharr

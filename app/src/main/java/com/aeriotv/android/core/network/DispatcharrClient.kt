@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.network
 
 import com.aeriotv.android.BuildConfig
+import com.aeriotv.android.feature.ondemand.vodMeasuredDescriptors
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -1232,6 +1233,66 @@ class DispatcharrClient @Inject constructor() {
     }
 
     /**
+     * GET /api/vod/movies/<id>/providers/ - every provider relation Dispatcharr
+     * deduped into this one logical movie (one row per M3U account that carries
+     * a copy). Backs the VOD "Version" picker: the user pins playback to a
+     * specific provider copy by appending its stream_id / m3u_account_id to the
+     * proxy URL (see [vodMovieUrl]). Plain JSON array; fetchListOrResults
+     * tolerates a paginated shape from future builds.
+     *
+     * SECURITY: the payload nests the provider account's credentials under
+     * m3u_account.profiles. [DispatcharrVODProviderRelation] decodes only the
+     * fields the picker needs (ignoreUnknownKeys drops the rest) and callers
+     * must never log the raw body.
+     */
+    suspend fun getMovieProviders(
+        baseUrl: String,
+        apiKey: String,
+        movieId: Int,
+    ): List<DispatcharrVODProviderRelation> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/vod/movies/$movieId/providers/", apiKey)
+
+    /**
+     * GET /api/vod/movies/<id>/provider-info/?relation_id=<n> - the MEASURED
+     * properties of ONE provider copy. Same endpoint as
+     * [getMovieProviderInfo], but pinned to a relation, so each copy reports
+     * its own ffprobe results instead of the priority winner's.
+     *
+     * Same lazy-refresh caveat as its sibling: the first call for a copy the
+     * server has never inspected triggers an upstream fetch and can take
+     * several seconds, then caches for 24h. Callers should treat it as
+     * progressive enrichment and render the picker before it returns.
+     */
+    suspend fun getMovieProviderMedia(
+        baseUrl: String,
+        apiKey: String,
+        movieId: Int,
+        relationId: Int,
+    ): DispatcharrVODProviderMedia {
+        val url = "${baseUrl.trimEnd('/')}/api/vod/movies/$movieId/provider-info/" +
+            "?relation_id=$relationId"
+        val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
+        unauthorizedCheck(response, url)
+        if (!response.status.isSuccess()) {
+            throw DispatcharrError.Transport("Movie provider-media failed: HTTP ${response.status.value}")
+        }
+        return response.body()
+    }
+
+    /**
+     * GET /api/vod/series/<id>/providers/ - series counterpart of
+     * [getMovieProviders]. Same row shape except the relation carries
+     * external_series_id instead of stream_id; the tolerant decode handles
+     * both. Episode playback pins the version via m3u_account_id only.
+     */
+    suspend fun getSeriesProviders(
+        baseUrl: String,
+        apiKey: String,
+        seriesId: Int,
+    ): List<DispatcharrVODProviderRelation> =
+        fetchListOrResults("${baseUrl.trimEnd('/')}/api/vod/series/$seriesId/providers/", apiKey)
+
+    /**
      * GET /api/vod/series/<id>/episodes/?page=N&page_size=100. Mirrors iOS
      * DispatcharrAPI.fetchEpisodesPage (StreamingAPIs.swift:2086). Phase
      * 10c-2 fetches page 1 only; long-running shows (One Piece etc.) will
@@ -1278,9 +1339,16 @@ class DispatcharrClient @Inject constructor() {
         apiKey: String,
         episodeUuid: String,
         streamId: Int? = null,
+        /** VOD version pinning: routes the episode to a specific provider
+         *  account's copy (server default priority + failover when null). */
+        m3uAccountId: Int? = null,
     ): String = withContext(Dispatchers.IO) {
         val base = "${baseUrl.trimEnd('/')}/proxy/vod/episode/$episodeUuid"
-        val entry = if (streamId != null) "$base?stream_id=$streamId" else base
+        val params = buildList {
+            if (streamId != null) add("stream_id=$streamId")
+            if (m3uAccountId != null) add("m3u_account_id=$m3uAccountId")
+        }
+        val entry = if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
         val request = Request.Builder()
             .url(entry)
             .header("X-API-Key", apiKey)
@@ -1315,9 +1383,21 @@ class DispatcharrClient @Inject constructor() {
      * HTTP headers on a 301 hop, so playback fails before the session URL
      * is reached.
      */
-    fun vodMovieUrl(baseUrl: String, movieUuid: String, streamId: Int? = null): String {
+    fun vodMovieUrl(
+        baseUrl: String,
+        movieUuid: String,
+        streamId: Int? = null,
+        /** VOD version pinning: routes playback to a specific provider
+         *  account's copy. stream_id wins server-side when both are set;
+         *  neither param keeps the server's priority + failover default. */
+        m3uAccountId: Int? = null,
+    ): String {
         val base = "${baseUrl.trimEnd('/')}/proxy/vod/movie/$movieUuid"
-        return if (streamId != null) "$base?stream_id=$streamId" else base
+        val params = buildList {
+            if (streamId != null) add("stream_id=$streamId")
+            if (m3uAccountId != null) add("m3u_account_id=$m3uAccountId")
+        }
+        return if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
     }
 
     /**
@@ -1335,8 +1415,9 @@ class DispatcharrClient @Inject constructor() {
         apiKey: String,
         movieUuid: String,
         streamId: Int? = null,
+        m3uAccountId: Int? = null,
     ): String = withContext(Dispatchers.IO) {
-        val entry = vodMovieUrl(baseUrl, movieUuid, streamId)
+        val entry = vodMovieUrl(baseUrl, movieUuid, streamId, m3uAccountId)
         val request = Request.Builder()
             .url(entry)
             .header("X-API-Key", apiKey)
@@ -1690,6 +1771,115 @@ data class DispatcharrM3uAccount(
     val id: Int,
     val name: String? = null,
 )
+
+/**
+ * One provider relation from `/api/vod/{movies,series}/<id>/providers/` - a
+ * specific M3U account's copy of a deduped VOD item, for the Version picker.
+ *
+ * Tolerant decode throughout: movie rows carry `stream_id`, series rows carry
+ * `external_series_id` instead, `quality_info`'s shape has drifted across
+ * Dispatcharr builds (object with `quality` / `resolution`, or null), so both
+ * ride as raw JSON with getter accessors. The nested `m3u_account` object
+ * includes the provider account's credentials under `profiles`; only id + name
+ * are declared here (ignoreUnknownKeys drops the rest) and the raw payload
+ * must never be logged.
+ */
+@Serializable
+data class DispatcharrVODProviderRelation(
+    /** Relation pk (NOT the stream / account id). */
+    val id: Int,
+    @SerialName("stream_id")
+    val streamIdRaw: JsonElement? = null,
+    @SerialName("container_extension")
+    val containerExtension: String? = null,
+    @SerialName("quality_info")
+    val qualityInfo: JsonElement? = null,
+    @SerialName("m3u_account")
+    val m3uAccount: DispatcharrVODProviderAccount? = null,
+) {
+    private fun qualityField(key: String): String? =
+        ((qualityInfo as? JsonObject)?.get(key) as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+
+    /** Provider stream id as a string (movies only; absent on series rows).
+     *  String-or-number tolerant, same wire variance as tmdb_id elsewhere. */
+    val streamId: String?
+        get() = (streamIdRaw as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+
+    /** e.g. "4K" / "FHD" - Dispatcharr's parsed quality tag. */
+    val quality: String? get() = qualityField("quality")
+
+    /** e.g. "1920x1080"; fallback label slot when [quality] is absent. */
+    val resolution: String? get() = qualityField("resolution")
+}
+
+/** The provider M3U account a VOD relation belongs to. Deliberately minimal:
+ *  the wire object nests full account credentials under `profiles`, which must
+ *  never be decoded or logged. */
+@Serializable
+data class DispatcharrVODProviderAccount(
+    val id: Int,
+    val name: String? = null,
+)
+
+/**
+ * MEASURED stream properties for ONE provider copy, from
+ * `/api/vod/movies/<id>/provider-info/?relation_id=<n>`. Dispatcharr relays the
+ * upstream panel's own ffprobe output here, so these are the file's real
+ * characteristics rather than the provider's advertised title.
+ *
+ * Every field is optional on purpose: coverage varies per provider. Measured on
+ * a live server, some copies report full video + audio streams, some report
+ * only a bitrate, and some report nothing at all. Whatever is missing is simply
+ * not shown - the picker never guesses.
+ *
+ * `video` / `audio` ride as raw JSON and are read through tolerant getters
+ * (same style as [DispatcharrVODProviderRelation.qualityInfo]) because they
+ * routinely arrive as an EMPTY object `{}`, and a strict nested model would
+ * turn that into decode noise.
+ */
+@Serializable
+data class DispatcharrVODProviderMedia(
+    @SerialName("bitrate")
+    val bitrateRaw: JsonElement? = null,
+    val video: JsonElement? = null,
+    val audio: JsonElement? = null,
+) {
+    private val videoStream: JsonObject? get() = video as? JsonObject
+    private val audioStream: JsonObject? get() = audio as? JsonObject
+
+    /** Overall bitrate in kbps. Dispatcharr emits 0 for "unknown", which is
+     *  not a measurement, so it reads as absent. */
+    val bitrateKbps: Int?
+        get() = (bitrateRaw as? JsonPrimitive)?.let { prim ->
+            prim.intOrNull ?: prim.content.toDoubleOrNull()?.toInt()
+        }?.takeIf { it > 0 }
+
+    /** Real frame width / height, i.e. what the file actually is rather than
+     *  what its title claims. */
+    val width: Int? get() = videoStream?.intField("width")?.takeIf { it > 0 }
+    val height: Int? get() = videoStream?.intField("height")?.takeIf { it > 0 }
+
+    /** ffprobe codec names, e.g. "hevc" / "h264" and "eac3" / "aac". */
+    val videoCodec: String? get() = videoStream?.stringField("codec_name")?.takeIf { it.isNotBlank() }
+    val audioCodec: String? get() = audioStream?.stringField("codec_name")?.takeIf { it.isNotBlank() }
+    val audioChannels: Int? get() = audioStream?.intField("channels")?.takeIf { it > 0 }
+
+    /** True when the server reported at least one real measurement. */
+    val hasAnyMeasurement: Boolean
+        get() = bitrateKbps != null || width != null || videoCodec != null || audioCodec != null
+
+    /** Measured descriptors, most significant first. Resolution comes from the
+     *  actual frame size, so an upscaled "4K" file that is really 1920 wide
+     *  reads as 1080p here. Absent measurements contribute nothing.
+     *
+     *  The wording lives in ONE place (vodMeasuredDescriptors), shared with the
+     *  picker's learned-from-playback measurements so a server-described copy
+     *  and a device-measured copy read identically. Server-only shape; the
+     *  merged form takes the learned data as its second argument. */
+    val descriptors: List<String>
+        get() = vodMeasuredDescriptors(this)
+}
 
 @Serializable
 data class DispatcharrChannelStream(
@@ -2222,6 +2412,13 @@ private fun JsonObject.boolField(name: String): Boolean? {
 private fun JsonObject.longField(name: String): Long? {
     val prim = this[name] as? JsonPrimitive ?: return null
     return prim.longOrNull ?: prim.content.toLongOrNull()
+}
+
+/** ffprobe emits some numerics as strings ("1920") and some as floats; take
+ *  either rather than dropping the measurement. */
+private fun JsonObject.intField(name: String): Int? {
+    val prim = this[name] as? JsonPrimitive ?: return null
+    return prim.intOrNull ?: prim.content.toDoubleOrNull()?.toInt()
 }
 
 private fun JsonObject.objectField(name: String): JsonObject? =

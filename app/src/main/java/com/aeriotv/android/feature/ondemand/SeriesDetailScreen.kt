@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -125,7 +126,13 @@ fun SeriesDetailScreen(
         // lazy-scrape populates the episode table before /episodes/ is hit, and caches
         // seriesProviderInfo, so the separate loadSeriesProviderInfo() call is gone.
         viewModel.loadEpisodes(seriesId)
+        // Version picker data (Dispatcharr Direct Connect only; the VM caches
+        // empty for every other source so the pill never renders).
+        viewModel.loadSeriesProviders(seriesId)
     }
+    val versionOptions = state.seriesProviders[seriesId].orEmpty()
+    val selectedVersion = state.selectedSeriesVersion[seriesId]
+    var showVersionPicker by remember(seriesId) { mutableStateOf(false) }
 
     // TMDB poster fallback (opt-in): only when the server gave no artwork.
     var tmdbPosterUrl by remember(seriesId) { mutableStateOf<String?>(null) }
@@ -382,6 +389,14 @@ fun SeriesDetailScreen(
                         tmdbDetails = tmdbDetails,
                         isTv = isTv,
                         castPhotosVisible = castCrewPeople.isNotEmpty(),
+                        // Only offered when there is an actual choice (> 1
+                        // provider copy on a Dispatcharr Direct Connect source).
+                        versionLabel = if (versionOptions.size > 1) {
+                            selectedVersion?.label ?: "Auto"
+                        } else {
+                            null
+                        },
+                        onVersionClick = { showVersionPicker = true },
                         // The chip row, when present, is always the topmost
                         // focusable on this screen.
                         chipRowModifier = Modifier.onFocusChanged {
@@ -528,6 +543,18 @@ fun SeriesDetailScreen(
         // pill would otherwise be an invisible D-pad focus stop.
         if (!isTv) {
             FloatingBackButton(onClick = onBack)
+        }
+
+        if (showVersionPicker) {
+            VodVersionPickerSheet(
+                options = versionOptions,
+                selected = selectedVersion,
+                onSelect = { option ->
+                    viewModel.selectSeriesVersion(seriesId, option)
+                    showVersionPicker = false
+                },
+                onDismiss = { showVersionPicker = false },
+            )
         }
 
         qrLink?.let { link ->
@@ -746,6 +773,10 @@ private fun SeriesInfoSection(
     tmdbDetails: TmdbDetails?,
     isTv: Boolean,
     castPhotosVisible: Boolean,
+    // Non-null only when there is more than one provider copy to pick from
+    // (Dispatcharr Direct Connect); renders the "Version: {label}" pill.
+    versionLabel: String? = null,
+    onVersionClick: () -> Unit = {},
     chipRowModifier: Modifier,
     onOpenUrl: (label: String, url: String) -> Unit,
 ) {
@@ -782,7 +813,7 @@ private fun SeriesInfoSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (trailerUrl != null || tmdbUrl != null) {
+        if (trailerUrl != null || tmdbUrl != null || versionLabel != null) {
             Row(
                 modifier = chipRowModifier,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -795,6 +826,11 @@ private fun SeriesInfoSection(
                 if (tmdbUrl != null) {
                     PillButton(icon = Icons.Outlined.Info, text = "View on TMDB") {
                         onOpenUrl("View on TMDB", tmdbUrl)
+                    }
+                }
+                if (versionLabel != null) {
+                    PillButton(icon = Icons.Outlined.Tune, text = "Version: $versionLabel") {
+                        onVersionClick()
                     }
                 }
             }

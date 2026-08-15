@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -86,10 +87,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.BuildConfig
+import com.aeriotv.android.core.data.VodLearnedStream
 import com.aeriotv.android.core.pip.PipState
 import com.aeriotv.android.core.pip.enterPip16x9
 import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.core.pip.supportsPip
+import com.aeriotv.android.feature.ondemand.VodProviderOption
+import com.aeriotv.android.feature.ondemand.VodVersionPickerSheet
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.settings.bufferMillisFor
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
@@ -97,6 +101,7 @@ import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -123,7 +128,7 @@ private const val AUTO_HIDE_MS = 4_000L
  * receive it). PlayPause is the default landing spot when controls reveal;
  * LEFT/RIGHT cycle Rewind <-> PlayPause <-> Forward; UP enters Scrubber.
  */
-private enum class TvVodFocusZone { None, Rewind, PlayPause, Forward, Scrubber }
+private enum class TvVodFocusZone { None, Rewind, PlayPause, Forward, Options, Scrubber }
 
 /**
  * VOD playback. Task #62: rebuilt on Media3 ExoPlayer.
@@ -178,6 +183,24 @@ fun VODPlayerScreen(
      *  endpoint - the screen then stops reporting for this playback. */
     onReportCatchupPosition: suspend (playbackUrl: String, positionSecs: Double, paused: Boolean) -> Boolean =
         { _, _, _ -> true },
+    /** VOD version switching (Dispatcharr Direct Connect): the provider
+     *  copies of the playing item. The Options sheet offers "Switch Version"
+     *  only when there is more than one. */
+    versionOptions: List<VodProviderOption> = emptyList(),
+    /** The pinned version, or null for "Auto" (server priority + failover). */
+    selectedVersion: VodProviderOption? = null,
+    /** Records the selection in the VM and re-resolves the playback URL for
+     *  it (null option = back to Auto). Returns the new session URL, or null
+     *  when resolution failed (the player then keeps the current stream). */
+    onSelectVersion: suspend (VodProviderOption?) -> String? = { null },
+    /** Remembers what ExoPlayer MEASURED for the pinned provider copy, so the
+     *  Version picker can describe copies the upstream panel never did.
+     *
+     *  MOVIES ONLY: wired by the movie player route alone. An episode option
+     *  pins an m3u ACCOUNT rather than a specific file, so its relation id
+     *  says nothing about what played; DVR and live playback have no provider
+     *  copy at all. Leaving this at its no-op default is what excludes them. */
+    onLearnStream: suspend (relationId: Int, stream: VodLearnedStream) -> Unit = { _, _ -> },
 ) {
     // Keep the screen on during VOD playback. Matches PlayerScreen for the
     // same reason: system screen-timeout would otherwise dim/sleep the panel
@@ -205,6 +228,14 @@ fun VODPlayerScreen(
 
     var chromeVisible by remember { mutableStateOf(true) }
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+
+    // Options entry point (bottom chrome, rightmost): a small sheet with
+    // Switch Version (when the item has > 1 provider copy) + Audio Track +
+    // Subtitles. All FormFactorModal-based so they work on phone AND TV.
+    var showOptionsSheet by remember { mutableStateOf(false) }
+    var showVersionSheet by remember { mutableStateOf(false) }
+    var showAudioSheet by remember { mutableStateOf(false) }
+    var showSubtitlesSheet by remember { mutableStateOf(false) }
 
     // GH #33 companion remote: register this screen's per-screen player with the
     // companion host while mounted, so a paired phone's play/pause/seek drives
@@ -542,6 +573,67 @@ fun VODPlayerScreen(
         chromeVisible = true
         lastInteractionAt = android.os.SystemClock.uptimeMillis()
     }
+    // Switch the playing item to another provider copy IN PLACE (same
+    // mechanism as the native catch-up re-mint above): record the selection +
+    // re-resolve via the caller, then swap the media item at the current
+    // position so playback resumes where it was. Watch progress is keyed by
+    // the movie/episode uuid, which is unchanged across versions, so resume
+    // state survives the swap untouched.
+    val switchVersion: (VodProviderOption?) -> Unit = { option ->
+        seekScope.launch {
+            val newUrl = onSelectVersion(option)
+            val p = exoPlayer
+            if (newUrl != null && p != null) {
+                val resumeAt = p.contentPosition.coerceAtLeast(0L)
+                currentPlaybackUrl = newUrl
+                p.setMediaItem(MediaItem.fromUri(newUrl), resumeAt)
+                p.prepare()
+                p.playWhenReady = true
+                Log.i(TAG, "VOD version switch; resuming at ${resumeAt / 1000}s")
+            } else if (newUrl == null) {
+                Log.w(TAG, "VOD version switch failed to resolve; keeping current stream")
+            }
+        }
+    }
+
+    // ── Learned stream measurements ─────────────────────────────────────
+    // Dispatcharr relays each provider panel's ffprobe output to the Version
+    // picker, but coverage is uneven: on a live server many copies publish a
+    // bitrate and nothing else, and some publish nothing at all. A copy that
+    // is PLAYING is fully described though, so we hand the real frame size and
+    // codecs back to the VM and the picker keeps showing them. Still a
+    // measurement start to finish; provider titles are never parsed.
+    //
+    // Keyed on the pinned copy's relation id: on Auto there is no copy to
+    // attribute the measurement to. [onLearnStream] is a no-op unless the
+    // caller is the MOVIE route (see its KDoc), and isDvr is belt and braces.
+    val learnRelationId = selectedVersion?.relationId?.takeIf { !isDvr }
+    val currentOnLearnStream by rememberUpdatedState(onLearnStream)
+    DisposableEffect(exoPlayer, learnRelationId) {
+        val player = exoPlayer
+        if (player == null || learnRelationId == null) return@DisposableEffect onDispose { }
+        // Playback reports the same format repeatedly (tracks change, then
+        // READY, then again on every renderer reconfigure), so only a CHANGED
+        // measurement is worth handing on.
+        var lastRecorded: VodLearnedStream? = null
+        fun capture() {
+            val measured = player.readLearnedStream()
+            if (measured.isEmpty || measured == lastRecorded) return
+            lastRecorded = measured
+            seekScope.launch { currentOnLearnStream(learnRelationId, measured) }
+        }
+        val listener = object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) = capture()
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) capture()
+            }
+        }
+        player.addListener(listener)
+        // A version switch reuses this ExoPlayer, so the copy already playing
+        // can have announced its tracks before this effect re-registered.
+        capture()
+        onDispose { player.removeListener(listener) }
+    }
 
     // Saved progress lookup. Null while loading; -1L after a confirmed "no
     // saved progress" read. Drives the resume-seek LaunchedEffect.
@@ -632,6 +724,10 @@ fun VODPlayerScreen(
                                 val target = min(maxPos, positionMs + 10_000L)
                                 seekPlayer(target); reveal()
                             }
+                            TvVodFocusZone.Options -> {
+                                showOptionsSheet = true
+                                lastInteractionAt = now
+                            }
                             else -> { togglePlayPause() } // PlayPause / None
                         }
                     }
@@ -642,6 +738,7 @@ fun VODPlayerScreen(
                             TvVodFocusZone.Scrubber -> scrubStep(-1, isRepeat)
                             TvVodFocusZone.PlayPause -> { tvFocusZone = TvVodFocusZone.Rewind; lastInteractionAt = now }
                             TvVodFocusZone.Forward -> { tvFocusZone = TvVodFocusZone.PlayPause; lastInteractionAt = now }
+                            TvVodFocusZone.Options -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now }
                             else -> { tvFocusZone = TvVodFocusZone.Rewind; lastInteractionAt = now } // Rewind/None: stay leftmost
                         }
                         chromeVisible = true
@@ -652,7 +749,8 @@ fun VODPlayerScreen(
                             TvVodFocusZone.Scrubber -> scrubStep(+1, isRepeat)
                             TvVodFocusZone.PlayPause -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now }
                             TvVodFocusZone.Rewind -> { tvFocusZone = TvVodFocusZone.PlayPause; lastInteractionAt = now }
-                            else -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now } // Forward/None: stay rightmost
+                            TvVodFocusZone.Forward -> { tvFocusZone = TvVodFocusZone.Options; lastInteractionAt = now }
+                            else -> { tvFocusZone = TvVodFocusZone.Options; lastInteractionAt = now } // Options/None: stay rightmost
                         }
                         chromeVisible = true
                     }
@@ -1308,6 +1406,10 @@ fun VODPlayerScreen(
                         p.seekToDefaultPosition()
                         positionMs = durationMs
                     },
+                    onOptions = {
+                        showOptionsSheet = true
+                        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter),
@@ -1415,6 +1517,80 @@ fun VODPlayerScreen(
                 }
             }
         }
+
+        // ── Options sheets ───────────────────────────────────────────────
+        // FormFactorModal-based (bottom sheet on touch, centered dialog on
+        // TV); the dialog window owns D-pad input while open, so the root
+        // key handler above never fights the rows.
+        if (showOptionsSheet) {
+            com.aeriotv.android.ui.FormFactorModal(onDismiss = { showOptionsSheet = false }) {
+                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+                    Text(
+                        text = "Options",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (versionOptions.size > 1) {
+                        PlayerOptionRow("Switch Version") {
+                            showOptionsSheet = false
+                            showVersionSheet = true
+                        }
+                    }
+                    PlayerOptionRow("Audio Track") {
+                        showOptionsSheet = false
+                        showAudioSheet = true
+                    }
+                    PlayerOptionRow("Subtitles") {
+                        showOptionsSheet = false
+                        showSubtitlesSheet = true
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+        }
+        if (showVersionSheet) {
+            VodVersionPickerSheet(
+                options = versionOptions,
+                selected = selectedVersion,
+                onSelect = { option ->
+                    showVersionSheet = false
+                    // Re-selecting the active version (or Auto while on Auto)
+                    // would just re-tune the same copy; skip the churn.
+                    if (option?.relationId != selectedVersion?.relationId) {
+                        switchVersion(option)
+                    }
+                },
+                onDismiss = { showVersionSheet = false },
+            )
+        }
+        if (showAudioSheet) {
+            exoPlayer?.let { p ->
+                AudioTracksSheet(
+                    tracks = remember { p.readAudioTracks() },
+                    currentTrackId = p.readCurrentAid(),
+                    onSelect = { id ->
+                        p.selectAudioTrack(id)
+                        showAudioSheet = false
+                    },
+                    onDismiss = { showAudioSheet = false },
+                )
+            }
+        }
+        if (showSubtitlesSheet) {
+            exoPlayer?.let { p ->
+                SubtitlesSheet(
+                    tracks = remember { p.readSubtitleTracks() },
+                    currentTrackId = p.readCurrentSid(),
+                    onSelect = { id ->
+                        p.selectSubtitleTrack(id)
+                        showSubtitlesSheet = false
+                    },
+                    onDismiss = { showSubtitlesSheet = false },
+                )
+            }
+        }
     }
 
     // Auto-hide. The extra keys are inert on phone (lastInteractionAt stays
@@ -1453,6 +1629,7 @@ private fun BottomChrome(
     onSkipForward: () -> Unit,
     isDvr: Boolean = false,
     onSeekToLive: () -> Unit = {},
+    onOptions: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var thumbCenterPx by remember { mutableFloatStateOf(0f) }
@@ -1572,6 +1749,17 @@ private fun BottomChrome(
                     color = Color.White,
                 )
             }
+            // Options entry point (rightmost): Switch Version / Audio Track /
+            // Subtitles sheet. Same white-fill focus visual as the skip
+            // buttons under the TV zone model.
+            Spacer(Modifier.width(8.dp))
+            TransportIconButton(
+                icon = Icons.Outlined.Tune,
+                contentDescription = "Player options",
+                onClick = onOptions,
+                focused = isTvForm && tvFocusZone == TvVodFocusZone.Options,
+                isTvForm = isTvForm,
+            )
             }
         }
         // Floating scrub-readout bubble (iOS PlayerView.scrubReadout parity,
@@ -1628,6 +1816,27 @@ private fun TransportIconButton(
             contentDescription = contentDescription,
             tint = if (focused) Color.Black else Color.White,
             modifier = Modifier.size(28.dp),
+        )
+    }
+}
+
+/** One action row of the player Options sheet. Plain clickable (focusable on
+ *  TV by default inside the dialog window) - no radio, these rows only open
+ *  the dedicated picker sheets. */
+@Composable
+private fun PlayerOptionRow(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
         )
     }
 }

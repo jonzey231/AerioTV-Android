@@ -1065,6 +1065,69 @@ class PlaylistRepository @Inject constructor(
     }
 
     /**
+     * The provider relations Dispatcharr deduped into one logical movie, for
+     * the VOD Version picker. Empty for non-Dispatcharr sources or when there
+     * is no active playlist. AuthBroker-wrapped like the channel-streams
+     * lookup above. The payload nests provider credentials (the client model
+     * declares only safe fields); never log the raw rows.
+     */
+    suspend fun listVodMovieProviders(
+        movieId: Int,
+    ): List<com.aeriotv.android.core.network.DispatcharrVODProviderRelation> {
+        val playlist = activePlaylist() ?: return emptyList()
+        val sourceType = playlist.resolvedSourceType()
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+            sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr) return emptyList()
+        val base = effectiveBaseUrl(playlist)
+        return dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            dispatcharrClient.getMovieProviders(base, key, movieId)
+        }
+    }
+
+    /**
+     * MEASURED stream properties of ONE provider copy (the picker's quality
+     * labels). Null for non-Dispatcharr sources, when there is no active
+     * playlist, or on any failure: this is best-effort enrichment, so a copy
+     * the server cannot describe simply shows account + container.
+     *
+     * Latency: the first call for a copy Dispatcharr has never inspected can
+     * take several seconds (it fetches upstream), then caches 24h server-side.
+     * Callers must render the picker first and fill labels in as these land.
+     */
+    suspend fun vodMovieProviderMedia(
+        movieId: Int,
+        relationId: Int,
+    ): com.aeriotv.android.core.network.DispatcharrVODProviderMedia? {
+        val playlist = activePlaylist() ?: return null
+        val sourceType = playlist.resolvedSourceType()
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+            sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr) return null
+        val base = effectiveBaseUrl(playlist)
+        return runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getMovieProviderMedia(base, key, movieId, relationId)
+            }
+        }.getOrNull()
+    }
+
+    /** Series counterpart of [listVodMovieProviders]. */
+    suspend fun listVodSeriesProviders(
+        seriesId: Int,
+    ): List<com.aeriotv.android.core.network.DispatcharrVODProviderRelation> {
+        val playlist = activePlaylist() ?: return emptyList()
+        val sourceType = playlist.resolvedSourceType()
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+            sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr) return emptyList()
+        val base = effectiveBaseUrl(playlist)
+        return dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            dispatcharrClient.getSeriesProviders(base, key, seriesId)
+        }
+    }
+
+    /**
      * Switch a Dispatcharr channel's active upstream to [streamId] (a Stream pk
      * from [listDispatcharrChannelStreams]). [channelUuid] is the channel UUID
      * (M3UChannel.id minus the "disp:" prefix). Dispatcharr swaps the source
