@@ -4,7 +4,9 @@ import android.content.Context
 import android.os.Handler
 import androidx.annotation.OptIn
 import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.RendererCapabilities
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.Renderer
@@ -93,18 +95,14 @@ fun aerioRenderersFactory(
             allowedVideoJoiningTimeMs: Long,
             out: ArrayList<Renderer>,
         ) {
-            if (!forceVideoCodecReinit) {
-                super.buildVideoRenderers(
-                    context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback,
-                    eventHandler, eventListener, allowedVideoJoiningTimeMs, out,
-                )
-                return
-            }
-            // Mirror of the stock platform renderer construction; no video
-            // extension renderers are bundled in this app, so skipping the
-            // extension lookup super would do loses nothing.
+            // Always our subclass: it carries the Dolby Vision base-layer
+            // fallback, which every playback path needs, and vetoes codec
+            // reuse only when asked. Mirror of the stock platform renderer
+            // construction; no video extension renderers are bundled in this
+            // app, so skipping the extension lookup super would do loses
+            // nothing.
             out.add(
-                NoReuseMediaCodecVideoRenderer(
+                AerioMediaCodecVideoRenderer(
                     context,
                     codecAdapterFactory,
                     mediaCodecSelector,
@@ -113,6 +111,7 @@ fun aerioRenderersFactory(
                     eventHandler,
                     eventListener,
                     MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
+                    vetoCodecReuse = forceVideoCodecReinit,
                 ),
             )
         }
@@ -269,7 +268,7 @@ private class PtsSmoothingAudioSink(sink: AudioSink) : ForwardingAudioSink(sink)
  * (black screen with audio after a live channel switch).
  */
 @OptIn(UnstableApi::class)
-private class NoReuseMediaCodecVideoRenderer(
+private class AerioMediaCodecVideoRenderer(
     context: Context,
     codecAdapterFactory: MediaCodecAdapter.Factory,
     mediaCodecSelector: MediaCodecSelector,
@@ -278,6 +277,7 @@ private class NoReuseMediaCodecVideoRenderer(
     eventHandler: Handler?,
     eventListener: VideoRendererEventListener?,
     maxDroppedFramesToNotify: Int,
+    private val vetoCodecReuse: Boolean,
 ) : MediaCodecVideoRenderer(
     context,
     codecAdapterFactory,
@@ -288,12 +288,79 @@ private class NoReuseMediaCodecVideoRenderer(
     eventListener,
     maxDroppedFramesToNotify,
 ) {
+    /**
+     * Dolby Vision base-layer fallback.
+     *
+     * Media3 1.4.1 substitutes an HEVC/H.264/AV1 decoder for the Dolby Vision
+     * profiles whose base layer is plainly backward compatible (DvheDtr,
+     * DvheSt, DvavSe, Dvav110 - see MediaCodecUtil.getAlternativeCodecMimeType)
+     * but deliberately NOT for dvhe.07 (DvheDtb), the dual-layer Blu-ray
+     * profile. On a device without a Dolby Vision decoder that leaves the video
+     * track with no decoder at all, so ExoPlayer drops it and plays the file as
+     * audio only. Measured on a Z Fold 5 with a 73 Mbps remux (HEVC Main 10
+     * 3840x2160 + TrueHD Atmos, DOVI profile 7, el_present_flag 1): audio
+     * played, the surface never received a frame, and no video codec was ever
+     * created.
+     *
+     * The base layer of these files is ordinary HEVC Main 10; the enhancement
+     * layer and RPU ride in NAL units a plain HEVC decoder ignores, which is
+     * exactly how mpv plays them on iOS. So when the stock path finds nothing,
+     * retry as if the track were HEVC. Colour may be slightly off versus true
+     * Dolby Vision output (the RPU is not applied), which is a better outcome
+     * than no picture.
+     *
+     * Deliberately narrow: it only engages when the stock path found no
+     * decoder AND the format is Dolby Vision, so no other content changes
+     * behaviour.
+     */
+    private fun baseLayerFormatOrNull(format: Format): Format? {
+        if (!MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType, ignoreCase = true)) return null
+        return format.buildUpon()
+            .setSampleMimeType(MimeTypes.VIDEO_H265)
+            // The codecs string still says dvhe.*; clearing it stops the
+            // profile/level check from rejecting the HEVC decoder.
+            .setCodecs(null)
+            .build()
+    }
+
+    override fun supportsFormat(
+        mediaCodecSelector: MediaCodecSelector,
+        format: Format,
+    ): Int {
+        val support = super.supportsFormat(mediaCodecSelector, format)
+        if (RendererCapabilities.getFormatSupport(support) == androidx.media3.common.C.FORMAT_HANDLED) {
+            return support
+        }
+        val baseLayer = baseLayerFormatOrNull(format) ?: return support
+        val fallback = super.supportsFormat(mediaCodecSelector, baseLayer)
+        if (RendererCapabilities.getFormatSupport(fallback) == androidx.media3.common.C.FORMAT_HANDLED) {
+            android.util.Log.i(
+                "AerioPlayerDiag",
+                "Dolby Vision without a DV decoder; decoding the HEVC base layer",
+            )
+            return fallback
+        }
+        return support
+    }
+
+    override fun getDecoderInfos(
+        mediaCodecSelector: MediaCodecSelector,
+        format: Format,
+        requiresSecureDecoder: Boolean,
+    ): List<MediaCodecInfo> {
+        val infos = super.getDecoderInfos(mediaCodecSelector, format, requiresSecureDecoder)
+        if (infos.isNotEmpty()) return infos
+        val baseLayer = baseLayerFormatOrNull(format) ?: return infos
+        return super.getDecoderInfos(mediaCodecSelector, baseLayer, requiresSecureDecoder)
+    }
+
     override fun canReuseCodec(
         codecInfo: MediaCodecInfo,
         oldFormat: Format,
         newFormat: Format,
     ): DecoderReuseEvaluation {
         val evaluation = super.canReuseCodec(codecInfo, oldFormat, newFormat)
+        if (!vetoCodecReuse) return evaluation
         // Stock already vetoed reuse (a real format/config change) -- respect it.
         if (evaluation.result == DecoderReuseEvaluation.REUSE_RESULT_NO) return evaluation
         // Only the decoders that actually showed the flush-and-reuse black-screen

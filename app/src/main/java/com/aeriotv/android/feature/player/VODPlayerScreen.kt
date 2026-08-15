@@ -98,6 +98,7 @@ import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.settings.bufferMillisFor
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -236,6 +237,13 @@ fun VODPlayerScreen(
     var showVersionSheet by remember { mutableStateOf(false) }
     var showAudioSheet by remember { mutableStateOf(false) }
     var showSubtitlesSheet by remember { mutableStateOf(false) }
+
+    // The copy has a video track this device has no decoder for, so ExoPlayer
+    // dropped it and is playing audio only. AerioMediaCodecVideoRenderer
+    // already rescues what it can (Dolby Vision falls back to its HEVC base
+    // layer); this is the residue that nothing can decode, and without a
+    // notice it looks like a black-screen bug.
+    var videoUnsupported by remember { mutableStateOf(false) }
 
     // GH #33 companion remote: register this screen's per-screen player with the
     // companion host while mounted, so a paired phone's play/pause/seek drives
@@ -632,6 +640,38 @@ fun VODPlayerScreen(
         // A version switch reuses this ExoPlayer, so the copy already playing
         // can have announced its tracks before this effect re-registered.
         capture()
+        onDispose { player.removeListener(listener) }
+    }
+
+    // ── Undecodable video detection ─────────────────────────────────────
+    // Read support off the track groups rather than Tracks.isTypeSupported so
+    // the meaning is explicit: the item carries video, and not one of its
+    // video tracks can be played here. Support flags come from the renderer
+    // capabilities, so a Dolby Vision copy rescued by the HEVC base-layer
+    // fallback reads as supported and never trips this.
+    DisposableEffect(exoPlayer) {
+        val player = exoPlayer ?: return@DisposableEffect onDispose { }
+        fun evaluate(tracks: Tracks) {
+            val videoGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+            val playable = videoGroups.any { group ->
+                (0 until group.length).any { group.isTrackSupported(it) }
+            }
+            val unsupported = videoGroups.isNotEmpty() && !playable
+            if (unsupported != videoUnsupported) {
+                videoUnsupported = unsupported
+                if (unsupported) {
+                    val codecs = videoGroups.flatMap { group ->
+                        (0 until group.length).map { group.getTrackFormat(it).sampleMimeType ?: "?" }
+                    }.distinct().joinToString()
+                    Log.w(TAG, "No decoder for this copy's video ($codecs); playing audio only")
+                }
+            }
+        }
+        val listener = object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) = evaluate(tracks)
+        }
+        player.addListener(listener)
+        evaluate(player.currentTracks)
         onDispose { player.removeListener(listener) }
     }
 
@@ -1414,6 +1454,60 @@ fun VODPlayerScreen(
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter),
                 )
+            }
+        }
+
+        // Audio-only notice. Playback is healthy, so this is deliberately not
+        // the error card: no Retry, no auto-reconnect, nothing to retry into.
+        // Where another copy exists the way out is a version switch, which on
+        // TV runs through the Options zone (the player swallows D-pad keys for
+        // its own transport model, so a focusable button here would never see
+        // an OK press); on touch the card itself opens the picker.
+        val canSwitchVersion = versionOptions.size > 1
+        if (videoUnsupported && playbackErrorMessage == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp)
+                    .then(
+                        if (canSwitchVersion && !isTvForm) {
+                            Modifier.clickable { showVersionSheet = true }
+                        } else Modifier
+                    ),
+                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = Color(0xFFFF9800),
+                    modifier = Modifier.size(44.dp),
+                )
+                Text(
+                    text = "Video Not Supported",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White,
+                )
+                Text(
+                    text = "This device cannot decode this copy's video format, " +
+                        "so only the audio is playing.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.85f),
+                    textAlign = TextAlign.Center,
+                )
+                if (canSwitchVersion) {
+                    Text(
+                        text = if (isTvForm) {
+                            "Open Options in the player controls, then Switch Version, " +
+                                "to try another copy of this title."
+                        } else {
+                            "Tap here to try another copy of this title."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         }
 
