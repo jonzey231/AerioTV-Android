@@ -244,9 +244,15 @@ fun MovieDetailScreen(
             androidx.compose.runtime.CompositionLocalProvider(
                 androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringSpec,
             ) {
+            val detailListState = androidx.compose.foundation.lazy.rememberLazyListState()
+            val detailScope = androidx.compose.runtime.rememberCoroutineScope()
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 32.dp),
+                state = detailListState,
+                // 32dp left the cast row sitting on the very bottom edge of a
+                // TV panel with its focus scale clipped (Logan, 2026-08-15).
+                // The last row needs somewhere to scroll into.
+                contentPadding = PaddingValues(bottom = if (isTv) 96.dp else 32.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 item {
@@ -258,6 +264,13 @@ fun MovieDetailScreen(
                         hasResume = hasResume,
                         isTv = isTv,
                         onPlay = { onPlay(movie) },
+                        onPlayFocused = {
+                            if (isTv) {
+                                detailScope.launch {
+                                    runCatching { detailListState.animateScrollToItem(0) }
+                                }
+                            }
+                        },
                     )
                 }
                 item {
@@ -416,6 +429,7 @@ private fun HeroSection(
     hasResume: Boolean,
     isTv: Boolean,
     onPlay: () -> Unit,
+    onPlayFocused: () -> Unit = {},
 ) {
     val heroUrl = info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl
     val posterUrl = movie.logo?.url ?: info?.posterUrl ?: tmdbPosterUrl
@@ -531,7 +545,15 @@ private fun HeroSection(
                 PlayCta(
                     hasResume = hasResume,
                     onClick = onPlay,
-                    modifier = Modifier.focusRequester(playFocus),
+                    // Coming back UP the page, focus stopping on Play is not
+                    // enough: bring-into-view scrolls only far enough to show
+                    // the CTA, which sits low in the hero, so the artwork above
+                    // it stayed cut off and the hero never looked whole again
+                    // (Logan, 2026-08-15). Reaching Play means we are at the
+                    // top, so put the list back to a true zero offset.
+                    modifier = Modifier
+                        .focusRequester(playFocus)
+                        .onFocusChanged { if (it.isFocused) onPlayFocused() },
                 )
             }
         }
@@ -752,7 +774,13 @@ private fun CastCrewSection(
         )
         Spacer(Modifier.height(10.dp))
         LazyRow(
-            contentPadding = PaddingValues(horizontal = edgeInset),
+            // The row clips to its own bounds, so a focused card's scale had
+            // nowhere to grow and its name/role were sliced off the bottom
+            // (Logan, 2026-08-15). Vertical headroom for the focus scale.
+            contentPadding = PaddingValues(
+                horizontal = edgeInset,
+                vertical = if (isTv) 20.dp else 8.dp,
+            ),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(items = people, key = { it.id }) { person ->
