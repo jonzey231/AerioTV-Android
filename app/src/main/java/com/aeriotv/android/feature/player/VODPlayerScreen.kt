@@ -699,6 +699,14 @@ fun VODPlayerScreen(
             // still receives OK presses.
             .onPreviewKeyEvent { event ->
                 if (!isTvForm || exoPlayer == null) return@onPreviewKeyEvent false
+                // The error overlay owns the remote while it is up. The player
+                // object still exists during a playback error, so without this
+                // the handler below keeps eating OK and the arrows for its
+                // transport model: the card takes focus on Retry Now, the
+                // button highlights, and no press ever reaches it or moves to
+                // Close. Reported on the Google TV Streamer, 2026-08-15.
+                // There is nothing playing behind the card to transport anyway.
+                if (playbackErrorMessage != null) return@onPreviewKeyEvent false
                 val handledKey = when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter,
                     Key.DirectionLeft, Key.DirectionRight,
@@ -1756,17 +1764,29 @@ private fun BottomChrome(
                 onThumbGeometry = { c, w -> thumbCenterPx = c; trackWidthPx = w },
             )
             Spacer(Modifier.height(6.dp))
+            val displayMs = if (isDragging) (dragFraction * durationMs).toLong() else positionMs
+            // Equal-weight side SLOTS with the transport at its natural width
+            // in between. One weighted spacer either side looked centred but
+            // was not: the right group (duration plus the Options button) is
+            // wider than the elapsed time on the left, and splitting the
+            // leftover space equally then pushed the transport left of screen
+            // centre by half that difference. Slots pin the middle whatever
+            // the sides hold, and each side stays inside its own half.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-            val displayMs = if (isDragging) (dragFraction * durationMs).toLong() else positionMs
-            Text(
-                text = formatTime(displayMs),
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White,
-            )
-            Spacer(Modifier.weight(1f))
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(
+                    text = formatTime(displayMs),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
             TransportIconButton(
                 icon = Icons.Filled.Replay10,
                 contentDescription = "Back 10 seconds",
@@ -1802,7 +1822,12 @@ private fun BottomChrome(
                 focused = isTvForm && tvFocusZone == TvVodFocusZone.Forward,
                 isTvForm = isTvForm,
             )
-            Spacer(Modifier.weight(1f))
+            }
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             if (isDvr) {
                 // LIVE pill (iOS PlayerView): filled red within 15s of the
                 // live edge, hollow/gray when scrubbed back. Tapping it
@@ -1854,6 +1879,7 @@ private fun BottomChrome(
                 focused = isTvForm && tvFocusZone == TvVodFocusZone.Options,
                 isTvForm = isTvForm,
             )
+            }
             }
         }
         // Floating scrub-readout bubble (iOS PlayerView.scrubReadout parity,

@@ -309,9 +309,24 @@ private class AerioMediaCodecVideoRenderer(
      * Dolby Vision output (the RPU is not applied), which is a better outcome
      * than no picture.
      *
-     * Deliberately narrow: it only engages when the stock path found no
-     * decoder AND the format is Dolby Vision, so no other content changes
-     * behaviour.
+     * A device that HAS a Dolby Vision decoder fails the same file the other
+     * way round. The Google TV Streamer (MediaTek) accepts the track on
+     * c2.mtk.dvav.ser.decoder and then dies mid-decode with
+     * ERROR_CODE_DECODING_FAILED, because the shipping DV decoders target the
+     * single-layer profiles (5, 8, 9) and profile 7 carries a second layer
+     * they cannot consume. That is a RUNTIME failure, so neither the
+     * no-decoder fallback above nor Media3's enableDecoderFallback (which only
+     * covers decoder INITIALISATION) can rescue it.
+     *
+     * So profile 7 is special-cased: prefer the HEVC base layer even when the
+     * platform offers a Dolby Vision decoder, and keep that decoder as a last
+     * resort behind it. Profile 7 is a Blu-ray dual-layer format that Media3
+     * itself calls deprecated and not always backward compatible; a device
+     * that truly decodes it is not something any of these panels ship.
+     *
+     * Deliberately narrow: DV formats that are not profile 7 keep using the
+     * device decoder, and the fallback engages for them only when nothing
+     * else can decode the track.
      */
     private fun baseLayerFormatOrNull(format: Format): Format? {
         if (!MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType, ignoreCase = true)) return null
@@ -323,12 +338,40 @@ private class AerioMediaCodecVideoRenderer(
             .build()
     }
 
+    /**
+     * True for dual-layer Dolby Vision (profile 7). The codecs string is
+     * "dvhe.07.06" / "dvh1.07.06": the profile is the middle field. Absent or
+     * unparseable codecs means "not known to be profile 7", which keeps the
+     * device decoder in charge rather than guessing.
+     */
+    private fun isDolbyVisionProfile7(format: Format): Boolean {
+        if (!MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType, ignoreCase = true)) return false
+        val parts = format.codecs?.split('.') ?: return false
+        if (parts.size < 2) return false
+        return parts[1].trim().toIntOrNull() == 7
+    }
+
     override fun supportsFormat(
         mediaCodecSelector: MediaCodecSelector,
         format: Format,
     ): Int {
         val support = super.supportsFormat(mediaCodecSelector, format)
         if (RendererCapabilities.getFormatSupport(support) == androidx.media3.common.C.FORMAT_HANDLED) {
+            // Profile 7 reports handled on devices whose DV decoder then fails
+            // mid-decode, so answer for the decoder getDecoderInfos will
+            // actually hand back (the HEVC base layer) rather than for one we
+            // are about to skip.
+            if (isDolbyVisionProfile7(format)) {
+                val p7BaseLayer = baseLayerFormatOrNull(format)
+                if (p7BaseLayer != null) {
+                    val p7Support = super.supportsFormat(mediaCodecSelector, p7BaseLayer)
+                    if (RendererCapabilities.getFormatSupport(p7Support) ==
+                        androidx.media3.common.C.FORMAT_HANDLED
+                    ) {
+                        return p7Support
+                    }
+                }
+            }
             return support
         }
         val baseLayer = baseLayerFormatOrNull(format) ?: return support
@@ -349,7 +392,21 @@ private class AerioMediaCodecVideoRenderer(
         requiresSecureDecoder: Boolean,
     ): List<MediaCodecInfo> {
         val infos = super.getDecoderInfos(mediaCodecSelector, format, requiresSecureDecoder)
-        if (infos.isNotEmpty()) return infos
+        if (infos.isNotEmpty()) {
+            if (!isDolbyVisionProfile7(format)) return infos
+            val p7BaseLayer = baseLayerFormatOrNull(format) ?: return infos
+            val baseLayerInfos =
+                super.getDecoderInfos(mediaCodecSelector, p7BaseLayer, requiresSecureDecoder)
+            if (baseLayerInfos.isEmpty()) return infos
+            android.util.Log.i(
+                "AerioPlayerDiag",
+                "Dolby Vision Profile 7 is dual layer; decoding the HEVC base layer " +
+                    "ahead of the device DV decoder",
+            )
+            // Base layer first, the platform's own DV decoders behind it, so a
+            // device that really can decode profile 7 still has a route.
+            return baseLayerInfos + infos.filterNot { it in baseLayerInfos }
+        }
         val baseLayer = baseLayerFormatOrNull(format) ?: return infos
         return super.getDecoderInfos(mediaCodecSelector, baseLayer, requiresSecureDecoder)
     }
