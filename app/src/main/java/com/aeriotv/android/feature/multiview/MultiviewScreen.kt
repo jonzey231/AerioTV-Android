@@ -1148,10 +1148,18 @@ private fun TileGrid(
                                 // practice (Logan's Fold, 2026-08-16). Pickup
                                 // (and the relocate fallback) now arms on the
                                 // first actual drag movement instead.
+                                // Threshold, not "any callback": a finger
+                                // resting on glass still emits tiny moves, so
+                                // arming on the first onDrag made release-in-
+                                // place unreachable in practice (measured on
+                                // Logan's Fold - the menu never opened).
+                                val dragSlop = viewConfiguration.touchSlop * 2f
                                 var moved = false
+                                var travelled = 0f
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { offset ->
                                         moved = false
+                                        travelled = 0f
                                         dragSource = index
                                         val pr = pxRects.getOrNull(index)
                                         dragPos = Offset(
@@ -1161,7 +1169,8 @@ private fun TileGrid(
                                     },
                                     onDrag = { change, amount ->
                                         change.consume()
-                                        if (!moved) {
+                                        travelled += amount.getDistance()
+                                        if (!moved && travelled > dragSlop) {
                                             moved = true
                                             onTileLongPress(index)
                                         }
