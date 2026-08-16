@@ -172,6 +172,17 @@ class DispatcharrClient @Inject constructor() {
                     "not your Dispatcharr XC password.",
             )
         }
+        if (code == 429) {
+            // Dispatcharr throttles /api/accounts/token/. A second login
+            // close on the heels of the first (verify + warmup) trips it,
+            // and the generic transport copy sent users chasing URL and
+            // credential problems that did not exist (Discord 2026-08-16,
+            // iOS twin fixed the same day). Self-clearing: say WAIT.
+            throw DispatcharrError.Transport(
+                "The server is rate-limiting login attempts (HTTP 429). " +
+                    "Wait a minute and try again.",
+            )
+        }
         if (!response.status.isSuccess()) {
             throw DispatcharrError.Transport("Login transport error: HTTP $code")
         }
@@ -257,8 +268,16 @@ class DispatcharrClient @Inject constructor() {
                     "points at a Dispatcharr 0.23.0 or newer instance.",
             )
         }
-        return me.apiKey.takeIf { it.isNotBlank() }
-            ?: throw DispatcharrError.UnexpectedResponse("Server did not return an api_key for this user")
+        // An account without an api_key is a fixable server-side state, not
+        // a protocol mismatch: superusers created before Dispatcharr's
+        // api_key-minting path carry none (Discord 2026-08-16). Name the
+        // fix instead of the generic "unexpected shape" copy.
+        return me.apiKey?.takeIf { it.isNotBlank() }
+            ?: throw DispatcharrError.UnexpectedResponse(
+                "The Dispatcharr account '${me.username}' has no API key. In " +
+                    "Dispatcharr, open System, then Users, edit this user, and " +
+                    "generate an API key, then try again.",
+            )
     }
 
     /**
@@ -1673,8 +1692,13 @@ data class RefreshResponse(
 data class MeResponse(
     val id: Int,
     val username: String,
+    /** Nullable + defaulted: a superuser created outside Dispatcharr's
+     *  api_key-minting path carries none, and a strict decode turned that
+     *  into a misleading "unexpected profile shape" error. The caller
+     *  (fetchCurrentUserApiKey) turns null/blank into an actionable
+     *  generate-an-API-key message instead. */
     @SerialName("api_key")
-    val apiKey: String,
+    val apiKey: String? = null,
     /** Dispatcharr account level: 10 = admin, 1 = standard, 0 = streamer. Only
      *  admins (>= 10) can POST server recordings. Nullable + defaulted so older
      *  servers without the field still parse. */
