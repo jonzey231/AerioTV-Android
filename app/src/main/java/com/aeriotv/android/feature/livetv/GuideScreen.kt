@@ -1792,6 +1792,15 @@ fun GuideScreen(
                     // focus on the pill row).
                     if (isTv) guideNav.focusChannelAtNow(0, nowMillis, listState)
                 }
+            } else if (filteredChannels.isEmpty() &&
+                state.selectedGroup != PlaylistViewModel.ALL_GROUPS
+            ) {
+                // GH #72: an empty group counts as "at top" (index 0, offset
+                // 0), so Back used to fall straight through to finish() and
+                // QUIT THE APP from a screen the user was trying to back out
+                // of. Undo the group selection first; the next Back then exits
+                // normally from a populated grid.
+                viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
             } else {
                 // #10 tvOS parity: at the top channel Menu/Back exits to the
                 // launcher (Apple TV Home has no confirm), so finish straight
@@ -2287,6 +2296,21 @@ fun GuideScreen(
                     }
                 },
         ) {
+            // GH #72: an empty group leaves the grid with no focusable node,
+            // which also kills the hold-LEFT sidebar handler on this very
+            // LazyColumn (onPreviewKeyEvent runs along the FOCUSED node's
+            // ancestor chain only). The notice restores one, and carries an
+            // explicit button back to every channel.
+            if (filteredChannels.isEmpty()) {
+                item(key = "guide.emptyGroup") {
+                    EmptyGroupNotice(
+                        isSearching = state.searchQuery.isNotBlank(),
+                        onShowAllChannels = {
+                            viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
+                        },
+                    )
+                }
+            }
             // Key by url, not the non-unique "m3u:<tvg-id>" id (GH #31 crash fix).
             itemsIndexed(items = filteredChannels, key = { _, ch -> ch.url }) { channelIndex, channel ->
                 val programmes = GuideRowProgrammes(state.epgByChannel[channel.guideMatchKey].orEmpty())

@@ -118,6 +118,7 @@ import com.aeriotv.android.feature.collections.CollectionPill
 import com.aeriotv.android.feature.collections.CollectionsMenuContext
 import com.aeriotv.android.feature.collections.CollectionsViewModel
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
+import com.aeriotv.android.feature.livetv.EmptyGroupNotice
 import com.aeriotv.android.feature.livetv.LiveTVViewMode
 import com.aeriotv.android.feature.livetv.ManageGroupsSheet
 import com.aeriotv.android.feature.livetv.ProgramInfoSheet
@@ -665,6 +666,21 @@ fun ChannelListScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // GH #72: an empty group is a legitimate state (a provider
+                // group nothing has been assigned to yet), not an error, so it
+                // gets a notice with a way out rather than a blank list. The
+                // pill row stays on screen here, so this is comfort rather
+                // than rescue; the guide is where it is load-bearing.
+                if (filtered.isEmpty()) {
+                    item(key = "list.emptyGroup") {
+                        EmptyGroupNotice(
+                            isSearching = state.searchQuery.isNotBlank(),
+                            onShowAllChannels = {
+                                viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
+                            },
+                        )
+                    }
+                }
                 // Key by url, NOT id: id is "m3u:<tvg-id>", and providers assign
                 // the same tvg-id to multiple distinct channels, so id is not
                 // unique. Compose LazyColumn hard-crashes on a duplicate key. url
