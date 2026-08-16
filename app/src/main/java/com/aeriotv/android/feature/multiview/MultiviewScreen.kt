@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.TableRows
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.ViewSidebar
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Button
@@ -255,6 +256,10 @@ fun MultiviewScreen(
     // reads (toggle / addTile APPEND, never clear), so newly picked tiles grow
     // the existing grid and BACK out of the picker keeps everything.
     var addPickerOpen by remember { mutableStateOf(false) }
+    // Swap Stream: the tile the picker should RE-POINT rather than append to.
+    // Null = the picker's normal add behaviour. Cleared whenever it closes so a
+    // later "Add streams" can never inherit a stale target.
+    var swapTargetTileId by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = !exitDialogOpen) {
         when {
             relocatingIndex != null -> relocatingIndex = null
@@ -622,9 +627,10 @@ fun MultiviewScreen(
             // hiltViewModel()'s fresh, graph-detached instance, matching
             // Navigation.kt's hiltViewModel(parent) wiring.
             playlistVm = playlistVm,
-            onLaunch = { addPickerOpen = false },
-            onCancel = { addPickerOpen = false },
-            onDismiss = { addPickerOpen = false },
+            swapTargetTileId = swapTargetTileId,
+            onLaunch = { addPickerOpen = false; swapTargetTileId = null },
+            onCancel = { addPickerOpen = false; swapTargetTileId = null },
+            onDismiss = { addPickerOpen = false; swapTargetTileId = null },
         )
     }
 
@@ -666,6 +672,19 @@ fun MultiviewScreen(
                         ),
                     )
                 }
+                // Swap Stream: re-point THIS tile at something else through
+                // the very same picker as "Add streams". No cap check here -
+                // the grid does not grow, so the tile count is unchanged.
+                add(
+                    TvMenuAction(
+                        label = "Swap Stream",
+                        icon = Icons.Filled.SwapHoriz,
+                        onClick = {
+                            swapTargetTileId = menuTile.id
+                            addPickerOpen = true
+                        },
+                    ),
+                )
                 if (menuIdx != focused) {
                     add(
                         TvMenuAction(

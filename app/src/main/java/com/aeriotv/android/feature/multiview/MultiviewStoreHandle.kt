@@ -29,6 +29,8 @@ class MultiviewStoreHandleVm @Inject constructor(
     fun isSelected(channel: M3UChannel): Boolean = store.isSelected(channel)
     fun addTile(tile: MultiviewTile): Boolean = store.addTile(tile)
     fun removeTile(tileId: String) = store.removeTile(tileId)
+    fun replaceTile(tileId: String, replacement: MultiviewTile): Boolean =
+        store.replaceTile(tileId, replacement)
     fun setAudioFocus(index: Int) = store.setAudioFocus(index)
     fun swap(from: Int, to: Int) = store.swap(from, to)
     fun move(from: Int, to: Int) = store.move(from, to)
@@ -57,6 +59,8 @@ class MultiviewStoreHandle(
     val toggle: (M3UChannel) -> Unit,
     val addTile: (MultiviewTile) -> Boolean,
     val removeTile: (String) -> Unit,
+    /** Swap Stream: re-point an existing tile, keeping its slot. */
+    val replaceTile: (String, MultiviewTile) -> Boolean,
     val setAudioFocus: (Int) -> Unit,
     val swap: (Int, Int) -> Unit,
     val move: (Int, Int) -> Unit,
@@ -80,6 +84,7 @@ fun rememberMultiviewStoreHandle(
         toggle = vm::toggle,
         addTile = vm::addTile,
         removeTile = vm::removeTile,
+        replaceTile = vm::replaceTile,
         setAudioFocus = vm::setAudioFocus,
         swap = vm::swap,
         move = vm::move,

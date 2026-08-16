@@ -112,6 +112,10 @@ fun AddToMultiviewSheet(
     // revert to (the multiview grid's "Add streams") pass the same close lambda
     // for both. Defaults to onCancel so existing call sites keep compiling.
     onDismiss: () -> Unit = onCancel,
+    // Swap Stream: when non-null this same picker RE-POINTS the tile with this
+    // id instead of appending a new one, and closes on the first pick. Null
+    // keeps the original add behaviour, so existing call sites are unchanged.
+    swapTargetTileId: String? = null,
     multiviewStore: MultiviewStoreHandle = rememberMultiviewStoreHandle(),
     playlistVm: PlaylistViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
@@ -230,6 +234,29 @@ fun AddToMultiviewSheet(
             pendingWarnedAdd = commit
         } else {
             commit()
+        }
+    }
+    // Swap Stream: one picker, two verbs. With [swapTargetTileId] set every
+    // pick RE-POINTS that tile and closes the sheet; without one the original
+    // add paths run untouched. Routing both through this file keeps the rows,
+    // search, sources and gating identical between them, which is the whole
+    // reason Swap reuses this sheet rather than growing its own.
+    //
+    // Swap deliberately skips [gateAdd]: the soft-limit performance warning is
+    // about ADDING a stream, and a swap leaves the tile count alone.
+    fun commitTile(tile: MultiviewTile): Boolean {
+        val target = swapTargetTileId ?: return multiviewStore.addTile(tile)
+        val ok = multiviewStore.replaceTile(target, tile)
+        // A false here means the pick already occupies another tile; leave the
+        // sheet open so the user can choose something else.
+        if (ok) onLaunch()
+        return ok
+    }
+    val commitChannel: (M3UChannel, Boolean) -> Unit = { channel, isSel ->
+        if (swapTargetTileId != null) {
+            commitTile(MultiviewTile.live(channel))
+        } else {
+            gateAdd(!isSel) { multiviewStore.toggle(channel) }
         }
     }
     // FORM-FACTOR SPLIT: phones/tablets get the native ModalBottomSheet (with
@@ -414,7 +441,7 @@ fun AddToMultiviewSheet(
                                     nowTitle = now?.title.orEmpty(),
                                     selected = isSel,
                                     atCap = !isSel && atCapNow,
-                                    onToggle = { gateAdd(!isSel) { multiviewStore.toggle(channel) } },
+                                    onToggle = { commitChannel(channel, isSel) },
                                 )
                             }
                             item(key = "hdr_all") { SectionHeader("All Channels") }
@@ -427,7 +454,7 @@ fun AddToMultiviewSheet(
                                 nowTitle = now?.title.orEmpty(),
                                 selected = isSel,
                                 atCap = !isSel && atCapNow,
-                                onToggle = { gateAdd(!isSel) { multiviewStore.toggle(channel) } },
+                                onToggle = { commitChannel(channel, isSel) },
                             )
                         }
                     }
@@ -450,7 +477,7 @@ fun AddToMultiviewSheet(
                                             resolving = resolving + movie.uuid
                                             onDemandVm.resolveMovieUrl(movie.uuid).onSuccess { r ->
                                                 val resume = watchVm.get(movie.uuid)?.positionMs ?: 0L
-                                                multiviewStore.addTile(
+                                                commitTile(
                                                     MultiviewTile(
                                                         id = tileId,
                                                         kind = TileKind.Vod,
@@ -541,7 +568,7 @@ fun AddToMultiviewSheet(
                                                 onDemandVm.resolveEpisodeUrl(ep.uuid, ep.firstStreamId)
                                                     .onSuccess { r ->
                                                         val resume = watchVm.get(ep.uuid)?.positionMs ?: 0L
-                                                        multiviewStore.addTile(
+                                                        commitTile(
                                                             MultiviewTile(
                                                                 id = tileId,
                                                                 kind = TileKind.Vod,
@@ -597,7 +624,7 @@ fun AddToMultiviewSheet(
                                 onPick = {
                                     if (isSel) return@VodPickerRow
                                     gateAdd(true) {
-                                        multiviewStore.addTile(
+                                        commitTile(
                                             MultiviewTile(
                                                 id = tileId,
                                                 kind = TileKind.Vod,

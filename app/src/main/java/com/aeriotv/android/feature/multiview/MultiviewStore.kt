@@ -90,6 +90,31 @@ class MultiviewStore @Inject constructor() {
         return true
     }
 
+    /**
+     * Swap Stream (iOS parity: MultiviewStore.replace(tileID:with:server:)):
+     * re-point the tile identified by [tileId] at [replacement], keeping its
+     * SLOT. Tiles here are positional and audio focus is an index, so holding
+     * the slot is what keeps audio and the layout roles with the tile the user
+     * was looking at; the composable at that position sees a new url and does
+     * an in-place re-prepare, the same cost profile as [removeAt]'s shifted
+     * tiles.
+     *
+     * The grid never changes size, so [maxTiles] and the soft-limit
+     * performance warning - both about ADDING load - deliberately do not
+     * apply. Returns true when the slot now shows [replacement]: picking what
+     * the tile already shows is a no-op success, while picking something
+     * already in ANOTHER tile fails, matching the picker's id dedup.
+     */
+    fun replaceTile(tileId: String, replacement: MultiviewTile): Boolean {
+        val current = _selected.value
+        val index = current.indexOfFirst { it.id == tileId }
+        if (index < 0) return false
+        if (current[index].id == replacement.id) return true
+        if (current.any { it.id == replacement.id }) return false
+        _selected.value = current.toMutableList().also { it[index] = replacement }
+        return true
+    }
+
     /** Remove a tile by id (mixed picker counterpart of [removeAt]). */
     fun removeTile(tileId: String) {
         val index = _selected.value.indexOfFirst { it.id == tileId }
