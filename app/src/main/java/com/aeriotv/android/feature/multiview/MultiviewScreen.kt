@@ -1137,23 +1137,41 @@ private fun TileGrid(
                     .then(
                         if (!anyFullscreen) {
                             Modifier.pointerInput(index, tiles.size, pxRects.getOrNull(index)) {
+                                // Touch long-press serves two verbs. A long
+                                // press that then DRAGS is reorder, exactly as
+                                // before; a long press RELEASED in place opens
+                                // the tile action menu (iOS long-press parity).
+                                // Until now release-in-place entered the
+                                // tap-to-swap relocate mode, so phones had NO
+                                // route to the menu at all - Make Audio,
+                                // Spotlight, Swap Stream were TV-only in
+                                // practice (Logan's Fold, 2026-08-16). Pickup
+                                // (and the relocate fallback) now arms on the
+                                // first actual drag movement instead.
+                                var moved = false
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { offset ->
+                                        moved = false
                                         dragSource = index
                                         val pr = pxRects.getOrNull(index)
                                         dragPos = Offset(
                                             (pr?.left ?: 0f) + offset.x,
                                             (pr?.top ?: 0f) + offset.y,
                                         )
-                                        onTileLongPress(index)
                                     },
                                     onDrag = { change, amount ->
                                         change.consume()
+                                        if (!moved) {
+                                            moved = true
+                                            onTileLongPress(index)
+                                        }
                                         dragPos += amount
                                     },
                                     onDragEnd = {
                                         val from = dragSource
-                                        if (from != null) {
+                                        if (!moved) {
+                                            onTileMenu(index)
+                                        } else if (from != null) {
                                             val to = MultiviewGridMath.indexAt(dragPos, pxRects)
                                             if (to != from) onReorder(from, to)
                                         }
