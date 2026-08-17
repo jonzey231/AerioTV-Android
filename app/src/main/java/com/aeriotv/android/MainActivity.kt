@@ -632,15 +632,16 @@ class MainActivity : ComponentActivity() {
         window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
     }
 
-    /** Frankie B. freeze (Discord, logs 2026-08-04): resume job for the
-     *  pause-through-mode-switch below. Cancelled on player swap so a stale
-     *  resume can never un-pause a different stream. */
-    private var resModeResumeJob: kotlinx.coroutines.Job? = null
+    /** Frankie B. freeze (Discord, logs 2026-08-04): post-switch wedge
+     *  watchdog. Cancelled on player swap so it can never act on a
+     *  different stream than the one it observed. */
+    private var resModeWatchdogJob: kotlinx.coroutines.Job? = null
 
-    /** How long a mid-playback HDMI mode change gets to settle before the
-     *  paused player resumes. The same knob Kodi ships as "delay after
-     *  change of refresh rate", added for exactly this Amlogic bug class. */
-    private val resModeSettleMs = 2500L
+    /** How long after a mid-playback HDMI mode change the watchdog waits
+     *  before checking that video frames are flowing again. Long enough
+     *  to cover the mode change plus a normal post-switch re-buffer
+     *  (his log shows healthy recoveries at 5-7s). */
+    private val resModeWedgeCheckMs = 8000L
 
     /** GH #40: switch the display to the content's resolution class. */
     private fun applyContentResolutionMode(videoW: Int, videoH: Int) {
@@ -667,37 +668,47 @@ class MainActivity : ComponentActivity() {
                 ),
             )
             .firstOrNull() ?: return
-        // Frankie B.'s Chromecast logs (2026-08-04): onVideoSizeChanged fires
-        // at first frame, so this switch landed UNDER an active 4K decode.
-        // The HDMI re-handshake tears the codec's output surface mid-stream
-        // (SurfaceUtils reconnect + ACodec re-init in his log), forcing a
-        // 5-7s re-buffer on every 4K tune - and on Amlogic decoders the
-        // mid-decode reconfigure sometimes wedges video output entirely
-        // ("freezes completely on 4K footage"). Pause the pipeline through
-        // the switch so the reconfigure happens against a quiescent codec,
-        // then resume once the display settles. A live stream resumes a
-        // couple of seconds behind the edge; the existing live-edge handling
-        // absorbs that on the next tune or Go Live.
-        val player = resMatchPlayer
-        val pauseThroughSwitch = player != null && player.playWhenReady &&
-            player.playbackState == androidx.media3.common.Player.STATE_READY
-        if (pauseThroughSwitch) {
-            Log.i(TAG, "GH#40 pausing through mode switch (${resModeSettleMs}ms settle)")
-            player?.pause()
-        }
         Log.i(TAG, "GH#40 content res match: ${videoW}x$videoH -> mode ${best.physicalWidth}x${best.physicalHeight}@${best.refreshRate}")
         window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
         resolutionModeApplied = true
-        if (pauseThroughSwitch) {
-            resModeResumeJob?.cancel()
-            resModeResumeJob = lifecycleScope.launch {
-                kotlinx.coroutines.delay(resModeSettleMs)
-                // Same instance only: a channel change during the settle
-                // window swaps players, and the new one manages itself.
-                if (resMatchPlayer === player) {
-                    Log.i(TAG, "GH#40 resuming after mode switch")
-                    player?.play()
-                }
+        // Frankie B.'s Chromecast logs (2026-08-04): onVideoSizeChanged fires
+        // at first frame, so this switch lands UNDER the active decode. The
+        // HDMI re-handshake tears the codec's output surface (SurfaceUtils
+        // reconnect + ACodec re-init in his log); most devices ride through
+        // with a brief re-buffer, but Amlogic decoders sometimes wedge video
+        // output entirely ("freezes completely on 4K footage") with no error
+        // event, so nothing recovers. Playback is deliberately NOT paused
+        // (Logan 2026-08-16) - healthy devices pay nothing. Instead a
+        // watchdog samples the video decoder's rendered-frame counter and,
+        // if no frame has rendered by the check, re-prepares at the live
+        // edge - the same recovery a manual channel re-tap performs.
+        val player = resMatchPlayer
+        if (player != null && player.playWhenReady) {
+            val countersBefore = player.videoDecoderCounters
+            val renderedBefore = countersBefore?.renderedOutputBufferCount ?: 0
+            resModeWatchdogJob?.cancel()
+            resModeWatchdogJob = lifecycleScope.launch {
+                kotlinx.coroutines.delay(resModeWedgeCheckMs)
+                // Same instance only: a channel change during the window
+                // swaps players, and the new one manages itself.
+                val p = resMatchPlayer ?: return@launch
+                if (p !== player || !p.playWhenReady) return@launch
+                val countersNow = p.videoDecoderCounters ?: return@launch
+                // The reconfigure may re-init the codec, replacing the
+                // counters object and resetting its totals - a NEW object
+                // with rendered frames is a healthy recovery, so the
+                // baseline only carries over when the object survived.
+                val baseline =
+                    if (countersNow === countersBefore) renderedBefore else 0
+                if (countersNow.renderedOutputBufferCount > baseline) return@launch
+                Log.w(
+                    TAG,
+                    "GH#40 video wedged after mode switch " +
+                        "(rendered=${countersNow.renderedOutputBufferCount} " +
+                        "baseline=$baseline state=${p.playbackState}); re-preparing",
+                )
+                p.seekToDefaultPosition()
+                p.prepare()
             }
         }
     }
@@ -761,8 +772,8 @@ class MainActivity : ComponentActivity() {
             exoHolder.playerInstance.collect { p ->
                 resMatchPlayer?.let { old -> resMatchListener?.let(old::removeListener) }
                 resMatchListener = null
-                resModeResumeJob?.cancel()
-                resModeResumeJob = null
+                resModeWatchdogJob?.cancel()
+                resModeWatchdogJob = null
                 resMatchPlayer = p
                 if (p == null) {
                     restoreDisplayMode()
