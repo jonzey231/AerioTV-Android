@@ -257,6 +257,7 @@ fun GuideScreen(
         initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
     )
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val multiviewStore = rememberMultiviewStoreHandle()
     // Observe the mini-player session so the guide's Back handler can stand
     // down while the mini is showing (see the BackHandler below for why).
@@ -2368,6 +2369,7 @@ fun GuideScreen(
                     multiviewStore = multiviewStore,
                     showLogo = showChannelLogos,
                     showNumber = showChannelNumbers,
+                    showName = showChannelNames,
                     collectionsMenu = collectionsMenu,
                     onProgrammeWatch = if (channel.hasCatchup) {
                         { prog -> onCatchupResolve(channel, prog) }
@@ -2548,6 +2550,9 @@ private fun ChannelGuideRow(
     showLogo: Boolean = true,
     /** GH #19: when false the channel-number text is omitted from the rail. */
     showNumber: Boolean = true,
+    /** GH #73: when false the channel-name text is omitted from the rail, so a
+     *  logo-only rail hands its width to the programme grid. */
+    showName: Boolean = true,
     collectionsMenu: CollectionsMenuContext? = null,
     /** Catch-up (task #133): non-null when this channel has a replayable
      *  archive; invoked with a PAST programme the user chose to watch. Each
@@ -2702,7 +2707,12 @@ private fun ChannelGuideRow(
                                 .data(channel.tvgLogo)
                                 .size(128, 128)
                                 .build(),
-                            contentDescription = null,
+                            // GH #73: with the name line hidden the logo is
+                            // the only thing identifying this row, so it stops
+                            // being decorative and carries the name for
+                            // TalkBack. With the name shown it stays null, so
+                            // the name is not announced twice.
+                            contentDescription = if (showName) null else channel.name,
                             // GH #25: logos grow with the TV comfort scale like
                             // the row text does - a bigger display scale was
                             // enlarging rows and labels around a fixed 36x24
@@ -2730,19 +2740,23 @@ private fun ChannelGuideRow(
                     }
                     Spacer(Modifier.height(2.dp))
                     }
-                    Text(
-                        text = channel.name,
-                        style = nameStyle,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        // GH #25: at comfort scales the taller row has room for
-                        // a second line, so long channel names wrap instead of
-                        // truncating ("NBC Sports ..." -> full name). Base
-                        // scale keeps the tvOS single-line parity.
-                        maxLines = if (textScale >= 1.25f) 2 else 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    // GH #73: the name line collapses when the toggle is off,
+                    // leaving the logo centred in the rail.
+                    if (showName) {
+                        Text(
+                            text = channel.name,
+                            style = nameStyle,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            // GH #25: at comfort scales the taller row has room for
+                            // a second line, so long channel names wrap instead of
+                            // truncating ("NBC Sports ..." -> full name). Base
+                            // scale keeps the tvOS single-line parity.
+                            maxLines = if (textScale >= 1.25f) 2 else 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             } else {
                 // iOS EPGGuideView channelLabel (EPGGuideView.swift:3459): a
@@ -2779,7 +2793,7 @@ private fun ChannelGuideRow(
                                     .data(channel.tvgLogo)
                                     .size(128, 128)
                                     .build(),
-                                contentDescription = null,
+                                contentDescription = if (showName) null else channel.name,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(2.dp),
@@ -2795,15 +2809,18 @@ private fun ChannelGuideRow(
                     }
                     Spacer(Modifier.height(3.dp))
                     }
-                    Text(
-                        text = channel.name,
-                        style = nameStyle,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    // GH #73: same collapse on the phone rail.
+                    if (showName) {
+                        Text(
+                            text = channel.name,
+                            style = nameStyle,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     // GH #19: the number line collapses when the toggle is off.
                     if (showNumber) {
                         channel.channelNumber?.let { num ->

@@ -123,6 +123,7 @@ fun AppearanceSettingsScreen(
     val customAccentHex by viewModel.customAccentHex.collectAsStateWithLifecycle(initialValue = "")
     val showChannelLogos by viewModel.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNumbers by viewModel.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by viewModel.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
     var accentPickerOpen by remember { mutableStateOf(false) }
@@ -271,7 +272,7 @@ fun AppearanceSettingsScreen(
                 // its own footer, the palette grid is browse-and-tweak.
                 settingsCard(
                     header = "Channel List",
-                    footer = "Turn logos or numbers off to give long channel names more row width. Applies to the Live TV list and the Guide.",
+                    footer = "Turn logos, numbers or names off to give the rest of the row more width. Applies to the Live TV list and the Guide.",
                 ) {
                     ToggleRow(
                         title = "Show Channel Logos",
@@ -285,6 +286,16 @@ fun AppearanceSettingsScreen(
                         subtitle = "Display each channel's number in the Live TV list and Guide.",
                         checked = showChannelNumbers,
                         onCheckedChange = viewModel::setShowChannelNumbers,
+                    )
+                    DividerRow()
+                    // GH #73. Sits with its siblings rather than in its own card:
+                    // all three answer the same question -- what identifies a
+                    // channel row -- and the shared footer covers them together.
+                    ToggleRow(
+                        title = "Show Channel Name",
+                        subtitle = "Display each channel's name from the M3U or Dispatcharr Server.",
+                        checked = showChannelNames,
+                        onCheckedChange = viewModel::setShowChannelNames,
                     )
                 }
 
