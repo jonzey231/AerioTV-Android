@@ -97,6 +97,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -2584,6 +2585,32 @@ private fun ChannelGuideRow(
         derivedStateOf { channelIndex == guideNav.lastFocusedChannelIndex }
     }
 
+    // Perf: the focused row's halo (below) is DEFERRED until focus rests here.
+    //
+    // The halo composes ~5x the padded window so a horizontal page-jump always
+    // lands on a live cell. Paying it the instant focus arrives made every
+    // vertical press compose that whole batch on the new row and dispose it on
+    // the old one -- measured on an onn 4K pro (release, 20 scripted Downs):
+    // 750ms median frame, 74% janky, with 160ms mean / 486ms worst spent in
+    // Compose+layout+display-list on the UI thread. A held Down is a burst of
+    // presses, so the halo was rebuilt for rows the user is only passing
+    // THROUGH.
+    //
+    // Nothing needs it mid-burst: the halo guards horizontal moves, which can
+    // only start once the user stops moving vertically, and the composed pad
+    // (a full viewport each side) already covers a page-jump's 0.85-viewport
+    // stride on its own. So rows keep the plain viewport clip while focus is
+    // travelling, and the halo builds on the idle frame after it settles.
+    var haloActive by remember(channelIndex) { mutableStateOf(false) }
+    LaunchedEffect(rowIsFocused) {
+        if (!rowIsFocused) {
+            haloActive = false
+        } else {
+            delay(GUIDE_HALO_SETTLE_MS)
+            haloActive = true
+        }
+    }
+
     // Compact rail sizing. On TV we keep it tight (narrow rail, small logo) so
     // more channels fit; legibility comes from the name/cell text, not bulk.
     // The number column is TV-only: the phone cell stacks its number UNDER the
@@ -3012,7 +3039,9 @@ private fun ChannelGuideRow(
                     // rowIsFocused is hoisted to the row body as a derivedStateOf
                     // (see above) so reading it here doesn't subscribe this row to
                     // every lastFocusedChannelIndex change.
-                    if (!rowIsFocused &&
+                    // haloActive, not rowIsFocused: a row focus is merely PASSING
+                    // through stays viewport-clipped like any other row.
+                    if (!haloActive &&
                         (rawEnd <= visibleStartMs || rawStart >= visibleEndMs)
                     ) return@forEachIndexed
                     // Task #188: BOUND the focused-row exception. Composing the
@@ -3025,7 +3054,7 @@ private fun ChannelGuideRow(
                     // exception exists for cannot reach cells 2+ windows away,
                     // because the column snap and retarget logic always pull
                     // focus back toward the viewport first.
-                    if (rowIsFocused) {
+                    if (haloActive) {
                         val haloMs = (visibleEndMs - visibleStartMs) * 2
                         if (rawEnd <= visibleStartMs - haloMs ||
                             rawStart >= visibleEndMs + haloMs
@@ -3281,7 +3310,10 @@ private fun ProgrammeCell(
     val cellDensity = androidx.compose.ui.platform.LocalDensity.current
     // Short time-range label ("7:00 - 7:30"), shown on the TV guide cell beneath
     // the title to match the tvOS Emby-style cell (title + time range).
-    val cellTimeFmt = remember { SimpleDateFormat("h:mm", Locale.getDefault()) }
+    // Perf: one formatter for the whole guide instead of one allocated (and
+    // remembered, and GC'd) per cell. SimpleDateFormat is not thread-safe, but
+    // every use here is on the composition thread.
+    val cellTimeFmt = guideCellTimeFormat
     val timeRange = remember(programme.startMillis, programme.endMillis) {
         "${cellTimeFmt.format(java.util.Date(programme.startMillis))} - " +
             cellTimeFmt.format(java.util.Date(programme.endMillis))
@@ -3386,13 +3418,30 @@ private fun ProgrammeCell(
             // frame, which made D-pad navigation laggy. The cheap border + bg
             // highlight below is the guide's focus cue; the springy grow lives
             // only on the sparse surfaces (nav pills, On Demand posters, rows).
-            .clip(cellShape)
-            .background(cellBg)
-            .then(
-                if (cellBorderWidth > 0.dp)
-                    Modifier.border(cellBorderWidth, cellBorderColor, cellShape)
-                else Modifier,
-            )
+            // Perf: fill + focus ring drawn in ONE node instead of the
+            // clip -> background -> border chain. Three modifier nodes per cell
+            // (one of them a clip, which forces its own render layer) x ~126
+            // composed cells was ~2ms of display-list recording per cell on
+            // every scroll frame. drawBehind paints the identical rounded fill
+            // and inset ring with no layer and no clip.
+            .drawBehind {
+                val r = if (focused) 4.dp.toPx() else 0f
+                val corner = androidx.compose.ui.geometry.CornerRadius(r, r)
+                drawRoundRect(color = cellBg, cornerRadius = corner)
+                val bw = cellBorderWidth.toPx()
+                if (bw > 0f) {
+                    drawRoundRect(
+                        color = cellBorderColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(bw / 2f, bw / 2f),
+                        size = androidx.compose.ui.geometry.Size(
+                            (size.width - bw).coerceAtLeast(0f),
+                            (size.height - bw).coerceAtLeast(0f),
+                        ),
+                        cornerRadius = corner,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = bw),
+                    )
+                }
+            }
             .onFocusChanged {
                 focused = it.isFocused
                 // Record which channel row + time column owns focus so the
@@ -3414,6 +3463,13 @@ private fun ProgrammeCell(
                 // can land back on this cell and would otherwise start playback.
                 onClick = menuGuard.wrap(onPlay),
                 onLongClick = { menuOpen = true; menuGuard.arm() },
+                // Perf: no ripple. Focus is already conveyed by the cell fill +
+                // ring drawn above, and an indication node per cell costs
+                // composition on every cell the guide builds. Phone keeps the
+                // same behaviour minus the ripple wash, which the flat Emby-style
+                // cell never really showed anyway.
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
             )
             // tvOS programCell uses .padding(.horizontal, 8) / .padding(.vertical, 6)
             // on a 110pt row -> proportional 4dp/3dp on the 55dp Android-TV row.
@@ -3868,6 +3924,12 @@ private const val SIDEBAR_HOLD_OPEN_MS = 320L
  *  the focus search found no horizontal neighbour. Pairs with the grid's
  *  L/R focus-exit cancel so horizontal nav never escapes to the chrome. */
 private const val GUIDE_VIEWPORT_PAD_MS = 90L * 60_000L
+
+/** How long focus must REST on a row before it pays for the focus halo. Long
+ *  enough that a held D-pad Down (repeat rate ~60-120ms on the onn remote)
+ *  never triggers one mid-burst, short enough to be built well before a user
+ *  who stopped to read can start moving horizontally. */
+private const val GUIDE_HALO_SETTLE_MS = 180L
 
 /** Convert a millisecond span to its dp width on the (already scaled) time axis. */
 private fun msToDp(ms: Long, hourWidth: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp =
@@ -4371,4 +4433,15 @@ private class GuideLeadingEdgeBringIntoViewSpec(
         // the timeline days into catch-up history. Refuse instead.
         return if (abs(distance) > containerSize) 0f else distance
     }
+}
+
+
+/** Shared "h:mm" formatter for guide cells. One instance for the process rather
+ *  than one allocated, remembered and GC'd per composed cell -- the guide builds
+ *  and disposes these by the dozen on every D-pad press. SimpleDateFormat is not
+ *  thread-safe; every use is on the composition (main) thread. Locale is read
+ *  once, so a locale change takes effect on the next process start, which is
+ *  what the rest of this screen's static formatters already assume. */
+private val guideCellTimeFormat: SimpleDateFormat by lazy(LazyThreadSafetyMode.NONE) {
+    SimpleDateFormat("h:mm", Locale.getDefault())
 }
