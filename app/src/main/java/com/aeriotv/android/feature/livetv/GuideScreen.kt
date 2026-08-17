@@ -121,6 +121,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -425,7 +426,10 @@ fun GuideScreen(
     // canvas (NOT copied from tvOS point values, which would be ~2x too big).
     // tvOS rowHeight 110pt / 1080 = 10.19% -> 540dp * 0.1019 = 55dp;
     // timeHeader 50pt / 1080 = 4.63% -> 540dp * 0.0463 = 25dp.
-    val rowHeight = if (isTv) 55.dp * tvComfortScale else GuideMetrics.ROW_HEIGHT
+    // The TV row is measured from the type the cell holds (title + secondary
+    // line + time/badges) instead of that flat 55dp, which was a line short and
+    // clipped the badge row in half. See [tvGuideRowHeight].
+    val rowHeight = if (isTv) tvGuideRowHeight(tvComfortScale) else GuideMetrics.ROW_HEIGHT
     val headerHeight = if (isTv) 25.dp * tvComfortScale else GuideMetrics.HEADER_HEIGHT
     // tvOS draws the guide grid separators as cyan (accentPrimary) hairlines, not
     // neutral gray; mirror that on TV so the grid reads as one continuous surface.
@@ -3420,9 +3424,14 @@ private fun ProgrammeCell(
             // Phone keeps the original 8/6 inset.
             .padding(
                 horizontal = if (isTv) 4.dp else 8.dp,
-                vertical = if (isTv) 3.dp else 6.dp,
+                vertical = if (isTv) TV_CELL_INSET_V else 6.dp,
             ),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        // No gap between the text block and the live-progress bar below it: the
+        // bar is pinned to the cell's bottom edge, and on TV that 2dp was taken
+        // out of the text block's budget (a Column hands the leftover to its last
+        // child), so a now-airing cell clipped its badge line even after the row
+        // was sized for it.
+        verticalArrangement = Arrangement.spacedBy(if (isTv) 0.dp else 2.dp),
     ) {
         // One source of truth for the long-press actions; rendered as an
         // anchored DropdownMenu on phone (a thumb-distance idiom) and as the
@@ -3579,7 +3588,7 @@ private fun ProgrammeCell(
             // soft white, time-range dims further.
             Column(
                 modifier = contentSticky,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(TV_CELL_GAP),
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -3627,28 +3636,43 @@ private fun ProgrammeCell(
                         )
                     }
                 }
+                // ONE secondary line between the title and the time/badge row,
+                // and the cell renders only the lines it actually has: a
+                // programme with neither sub-title nor description is a two-line
+                // cell (title + time), a placeholder is a one-line cell (title
+                // alone, no time row), and nothing stretches or clips to fill the
+                // row. The row is sized for this three-line worst case in
+                // [tvGuideRowHeight].
+                //
                 // GH #34: the XMLTV <sub-title> (episode / sports-match name,
                 // e.g. "Team A vs Team B") is what distinguishes back-to-back
-                // programmes with the same generic title; surface it in the cell.
-                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                // programmes sharing one generic title, so it WINS the line when
+                // a programme carries both -- it is the more identifying of the
+                // two, and the full description is one OK press away in Program
+                // Info. Rendering both, as this did before, asked for a fourth
+                // line on a row that could not fit a third: the sub-title and
+                // description showed, and the time and NEW / LIVE / SxxExx
+                // badges got sliced in half.
+                val secondary = programme.subTitle?.takeIf { it.isNotBlank() }
+                    ?: programme.description.takeIf { it.isNotBlank() }
+                if (secondary != null) {
                     Text(
-                        text = sub,
+                        text = secondary,
                         style = MaterialTheme.typography.labelSmall,
                         color = if (focused) Color.White.copy(alpha = 0.85f)
                         else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic,
+                        // Italic marks it as the episode/match name rather than a
+                        // description, matching the phone cell's sub-title.
+                        fontStyle = if (programme.subTitle?.isNotBlank() == true)
+                            FontStyle.Italic else FontStyle.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (programme.description.isNotBlank()) {
-                    Text(
-                        text = programme.description,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (focused) Color.White.copy(alpha = 0.85f)
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        // Weighted, so it is measured LAST and absorbs any
+                        // squeeze itself instead of passing it to the badge row
+                        // (the belt-and-braces the phone branch already had for
+                        // GH #46): a long title that wraps, or a font-scale
+                        // override, costs this line its height, never the badges.
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
                 if (!programme.isPlaceholder) {
@@ -3821,6 +3845,80 @@ private object GuideMetrics {
     val ROW_HEIGHT = 72.dp
     /** Base (1.0x) width of one hour column. Scaled by guideScale at render. */
     val HOUR_WIDTH = 320.dp
+}
+
+// --- Android-TV programme cell metrics -------------------------------------
+// The cell's insets and inter-line gap live here rather than inline in
+// [ProgrammeCell] because [tvGuideRowHeight] has to add up the SAME numbers to
+// work out how tall a row must be. When the two drifted apart the last line of
+// the cell was silently clipped, which is the bug this exists to prevent: keep
+// the layout and the height math reading from one source.
+
+/** Vertical inset above the title and below the last line (tvOS .padding(.vertical, 6) on a 110pt row). */
+private val TV_CELL_INSET_V = 3.dp
+
+/** Gap between the cell's stacked lines (title / secondary / time+badges). */
+private val TV_CELL_GAP = 2.dp
+
+/** Floor for the time+badges line. The compact SeasonEpisodePill and EpgFlagsRow
+ *  chips are a 9sp label inside 1dp vertical padding and a 1dp border, so they
+ *  stand slightly taller than the bare labelSmall line next to them and are what
+ *  actually decides this row's height. Measured against the rendered pills. */
+private val TV_CELL_BADGE_MIN_HEIGHT = 16.dp
+
+/** The now-airing elapsed bar pinned to the bottom of a live cell. It is an
+ *  unweighted Column child measured after the text block, so the row has to
+ *  carry it explicitly -- otherwise the text block consumes the last dp and the
+ *  bar measures to zero, silently losing the live marker on exactly the cell the
+ *  user is most likely looking at. */
+private val TV_CELL_PROGRESS_HEIGHT = 3.dp
+
+/**
+ * Height of one Android-TV guide row, derived from the type it has to hold
+ * instead of a fixed 55dp.
+ *
+ * The old value came from tvOS proportions (110pt / 1080 = 10.19% -> 55dp) and
+ * predates the cell growing a third line: title, then the sub-title or
+ * description, then the time range with its NEW / LIVE / SxxExx badges. A Column
+ * measures unweighted children in order and hands the leftover to the last one,
+ * so on a 55dp row the badge line came out around half height -- the time and
+ * badges were sliced through the middle (user report on the onn 4K pro, guide at
+ * the default display scale). It is the same failure GH #46 hit on the phone's
+ * fixed 72dp row, and the reason the fix belongs in the height rather than in
+ * dropping another line: the badges carry information (NEW, LIVE, episode
+ * number) that appears nowhere else in the grid.
+ *
+ * [textScale] is the Live TV comfort scale. Cells render inside
+ * ChannelGuideRow's density override, which multiplies fontScale ONLY (GH #25),
+ * so the type is measured here at that same scale -- measuring at the ambient
+ * scale would leave the row short again for anyone above 1.0x. The result is
+ * floored at the historical 55dp * scale so no configuration ends up denser
+ * than it is today.
+ */
+@Composable
+private fun tvGuideRowHeight(textScale: Float): androidx.compose.ui.unit.Dp {
+    val base = androidx.compose.ui.platform.LocalDensity.current
+    val scaled = androidx.compose.ui.unit.Density(base.density, base.fontScale * textScale)
+    val typography = MaterialTheme.typography
+    // lineHeight is what a Text actually occupies. Material's table specifies it
+    // in sp for every style used here; the fontSize fallback only guards a theme
+    // override that leaves it Unspecified (or expresses it in em, which cannot
+    // convert to dp).
+    fun lineHeightDp(style: androidx.compose.ui.text.TextStyle): androidx.compose.ui.unit.Dp =
+        with(scaled) {
+            val lh = style.lineHeight
+            when {
+                lh.isSpecified && lh.isSp -> lh.toDp()
+                style.fontSize.isSpecified && style.fontSize.isSp -> style.fontSize.toDp() * 1.3f
+                else -> 16.dp
+            }
+        }
+    val title = lineHeightDp(typography.titleSmall)
+    val secondary = lineHeightDp(typography.labelSmall)
+    val badges = maxOf(lineHeightDp(typography.labelSmall), TV_CELL_BADGE_MIN_HEIGHT * textScale)
+    val needed = TV_CELL_INSET_V * 2 + title + TV_CELL_GAP + secondary + TV_CELL_GAP + badges +
+        TV_CELL_PROGRESS_HEIGHT
+    return maxOf(needed, 55.dp * textScale)
 }
 
 private const val MS_PER_HOUR_F = 3_600_000f
