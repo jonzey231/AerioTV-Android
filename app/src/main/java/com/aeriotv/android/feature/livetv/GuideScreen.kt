@@ -3307,6 +3307,34 @@ private fun ProgrammeCell(
         }
     }
     var focused by remember { mutableStateOf(false) }
+
+    // Progressive detail. A cell composed WHILE the user is navigating renders
+    // its title only, then fills in the sub-title / description / time+badges
+    // once movement settles. Composing those lines is the bulk of a cell's
+    // cost, and during a held D-pad the rows they land on are being scrolled
+    // past unread -- this is what a Leanback guide gets for free by binding a
+    // recycled view lazily.
+    //
+    // The initial read is a PLAIN field read (see lastFocusMoveAtMs), so no
+    // cell subscribes to focus moves, and cells already on screen with their
+    // detail drawn are never revisited -- only the ones being composed right
+    // now start bare. The cost of settling is therefore proportional to what
+    // was just composed, not to everything on screen.
+    var showDetail by remember {
+        mutableStateOf(
+            android.os.SystemClock.uptimeMillis() - guideNav.lastFocusMoveAtMs >= GUIDE_DETAIL_SETTLE_MS
+        )
+    }
+    if (!showDetail) {
+        LaunchedEffect(Unit) {
+            while (
+                android.os.SystemClock.uptimeMillis() - guideNav.lastFocusMoveAtMs < GUIDE_DETAIL_SETTLE_MS
+            ) {
+                delay(GUIDE_DETAIL_POLL_MS)
+            }
+            showDetail = true
+        }
+    }
     val cellDensity = androidx.compose.ui.platform.LocalDensity.current
     // Short time-range label ("7:00 - 7:30"), shown on the TV guide cell beneath
     // the title to match the tvOS Emby-style cell (title + time range).
@@ -3686,7 +3714,7 @@ private fun ProgrammeCell(
                 // GH #34: the XMLTV <sub-title> (episode / sports-match name,
                 // e.g. "Team A vs Team B") is what distinguishes back-to-back
                 // programmes with the same generic title; surface it in the cell.
-                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                programme.subTitle?.takeIf { showDetail && it.isNotBlank() }?.let { sub ->
                     Text(
                         text = sub,
                         style = MaterialTheme.typography.labelSmall,
@@ -3697,7 +3725,7 @@ private fun ProgrammeCell(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (programme.description.isNotBlank()) {
+                if (showDetail && programme.description.isNotBlank()) {
                     Text(
                         text = programme.description,
                         style = MaterialTheme.typography.labelSmall,
@@ -3707,7 +3735,7 @@ private fun ProgrammeCell(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (!programme.isPlaceholder) {
+                if (showDetail && !programme.isPlaceholder) {
                     // Time range plus the season/episode pill and badge flags,
                     // folded onto one line so the height-limited TV cell does
                     // not gain a row. Trailing badges clip first on narrow cells.
@@ -3779,7 +3807,7 @@ private fun ProgrammeCell(
                     }
                 }
                 // GH #34: surface the XMLTV <sub-title> (match/episode name).
-                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                programme.subTitle?.takeIf { showDetail && it.isNotBlank() }?.let { sub ->
                     Text(
                         text = sub,
                         style = MaterialTheme.typography.labelSmall,
@@ -3804,7 +3832,7 @@ private fun ProgrammeCell(
                 }
                 val hasBadgeRow = flags.isNotEmpty() || seLabel != null
 
-                if (programme.description.isNotBlank()) {
+                if (showDetail && programme.description.isNotBlank()) {
                     Text(
                         text = programme.description,
                         style = MaterialTheme.typography.labelSmall,
@@ -3831,7 +3859,7 @@ private fun ProgrammeCell(
                 }
                 // Badges sit BELOW the title and description so the cell reads
                 // cleanly top-down instead of a busy middle row.
-                if (hasBadgeRow) {
+                if (showDetail && hasBadgeRow) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -3931,6 +3959,15 @@ private const val GUIDE_VIEWPORT_PAD_MS = 90L * 60_000L
  *  who stopped to read can start moving horizontally. */
 private const val GUIDE_HALO_SETTLE_MS = 180L
 
+/** How long after the last focus move a cell waits before filling in its detail
+ *  lines. Comfortably longer than the remote's key-repeat interval so a held
+ *  D-pad never triggers a fill mid-burst, and short enough to land within a
+ *  frame or two of the user stopping. */
+private const val GUIDE_DETAIL_SETTLE_MS = 140L
+
+/** Poll step while a bare cell waits for movement to settle. */
+private const val GUIDE_DETAIL_POLL_MS = 40L
+
 /** Convert a millisecond span to its dp width on the (already scaled) time axis. */
 private fun msToDp(ms: Long, hourWidth: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp =
     (hourWidth.value * (ms.toFloat() / MS_PER_HOUR_F)).dp
@@ -3979,6 +4016,13 @@ private class GuideVerticalNavState {
      *  observable state -- only the key handler reads/writes it to throttle the
      *  held-key fast-scroll to [HOLD_SCROLL_MIN_INTERVAL_MS]. */
     var lastVerticalMoveAtMs = 0L
+
+    /** uptimeMillis of the last focus move in EITHER direction. Plain field, not
+     *  observable state, and deliberately so: cells read it once at composition
+     *  to decide whether to defer their detail lines, and a snapshot-backed read
+     *  there would subscribe every composed cell to every focus move -- exactly
+     *  the cost the deferral exists to avoid. */
+    var lastFocusMoveAtMs = 0L
 
     /** True from [beginVerticalMove] until the move coroutine settles. Lets the
      *  key handler keep stepping channel-by-channel on rapid / long-press UP
@@ -4155,6 +4199,7 @@ private class GuideVerticalNavState {
     /** Called by a cell when it gains focus. Records which channel row owns
      *  focus and the time column the user is in. */
     fun onCellFocused(channelIndex: Int, cellStartMs: Long) {
+        lastFocusMoveAtMs = android.os.SystemClock.uptimeMillis()
         focusedChannelIndex = channelIndex
         lastFocusedChannelIndex = channelIndex
         // Raw column of the cell that actually holds focus (never clamped forward),
