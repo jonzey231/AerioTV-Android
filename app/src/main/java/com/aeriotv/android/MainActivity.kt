@@ -632,6 +632,16 @@ class MainActivity : ComponentActivity() {
         window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
     }
 
+    /** Frankie B. freeze (Discord, logs 2026-08-04): resume job for the
+     *  pause-through-mode-switch below. Cancelled on player swap so a stale
+     *  resume can never un-pause a different stream. */
+    private var resModeResumeJob: kotlinx.coroutines.Job? = null
+
+    /** How long a mid-playback HDMI mode change gets to settle before the
+     *  paused player resumes. The same knob Kodi ships as "delay after
+     *  change of refresh rate", added for exactly this Amlogic bug class. */
+    private val resModeSettleMs = 2500L
+
     /** GH #40: switch the display to the content's resolution class. */
     private fun applyContentResolutionMode(videoW: Int, videoH: Int) {
         if (!matchContentResolutionEnabled || !isTelevisionDevice()) return
@@ -657,9 +667,39 @@ class MainActivity : ComponentActivity() {
                 ),
             )
             .firstOrNull() ?: return
+        // Frankie B.'s Chromecast logs (2026-08-04): onVideoSizeChanged fires
+        // at first frame, so this switch landed UNDER an active 4K decode.
+        // The HDMI re-handshake tears the codec's output surface mid-stream
+        // (SurfaceUtils reconnect + ACodec re-init in his log), forcing a
+        // 5-7s re-buffer on every 4K tune - and on Amlogic decoders the
+        // mid-decode reconfigure sometimes wedges video output entirely
+        // ("freezes completely on 4K footage"). Pause the pipeline through
+        // the switch so the reconfigure happens against a quiescent codec,
+        // then resume once the display settles. A live stream resumes a
+        // couple of seconds behind the edge; the existing live-edge handling
+        // absorbs that on the next tune or Go Live.
+        val player = resMatchPlayer
+        val pauseThroughSwitch = player != null && player.playWhenReady &&
+            player.playbackState == androidx.media3.common.Player.STATE_READY
+        if (pauseThroughSwitch) {
+            Log.i(TAG, "GH#40 pausing through mode switch (${resModeSettleMs}ms settle)")
+            player?.pause()
+        }
         Log.i(TAG, "GH#40 content res match: ${videoW}x$videoH -> mode ${best.physicalWidth}x${best.physicalHeight}@${best.refreshRate}")
         window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
         resolutionModeApplied = true
+        if (pauseThroughSwitch) {
+            resModeResumeJob?.cancel()
+            resModeResumeJob = lifecycleScope.launch {
+                kotlinx.coroutines.delay(resModeSettleMs)
+                // Same instance only: a channel change during the settle
+                // window swaps players, and the new one manages itself.
+                if (resMatchPlayer === player) {
+                    Log.i(TAG, "GH#40 resuming after mode switch")
+                    player?.play()
+                }
+            }
+        }
     }
 
     /** GH #40: hand the mode choice back to the system (native/UI mode). */
@@ -721,6 +761,8 @@ class MainActivity : ComponentActivity() {
             exoHolder.playerInstance.collect { p ->
                 resMatchPlayer?.let { old -> resMatchListener?.let(old::removeListener) }
                 resMatchListener = null
+                resModeResumeJob?.cancel()
+                resModeResumeJob = null
                 resMatchPlayer = p
                 if (p == null) {
                     restoreDisplayMode()
