@@ -208,52 +208,14 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Choose what comes in from Drive",
-            body = "Turning on Google Drive sync now asks what should come " +
-                "across before anything is pulled down, and each device " +
-                "chooses for itself. Your customised remote button map is " +
-                "its own category and stays on the TV that made it, so a TV " +
-                "with a different remote no longer inherits the wrong map.",
-        ),
-        WhatsNewItem(
-            title = "Signing in turns sync on",
-            body = "Signing into Drive as a brand-new user with nothing to " +
-                "restore now leaves sync switched on, so everything from " +
-                "that point forward keeps in step across your devices. " +
-                "Settings also spells out what actually triggers a sync.",
-        ),
-        WhatsNewItem(
-            title = "Manage Groups is back in the TV Guide",
-            body = "Android TV's Guide has its own Manage Groups button " +
-                "again: after the last group pill, or beside the Groups " +
-                "heading when you use the sidebar. Hiding and reordering " +
-                "groups no longer means switching to List view first.",
-        ),
-        WhatsNewItem(
-            title = "Guide no longer crashes with a long guide",
-            body = "Opening the grid view with a very deep guide history " +
-                "could close the app outright. The guide's timeline is now " +
-                "capped to a span it can actually draw.",
-        ),
-        WhatsNewItem(
-            title = "Live Rewind gives storage back",
-            body = "A channel's rewind buffer is now released the moment you " +
-                "leave it instead of being kept, which could add up to " +
-                "gigabytes over an evening of channel surfing. Buffer Size " +
-                "in Settings also does something real now, and says what " +
-                "each option is for.",
-        ),
-        WhatsNewItem(
-            title = "Empty playlists are reported, not shown as empty",
-            body = "A playlist that answers with nothing at all is now " +
-                "reported as an error instead of quietly appearing as a " +
-                "playlist with no channels.",
-        ),
-        WhatsNewItem(
-            title = "DVR list keeps up",
-            body = "Opening the DVR tab refreshes it immediately, so a " +
-                "recording that has just finished shows up under Completed " +
-                "without waiting or restarting the app.",
+            title = "Watch from Beginning really starts at the beginning",
+            body = "Playing a still-recording programme from the beginning " +
+                "could open at the live edge instead, leaving you to rewind " +
+                "the whole way by hand. It happened most often right after " +
+                "the app was opened fresh, which is why it seemed to come " +
+                "and go. AerioTV now asks for the start of the recording " +
+                "before the first frame is fetched, so there is nothing left " +
+                "to race. Start at Live is unchanged.",
         ),
     )
 }
