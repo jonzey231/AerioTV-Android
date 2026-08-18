@@ -119,6 +119,29 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "VODPlayerScreen"
+
+/**
+ * GH #78: how long the "Watch from Beginning" watcher follows an in-progress
+ * DVR recording after prepare(), waiting to see whether media3's live-edge
+ * default overrode our pinned start position. Generous on purpose: on a cold
+ * app launch on a low-power Google TV box, a 25-minute recording's playlist
+ * (375+ segments at Dispatcharr's -hls_time 4) can take many seconds to
+ * resolve, and the previous 6-second cap expired before it ever did.
+ */
+private const val WATCH_FROM_START_WINDOW_MS = 45_000L
+
+/**
+ * GH #78: target live offset used to drag an in-progress recording's live
+ * window default start position back to its FIRST segment. Any value larger
+ * than the recording can possibly be works, because HlsMediaSource constrains
+ * it to the playlist duration before subtracting; 30 days is far beyond any
+ * real recording and stays clear of overflow in Util.msToUs.
+ */
+private const val WATCH_FROM_START_TARGET_OFFSET_MS = 30L * 24L * 60L * 60L * 1000L
+
+/** Cap on re-corrections so a window that refuses to hold position 0 degrades
+ *  to "starts at live" rather than an endless seek loop. */
+private const val WATCH_FROM_START_MAX_CORRECTIONS = 5
 private const val AUTO_HIDE_MS = 4_000L
 
 /**
@@ -328,6 +351,11 @@ fun VODPlayerScreen(
     // PlayerView.scheduleScrubCommit parity) so key autorepeat sweeps the
     // preview instead of queueing one seek per repeat (no stutter).
     var scrubTargetMs by remember { mutableStateOf<Long?>(null) }
+    // GH #78: set by the first deliberate seek of any kind (scrub commit,
+    // d-pad skip, media key, scrubber drag). The from-beginning watcher below
+    // stands down the moment this flips, so a correction can never land on top
+    // of a position the user chose.
+    var userSeeked by remember { mutableStateOf(false) }
     // iOS PlayerView.scrubStep acceleration: consecutive same-direction
     // steps grow the multiplier (1 + count/2, capped 12x of the 10s base).
     var scrubAccelCount by remember { mutableIntStateOf(0) }
@@ -453,6 +481,7 @@ fun VODPlayerScreen(
     // inside what's already buffered use a normal (instant) player seek.
     val seekPlayer: (Long) -> Unit = seek@{ rawTarget ->
         val player = exoPlayer ?: return@seek
+        userSeeked = true
         if (!isCatchup) {
             player.seekTo(rawTarget)
             positionMs = rawTarget
@@ -1034,8 +1063,37 @@ fun VODPlayerScreen(
                         // live and had to rewind by hand (Logan 2026-08-10).
                         // An explicit start position means the default is never
                         // consulted, so there is no race to lose.
+                        //
+                        // GH #78: the pin alone was not enough. Dispatcharr's
+                        // DVR muxer omits EXT-X-ENDLIST, so media3 builds a
+                        // DYNAMIC window whose DEFAULT position is the live
+                        // edge, and any time our pinned 0 was masked against
+                        // the placeholder timeline that default won instead.
+                        // So move the default itself. HlsMediaSource derives
+                        // the live window's default start position as
+                        // `durationUs + liveEdgeOffsetUs - targetOffsetMs`,
+                        // having first constrained targetOffsetMs to at most
+                        // `durationUs + liveEdgeOffsetUs`. Dispatcharr writes
+                        // no EXT-X-PROGRAM-DATE-TIME, so liveEdgeOffsetUs is
+                        // 0, an oversized target offset clamps to the full
+                        // duration, and the default start position lands on
+                        // the FIRST segment. That is the same thing the Apple
+                        // build asks ffmpeg for with live_start_index=0: the
+                        // decision is made before the first byte is fetched,
+                        // so there is no resolution race left to lose.
+                        // Leaving min/max playback speed unset also pins the
+                        // rate at 1.0x, so media3 never speeds up trying to
+                        // chase the live edge.
                         if (isDvr && !startAtLiveEdge) {
-                            setMediaItem(MediaItem.fromUri(streamUrl), 0L)
+                            val fromStartItem = MediaItem.Builder()
+                                .setUri(streamUrl)
+                                .setLiveConfiguration(
+                                    MediaItem.LiveConfiguration.Builder()
+                                        .setTargetOffsetMs(WATCH_FROM_START_TARGET_OFFSET_MS)
+                                        .build(),
+                                )
+                                .build()
+                            setMediaItem(fromStartItem, 0L)
                         } else {
                             setMediaItem(MediaItem.fromUri(streamUrl))
                         }
@@ -1107,47 +1165,95 @@ fun VODPlayerScreen(
             }
         }
 
-        // DVR catch-up backstop. The start position is already pinned to 0 at
-        // setMediaItem time (see the player builder above), which is what
-        // actually fixes "Watch from Beginning"; this only corrects the case
-        // where the live window resolves LATER and drags playback forward.
+        // GH #78: "Watch from Beginning" on an in-progress recording.
         //
-        // It waits on isCurrentMediaItemSeekable, not merely a non-empty
-        // timeline: Media3 publishes a placeholder window while the playlist
-        // is still loading, and the old code seeked against that, so the real
-        // window then resolved to its default position (the live edge) and the
-        // user landed at live. Only nudges when we are actually near the edge,
-        // so it can never fight a deliberate user seek.
-        LaunchedEffect(exoPlayer, isDvr) {
+        // The start position is pinned to 0 at setMediaItem time (see the
+        // player builder above), which is the primary fix. It is not
+        // sufficient on its own. Dispatcharr records with
+        // `-hls_flags append_list+omit_endlist` and writes no
+        // EXT-X-PLAYLIST-TYPE, so by spec the playlist is a LIVE playlist and
+        // media3 builds a DYNAMIC window whose DEFAULT position is the live
+        // edge. Whenever the real window resolves after our pin was masked
+        // against the placeholder timeline, that default wins and the user
+        // lands at live with 25 minutes to rewind by hand.
+        //
+        // The previous backstop sampled the position exactly ONCE, and only
+        // within 6 seconds of the player being built. Both limits fail in
+        // precisely the case kmac reported: on a cold app launch on a
+        // low-power Google TV box, a 25-minute recording's playlist (375+
+        // segments at Dispatcharr's -hls_time 4) can take longer than 6s to
+        // resolve, and if the single sample lands BEFORE it resolves it reads
+        // ~0, logs "nothing to correct", and exits, leaving nothing to catch
+        // the drag that follows. That is exactly the reported shape: broken
+        // from a fresh launch, fine once the app is warm.
+        //
+        // So follow playback instead of guessing once. Dispatcharr uses
+        // `-hls_list_size 0`, so no segment ever rolls off and window position
+        // 0 stays valid for the whole recording; a correction can never
+        // strand the user mid-window.
+        LaunchedEffect(exoPlayer, isDvr, startAtLiveEdge) {
             if (!isDvr || startAtLiveEdge) return@LaunchedEffect
             val player = exoPlayer ?: return@LaunchedEffect
-            var waited = 0L
-            while (!player.isCurrentMediaItemSeekable && waited < 6_000L) {
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            var lastPos = -1L
+            var corrections = 0
+            while (android.os.SystemClock.elapsedRealtime() - startedAt < WATCH_FROM_START_WINDOW_MS) {
                 delay(200L)
-                waited += 200L
+                if (userSeeked) {
+                    Log.i(TAG, "DVR from-beginning: user seeked, standing down (corrections=$corrections)")
+                    return@LaunchedEffect
+                }
+                // GH #45: never seek into an errored player. seekTo flushes the
+                // codec, and flushing an already-errored MediaCodec turns a
+                // recoverable decode error into a fatal native crash cascade.
+                // Reset the position baseline so the reconnect that follows is
+                // not mistaken for a live-edge drag.
+                if (player.playerError != null) {
+                    lastPos = -1L
+                    continue
+                }
+                // media3 publishes a placeholder window (empty timeline, not
+                // seekable) while the playlist loads. Treat that as "not
+                // resolved yet" and KEEP WAITING; the old 6s cap gave up here.
+                if (player.currentTimeline.isEmpty || !player.isCurrentMediaItemSeekable) {
+                    lastPos = -1L
+                    continue
+                }
+                val pos = player.contentPosition
+                // Two shapes of the same failure. Either the window resolved
+                // straight to the live edge (the first resolved sample is
+                // already deep into the recording), or it resolved late and
+                // DRAGGED playback forward (position jumped much further than
+                // 200ms of wall clock can account for). Normal playback moves
+                // ~200ms per sample, so a 3s jump is never organic.
+                val resolvedAtEdge = lastPos < 0L && pos > 5_000L
+                val draggedForward = lastPos >= 0L && pos - lastPos > 3_000L
+                if (resolvedAtEdge || draggedForward) {
+                    if (corrections >= WATCH_FROM_START_MAX_CORRECTIONS) {
+                        Log.w(
+                            TAG,
+                            "DVR from-beginning: window returned to ${pos}ms after $corrections " +
+                                "corrections; standing down rather than looping seeks",
+                        )
+                        return@LaunchedEffect
+                    }
+                    player.seekTo(player.currentMediaItemIndex, 0L)
+                    corrections++
+                    Log.i(
+                        TAG,
+                        "DVR from-beginning: window resolved at ${pos}ms (live edge); " +
+                            "corrected to window start (correction $corrections)",
+                    )
+                    lastPos = 0L
+                    continue
+                }
+                lastPos = pos
             }
-            if (!player.isCurrentMediaItemSeekable) {
-                Log.w(TAG, "DVR from-beginning: window never became seekable after ${waited}ms")
-                return@LaunchedEffect
-            }
-            // Seek on POSITION alone. The first cut of this gated on
-            // contentDuration ("are we within 10s of the end?"), which is
-            // TIME_UNSET on a live HLS window - so the guard was always false
-            // and the correction never ran. Measured on the emulator against a
-            // 43-minute in-progress recording: the window resolved to
-            // 2597147ms (the live edge) and the seek was skipped.
-            //
-            // The user explicitly asked to start from the beginning, and this
-            // runs once before they can seek, so any non-trivial offset is
-            // Media3's live-edge default and should be corrected. The 2s
-            // threshold only avoids a pointless seek when 0 already stuck.
-            val pos = player.contentPosition
-            if (pos > 2_000L) {
-                player.seekTo(player.currentMediaItemIndex, 0L)
-                Log.i(TAG, "DVR from-beginning: resolved to ${pos}ms (live edge), seeking to window start")
-            } else {
-                Log.i(TAG, "DVR from-beginning: already at ${pos}ms, nothing to correct")
-            }
+            Log.i(
+                TAG,
+                "DVR from-beginning: watcher done after ${WATCH_FROM_START_WINDOW_MS}ms " +
+                    "(corrections=$corrections, position=${lastPos}ms)",
+            )
         }
 
         // Periodic save. Mirrors iOS NowPlayingManager.currentWatchProgress's
