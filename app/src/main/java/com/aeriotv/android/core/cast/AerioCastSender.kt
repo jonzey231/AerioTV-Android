@@ -167,6 +167,14 @@ class AerioCastSender @Inject constructor(
 
     private val castStateListener = CastStateListener { st -> onCastState(st) }
 
+    /** One involuntary session end: the cast dropped without the user stopping
+     *  it (network loss, receiver died). CastNotificationController renders it
+     *  as a heads-up notification so a backgrounded phone still tells the user
+     *  why the TV fell back to the idle screen. */
+    data class InvoluntaryEnd(val deviceName: String?, val contentTitle: String?)
+    private val _involuntaryEnd = kotlinx.coroutines.flow.MutableSharedFlow<InvoluntaryEnd>(extraBufferCapacity = 4)
+    val involuntaryEnd: kotlinx.coroutines.flow.SharedFlow<InvoluntaryEnd> = _involuntaryEnd
+
     private val sessionListener = object : SessionManagerListener<CastSession> {
         override fun onSessionStarted(session: CastSession, sessionId: String) = onConnected(session)
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) = onConnected(session)
@@ -181,7 +189,25 @@ class AerioCastSender @Inject constructor(
         // so the controller reappears on resume; the render gate on state==Connected
         // already hides it during the gap. onCastState below drops state to
         // Available/Unavailable during the suspend, which is the correct hide.
-        override fun onSessionEnded(session: CastSession, error: Int) = endCleanup()
+        override fun onSessionEnded(session: CastSession, error: Int) {
+            // Kenton 2026-08-18 (log 20:14:19): a healthy cast ended from the
+            // network side (route unselected reason=3, device gone from
+            // discovery) while the app was backgrounded, and the only visible
+            // effect was the ongoing notification silently vanishing. A
+            // non-zero error means the user did NOT stop this cast; say so.
+            if (error != com.google.android.gms.cast.CastStatusCodes.SUCCESS) {
+                val device = session.castDevice?.friendlyName
+                val what = _content.value?.title
+                Log.w(TAG, "cast session ended involuntarily: error=$error " +
+                    com.google.android.gms.cast.CastStatusCodes.getStatusCodeString(error))
+                _involuntaryEnd.tryEmit(InvoluntaryEnd(device, what))
+                surfaceCastFailure(
+                    if (device.isNullOrBlank()) "Casting disconnected"
+                    else "Casting to $device disconnected",
+                )
+            }
+            endCleanup()
+        }
         override fun onSessionSuspended(session: CastSession, reason: Int) = refreshFromContext()
         override fun onSessionStartFailed(session: CastSession, error: Int) = endCleanup()
         override fun onSessionResumeFailed(session: CastSession, error: Int) = endCleanup()
@@ -394,6 +420,15 @@ class AerioCastSender @Inject constructor(
             } catch (e: TimeoutCancellationException) {
                 surfaceCastFailure("Can't cast this channel: the stream never started")
                 null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Kenton 2026-08-18 (log 19:55:07): a second channel flip
+                // cancels this job via proxyLoadJob?.cancel(); that is
+                // supersession, not failure, and the flip that cancelled us
+                // goes on to cast fine. Swallowing the CancellationException
+                // in the Throwable arm below toasted "Can't cast this channel
+                // right now" over a working cast AND broke structured
+                // cancellation. Rethrow.
+                throw e
             } catch (t: Throwable) {
                 Log.w(TAG, "cast proxy start failed: $t")
                 surfaceCastFailure("Can't cast this channel right now")

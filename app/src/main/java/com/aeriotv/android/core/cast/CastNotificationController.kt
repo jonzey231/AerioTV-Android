@@ -54,6 +54,14 @@ class CastNotificationController @Inject constructor(
         // session is genuinely still active/resuming.
         clear()
         scope.launch {
+            // An involuntary drop (network loss, receiver death) otherwise just
+            // makes the ongoing chip vanish -- Kenton 2026-08-18: TV on the idle
+            // screen, phone showing nothing. Tell the user what happened with a
+            // normal-priority, auto-cancel notification; tapping it reopens the
+            // app, where the cast button offers the device again.
+            castSender.involuntaryEnd.collect { end -> postDisconnected(end) }
+        }
+        scope.launch {
             combine(castSender.state, castSender.content) { s, c -> s to c }
                 .collect { (state, content) ->
                     val casting = state is AerioCastSender.State.Connected && content != null
@@ -95,6 +103,39 @@ class CastNotificationController @Inject constructor(
         runCatching { NotificationManagerCompat.from(context).notify(NOTIF_ID, notif) }
     }
 
+    private fun postDisconnected(end: AerioCastSender.InvoluntaryEnd) {
+        val launchPi = PendingIntent.getActivity(
+            context,
+            REQ_CODE,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val title = if (!end.deviceName.isNullOrBlank()) {
+            "Casting to ${end.deviceName} disconnected"
+        } else {
+            "Casting disconnected"
+        }
+        val body = buildString {
+            if (!end.contentTitle.isNullOrBlank()) append("${end.contentTitle} stopped. ")
+            append("The connection to the TV was lost. Open AerioTV to cast again.")
+        }
+        val notif = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(launchPi)
+            .setAutoCancel(true)
+            // DEFAULT, not the channel's LOW: the ongoing chip is ambient, but
+            // a drop is news the user needs even from a pocketed phone.
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(ALERT_NOTIF_ID, notif) }
+    }
+
     private fun clear() {
         runCatching { NotificationManagerCompat.from(context).cancel(NOTIF_ID) }
     }
@@ -113,6 +154,7 @@ class CastNotificationController @Inject constructor(
     private companion object {
         const val CHANNEL_ID = "aeriotv_casting"
         const val NOTIF_ID = 0xC5
+        const val ALERT_NOTIF_ID = 0xC6
         const val REQ_CODE = 0xC5
     }
 }
