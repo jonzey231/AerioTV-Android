@@ -425,8 +425,16 @@ fun GuideScreen(
     // canvas (NOT copied from tvOS point values, which would be ~2x too big).
     // tvOS rowHeight 110pt / 1080 = 10.19% -> 540dp * 0.1019 = 55dp;
     // timeHeader 50pt / 1080 = 4.63% -> 540dp * 0.0463 = 25dp.
-    val rowHeight = if (isTv) 55.dp * tvComfortScale else GuideMetrics.ROW_HEIGHT
-    val headerHeight = if (isTv) 25.dp * tvComfortScale else GuideMetrics.HEADER_HEIGHT
+    // GH #72 (ant462, Onn 4K): the row must also track the OS-level text
+    // scaling. The rowDensity provider below multiplies the SYSTEM fontScale
+    // into every sp inside the row, so text on a box with Accessibility >
+    // Text scaling raised grew while this dp height did not, and the cell's
+    // last line (the time range) rendered half-cut on every row. Same
+    // treatment the comfort scale already gets; computed here, OUTSIDE the
+    // rowDensity override, so the comfort factor is not applied twice.
+    val systemFontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val rowHeight = if (isTv) 55.dp * tvComfortScale * systemFontScale else GuideMetrics.ROW_HEIGHT
+    val headerHeight = if (isTv) 25.dp * tvComfortScale * systemFontScale else GuideMetrics.HEADER_HEIGHT
     // tvOS draws the guide grid separators as cyan (accentPrimary) hairlines, not
     // neutral gray; mirror that on TV so the grid reads as one continuous surface.
     // Phone keeps the existing gray surfaceVariant divider.
@@ -3630,7 +3638,13 @@ private fun ProgrammeCell(
                 // GH #34: the XMLTV <sub-title> (episode / sports-match name,
                 // e.g. "Team A vs Team B") is what distinguishes back-to-back
                 // programmes with the same generic title; surface it in the cell.
-                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                // Guarded like iOS cellContent: Dispatcharr promotes subTitle
+                // into description when <desc> is empty, so an unguarded pair
+                // double-prints the same line and wastes one of the cell's
+                // scarce rows (GH #72).
+                programme.subTitle?.takeIf {
+                    it.isNotBlank() && it != programme.title && it != programme.description
+                }?.let { sub ->
                     Text(
                         text = sub,
                         style = MaterialTheme.typography.labelSmall,
@@ -3649,6 +3663,15 @@ private fun ProgrammeCell(
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        // GH #72: the tvOS cell gives title/subtitle/time
+                        // layoutPriority(1) so the DESCRIPTION is what
+                        // compresses in the fixed-height cell. Compose
+                        // equivalent (same trick as the phone cell's GH #46
+                        // fix): the sole weighted child is measured LAST and
+                        // absorbs any squeeze, so a cell that also carries a
+                        // subtitle drops description height rather than
+                        // pushing the time row off the bottom.
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
                 if (!programme.isPlaceholder) {
@@ -3723,7 +3746,10 @@ private fun ProgrammeCell(
                     }
                 }
                 // GH #34: surface the XMLTV <sub-title> (match/episode name).
-                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                programme.subTitle?.takeIf {
+                    // Same double-print guard as the TV cell above (GH #72).
+                    it.isNotBlank() && it != programme.title && it != programme.description
+                }?.let { sub ->
                     Text(
                         text = sub,
                         style = MaterialTheme.typography.labelSmall,
