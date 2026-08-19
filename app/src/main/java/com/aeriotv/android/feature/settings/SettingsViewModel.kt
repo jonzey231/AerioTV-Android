@@ -57,6 +57,10 @@ class SettingsViewModel @Inject constructor(
     }
 
     val showChannelNumbers: Flow<Boolean> = prefs.showChannelNumbers
+    val showChannelNames: Flow<Boolean> = prefs.showChannelNames
+    fun setShowChannelNames(value: Boolean) {
+        viewModelScope.launch { prefs.setShowChannelNames(value) }
+    }
     fun setShowChannelNumbers(value: Boolean) {
         viewModelScope.launch { prefs.setShowChannelNumbers(value) }
     }

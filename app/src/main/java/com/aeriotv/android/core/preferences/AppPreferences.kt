@@ -133,6 +133,16 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * GH #73 (ant462): hide the channel NAME text in the Guide's channel rail,
+     * leaving logo and number, for users who recognise channels by logo and
+     * want the rail as narrow-reading as possible. Default ON.
+     */
+    val showChannelNames: Flow<Boolean> = store.data.map { it[KEY_SHOW_CHANNEL_NAMES] ?: true }
+    suspend fun setShowChannelNames(value: Boolean) {
+        store.edit { it[KEY_SHOW_CHANNEL_NAMES] = value }
+    }
+
+    /**
      * Whether the EPG program badges (LIVE / NEW / PREMIERE / FINALE / REPEAT +
      * season/episode pill) render in the guide, channel list, and info sheet.
      * Default ON. Stored + Drive-synced PER DEVICE TYPE (a separate value for TV
@@ -1367,6 +1377,7 @@ class AppPreferences @Inject constructor(
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
+        val KEY_SHOW_CHANNEL_NAMES = booleanPreferencesKey("ui_show_channel_names")
         val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")
         val KEY_SHOW_EPG_BADGES_MOBILE = booleanPreferencesKey("ui_show_epg_badges_mobile")
         val KEY_PLAYER_ASPECT_MODE = stringPreferencesKey("player_aspect_mode")

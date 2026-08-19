@@ -123,6 +123,7 @@ fun AppearanceSettingsScreen(
     val customAccentHex by viewModel.customAccentHex.collectAsStateWithLifecycle(initialValue = "")
     val showChannelLogos by viewModel.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNumbers by viewModel.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by viewModel.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
     var accentPickerOpen by remember { mutableStateOf(false) }
@@ -285,6 +286,13 @@ fun AppearanceSettingsScreen(
                         subtitle = "Display each channel's number in the Live TV list and Guide.",
                         checked = showChannelNumbers,
                         onCheckedChange = viewModel::setShowChannelNumbers,
+                    )
+                    DividerRow()
+                    ToggleRow(
+                        title = "Show Channel Names",
+                        subtitle = "Display each channel's name in the Guide's channel column.",
+                        checked = showChannelNames,
+                        onCheckedChange = viewModel::setShowChannelNames,
                     )
                 }
 

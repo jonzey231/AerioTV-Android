@@ -386,27 +386,50 @@ fun RecordProgramSheet(
     // (RecordProgramSheet.swift customSheet). Plain buttons so it D-pads
     // cleanly on TV.
     customBufferTarget?.let { editTarget ->
+        // GH #67 (djkotik): the pre-roll stepper goes NEGATIVE, meaning "start
+        // recording N minutes after the listed start" - a 9:00pm rugby listing
+        // whose kickoff is 9:50 records from 9:45 with -45. Floored so the
+        // start stays at least a minute before the programme ends. End Late
+        // keeps its positive-only range.
+        val durationMin = ((target.endMillis - target.startMillis) / 60_000L).toInt()
+        val floor = if (editTarget == CustomBufferTarget.PreRoll) {
+            -(durationMin - 1).coerceAtLeast(0)
+        } else 1
         AlertDialog(
             onDismissRequest = { customBufferTarget = null },
             title = { Text("Custom Buffer") },
             text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(onClick = {
-                        if (customBufferDraft > 1) customBufferDraft -= 1
+                        if (customBufferDraft > floor) customBufferDraft -= 1
+                        if (customBufferDraft == 0 && floor < 0) customBufferDraft = -1
                     }) { Text("−", style = MaterialTheme.typography.titleLarge) }
                     Text(
-                        text = "$customBufferDraft minutes",
+                        text = if (customBufferDraft < 0)
+                            "${-customBufferDraft} min after start"
+                        else "$customBufferDraft minutes",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
                     TextButton(onClick = {
                         if (customBufferDraft < 120) customBufferDraft += 1
+                        if (customBufferDraft == 0 && floor < 0) customBufferDraft = 1
                     }) { Text("+", style = MaterialTheme.typography.titleLarge) }
+                }
+                if (editTarget == CustomBufferTarget.PreRoll && floor < 0) {
+                    Text(
+                        text = "Step below zero to start the recording after the listed start time.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
                 }
             },
             confirmButton = {
@@ -519,7 +542,14 @@ private fun MinuteRadioFlow(
                 ),
             )
             Text(
-                text = if (isCustomSelected) "Custom ($selected min)" else "Custom",
+                // GH #67: a NEGATIVE pre-roll means "start recording after the
+                // listed start" (a 9:00 listing whose kickoff is 9:50); echo it
+                // in plain words instead of a minus sign.
+                text = when {
+                    isCustomSelected && selected < 0 -> "Custom (${-selected} min after start)"
+                    isCustomSelected -> "Custom ($selected min)"
+                    else -> "Custom"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground,
             )

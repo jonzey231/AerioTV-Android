@@ -257,6 +257,7 @@ fun GuideScreen(
         initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
     )
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val multiviewStore = rememberMultiviewStoreHandle()
     // Observe the mini-player session so the guide's Back handler can stand
     // down while the mini is showing (see the BackHandler below for why).
@@ -2197,9 +2198,22 @@ fun GuideScreen(
                         guideNav.stepHorizontal(forward = right)
                         return@onPreviewKeyEvent true
                     }
+                    // GH #49 / iOS #66: remote CHANNEL keys page the guide by
+                    // one viewport of rows (PageUp/Down too - that is what many
+                    // CEC bridges and keyboards emit). Visible-row count comes
+                    // from the live layout, so the page size follows the row
+                    // height through the comfort/text scales (GH #25/#72).
+                    val pageRows = (listState.layoutInfo.visibleItemsInfo.size - 1)
+                        .coerceAtLeast(1)
+                    val isPage = when (event.key) {
+                        Key.ChannelDown, Key.PageDown, Key.ChannelUp, Key.PageUp -> true
+                        else -> false
+                    }
                     val delta = when (event.key) {
                         Key.DirectionDown -> 1
                         Key.DirectionUp -> -1
+                        Key.ChannelDown, Key.PageDown -> pageRows
+                        Key.ChannelUp, Key.PageUp -> -pageRows
                         else -> return@onPreviewKeyEvent false
                     }
                     // THROTTLE held-key fast-scroll to a controllable rate. The
@@ -2252,7 +2266,14 @@ fun GuideScreen(
                     // No cell focused yet (fresh entry from the chips/top bar):
                     // let the default search drive the first descent.
                     if (cur < 0) return@onPreviewKeyEvent false
-                    val target = cur + delta
+                    var target = cur + delta
+                    // Page moves CLAMP at the edges and never escape the grid:
+                    // a channel key at the top of the list lands on channel 1,
+                    // it does not hand focus to the nav pill (GH #49).
+                    if (isPage) {
+                        target = target.coerceIn(0, filteredChannels.lastIndex)
+                        if (target == cur) return@onPreviewKeyEvent true
+                    }
                     // UP from the very top channel -> do NOT consume, so focus
                     // falls through to `up = topNavRequester` and escapes to the
                     // Live TV nav pill (Bug 2's intended top-of-guide behaviour).
@@ -2376,6 +2397,7 @@ fun GuideScreen(
                     multiviewStore = multiviewStore,
                     showLogo = showChannelLogos,
                     showNumber = showChannelNumbers,
+                    showName = showChannelNames,
                     collectionsMenu = collectionsMenu,
                     onProgrammeWatch = if (channel.hasCatchup) {
                         { prog -> onCatchupResolve(channel, prog) }
@@ -2554,6 +2576,7 @@ private fun ChannelGuideRow(
     palette: CategoryPaletteState,
     multiviewStore: MultiviewStoreHandle,
     showLogo: Boolean = true,
+    showName: Boolean = true,
     /** GH #19: when false the channel-number text is omitted from the rail. */
     showNumber: Boolean = true,
     collectionsMenu: CollectionsMenuContext? = null,
@@ -2738,6 +2761,8 @@ private fun ChannelGuideRow(
                     }
                     Spacer(Modifier.height(2.dp))
                     }
+                    // GH #73: name is toggleable; logo + number stay.
+                    if (showName) {
                     Text(
                         text = channel.name,
                         style = nameStyle,
@@ -2751,6 +2776,7 @@ private fun ChannelGuideRow(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    }
                 }
             } else {
                 // iOS EPGGuideView channelLabel (EPGGuideView.swift:3459): a
@@ -2803,6 +2829,8 @@ private fun ChannelGuideRow(
                     }
                     Spacer(Modifier.height(3.dp))
                     }
+                    // GH #73: name is toggleable on phone too; logo + number stay.
+                    if (showName) {
                     Text(
                         text = channel.name,
                         style = nameStyle,
@@ -2812,6 +2840,7 @@ private fun ChannelGuideRow(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    }
                     // GH #19: the number line collapses when the toggle is off.
                     if (showNumber) {
                         channel.channelNumber?.let { num ->
