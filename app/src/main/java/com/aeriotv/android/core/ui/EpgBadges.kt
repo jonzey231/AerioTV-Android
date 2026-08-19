@@ -47,6 +47,13 @@ data class EpgFlag(val label: String, val color: Color)
 val LocalShowEpgBadges = androidx.compose.runtime.staticCompositionLocalOf { true }
 
 /**
+ * Labels of badge kinds the user has hidden under the master switch (Logan,
+ * 2026-08-19). Provided at the Live TV level; EpgFlagsRow and the program-info
+ * badge list filter against it, so every surface obeys the same choice.
+ */
+val LocalHiddenEpgBadges = androidx.compose.runtime.staticCompositionLocalOf { emptySet<String>() }
+
+/**
  * Ordered badge list for a program, most-salient first. REPEAT is suppressed
  * when NEW is set (a program is one or the other). Empty when nothing applies.
  */
@@ -117,12 +124,14 @@ fun EpgFlagsRow(
     compact: Boolean = false,
     spacing: androidx.compose.ui.unit.Dp = if (compact) 3.dp else 4.dp,
 ) {
-    if (flags.isEmpty()) return
+    val hidden = LocalHiddenEpgBadges.current
+    val shown = if (hidden.isEmpty()) flags else flags.filter { it.label !in hidden }
+    if (shown.isEmpty()) return
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(spacing),
     ) {
-        flags.forEach { EpgFlagBadge(it, compact = compact) }
+        shown.forEach { EpgFlagBadge(it, compact = compact) }
     }
 }
 

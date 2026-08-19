@@ -2502,6 +2502,15 @@ data class DispatcharrEpgEntry(
     val isPremiere: Boolean = false,
     @SerialName("is_finale")
     val isFinale: Boolean = false,
+    // Dispatcharr's bulk-grid serializer does not emit this today (only the
+    // per-program detail endpoint does - apps/epg/serializers.py puts
+    // is_previously_shown on ProgramDetailSerializer, not the slim
+    // ProgramDataSerializer). Decoded here anyway so REPEAT pills light up
+    // the moment the server adds the field, with false as the safe default.
+    // Discord report (mikec79, 2026-08-19): REPEAT shows via XC's XMLTV but
+    // never via Direct Connect - this is why.
+    @SerialName("is_previously_shown")
+    val isPreviouslyShown: Boolean = false,
     // Newer Dispatcharr builds occasionally emit a top-level `categories`
     // array on the bulk grid — accept it as a free upgrade. Falls back to
     // the per-program lazy fetch when null.
@@ -2537,6 +2546,11 @@ data class DispatcharrProgramDetail(
     // both, StreamingAPIs.swift:3085); accept any primitive shape.
     @SerialName("tmdb_id")
     val tmdbIdRaw: JsonElement? = null,
+    /** Rerun flag - the detail endpoint DOES carry this today (unlike the
+     *  bulk grid), so the Program Info sheet can badge REPEAT on Direct
+     *  Connect (mikec79, 2026-08-19). */
+    @SerialName("is_previously_shown")
+    val isPreviouslyShown: Boolean = false,
 ) {
     val tmdbId: String?
         get() = (tmdbIdRaw as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }

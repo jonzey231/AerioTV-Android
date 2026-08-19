@@ -57,6 +57,8 @@ fun LiveTVTabContent(
     // sheet below so they hide the badges when the user turns them off.
     val showEpgBadges by settingsVm.showEpgBadges(formFactor.isTv)
         .collectAsStateWithLifecycle(initialValue = true)
+    val hiddenEpgBadges by settingsVm.hiddenEpgBadges
+        .collectAsStateWithLifecycle(initialValue = emptySet())
 
     // Resolved DEFAULT view. An explicit Settings choice (Settings -> App
     // Behaviors -> Default Live TV View) wins; "Automatic" (blank) falls back to
@@ -101,7 +103,10 @@ fun LiveTVTabContent(
     // iOS canon scopes the "Live TV List" Display Scale slider to List mode
     // only (the Guide grid is a strict-pitch layout that the user shouldn't
     // be free-scaling). Match that scoping rule here.
-    CompositionLocalProvider(LocalShowEpgBadges provides showEpgBadges) {
+    CompositionLocalProvider(
+        LocalShowEpgBadges provides showEpgBadges,
+        com.aeriotv.android.core.ui.LocalHiddenEpgBadges provides hiddenEpgBadges,
+    ) {
     when (mode) {
         LiveTVViewMode.List -> WithDisplayScale(scale = scale) {
             ChannelListScreen(

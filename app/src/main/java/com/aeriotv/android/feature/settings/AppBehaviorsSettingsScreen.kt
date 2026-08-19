@@ -92,6 +92,7 @@ fun AppBehaviorsSettingsScreen(
 
     val isTv = rememberIsTvDevice()
     val showEpgBadges by viewModel.showEpgBadges(isTv).collectAsStateWithLifecycle(initialValue = true)
+    val hiddenEpgBadges by viewModel.hiddenEpgBadges.collectAsStateWithLifecycle(initialValue = emptySet())
     // GH #47: phone-only cast behavior toggle.
     val castTapStaysOnList by viewModel.castTapStaysOnList.collectAsStateWithLifecycle(initialValue = true)
     // GH #38/#40: TV-only display-mode controls.
@@ -208,6 +209,19 @@ fun AppBehaviorsSettingsScreen(
                     checked = showEpgBadges,
                     onCheckedChange = { viewModel.setShowEpgBadges(isTv, it) },
                 )
+                // Per-badge choices under the master switch (Logan,
+                // 2026-08-19): pick which pills render. Rows only show while
+                // the master is on, mirroring how the master already scopes
+                // rendering.
+                if (showEpgBadges) {
+                    for (badge in listOf("NEW", "REPEAT", "LIVE", "PREMIERE", "FINALE")) {
+                        SettingsToggleRow(
+                            title = "${badge.first()}${badge.drop(1).lowercase()} badge",
+                            checked = badge !in hiddenEpgBadges,
+                            onCheckedChange = { on -> viewModel.setBadgeHidden(badge, hidden = !on) },
+                        )
+                    }
+                }
             }
 
             // Live Rewind (task #145 P2): full surface. Storage location

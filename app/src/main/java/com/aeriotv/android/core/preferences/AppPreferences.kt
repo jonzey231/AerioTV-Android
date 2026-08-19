@@ -153,6 +153,27 @@ class AppPreferences @Inject constructor(
     val showEpgBadgesTv: Flow<Boolean> = store.data.map { it[KEY_SHOW_EPG_BADGES_TV] ?: true }
     val showEpgBadgesMobile: Flow<Boolean> = store.data.map { it[KEY_SHOW_EPG_BADGES_MOBILE] ?: true }
     fun showEpgBadges(isTv: Boolean): Flow<Boolean> = if (isTv) showEpgBadgesTv else showEpgBadgesMobile
+
+    /**
+     * Per-badge visibility under the master "Show program badges" switch
+     * (Logan, 2026-08-19): users pick which pills render - NEW, REPEAT,
+     * LIVE, PREMIERE, FINALE. Stored as the set of HIDDEN labels so the
+     * default (empty set) shows everything and future badge kinds are
+     * visible until explicitly hidden.
+     */
+    val hiddenEpgBadges: Flow<Set<String>> = store.data.map { prefs ->
+        (prefs[KEY_HIDDEN_EPG_BADGES] ?: "").split('\n')
+            .mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
+    }
+    suspend fun setBadgeHidden(label: String, hidden: Boolean) {
+        store.edit { prefs ->
+            val cur = (prefs[KEY_HIDDEN_EPG_BADGES] ?: "").split('\n')
+                .mapNotNull { it.trim().takeIf(String::isNotBlank) }.toMutableSet()
+            if (hidden) cur.add(label) else cur.remove(label)
+            if (cur.isEmpty()) prefs.remove(KEY_HIDDEN_EPG_BADGES)
+            else prefs[KEY_HIDDEN_EPG_BADGES] = cur.joinToString("\n")
+        }
+    }
     suspend fun setShowEpgBadges(isTv: Boolean, value: Boolean) {
         store.edit { it[if (isTv) KEY_SHOW_EPG_BADGES_TV else KEY_SHOW_EPG_BADGES_MOBILE] = value }
     }
@@ -1378,6 +1399,7 @@ class AppPreferences @Inject constructor(
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
         val KEY_SHOW_CHANNEL_NAMES = booleanPreferencesKey("ui_show_channel_names")
+        val KEY_HIDDEN_EPG_BADGES = stringPreferencesKey("ui_hidden_epg_badges")
         val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")
         val KEY_SHOW_EPG_BADGES_MOBILE = booleanPreferencesKey("ui_show_epg_badges_mobile")
         val KEY_PLAYER_ASPECT_MODE = stringPreferencesKey("player_aspect_mode")

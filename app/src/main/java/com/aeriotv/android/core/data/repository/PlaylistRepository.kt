@@ -2007,8 +2007,10 @@ private fun List<DispatcharrEpgEntry>.toProgrammes(): List<EPGProgramme> =
             // back to per-program lazy fetch in ProgramInfoSheet otherwise.
             category = entry.categories?.filter { it.isNotBlank() }?.joinToString(",").orEmpty(),
             dispatcharrProgramId = entry.programIdInt,
-            // Badge metadata already decoded off the grid; Dispatcharr has no
-            // previously-shown/repeat field, so isRepeat stays false here.
+            // Badge metadata decoded off the grid. is_previously_shown is not
+            // in Dispatcharr's slim grid serializer TODAY, so isRepeat is
+            // false on current servers - but it is decoded and mapped so the
+            // pill lights up as soon as the server starts emitting it.
             subTitle = entry.subTitle?.takeIf { it.isNotBlank() },
             season = entry.season,
             episode = entry.episode,
@@ -2016,6 +2018,7 @@ private fun List<DispatcharrEpgEntry>.toProgrammes(): List<EPGProgramme> =
             isLiveBroadcast = entry.isLive,
             isPremiere = entry.isPremiere,
             isFinale = entry.isFinale,
+            isRepeat = entry.isPreviouslyShown,
         )
     }
 

@@ -68,6 +68,10 @@ class SettingsViewModel @Inject constructor(
     // EPG program badges. Per-device-type: the Settings screen passes the
     // current device's isTv so the right value is read/written and synced.
     fun showEpgBadges(isTv: Boolean): Flow<Boolean> = prefs.showEpgBadges(isTv)
+    val hiddenEpgBadges: Flow<Set<String>> = prefs.hiddenEpgBadges
+    fun setBadgeHidden(label: String, hidden: Boolean) {
+        viewModelScope.launch { prefs.setBadgeHidden(label, hidden) }
+    }
     fun setShowEpgBadges(isTv: Boolean, value: Boolean) {
         viewModelScope.launch { prefs.setShowEpgBadges(isTv, value) }
     }

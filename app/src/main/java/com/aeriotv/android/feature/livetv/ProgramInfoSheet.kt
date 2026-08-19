@@ -98,6 +98,9 @@ fun ProgramInfoSheet(
     // whatever target carries; flips when the lazy detail fetch resolves
     // with a richer list.
     var effectiveCategory by remember(target.id) { mutableStateOf(target.category) }
+    // Rerun flag lazily enriched from /api/epg/programs/<id>/ - the bulk grid
+    // Dispatcharr serves Direct Connect guides from carries no repeat field.
+    var enrichedRepeat by remember(target) { mutableStateOf(false) }
 
     // Program poster: server detail artwork first (SD proxy / XMLTV image /
     // icon), then TMDB-by-title when that opt-in is enabled and a key is
@@ -121,7 +124,7 @@ fun ProgramInfoSheet(
                 playlist.sourceType == SourceType.DispatcharrUserPass.name
             )
         if (programId != null && playlist != null && isDispatcharr &&
-            (categoryNeeded || posterUrl == null)
+            (categoryNeeded || posterUrl == null || !target.isRepeat)
         ) {
             val baseUrl = playlist.urlString
             val playlistId = playlist.id
@@ -136,6 +139,9 @@ fun ProgramInfoSheet(
             }.onSuccess { detail ->
                 val joined = detail.categories.filter { it.isNotBlank() }.joinToString(",")
                 if (categoryNeeded && joined.isNotBlank()) effectiveCategory = joined
+                // The bulk grid has no repeat field, but this endpoint does:
+                // surface REPEAT on Direct Connect (mikec79, 2026-08-19).
+                if (detail.isPreviouslyShown) enrichedRepeat = true
                 detail.bestPosterString?.let { raw ->
                     // Server-relative icon paths (protected /media/ etc.) need
                     // the playlist origin prefixed before Coil can load them.
@@ -195,6 +201,7 @@ fun ProgramInfoSheet(
                         effectiveCategory = effectiveCategory,
                         posterUrl = posterUrl,
                         posterWidth = 120.dp,
+                    enrichedRepeat = enrichedRepeat,
                         sectionGap = 12.dp,
                         metaRowPadding = 2.dp,
                     )
@@ -218,6 +225,7 @@ fun ProgramInfoSheet(
                     effectiveCategory = effectiveCategory,
                     posterUrl = posterUrl,
                     posterWidth = 100.dp,
+                    enrichedRepeat = enrichedRepeat,
                 )
                 Spacer(Modifier.height(24.dp))
             }
@@ -238,6 +246,9 @@ private fun ProgramInfoBody(
     effectiveCategory: String,
     posterUrl: String?,
     posterWidth: Dp,
+    /** Rerun flag lazily enriched from the program-detail endpoint; the bulk
+     *  grid Direct Connect guides ride carries no repeat field (mikec79). */
+    enrichedRepeat: Boolean = false,
     // Defaults match the phone sheet; the TV dialog passes tighter values so
     // the whole body fits inside its 500dp height cap.
     sectionGap: Dp = 20.dp,
@@ -276,7 +287,18 @@ private fun ProgramInfoBody(
                 if (target.isLiveNow() && !target.isLiveBroadcast) {
                     add(EpgFlag("ON NOW", EpgLiveRed))
                 }
-                if (showEpgBadges) addAll(target.epgFlags())
+                if (showEpgBadges) {
+                    val hidden = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
+                    addAll(
+                        com.aeriotv.android.core.ui.epgFlagsOf(
+                            isNew = target.isNew,
+                            isLiveBroadcast = target.isLiveBroadcast,
+                            isPremiere = target.isPremiere,
+                            isFinale = target.isFinale,
+                            isRepeat = target.isRepeat || enrichedRepeat,
+                        ).filter { it.label !in hidden },
+                    )
+                }
             }
             if (badges.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
