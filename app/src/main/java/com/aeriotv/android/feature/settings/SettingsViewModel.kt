@@ -61,6 +61,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setShowChannelNumbers(value) }
     }
 
+    val showChannelNames: Flow<Boolean> = prefs.showChannelNames
+    fun setShowChannelNames(value: Boolean) {
+        viewModelScope.launch { prefs.setShowChannelNames(value) }
+    }
+
     // EPG program badges. Per-device-type: the Settings screen passes the
     // current device's isTv so the right value is read/written and synced.
     fun showEpgBadges(isTv: Boolean): Flow<Boolean> = prefs.showEpgBadges(isTv)

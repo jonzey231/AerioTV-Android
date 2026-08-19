@@ -163,6 +163,7 @@ fun ChannelListScreen(
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
     val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
     val groupSortMode = com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw)
@@ -700,6 +701,7 @@ fun ChannelListScreen(
                         palette = palette,
                         showLogo = showChannelLogos,
                         showNumber = showChannelNumbers,
+                        showName = showChannelNames,
                         collectionsMenu = collectionsMenu,
                         onWatchPast = if (channel.hasCatchup) {
                             { prog -> onCatchupResolve(channel, prog) }
@@ -877,6 +879,9 @@ internal fun ChannelRow(
     /** GH #19: when false the channel-number column is omitted, same idea as
      *  showLogo. */
     showNumber: Boolean = true,
+    /** GH #73: when false the channel-name line is omitted from the row; the
+     *  logo and the EPG title below it still identify the channel. */
+    showName: Boolean = true,
     /**
      * Optional leading drag handle, rendered at the very start of the row
      * before the channel number. Only the Favorites tab passes this (to back
@@ -1033,7 +1038,9 @@ internal fun ChannelRow(
                         if (channel.tvgLogo.isNotBlank()) {
                             AsyncImage(
                                 model = channel.tvgLogo,
-                                contentDescription = null,
+                                // GH #73: see the guide rail -- the logo stops
+                                // being decorative once the name is hidden.
+                                contentDescription = if (showName) null else channel.name,
                                 // Fit preserves aspect ratio and centers within
                                 // the 50x32 container, matching iOS SwiftUI's
                                 // default Image.resizable + scaledToFit() pair.
@@ -1073,15 +1080,21 @@ internal fun ChannelRow(
                 // layout pass.
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = channel.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
+                        // GH #73: the name slot collapses when the toggle is
+                        // off. The catch-up badge beside it does NOT -- it marks
+                        // a capability of the row, not the name, and the rows
+                        // stay uniform because every row loses the same slot.
+                        if (showName) {
+                            Text(
+                                text = channel.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                        }
                         // Catch-up badge (Logan 2026-07-20, parity with the
                         // guide rail): a small history clock beside the name
                         // whenever this channel has a replayable archive.

@@ -76,6 +76,7 @@ fun FavoritesTabContent(
     )
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val isTv = rememberIsTvDevice()
     val favoriteIds by remember(favorites) {
         derivedStateOf { favorites.asSequence().map { it.channelId }.toHashSet() }
@@ -199,6 +200,7 @@ fun FavoritesTabContent(
                         palette = palette,
                         showLogo = showChannelLogos,
                         showNumber = showChannelNumbers,
+                        showName = showChannelNames,
                         collectionsMenu = collectionsMenu,
                         reorderHandle = {
                             Icon(

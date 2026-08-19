@@ -110,6 +110,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -257,6 +258,7 @@ fun GuideScreen(
         initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
     )
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val multiviewStore = rememberMultiviewStoreHandle()
     // Observe the mini-player session so the guide's Back handler can stand
     // down while the mini is showing (see the BackHandler below for why).
@@ -2368,6 +2370,7 @@ fun GuideScreen(
                     multiviewStore = multiviewStore,
                     showLogo = showChannelLogos,
                     showNumber = showChannelNumbers,
+                    showName = showChannelNames,
                     collectionsMenu = collectionsMenu,
                     onProgrammeWatch = if (channel.hasCatchup) {
                         { prog -> onCatchupResolve(channel, prog) }
@@ -2548,6 +2551,9 @@ private fun ChannelGuideRow(
     showLogo: Boolean = true,
     /** GH #19: when false the channel-number text is omitted from the rail. */
     showNumber: Boolean = true,
+    /** GH #73: when false the channel-name text is omitted from the rail, so a
+     *  logo-only rail hands its width to the programme grid. */
+    showName: Boolean = true,
     collectionsMenu: CollectionsMenuContext? = null,
     /** Catch-up (task #133): non-null when this channel has a replayable
      *  archive; invoked with a PAST programme the user chose to watch. Each
@@ -2683,66 +2689,89 @@ private fun ChannelGuideRow(
                     // iOS Issue #28: omit the channel logo when "Show Channel
                     // Logos" is off so the name takes the full space.
                     if (showLogo) {
-                    // Landscape logo, tvOS 72x48pt proportional on the 540dp
-                    // canvas -> 36x24dp (matching the channel column's tvOS
-                    // ratios). tvOS parity (rail-match pass): a REAL logo
+                    // The logo SIZES TO THE RAIL rather than sitting at a fixed
+                    // 36x24dp. It claims the rail width and whatever height is
+                    // left after the name line, which is what makes hiding the
+                    // name (GH #73) worth doing: the freed space goes to the
+                    // logo instead of becoming padding. ContentScale.Fit keeps
+                    // the aspect ratio, so a wide landscape logo and a square
+                    // one both letterbox inside the same slot instead of
+                    // stretching.
+                    //
+                    // tvOS parity (rail-match pass) still holds: a REAL logo
                     // floats directly on the rail background like tvOS's
-                    // CachedLogoImage -- no rounded box, no backing fill, no
-                    // inner padding (the dark chip behind every logo was an
-                    // Android-only invention). The boxed treatment survives
-                    // ONLY as the no-logo placeholder, mirroring tvOS's
-                    // guidePlaceholder rounded rect.
-                    if (channel.tvgLogo.isNotBlank()) {
-                        val ctx = androidx.compose.ui.platform.LocalContext.current
-                        // Phase 174: decode at 128x128 px so the downsample to
-                        // display size happens via GPU bilinear rather than
-                        // CPU box-filter. Sharper text/glyphs in logos.
-                        AsyncImage(
-                            model = coil3.request.ImageRequest.Builder(ctx)
-                                .data(channel.tvgLogo)
-                                .size(128, 128)
-                                .build(),
-                            contentDescription = null,
-                            // GH #25: logos grow with the TV comfort scale like
-                            // the row text does - a bigger display scale was
-                            // enlarging rows and labels around a fixed 36x24
-                            // logo, which is the thing old-eyes users squint at.
-                            modifier = Modifier.size(
-                                width = 36.dp * textScale,
-                                height = 24.dp * textScale,
-                            ),
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(width = 36.dp * textScale, height = 24.dp * textScale)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = channel.name.take(2).uppercase(),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
+                    // CachedLogoImage -- no rounded box, no backing fill. The
+                    // boxed treatment survives ONLY as the no-logo placeholder,
+                    // mirroring tvOS's guidePlaceholder rounded rect, and that
+                    // chip keeps its compact size because a two-letter monogram
+                    // blown up to fill the rail reads as a bug, not a logo.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            // Breathing room so a logo that fills its slot does
+                            // not touch the rail's divider or the name below.
+                            .padding(horizontal = 2.dp, vertical = 1.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (channel.tvgLogo.isNotBlank()) {
+                            val ctx = androidx.compose.ui.platform.LocalContext.current
+                            // Phase 174: decode above the display size so the
+                            // downsample happens via GPU bilinear rather than
+                            // CPU box-filter. Raised 128 -> 256 with the slot:
+                            // a name-less rail on a 120dp column at density 2
+                            // asks for ~240px, and a 128px decode upscaled into
+                            // that is visibly soft.
+                            AsyncImage(
+                                model = coil3.request.ImageRequest.Builder(ctx)
+                                    .data(channel.tvgLogo)
+                                    .size(256, 256)
+                                    .build(),
+                                // GH #73: with the name line hidden the logo is
+                                // the only thing identifying this row, so it
+                                // stops being decorative and carries the name
+                                // for TalkBack. With the name shown it stays
+                                // null, so the name is not announced twice.
+                                contentDescription = if (showName) null else channel.name,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize(),
                             )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 36.dp * textScale, height = 24.dp * textScale)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = channel.name.take(2).uppercase(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(2.dp))
                     }
-                    Text(
-                        text = channel.name,
-                        style = nameStyle,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        // GH #25: at comfort scales the taller row has room for
-                        // a second line, so long channel names wrap instead of
-                        // truncating ("NBC Sports ..." -> full name). Base
-                        // scale keeps the tvOS single-line parity.
-                        maxLines = if (textScale >= 1.25f) 2 else 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    // GH #73: the name line collapses when the toggle is off,
+                    // leaving the logo centred in the rail.
+                    if (showName) {
+                        Text(
+                            text = channel.name,
+                            style = nameStyle,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            // GH #25: at comfort scales the taller row has room for
+                            // a second line, so long channel names wrap instead of
+                            // truncating ("NBC Sports ..." -> full name). Base
+                            // scale keeps the tvOS single-line parity.
+                            maxLines = if (textScale >= 1.25f) 2 else 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             } else {
                 // iOS EPGGuideView channelLabel (EPGGuideView.swift:3459): a
@@ -2763,9 +2792,14 @@ private fun ChannelGuideRow(
                     // Android guide honored the toggle before this restyle, so
                     // keep it.)
                     if (showLogo) {
+                    // Same rail-filling treatment as the TV branch above: the
+                    // tile takes the width and the height left over after the
+                    // name + number lines rather than a fixed 40x28dp.
                     Box(
                         modifier = Modifier
-                            .size(width = 40.dp, height = 28.dp)
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = 2.dp, vertical = 1.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .background(MaterialTheme.colorScheme.background),
                         contentAlignment = Alignment.Center,
@@ -2777,9 +2811,10 @@ private fun ChannelGuideRow(
                             AsyncImage(
                                 model = coil3.request.ImageRequest.Builder(ctx2)
                                     .data(channel.tvgLogo)
-                                    .size(128, 128)
+                                    .size(256, 256)
                                     .build(),
-                                contentDescription = null,
+                                contentDescription = if (showName) null else channel.name,
+                                contentScale = ContentScale.Fit,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(2.dp),
@@ -2795,15 +2830,18 @@ private fun ChannelGuideRow(
                     }
                     Spacer(Modifier.height(3.dp))
                     }
-                    Text(
-                        text = channel.name,
-                        style = nameStyle,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    // GH #73: same collapse on the phone rail.
+                    if (showName) {
+                        Text(
+                            text = channel.name,
+                            style = nameStyle,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     // GH #19: the number line collapses when the toggle is off.
                     if (showNumber) {
                         channel.channelNumber?.let { num ->
