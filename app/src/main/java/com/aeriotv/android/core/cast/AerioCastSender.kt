@@ -155,6 +155,13 @@ class AerioCastSender @Inject constructor(
         }
     }
 
+    /** Set by onSessionEnding, which the Cast SDK only calls for a deliberate,
+     *  graceful teardown. An involuntary drop never sets it. */
+    private var endingGracefully = false
+
+    /** Friendly name of the most recently connected receiver, captured while the
+     *  session still exposes its CastDevice (see onConnected). */
+    private var lastDeviceName: String? = null
     private var warmed = false
     private var appContext: Context? = null
     private var mediaRouter: MediaRouter? = null
@@ -195,8 +202,11 @@ class AerioCastSender @Inject constructor(
             // discovery) while the app was backgrounded, and the only visible
             // effect was the ongoing notification silently vanishing. A
             // non-zero error means the user did NOT stop this cast; say so.
-            if (error != com.google.android.gms.cast.CastStatusCodes.SUCCESS) {
-                val device = session.castDevice?.friendlyName
+            val graceful = endingGracefully
+            endingGracefully = false
+            Log.i(TAG, "cast session ended: error=$error graceful=$graceful")
+            if (!graceful && error != com.google.android.gms.cast.CastStatusCodes.SUCCESS) {
+                val device = session.castDevice?.friendlyName ?: lastDeviceName
                 val what = _content.value?.title
                 Log.w(TAG, "cast session ended involuntarily: error=$error " +
                     com.google.android.gms.cast.CastStatusCodes.getStatusCodeString(error))
@@ -211,7 +221,16 @@ class AerioCastSender @Inject constructor(
         override fun onSessionSuspended(session: CastSession, reason: Int) = refreshFromContext()
         override fun onSessionStartFailed(session: CastSession, error: Int) = endCleanup()
         override fun onSessionResumeFailed(session: CastSession, error: Int) = endCleanup()
-        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionEnding(session: CastSession) {
+            // The SDK announces a GRACEFUL end here before onSessionEnded. An
+            // abrupt loss (receiver died, network dropped) skips this callback
+            // entirely, which is the only reliable way to tell the two apart:
+            // measured on a Z Fold 5 against a Google TV Streamer, a deliberate
+            // Stop Casting ends with error=2161 while a killed receiver ends
+            // with 2155/2055, so the error code alone cannot discriminate.
+            endingGracefully = true
+            Log.i(TAG, "cast session ending gracefully (user-initiated)")
+        }
     }
 
     /** Initialise CastContext + listeners. Idempotent; no-op on a Cast-disabled
@@ -311,6 +330,7 @@ class AerioCastSender @Inject constructor(
 
     /** End the current cast session (returns local playback to the phone). */
     fun stopCasting() {
+        endingGracefully = true
         runCatching { CastContext.getSharedInstance()?.sessionManager?.endCurrentSession(true) }
     }
 
@@ -485,6 +505,12 @@ class AerioCastSender @Inject constructor(
     }
 
     private fun onConnected(session: CastSession) {
+        // Remember the name while the session still has its CastDevice. By the
+        // time onSessionEnded fires on an involuntary drop the device reference
+        // is already cleared, so reading it there yields null and the alert
+        // degrades to a bare "Casting disconnected" (observed on a Z Fold 5
+        // against a Google TV Streamer, 2026-08-19).
+        session.castDevice?.friendlyName?.let { lastDeviceName = it }
         _state.value = State.Connected(session.castDevice?.friendlyName)
         attachControl(session)
         pending?.let { loadOnSession(session, it) }

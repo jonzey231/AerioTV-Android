@@ -121,15 +121,19 @@ class CastNotificationController @Inject constructor(
             if (!end.contentTitle.isNullOrBlank()) append("${end.contentTitle} stopped. ")
             append("The connection to the TV was lost. Open AerioTV to cast again.")
         }
-        val notif = NotificationCompat.Builder(context, CHANNEL_ID)
+        val notif = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(launchPi)
             .setAutoCancel(true)
-            // DEFAULT, not the channel's LOW: the ongoing chip is ambient, but
-            // a drop is news the user needs even from a pocketed phone.
+            // Its own channel, not the ongoing chip's. On Android 8+ the CHANNEL
+            // importance governs alerting and setPriority is ignored, so posting
+            // this to the IMPORTANCE_LOW "Casting" channel would make it silent
+            // and buried -- nearly as invisible as the silent disappearance this
+            // is meant to fix. A channel's importance is also immutable once
+            // created, so it has to be a separate channel, not a bumped one.
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
@@ -143,18 +147,45 @@ class CastNotificationController @Inject constructor(
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val mgr = context.getSystemService(NotificationManager::class.java) ?: return
-        if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
-        mgr.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Casting", NotificationManager.IMPORTANCE_LOW).apply {
-                setShowBadge(false)
-            },
-        )
+        if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Casting", NotificationManager.IMPORTANCE_LOW).apply {
+                    setShowBadge(false)
+                },
+            )
+        }
+        // Separate channel for the "cast dropped" alert: IMPORTANCE_DEFAULT so it
+        // actually makes a sound and sorts normally in the shade. The user can
+        // still silence it on its own without losing the ongoing casting chip.
+        if (mgr.getNotificationChannel(ALERT_CHANNEL_ID) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(
+                    ALERT_CHANNEL_ID,
+                    "Casting interrupted",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ),
+            )
+        }
     }
 
     private companion object {
         const val CHANNEL_ID = "aeriotv_casting"
+        const val ALERT_CHANNEL_ID = "aeriotv_cast_alerts"
         const val NOTIF_ID = 0xC5
-        const val ALERT_NOTIF_ID = 0xC6
+
+        // Notification ids in use across the app, so the next addition does not
+        // collide the way this one did: 0xAD/0xAE LocalRecordingService,
+        // 0xAF AerioMediaPlaybackService, 0xC5 the ongoing cast chip (above),
+        // 0xC6 CastHlsProxyService's FOREGROUND-SERVICE notification.
+        //
+        // This alert MUST NOT reuse 0xC6. Posting to a foreground service's id
+        // does not create a second notification, it overwrites that service's
+        // own notification; and when endCleanup() then stops the proxy service,
+        // the system reaps id 0xC6 and takes the alert with it. Verified on a
+        // Z Fold 5 against a live cast to a Google TV Streamer: the alert was
+        // posted and gone within the same teardown, leaving the user with
+        // nothing, which is the exact bug this is meant to fix.
+        const val ALERT_NOTIF_ID = 0x0C7A
         const val REQ_CODE = 0xC5
     }
 }
