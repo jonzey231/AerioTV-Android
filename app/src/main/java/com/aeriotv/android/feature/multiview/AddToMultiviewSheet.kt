@@ -178,10 +178,33 @@ fun AddToMultiviewSheet(
     }
     val byId = remember(playable) { playable.associateBy { it.id } }
 
-    // Group filter chips: "All" + each distinct groupTitle in source order.
-    val groups = remember(playable) {
+    // Group filter chips: "All" + the groups the guide/list shows, in the
+    // SAME order. GH #71 (kmac... reported by a Z Fold user): these chips were
+    // raw first-occurrence order and ignored both the user's Manage Groups
+    // sort (Default / A-Z / Manual) and the hidden-groups filter, so the
+    // picker disagreed with every other channel surface. Same pattern as
+    // PlayerScreen's overlayGroups and iOS AddToMultiviewSheet (orderedGroups
+    // minus hidden). Hidden groups drop from the chips only - their channels
+    // still play from "All", exactly like the guide.
+    val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
+    val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
+    val groupOrderPref by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
+    val groups = remember(playable, hiddenGroups, groupSortModeRaw, groupOrderPref) {
+        val source = playable.asSequence()
+            .map { it.groupTitle }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+        val ordered = com.aeriotv.android.feature.livetv.orderGroups(
+            source,
+            com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw),
+            groupOrderPref,
+        )
         listOf(PlaylistViewModel.ALL_GROUPS) +
-            playable.asSequence().map { it.groupTitle }.filter { it.isNotBlank() }.distinct().toList()
+            ordered.filter {
+                it !in hiddenGroups &&
+                    !it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
+            }
     }
 
     // Recent rows: resolve LRU ids against the current playlist, capped to a
