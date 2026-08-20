@@ -768,13 +768,39 @@ fun GuideScreen(
             (horizontalScrollState.value.toFloat() / hourWidthPx * 3_600_000f).toLong()
         mutableStateOf((startMs - padMs) to (startMs + spanMs + padMs))
     }
+    // E-3 (perf campaign 2026-08-19): wakes the widening walker below after a
+    // same-frame window collapse - the walker's snapshotFlow otherwise only
+    // emits on scroll motion, and a group switch has none.
+    var windowCollapseTick by remember { mutableStateOf(0) }
+    // E-3: when the CHANNEL LIST identity changes (group switch, search
+    // keystroke, reorder commit), every visible row is about to compose fresh
+    // cells. At the padded window that is ~3 viewports of cells in one frame -
+    // the measured 1.3-1.4s Davey frame behind the group-switch ANR. Collapse
+    // the window to the bare viewport IN THE SAME COMPOSITION (a state write
+    // here is visible to the LazyColumn's item lambdas later this frame), so
+    // the fresh rows compose a third of the cells; the sliced walker then
+    // widens the pads back over the following idle frames. Non-switch list
+    // changes (search, favorites) ride the same path harmlessly - cheaper
+    // churn frames, re-widened on idle.
+    var lastListForWindow by remember { mutableStateOf<Any?>(null) }
+    if (lastListForWindow !== filteredChannels) {
+        lastListForWindow = filteredChannels
+        val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
+        val startMs = windowStart +
+            (horizontalScrollState.value.toFloat() / hourWidthPx * 3_600_000f).toLong()
+        visibleWindow = startMs to (startMs + spanMs)
+        androidx.compose.runtime.SideEffect { windowCollapseTick++ }
+    }
     LaunchedEffect(windowStart, hourWidthPx, stripViewportPx) {
         val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
         val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
         val emergencyMs = 15L * 60_000L
         snapshotFlow {
-            horizontalScrollState.value to horizontalScrollState.isScrollInProgress
-        }.collect { (scroll, scrolling) ->
+            // windowCollapseTick makes the E-3 post-collapse widening run even
+            // with no scroll motion (its bump lands post-frame, so the sliced
+            // walk starts on the first idle frame after the cheap swap).
+            Triple(horizontalScrollState.value, horizontalScrollState.isScrollInProgress, windowCollapseTick)
+        }.collect { (scroll, scrolling, _) ->
             val rawStart = windowStart + (scroll / hourWidthPx * 3_600_000f).toLong()
             val rawEnd = rawStart + spanMs
             val (curStart, curEnd) = visibleWindow
