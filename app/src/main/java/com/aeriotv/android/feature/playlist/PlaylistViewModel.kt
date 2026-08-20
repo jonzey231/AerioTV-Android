@@ -901,6 +901,29 @@ class PlaylistViewModel @Inject constructor(
                 // launch just to log the count -- the actual allocation showed
                 // up in flame graphs as ~250ms of main-thread time.
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes across ${grouped.size} channels")
+                // A fetch that yields ZERO programmes is a FAILED fetch, not an
+                // empty guide, and it must not be allowed to overwrite anything.
+                // Installing it wiped the 6,916 rows the cached paint had just
+                // put on screen -- Logan's "the full guide shows for a second at
+                // launch and then disappears" (Streamer, 2026-08-20) -- and the
+                // save below then wrote the empty set OVER the good on-disk
+                // cache and stamped the epoch clean, so the next launch had
+                // nothing to paint either. One bad response from the server
+                // (hiccup, expired token, an IP ban answering 200 with no rows)
+                // took out the guide until a later fetch happened to succeed.
+                // Keep what we have; a real guide will arrive on the next
+                // refresh, and the cache stays intact meanwhile.
+                if (programmes.isEmpty()) {
+                    Log.w(
+                        TAG,
+                        "EPG fetch returned 0 programmes - keeping the existing " +
+                            "guide and cache (treating as a failed fetch)",
+                    )
+                    _state.update { it.copy(isEpgLoading = false) }
+                    return@fold Result.failure(
+                        IllegalStateException("EPG fetch returned no programmes"),
+                    )
+                }
                 epgWriteMutex.withLock {
                     val base = _state.value.epgByChannel
                     val installed = withContext(Dispatchers.Default) {
