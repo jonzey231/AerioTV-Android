@@ -1288,7 +1288,19 @@ private fun TvTopTabBar(
         // first-focused pill need an extra move or OK (user report).
         val deliberateEntry =
             android.os.SystemClock.uptimeMillis() - lastUpKeyMs[0] < 400L
-        if ((armed || deliberateEntry) && cur != selected) onSelect(cur)
+        if ((armed || deliberateEntry) && cur != selected) {
+            // E-5 (perf campaign 2026-08-19): SETTLE before committing. Only
+            // one tab branch is composed at a time, so each intermediate
+            // commit while walking the pill row serially cold-builds and
+            // disposes an entire tab (guide, On Demand grid, DVR) on the
+            // Streamer's single big core. 250ms is under the "did it react"
+            // threshold for a resting selection but longer than a pill-walk
+            // step, so pass-through pills never build. This LaunchedEffect is
+            // keyed on focusedTab: moving to the next pill cancels the
+            // pending commit with the coroutine.
+            kotlinx.coroutines.delay(250L)
+            onSelect(cur)
+        }
     }
 
     // Focus entering the bar by ANY route (the guide's routed UP, or plain
