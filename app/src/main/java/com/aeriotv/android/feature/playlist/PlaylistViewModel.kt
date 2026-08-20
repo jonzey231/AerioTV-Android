@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 /**
@@ -207,6 +208,31 @@ class PlaylistViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    /** I-5 (perf campaign 2026-08-20): every writer of
+     *  [UiState.epgByChannel] serializes through this mutex, with the heavy
+     *  merge computed on Dispatchers.Default against a snapshot taken under
+     *  the lock. Because no other epg writer can run between snapshot and
+     *  install, the install is a plain map swap - the merge loops that used
+     *  to run INSIDE `_state.update` (on the caller's Main dispatcher, and
+     *  re-run on CAS contention) are gone. This was the "EPG merge storms on
+     *  Main" finding: the minutes-after-open hitch cascade, and the iowait
+     *  half of the group-switch ANR. */
+    private val epgWriteMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** I-5: wholesale map swaps reuse the PRIOR per-channel List reference
+     *  when the contents are equal, so rows whose data did not change keep
+     *  their identity and skippable guide rows actually skip. Structural
+     *  equality is O(rows) - call off Main only. */
+    private fun preserveEpgListIdentity(
+        old: Map<String, List<EPGProgramme>>,
+        new: Map<String, List<EPGProgramme>>,
+    ): Map<String, List<EPGProgramme>> =
+        if (old.isEmpty()) new
+        else new.mapValues { (k, rows) ->
+            val prior = old[k]
+            if (prior != null && prior == rows) prior else rows
+        }
+
     /** One-shot signal that a source was successfully configured (added). The
      *  add flow navigates forward on THIS event, not on `phase == ChannelsReady`:
      *  when adding a second playlist `phase` is already ChannelsReady, so a
@@ -313,7 +339,7 @@ class PlaylistViewModel @Inject constructor(
                     val cleared = _state.value.epgByChannel.isNotEmpty()
                     if (cleared) {
                         Log.i(TAG, "onTrimMemory=$level: shedding in-memory EPG map")
-                        _state.update { it.copy(epgByChannel = emptyMap()) }
+                        epgWriteMutex.withLock { _state.update { it.copy(epgByChannel = emptyMap()) } }
                     }
                 }
             }
@@ -669,20 +695,26 @@ class PlaylistViewModel @Inject constructor(
         val history = withContext(Dispatchers.Default) {
             bridgeChannelIds(historyRaw, channelsForHistory)
         }
-        _state.update { st ->
-            val merged = HashMap(st.epgByChannel)
-            for ((channelId, rows) in groupByChannel(history)) {
-                val existing = merged[channelId]
-                merged[channelId] = if (existing.isNullOrEmpty()) {
-                    rows
-                } else {
-                    val seen = existing.asSequence().map { it.startMillis }.toHashSet()
-                    val fresh = rows.filter { it.startMillis !in seen }
-                    if (fresh.isEmpty()) existing
-                    else (fresh + existing).sortedBy { it.startMillis }
+        // I-5: merge under the writer mutex, computed off Main; the update
+        // installs a prebuilt map instead of looping inside the CAS.
+        epgWriteMutex.withLock {
+            val base = _state.value.epgByChannel
+            val merged = withContext(Dispatchers.Default) {
+                val out = HashMap(base)
+                for ((channelId, rows) in groupByChannel(history)) {
+                    val existing = out[channelId]
+                    out[channelId] = if (existing.isNullOrEmpty()) {
+                        rows
+                    } else {
+                        val seen = existing.asSequence().map { it.startMillis }.toHashSet()
+                        val fresh = rows.filter { it.startMillis !in seen }
+                        if (fresh.isEmpty()) existing
+                        else (fresh + existing).sortedBy { it.startMillis }
+                    }
                 }
+                out
             }
-            st.copy(epgByChannel = merged, epgHistoryHours = historyHours)
+            _state.update { it.copy(epgByChannel = merged, epgHistoryHours = historyHours) }
         }
         Log.i(TAG, "mergeEpgHistory: merged ${history.size} past programmes (${retentionDays}d window)")
     }
@@ -776,7 +808,13 @@ class PlaylistViewModel @Inject constructor(
             val groupedCached = withContext(Dispatchers.Default) {
                 withChannelNamePlaceholders(groupByChannel(cached), channelsNowCached)
             }
-            _state.update { it.copy(epgByChannel = groupedCached, isEpgLoading = false) }
+            epgWriteMutex.withLock {
+                val base = _state.value.epgByChannel
+                val installed = withContext(Dispatchers.Default) {
+                    preserveEpgListIdentity(base, groupedCached)
+                }
+                _state.update { it.copy(epgByChannel = installed, isEpgLoading = false) }
+            }
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
@@ -863,7 +901,13 @@ class PlaylistViewModel @Inject constructor(
                 // launch just to log the count -- the actual allocation showed
                 // up in flame graphs as ~250ms of main-thread time.
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes across ${grouped.size} channels")
-                _state.update { it.copy(epgByChannel = grouped, isEpgLoading = false) }
+                epgWriteMutex.withLock {
+                    val base = _state.value.epgByChannel
+                    val installed = withContext(Dispatchers.Default) {
+                        preserveEpgListIdentity(base, grouped)
+                    }
+                    _state.update { it.copy(epgByChannel = installed, isEpgLoading = false) }
+                }
                 // Persist the fresh guide so the next launch is instant.
                 // Re-stamp the cache generation only HERE, on a SUCCESSFUL
                 // network fetch: a failed one must leave the old epoch alone
@@ -909,21 +953,26 @@ class PlaylistViewModel @Inject constructor(
                         // content width, clamping the shared scroll - a second
                         // timeline-jump class). Enriched rows win their own
                         // (channel, start) slots; everything else survives.
-                        _state.update { st ->
-                            val merged = HashMap(st.epgByChannel)
-                            for ((channelId, rows) in groupedEnriched) {
-                                val existing = merged[channelId]
-                                merged[channelId] = if (existing.isNullOrEmpty()) {
-                                    rows
-                                } else {
-                                    val enrichedStarts =
-                                        rows.asSequence().map { it.startMillis }.toHashSet()
-                                    val keep = existing.filter { it.startMillis !in enrichedStarts }
-                                    if (keep.isEmpty()) rows
-                                    else (keep + rows).sortedBy { it.startMillis }
+                        // I-5: same mutex + off-main merge as mergeEpgHistory.
+                        epgWriteMutex.withLock {
+                            val base = _state.value.epgByChannel
+                            val merged = withContext(Dispatchers.Default) {
+                                val out = HashMap(base)
+                                for ((channelId, rows) in groupedEnriched) {
+                                    val existing = out[channelId]
+                                    out[channelId] = if (existing.isNullOrEmpty()) {
+                                        rows
+                                    } else {
+                                        val enrichedStarts =
+                                            rows.asSequence().map { it.startMillis }.toHashSet()
+                                        val keep = existing.filter { it.startMillis !in enrichedStarts }
+                                        if (keep.isEmpty()) rows
+                                        else (keep + rows).sortedBy { it.startMillis }
+                                    }
                                 }
+                                out
                             }
-                            st.copy(epgByChannel = merged)
+                            _state.update { it.copy(epgByChannel = merged) }
                         }
                         // Keep the cache enriched too so tints survive a relaunch.
                         runCatching { repository.saveEpgToCache(playlist.id, enriched) }
@@ -1275,7 +1324,7 @@ class PlaylistViewModel @Inject constructor(
             _state.update { it.copy(epgRefreshStatus = ActionStatus.Running) }
             runCatching { repository.purgeEpgCache(active.id) }
                 .onFailure { Log.w(TAG, "purgeEpgCache failed", it) }
-            _state.update { it.copy(epgByChannel = emptyMap()) }
+            epgWriteMutex.withLock { _state.update { it.copy(epgByChannel = emptyMap()) } }
             val outcome = doLoadEpg(active, forceRefresh = true)
             // The purge above dropped retained history too; re-merge whatever
             // survives (nothing on a true clean slate, task #135 semantics:
@@ -1327,7 +1376,7 @@ class PlaylistViewModel @Inject constructor(
             // 1. Purge guide cache (disk) + drop in-memory map, like refreshEpg.
             runCatching { repository.purgeEpgCache(active.id) }
                 .onFailure { Log.w(TAG, "refreshEverything: purgeEpgCache failed", it) }
-            _state.update { it.copy(epgByChannel = emptyMap()) }
+            epgWriteMutex.withLock { _state.update { it.copy(epgByChannel = emptyMap()) } }
             // 2. Signal On Demand to run its nuclear reset (id unchanged, so the
             //    observeActiveId collector won't fire; the bus is the bridge).
             vodResetBus.requestReset()
