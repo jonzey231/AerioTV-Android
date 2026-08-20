@@ -208,14 +208,37 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Watch from Beginning really starts at the beginning",
-            body = "Playing a still-recording programme from the beginning " +
-                "could open at the live edge instead, leaving you to rewind " +
-                "the whole way by hand. It happened most often right after " +
-                "the app was opened fresh, which is why it seemed to come " +
-                "and go. AerioTV now asks for the start of the recording " +
-                "before the first frame is fetched, so there is nothing left " +
-                "to race. Start at Live is unchanged.",
+            title = "You'll know when casting stops",
+            body = "If a cast to your TV drops because the connection was " +
+                "lost, AerioTV now tells you with a notification instead of " +
+                "silently going quiet, even when the app is in the " +
+                "background. Stopping a cast yourself never triggers it.",
+        ),
+        WhatsNewItem(
+            title = "Guide reads better on every TV",
+            body = "The bottom line of each guide cell (the time and badges) " +
+                "no longer gets cut off on TVs with larger text sizes, and " +
+                "the row height now follows your text scaling.",
+        ),
+        WhatsNewItem(
+            title = "Page the guide with your remote's channel keys",
+            body = "Channel up and down jump the guide a full screen of " +
+                "channels at a time.",
+        ),
+        WhatsNewItem(
+            title = "Pick which badges you see",
+            body = "New, Repeat, Live, Premiere, and Finale pills can each " +
+                "be turned on or off under Settings, App Behaviors. Repeat " +
+                "also now appears with Dispatcharr Direct Connect when you " +
+                "open a program's info.",
+        ),
+        WhatsNewItem(
+            title = "Smaller fixes",
+            body = "The multiview channel picker follows your custom group " +
+                "order. Channel names in the Guide can be hidden under " +
+                "Appearance. Recordings can start after the listed start " +
+                "time with a negative Start Early, for events that begin " +
+                "partway into a program.",
         ),
     )
 }
