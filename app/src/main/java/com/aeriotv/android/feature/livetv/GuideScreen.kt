@@ -1565,6 +1565,22 @@ fun GuideScreen(
         // BackHandler) so the scroll-to-top Back branch can re-focus the top
         // channel instead of leaving focus on the "All" group pill.
         val guideNav = remember { GuideVerticalNavState() }
+        // A channel-list swap (group switch, search, reorder) invalidates any
+        // pending focus recovery: the row index it captured names a different
+        // channel now. Cancel in COMPOSITION, the same frame the swap disposes
+        // the old rows, so the recovery coroutine's first poll already sees it.
+        var lastListForRecovery by remember { mutableStateOf<Any?>(null) }
+        if (lastListForRecovery !== filteredChannels) {
+            if (lastListForRecovery != null) guideNav.cancelFocusRecovery()
+            lastListForRecovery = filteredChannels
+        }
+        // Focus lifeline collector: a cell disposed while it owned focus (EPG
+        // swap, window narrowing) leaves focus orphaned and Compose relocates it
+        // somewhere arbitrary. Put it back on the row the user was actually on.
+        LaunchedEffect(guideNav) {
+            snapshotFlow { guideNav.orphanedFocusRow }
+                .collect { if (it >= 0) guideNav.recoverOrphanedFocus() }
+        }
         // Task #138: keep guideNav's viewport clamp current so a freshly-
         // focused left-clipped cell anchors to the on-screen column, not its
         // (possibly hours-past, with catch-up history) programme start.
@@ -2264,6 +2280,7 @@ fun GuideScreen(
                     // highlight" model). Null when no cell is focused (fresh entry),
                     // which keeps the default bring-into-view.
                     guideNav.lastVerticalMoveAtMs = nowMs
+                    guideNav.lastNavKeyAtMs = nowMs
                     val outgoingStartPx = guideNav.focusedCellStartPx
                     val leadingEdgeTargetPx = if (outgoingStartPx >= 0)
                         (outgoingStartPx - horizontalScrollState.value).toFloat().coerceAtLeast(0f)
@@ -3023,14 +3040,27 @@ private fun ChannelGuideRow(
                 // feeds keep every cell they kept before. The in-body clip
                 // checks stay as cheap invariants.
                 val items = programmes.items
-                val sliceHaloMs = if (rowIsFocused) viewportSpanMs else 0L
-                val sliceLo = maxOf(windowStart, visibleStartMs - sliceHaloMs)
-                val sliceHi = minOf(windowEnd, visibleEndMs + sliceHaloMs)
+                // The cell that ACTUALLY owns focus right now, if it is in this
+                // row. Every bound below is widened to keep it composed no
+                // matter what the window says - see the focus-hold note on the
+                // halo clip further down. focusedCellAnchorMs is a plain var,
+                // not snapshot state, so reading it here subscribes nobody.
+                val focusHoldMs = if (rowIsFocused) guideNav.focusedCellAnchorMs else Long.MIN_VALUE
+                val sliceHaloMs = if (rowIsFocused) viewportSpanMs * 2 else 0L
+                var sliceLo = maxOf(windowStart, visibleStartMs - sliceHaloMs)
+                var sliceHi = minOf(windowEnd, visibleEndMs + sliceHaloMs)
+                if (focusHoldMs != Long.MIN_VALUE) {
+                    sliceLo = minOf(sliceLo, focusHoldMs.coerceAtLeast(windowStart))
+                    sliceHi = maxOf(sliceHi, (focusHoldMs + 1).coerceAtMost(windowEnd))
+                }
                 var sliceStart = items.binarySearchBy(sliceLo) { it.startMillis }
                     .let { if (it < 0) -it - 1 else it }
                 while (sliceStart > 0 && items[sliceStart - 1].endMillis > sliceLo) sliceStart--
                 for (index in sliceStart until items.size) {
                     val programme = items[index]
+                    // Safe because sliceHi was widened above to clear the
+                    // focus-hold anchor: the break can never cut the composed
+                    // set short of the cell that owns focus.
                     if (programme.startMillis >= sliceHi) break
                     val rawStart = programme.startMillis
                     val rawEnd = programme.endMillis
@@ -3069,8 +3099,24 @@ private fun ChannelGuideRow(
                     // retarget logic always pull focus back toward the
                     // viewport first, so no reachable focus target can sit
                     // further out than that.
-                    if (rowIsFocused) {
-                        val haloMs = viewportSpanMs
+                    // FOCUS HOLD (Streamer bisect 2026-08-20): the halo is a
+                    // PERF knob and must never be the reason focus dies. I-1
+                    // first set it to ONE raw viewport, which left the focused
+                    // row zero slack: E-3 collapses the window to one bare
+                    // viewport on a list swap and the settle-walker only
+                    // re-widens on idle frames, so a walk down the guide
+                    // regularly ran with a window narrower and staler than the
+                    // halo assumed. The cell holding focus then fell outside
+                    // the clip, got disposed, and Compose relocated focus to
+                    // the first focusable in the list - the spontaneous yank
+                    // back to the top rows (release builds stranded it on the
+                    // nav circles instead). Two guards now: the halo is two
+                    // raw viewports (covers the 0.85-viewport page stride plus
+                    // a long cell, still EPG-size independent, still ~2x
+                    // cheaper than the pre-I-1 balloon), and the cell that
+                    // actually owns focus is kept unconditionally.
+                    if (rowIsFocused && focusHoldMs !in rawStart until rawEnd) {
+                        val haloMs = sliceHaloMs
                         if (rawEnd <= visibleStartMs - haloMs ||
                             rawStart >= visibleEndMs + haloMs
                         ) continue
@@ -3120,6 +3166,27 @@ private fun ChannelGuideRow(
                     // timeline days into the past. Unique per row after
                     // dedupSameAiring.
                     androidx.compose.runtime.key(programme.startMillis) {
+                    // Focus lifeline: if THIS cell owns focus when it leaves the
+                    // composition, tell the nav state so it can re-land focus on
+                    // this row instead of letting Compose scatter it. The common
+                    // cause is an EPG list swap under focus (see
+                    // recoverOrphanedFocus); the clip/halo changes above make it
+                    // rarer but cannot make it impossible.
+                    androidx.compose.runtime.DisposableEffect(Unit) {
+                        onDispose {
+                            if (guideNav.lastFocusedChannelIndex == channelIndex &&
+                                guideNav.focusedCellAnchorMs in rawStart until rawEnd
+                            ) {
+                                if (com.aeriotv.android.BuildConfig.DEBUG) {
+                                    android.util.Log.i(
+                                        "GuideMove",
+                                        "DISPOSE FOCUSED CELL row=$channelIndex start=$rawStart"
+                                    )
+                                }
+                                guideNav.noteFocusedCellDisposed(channelIndex)
+                            }
+                        }
+                    }
                     ProgrammeCell(
                         programme = programme,
                         channelName = channel.name,
@@ -3980,6 +4047,11 @@ private class GuideVerticalNavState {
      *  held-key fast-scroll to [HOLD_SCROLL_MIN_INTERVAL_MS]. */
     var lastVerticalMoveAtMs = 0L
 
+    /** uptimeMillis of the last D-pad navigation key the guide acted on, in either
+     *  axis. [recoverFocusAfterEpgSwap] uses it to tell "focus moved because the
+     *  user moved it" from "focus moved because a cell vanished". */
+    var lastNavKeyAtMs = 0L
+
     /** True from [beginVerticalMove] until the move coroutine settles. Lets the
      *  key handler keep stepping channel-by-channel on rapid / long-press UP
      *  even while [focusedChannelIndex] is transiently -1 mid-move (Bug 4). */
@@ -4149,7 +4221,83 @@ private class GuideVerticalNavState {
         // so keying off it makes Left/Right robust.
         val fromMs = if (focusedCellAnchorMs != Long.MIN_VALUE) focusedCellAnchorMs else anchorTimeMs
         if (i < 0 || fromMs == Long.MIN_VALUE) return false
+        lastNavKeyAtMs = android.os.SystemClock.uptimeMillis()
         return rowHorizontalHandlers[i]?.focusAdjacent(forward, fromMs) ?: false
+    }
+
+    /** Row whose focused cell was disposed out from under D-pad focus, or -1
+     *  when there is nothing to recover. Written by the cell's dispose hook,
+     *  observed by the guide's recovery collector. */
+    var orphanedFocusRow by mutableStateOf(-1)
+        private set
+    private var orphanedFocusAtMs = 0L
+
+    /** A composed cell that OWNED focus is being disposed. Compose is about to
+     *  relocate focus to whatever it can find; flag it so the guide can put
+     *  focus back where the user left it. */
+    fun noteFocusedCellDisposed(channelIndex: Int) {
+        orphanedFocusRow = channelIndex
+        orphanedFocusAtMs = android.os.SystemClock.uptimeMillis()
+    }
+
+    private var recoveryGeneration = 0
+
+    /** Drop any pending / in-flight focus recovery. The channel list changed
+     *  under us (group switch, search, reorder), so a row index captured before
+     *  the swap now names a DIFFERENT channel -- re-landing on it would fight
+     *  whatever the new list focuses. */
+    fun cancelFocusRecovery() {
+        if (orphanedFocusRow >= 0) orphanedFocusRow = -1
+        recoveryGeneration++
+    }
+
+    /**
+     * Put focus back on the row it was orphaned from.
+     *
+     * Streamer field trace 2026-08-20: a row scrolled into view composes
+     * whatever EPG is on hand (often a single placeholder block spanning the
+     * window); per-channel enrichment swaps the real programmes in about a
+     * second later. Cells carry composition identity keyed on programme start
+     * -- they must, see the key() note in the row -- so the swap DISPOSES the
+     * cell that owns focus. Compose then relocates focus to the first focusable
+     * it finds: walking down the guide, the user got yanked back to the top
+     * visible row a beat after landing (release builds stranded focus on the
+     * nav circles with the guide unmoved). It reads as the guide fighting the
+     * remote.
+     *
+     * Recovery cannot key off [focusedChannelIndex]: a disposed node never
+     * reports its unfocus, so that still names the orphaned row and everything
+     * looks fine. The dispose hook is the only honest signal.
+     *
+     * We re-land on the same time column once the replacement cells register
+     * their requesters -- unless the user has moved on (a nav key after the
+     * orphaning, or a vertical move in flight), in which case their move wins.
+     */
+    suspend fun recoverOrphanedFocus() {
+        val row = orphanedFocusRow
+        val armedAtMs = orphanedFocusAtMs
+        val gen = recoveryGeneration
+        orphanedFocusRow = -1
+        if (row < 0) return
+        // Attempt BEFORE the first delay: the replacement cells compose in the
+        // same frame the old one is disposed, so the requester is usually
+        // already registered and focus never visibly leaves the row. Every frame
+        // spent orphaned is a frame where a D-pad press hits no handler at all
+        // and is silently dropped.
+        repeat(24) { attempt ->
+            if (attempt > 0) kotlinx.coroutines.delay(8L)
+            if (gen != recoveryGeneration) return
+            if (verticalMoveInFlight || pendingTargetIndex >= 0) return
+            if (lastNavKeyAtMs > armedAtMs) return
+            val handler = rowHandlers[row] ?: return@repeat
+            programmaticFocusPending = true
+            if (handler.focusAtTime(anchorTimeMs)) {
+                focusedChannelIndex = row
+                lastFocusedChannelIndex = row
+                return
+            }
+            programmaticFocusPending = false
+        }
     }
 
     /** Called by a cell when it gains focus. Records which channel row owns
