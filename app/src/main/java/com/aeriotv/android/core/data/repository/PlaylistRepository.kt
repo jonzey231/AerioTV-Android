@@ -100,6 +100,11 @@ private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 3L * 60L * 1000L
  *  report of a 4GB app cache was exactly this, repeated. */
 private const val ORPHAN_TEMP_MAX_AGE_MS = 60L * 60L * 1000L
 
+/** E-6: minimum gap between EPG retention sweeps for one playlist. Upstream
+ *  layering saves once per source; the cutoff is days out, so re-pruning
+ *  seconds later only costs a full-table DELETE scan. */
+private const val RETENTION_SWEEP_COOLDOWN_MS = 5L * 60L * 1000L
+
 @Singleton
 class PlaylistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -938,11 +943,57 @@ class PlaylistRepository @Inject constructor(
         // ended over an hour ago) erased exactly the programmes the catch-up
         // "Watch" action needs.
         epgProgrammeDao.mergeForPlaylist(playlistId, entities, now)
-        val retentionDays = (dao.byId(playlistId)?.epgRetentionDays ?: 7).coerceAtLeast(1)
-        epgProgrammeDao.deleteEndedBeforeForPlaylist(
-            playlistId,
-            now - retentionDays * 24L * 60L * 60L * 1000L,
-        )
+        // E-6: prune at most once per cycle. Upstream layering calls this once
+        // PER SOURCE on purpose (so a kill mid-phase loses at most one feed),
+        // and every one of those calls used to run a full-table retention
+        // DELETE -- three sources, three sweeps, for a horizon measured in
+        // DAYS. Nothing about a 7-day cutoff needs re-applying seconds later,
+        // so the first save in a cycle sweeps and the rest skip.
+        val lastSweep = lastRetentionSweepAtMs[playlistId] ?: 0L
+        if (now - lastSweep >= RETENTION_SWEEP_COOLDOWN_MS) {
+            lastRetentionSweepAtMs[playlistId] = now
+            val retentionDays = (dao.byId(playlistId)?.epgRetentionDays ?: 7).coerceAtLeast(1)
+            epgProgrammeDao.deleteEndedBeforeForPlaylist(
+                playlistId,
+                now - retentionDays * 24L * 60L * 60L * 1000L,
+            )
+        }
+    }
+
+    /** Last retention prune per playlist; see the cooldown in [saveEpgToCache]. */
+    private val lastRetentionSweepAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * Write back JUST these programmes, leaving every other cached row alone.
+     *
+     * E-6 (perf campaign 2026-08-20): category enrichment changes a category
+     * string on the few hundred programmes that happen to be airing, and used
+     * to persist that by handing the ENTIRE feed back to [saveEpgToCache] -- a
+     * second full rewrite of a ~139k-row table, four indexes per row, plus
+     * another retention sweep, minutes after the first one finished. That is
+     * the disk churn behind the io-wait storm that turned a 1.4s guide stall
+     * into an ANR.
+     *
+     * These rows already exist: they carry the same (playlistId, channelId,
+     * startMillis) as their cached copies, so the REPLACE conflict strategy on
+     * that unique index updates them in place. Deliberately NOT
+     * [EpgProgrammeDao.mergeForPlaylist] -- that deletes the present-and-future
+     * region for every channel it touches before inserting, which for a partial
+     * list would erase the programmes that were not enriched.
+     */
+    suspend fun updateEpgRowsInCache(playlistId: String, programmes: List<EPGProgramme>) {
+        if (programmes.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val entities = withContext(Dispatchers.Default) {
+            programmes.mapNotNull { p ->
+                // Same drawability floor mergeForPlaylist applies; an enriched
+                // row must not sneak past the one filter every write shares.
+                if (p.endMillis - p.startMillis < 30_000L) null
+                else p.toCacheEntity(playlistId, now)
+            }
+        }
+        if (entities.isEmpty()) return
+        epgProgrammeDao.insertAll(entities)
     }
 
     /**

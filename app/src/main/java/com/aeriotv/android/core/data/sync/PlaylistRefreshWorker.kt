@@ -77,6 +77,19 @@ class PlaylistRefreshWorker @AssistedInject constructor(
         val knownKeys = com.aeriotv.android.core.data.buildChannelEpgKeyBridge(
             channels.getOrThrow(),
         ).keys
+        // E-6: honour the same cache-freshness gate the foreground load uses.
+        // The worker used to refetch and rewrite the whole guide on every
+        // wakeup regardless of how recently the app had already done it -- a
+        // full ~139k-row merge, four indexes per row, and a retention sweep,
+        // for data that could be minutes old. If a foreground refresh just ran,
+        // there is nothing here worth the disk churn.
+        val newestEpg = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
+        if (newestEpg != null &&
+            System.currentTimeMillis() - newestEpg < EPG_FRESH_ENOUGH_MS
+        ) {
+            Log.i(TAG, "EPG cache is fresh; skipping the background EPG rewrite")
+            return@runCatching Result.success()
+        }
         val epg = repository.loadEpg(playlist, knownKeys)
         if (epg.isFailure) {
             Log.w(TAG, "EPG refresh failed", epg.exceptionOrNull())
@@ -109,6 +122,12 @@ class PlaylistRefreshWorker @AssistedInject constructor(
     companion object {
         const val TAG = "PlaylistRefreshWorker"
         const val UNIQUE_NAME = "aeriotv-playlist-refresh"
+
+        /** E-6: skip the background EPG rewrite when the cache was refreshed
+         *  this recently. Deliberately looser than the foreground TTL (30
+         *  minutes): the worker runs on a 6-hour cadence, so anything newer
+         *  than an hour means the app already did this work. */
+        private const val EPG_FRESH_ENOUGH_MS = 60L * 60L * 1000L
 
         /**
          * Idempotent registration. Call from app startup with the user's

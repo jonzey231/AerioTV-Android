@@ -997,9 +997,30 @@ class PlaylistViewModel @Inject constructor(
                             }
                             _state.update { it.copy(epgByChannel = merged) }
                         }
-                        // Keep the cache enriched too so tints survive a relaunch.
-                        runCatching { repository.saveEpgToCache(playlist.id, enriched) }
-                        Log.i(TAG, "EPG enriched: categories backfilled for now-playing programmes")
+                        // Keep the cache enriched too so tints survive a relaunch
+                        // -- but write ONLY the rows enrichment actually
+                        // touched. E-6: this used to hand the whole feed back
+                        // to saveEpgToCache, re-writing ~139k rows and four
+                        // indexes each, plus a second retention sweep, to
+                        // change a category string on a few hundred airing
+                        // programmes. enrichNowPlayingCategories returns a
+                        // parallel list whose untouched entries are the SAME
+                        // instances, so identity picks out the changes for
+                        // free.
+                        val changedRows = withContext(Dispatchers.Default) {
+                            if (enriched.size == programmes.size) {
+                                enriched.filterIndexed { i, p -> p !== programmes[i] }
+                            } else {
+                                enriched
+                            }
+                        }
+                        runCatching { repository.updateEpgRowsInCache(playlist.id, changedRows) }
+                            .onFailure { Log.w(TAG, "enriched cache update failed", it) }
+                        Log.i(
+                            TAG,
+                            "EPG enriched: categories backfilled for now-playing programmes " +
+                                "(${changedRows.size} of ${enriched.size} rows written)",
+                        )
                     }
                 }
                 Result.success(programmes.size)
