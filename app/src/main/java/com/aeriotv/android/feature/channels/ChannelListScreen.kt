@@ -247,81 +247,21 @@ fun ChannelListScreen(
         }
     }
 
-    val filtered by remember(
-        state.channels, state.searchQuery, state.selectedGroup, state.sortMode,
-        favoriteIds, hiddenGroups, allGroupsRaw, groupSortMode, collections,
+    // E-1 stage 2 (perf campaign): shared off-main pipeline; see
+    // computeDisplayChannels and the twin call site in GuideScreen.
+    val filtered by androidx.compose.runtime.produceState(
+        initialValue = com.aeriotv.android.feature.livetv.computeDisplayChannels(
+            state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
+            allGroupsRaw, groupSortMode, hiddenGroups, favoriteIds, collections,
+        ),
+        state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
+        allGroupsRaw, groupSortMode, hiddenGroups, favoriteIds, collections,
     ) {
-        derivedStateOf {
-            val query = state.searchQuery.trim()
-            // #45: a "collection:<id>" sentinel filters to exactly the curated
-            // members, bypassing hidden groups (the user picked them
-            // explicitly); a dangling sentinel shows everything (iOS).
-            val activeCollection = ChannelCollection.idFromToken(state.selectedGroup)
-                ?.let { cid -> collections.firstOrNull { it.id == cid } }
-            val collectionMembers = activeCollection?.memberIds?.toSet()
-            // Only a collection filter when it doesn't collide with a real
-            // provider group named "collection:x" (#45 review).
-            val collectionSelected =
-                state.selectedGroup.startsWith(ChannelCollection.TOKEN_PREFIX) &&
-                    allGroupsRaw.none { it == state.selectedGroup }
-            val byGroupAndSearch = state.channels.asSequence()
-                .filter {
-                    // "All" still respects hidden-group filters so toggling a group off
-                    // truly hides its channels from the default list. The user can find
-                    // them again via search (which ignores the hidden set).
-                    when {
-                        collectionSelected -> collectionMembers?.contains(it.id) ?: true
-                        state.selectedGroup == PlaylistViewModel.ALL_GROUPS && query.isEmpty() ->
-                            it.groupTitle !in hiddenGroups
-                        state.selectedGroup == PlaylistViewModel.ALL_GROUPS -> true
-                        else -> it.groupTitle.equals(state.selectedGroup, ignoreCase = true)
-                    }
-                }
-                .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
-                .toList()
-            // When the user has chosen a non-default group order (A-Z or Manual),
-            // cluster the "All" list by that group order so the channels follow
-            // the groups (iOS sorts by group index then channel number). A
-            // specific-group view or Default order keeps the flat sort. Blank /
-            // unknown groups sort last. Within each group the chosen channel
-            // sort applies as the secondary key.
-            val clusterByGroup = query.isEmpty() &&
-                state.selectedGroup == PlaylistViewModel.ALL_GROUPS &&
-                groupSortMode != com.aeriotv.android.feature.livetv.GroupSortMode.Default
-            val groupRankIndex = if (clusterByGroup) {
-                allGroupsRaw.withIndex().associate { (i, g) -> g to i }
-            } else {
-                emptyMap()
-            }
-            // E-1 stage 1 (perf campaign 2026-08-19): Schwartzian transform,
-            // same rationale as GuideScreen.filteredChannels - the comparators
-            // allocated inside every comparison, on Main, per group switch.
-            val keyed = byGroupAndSearch.map { ch ->
-                ListSortKey(
-                    channel = ch,
-                    rank = if (clusterByGroup) groupRankIndex[ch.groupTitle] ?: Int.MAX_VALUE else 0,
-                    nameLower = ch.name.lowercase(),
-                    number = ch.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE,
-                    favorite = ch.id in favoriteIds,
-                )
-            }
-            val sorted = when (state.sortMode) {
-                SortMode.ByNumber -> keyed.sortedWith(
-                    compareBy({ it.rank }, { it.number }, { it.nameLower }),
-                )
-                SortMode.ByName -> keyed.sortedWith(
-                    compareBy({ it.rank }, { it.nameLower }),
-                )
-                SortMode.FavoritesFirst -> keyed.sortedWith(
-                    compareBy(
-                        { it.rank },
-                        { !it.favorite }, // favorited sorts first
-                        { it.number },
-                        { it.nameLower },
-                    ),
-                )
-            }
-            sorted.map { it.channel }
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            com.aeriotv.android.feature.livetv.computeDisplayChannels(
+                state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
+                allGroupsRaw, groupSortMode, hiddenGroups, favoriteIds, collections,
+            )
         }
     }
 
@@ -1747,12 +1687,3 @@ private fun formatTimeRange(programme: EPGProgramme): String {
     val end = timeFormat.format(java.util.Date(programme.endMillis))
     return "$start – $end"
 }
-
-/** E-1 stage 1: per-channel cached sort keys (see the filtered derivation). */
-private class ListSortKey(
-    val channel: com.aeriotv.android.core.data.M3UChannel,
-    val rank: Int,
-    val nameLower: String,
-    val number: Double,
-    val favorite: Boolean,
-)

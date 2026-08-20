@@ -617,90 +617,25 @@ fun GuideScreen(
         }
     }
 
-    val filteredChannels by remember(
-        state.channels, state.selectedGroup, allGroupNames, groupSortMode, collections,
-        state.sortMode, favoriteIds,
+    // E-1 stage 2 (perf campaign): the filter+sort pipeline runs on
+    // Dispatchers.Default via the shared computeDisplayChannels. The initial
+    // value computes synchronously ONCE so entry never flashes an empty
+    // guide; every subsequent input change (group switch, search, sort,
+    // reorder) recomputes off Main and lands as a single list swap - the
+    // group-switch path that used to block input dispatch into an ANR.
+    val filteredChannels by androidx.compose.runtime.produceState(
+        initialValue = computeDisplayChannels(
+            state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
+            allGroupNames, groupSortMode, hiddenGroups, favoriteIds, collections,
+        ),
+        state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
+        allGroupNames, groupSortMode, hiddenGroups, favoriteIds, collections,
     ) {
-        derivedStateOf {
-            val query = state.searchQuery.trim()
-            // #45: a "collection:<id>" sentinel filters to exactly the curated
-            // members. The user picked them explicitly, so hidden-group
-            // exclusion is bypassed (iOS filterChannels). A dangling sentinel
-            // (collection deleted mid-view) falls through to showing
-            // everything, exactly like iOS.
-            val activeCollection = ChannelCollection.idFromToken(state.selectedGroup)
-                ?.let { cid -> collections.firstOrNull { it.id == cid } }
-            val collectionMembers = activeCollection?.memberIds?.toSet()
-            // Treat the sentinel as a collection filter ONLY when it doesn't
-            // collide with a real provider group literally named "collection:x"
-            // (that group is in allGroupNames and must still filter normally).
-            // A dangling sentinel (collection deleted mid-view) isn't a real
-            // group, so it stays a collection filter and shows everything.
-            val collectionSelected =
-                state.selectedGroup.startsWith(ChannelCollection.TOKEN_PREFIX) &&
-                    allGroupNames.none { it == state.selectedGroup }
-            // When a non-default group order (A-Z / Manual) is active, cluster the
-            // "All" guide rows by that group order so the channels follow the
-            // groups (primary key = group index, then channel number). A specific
-            // group view or Default order keeps the flat numeric sort.
-            val clusterByGroup = query.isEmpty() &&
-                state.selectedGroup == PlaylistViewModel.ALL_GROUPS &&
-                groupSortMode != GroupSortMode.Default
-            val groupRankIndex = if (clusterByGroup) {
-                allGroupNames.withIndex().associate { (i, g) -> g to i }
-            } else {
-                emptyMap()
-            }
-            state.channels.asSequence()
-                .filter { ch ->
-                    when {
-                        collectionSelected -> collectionMembers?.contains(ch.id) ?: true
-                        state.selectedGroup != PlaylistViewModel.ALL_GROUPS ->
-                            ch.groupTitle.equals(state.selectedGroup, ignoreCase = true)
-                        // In "All", hide channels whose group is toggled off --
-                        // unless searching, where hidden groups stay findable
-                        // (matches the List view behaviour).
-                        query.isNotEmpty() -> true
-                        else -> ch.groupTitle !in hiddenGroups
-                    }
-                }
-                .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
-                // Same Sort menu contract as the List view (user report: the
-                // Number / Name / Favorites toggle was missing from the
-                // Guide): group clustering stays the primary key, then the
-                // selected mode orders within it.
-                // E-1 stage 1 (perf campaign 2026-08-19): Schwartzian
-                // transform. The comparators used to call name.lowercase()
-                // and channelNumber.toDoubleOrNull() INSIDE every comparison
-                // (~2 x N x log N allocations per derivation, on Main, on
-                // every group switch - the allocation storm behind the
-                // Streamer ANR record's 113,783 minor faults). Keys compute
-                // once per channel, the sort reads cached fields, ordering
-                // semantics are identical. Stage 2 moves the whole derivation
-                // into PlaylistViewModel on Dispatchers.Default.
-                .map { ch ->
-                    GuideSortKey(
-                        channel = ch,
-                        rank = if (clusterByGroup) groupRankIndex[ch.groupTitle] ?: Int.MAX_VALUE else 0,
-                        nameLower = ch.name.lowercase(),
-                        number = ch.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE,
-                        favorite = ch.id in favoriteIds,
-                    )
-                }
-                .sortedWith(
-                    when (state.sortMode) {
-                        SortMode.ByName -> compareBy({ it.rank }, { it.nameLower })
-                        SortMode.FavoritesFirst -> compareBy(
-                            { it.rank },
-                            { !it.favorite }, // favorited sorts first
-                            { it.number },
-                            { it.nameLower },
-                        )
-                        SortMode.ByNumber -> compareBy({ it.rank }, { it.number }, { it.nameLower })
-                    },
-                )
-                .map { it.channel }
-                .toList()
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            computeDisplayChannels(
+                state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
+                allGroupNames, groupSortMode, hiddenGroups, favoriteIds, collections,
+            )
         }
     }
 
@@ -4440,12 +4375,3 @@ private class GuideLeadingEdgeBringIntoViewSpec(
         return if (abs(distance) > containerSize) 0f else distance
     }
 }
-
-/** E-1 stage 1: per-channel cached sort keys (see filteredChannels). */
-private class GuideSortKey(
-    val channel: com.aeriotv.android.core.data.M3UChannel,
-    val rank: Int,
-    val nameLower: String,
-    val number: Double,
-    val favorite: Boolean,
-)
