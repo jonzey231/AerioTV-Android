@@ -2327,6 +2327,11 @@ fun GuideScreen(
                     nowMillis = nowMillis,
                     visibleStartMs = visibleWindow.first,
                     visibleEndMs = visibleWindow.second,
+                    // I-1: the focused-row halo is denominated in the RAW
+                    // viewport span, passed explicitly because the padded
+                    // window's width varies (E-3 collapses it to one span
+                    // during list swaps, the settle walker re-widens to 3).
+                    viewportSpanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong(),
                     isTv = isTv,
                     railWidth = railWidth,
                     rowHeight = rowHeight,
@@ -2368,6 +2373,7 @@ fun GuideScreen(
                     onToggleFavorite = { favoritesVm.toggle(channel) },
                     palette = palette,
                     multiviewStore = multiviewStore,
+                    multiviewSelection = stagedMultiview,
                     showLogo = showChannelLogos,
                     showNumber = showChannelNumbers,
                     showName = showChannelNames,
@@ -2528,6 +2534,7 @@ private fun ChannelGuideRow(
     nowMillis: Long,
     visibleStartMs: Long,
     visibleEndMs: Long,
+    viewportSpanMs: Long,
     isTv: Boolean,
     railWidth: androidx.compose.ui.unit.Dp,
     rowHeight: androidx.compose.ui.unit.Dp,
@@ -2549,6 +2556,7 @@ private fun ChannelGuideRow(
     onToggleFavorite: () -> Unit,
     palette: CategoryPaletteState,
     multiviewStore: MultiviewStoreHandle,
+    multiviewSelection: List<com.aeriotv.android.feature.multiview.MultiviewTile>,
     showLogo: Boolean = true,
     showName: Boolean = true,
     /** GH #19: when false the channel-number text is omitted from the rail. */
@@ -2560,9 +2568,13 @@ private fun ChannelGuideRow(
      *  retention window (see [canReplay]). */
     onProgrammeWatch: ((EPGProgramme) -> Unit)? = null,
 ) {
-    val multiviewSelected by multiviewStore.selected.collectAsStateWithLifecycle()
-    val inMultiview = multiviewSelected.any { it.id == channel.id }
-    val atCap = multiviewSelected.size >= multiviewStore.maxTiles && !inMultiview
+    // I-4c (perf campaign 2026-08-20): every row used to run its OWN
+    // collectAsStateWithLifecycle on the multiview selection flow - one
+    // coroutine + lifecycle observer per visible row, re-created on every
+    // row recomposition wave. The top level already collects the selection
+    // once (stagedMultiview); rows now receive it as data.
+    val inMultiview = multiviewSelection.any { it.id == channel.id }
+    val atCap = multiviewSelection.size >= multiviewStore.maxTiles && !inMultiview
     val context = LocalContext.current
     var railMenuOpen by remember { mutableStateOf(false) }
     val railMenuGuard = com.aeriotv.android.core.tv.rememberTvMenuGuard()
@@ -3001,12 +3013,30 @@ private fun ChannelGuideRow(
             Box(modifier = Modifier.width(totalWidth).fillMaxHeight()) {
                 // Programme cells, positioned by offset.
                 val windowEnd = windowStart + windowDurationMs
-                programmes.items.forEachIndexed { index, programme ->
+                // I-4a (perf campaign 2026-08-20): binary-search the composed
+                // slice instead of walking the channel's ENTIRE programme list
+                // (hundreds of items on a 7-day EPG) per recomposition - this
+                // loop re-runs for every visible row on every settle-walk
+                // slice and every window change. Items are start-sorted
+                // (sortedBy at merge time); the walk-back loop collects any
+                // long programmes straddling the lower bound, so overlapping
+                // feeds keep every cell they kept before. The in-body clip
+                // checks stay as cheap invariants.
+                val items = programmes.items
+                val sliceHaloMs = if (rowIsFocused) viewportSpanMs else 0L
+                val sliceLo = maxOf(windowStart, visibleStartMs - sliceHaloMs)
+                val sliceHi = minOf(windowEnd, visibleEndMs + sliceHaloMs)
+                var sliceStart = items.binarySearchBy(sliceLo) { it.startMillis }
+                    .let { if (it < 0) -it - 1 else it }
+                while (sliceStart > 0 && items[sliceStart - 1].endMillis > sliceLo) sliceStart--
+                for (index in sliceStart until items.size) {
+                    val programme = items[index]
+                    if (programme.startMillis >= sliceHi) break
                     val rawStart = programme.startMillis
                     val rawEnd = programme.endMillis
                     // Window clip: skip programmes entirely outside the guide span.
-                    if (rawEnd <= windowStart) return@forEachIndexed
-                    if (rawStart >= windowEnd) return@forEachIndexed
+                    if (rawEnd <= windowStart) continue
+                    if (rawStart >= windowEnd) continue
                     // Viewport clip: skip programmes outside the visible scroll
                     // window (+/- pad). Keeps each row to a handful of composed
                     // cells instead of all-in-window; the parent Box stays
@@ -3025,22 +3055,25 @@ private fun ChannelGuideRow(
                     // every lastFocusedChannelIndex change.
                     if (!rowIsFocused &&
                         (rawEnd <= visibleStartMs || rawStart >= visibleEndMs)
-                    ) return@forEachIndexed
-                    // Task #188: BOUND the focused-row exception. Composing the
-                    // focused row's ENTIRE window made its per-press cost scale
-                    // with EPG size (alturismo's large EPG = worst case; a
-                    // dense channel landing = the 350-900ms vertical hitch).
-                    // A halo of 2x the padded visible span on each side keeps
-                    // every cell a page-jump (0.85 viewport) or bring-into-view
-                    // step could land on alive -- the focus-orphan bug the
-                    // exception exists for cannot reach cells 2+ windows away,
-                    // because the column snap and retarget logic always pull
-                    // focus back toward the viewport first.
+                    ) continue
+                    // Task #188 + I-1 (perf campaign 2026-08-20): BOUND the
+                    // focused-row exception. Composing the focused row's ENTIRE
+                    // window made its per-press cost scale with EPG size; the
+                    // #188 fix bounded it to "2x the visible span" - but that
+                    // was denominated in the PADDED window, which task #190
+                    // later grew to 3 viewports, silently re-ballooning the
+                    // focused row to ~15 viewports of cells (the 350-900ms
+                    // vertical hitches came back). The halo is now ONE RAW
+                    // viewport span beyond the composed window on each side:
+                    // the page stride is 0.85 viewport and the column snap and
+                    // retarget logic always pull focus back toward the
+                    // viewport first, so no reachable focus target can sit
+                    // further out than that.
                     if (rowIsFocused) {
-                        val haloMs = (visibleEndMs - visibleStartMs) * 2
+                        val haloMs = viewportSpanMs
                         if (rawEnd <= visibleStartMs - haloMs ||
                             rawStart >= visibleEndMs + haloMs
-                        ) return@forEachIndexed
+                        ) continue
                     }
                     val clippedStart = rawStart.coerceAtLeast(windowStart)
                     // Anti-overlap: clamp the cell end to the next programme's start
