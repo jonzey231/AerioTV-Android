@@ -2510,16 +2510,17 @@ fun GuideScreen(
             TvGroupPicker(
                 allGroups = allGroupNames,
                 hiddenGroups = hiddenGroups,
-                onToggle = { group, visible ->
-                    settingsVm.setHiddenGroups(
-                        if (visible) hiddenGroups - group else hiddenGroups + group,
-                    )
-                },
                 onDismiss = { showManageGroups = false },
                 reorderEnabled = true,
                 sortMode = groupSortMode,
                 onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
-                onReorder = { settingsVm.setGroupOrder(it) },
+                // E-4: ONE commit per picker session at dismissal; the picker
+                // renders its own working copies meanwhile. Unchanged values
+                // are skipped so a look-and-close writes nothing.
+                onCommit = { hidden, order ->
+                    if (hidden != hiddenGroups) settingsVm.setHiddenGroups(hidden)
+                    order?.let { settingsVm.setGroupOrder(it) }
+                },
             )
         } else {
             ManageGroupsSheet(

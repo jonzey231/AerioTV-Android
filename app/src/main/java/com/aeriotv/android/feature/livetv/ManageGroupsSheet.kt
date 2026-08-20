@@ -367,15 +367,32 @@ fun ManageGroupsSheet(
 fun TvGroupPicker(
     allGroups: List<String>,
     hiddenGroups: Set<String>,
-    onToggle: (group: String, visible: Boolean) -> Unit,
     onDismiss: () -> Unit,
     reorderEnabled: Boolean = false,
     sortMode: GroupSortMode = GroupSortMode.Default,
     onSortModeChange: (GroupSortMode) -> Unit = {},
-    onReorder: (List<String>) -> Unit = {},
+    /** E-4 (perf campaign 2026-08-19): one commit per dialog SESSION, fired at
+     *  dismissal, replacing the per-press onToggle / per-drop onReorder
+     *  callbacks. Each of those was a synchronous DataStore write plus a
+     *  re-emission to every preference collector plus a full guide re-sort -
+     *  measured at 5-6 seconds per move on the Streamer, repeated per press.
+     *  The picker renders from its own working copies, so every press is
+     *  instant; the world updates once, after close. `order` is null when the
+     *  user never completed a manual move. */
+    onCommit: (hidden: Set<String>, order: List<String>?) -> Unit = { _, _ -> },
 ) {
     val manualReorder = reorderEnabled && sortMode == GroupSortMode.Manual
-    Dialog(onDismissRequest = onDismiss) {
+    var workingHidden by remember { mutableStateOf(hiddenGroups) }
+    var orderDirty by remember { mutableStateOf(false) }
+    // Seeded once per open; deliberately NOT reset on external emissions (the
+    // old LaunchedEffect(allGroups) reset clobbered the working order when a
+    // slow commit round-tripped mid-second-move).
+    var workingOrder by remember { mutableStateOf(allGroups) }
+    val commitAndDismiss = {
+        onCommit(workingHidden, if (orderDirty) workingOrder else null)
+        onDismiss()
+    }
+    Dialog(onDismissRequest = commitAndDismiss) {
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -452,8 +469,6 @@ fun TvGroupPicker(
                 }
                 val firstFocus = remember { FocusRequester() }
                 val moveFocus = remember { FocusRequester() }
-                var workingOrder by remember(allGroups) { mutableStateOf(allGroups) }
-                LaunchedEffect(allGroups) { workingOrder = allGroups }
                 var movingGroup by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
                 // Keep the D-pad cursor pinned on the moving row as it changes
@@ -468,7 +483,7 @@ fun TvGroupPicker(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     itemsIndexed(displayGroups, key = { _, g -> g }) { index, group ->
-                        val visible = group !in hiddenGroups
+                        val visible = group !in workingHidden
                         val isMoving = movingGroup == group
                         var focused by remember { mutableStateOf(false) }
                         Row(
@@ -514,7 +529,7 @@ fun TvGroupPicker(
                                                             workingOrder = moveInList(workingOrder, group, +1); true
                                                         }
                                                         Key.DirectionCenter, Key.Enter, Key.Back -> {
-                                                            movingGroup = null; onReorder(workingOrder); true
+                                                            movingGroup = null; orderDirty = true; true
                                                         }
                                                         else -> false
                                                     }
@@ -530,13 +545,20 @@ fun TvGroupPicker(
                                                     // Short press toggles visibility on release.
                                                     ev.type == KeyEventType.KeyUp &&
                                                         (ev.key == Key.DirectionCenter || ev.key == Key.Enter) -> {
-                                                        onToggle(group, !visible); true
+                                                        workingHidden =
+                                                            if (visible) workingHidden + group
+                                                            else workingHidden - group
+                                                        true
                                                     }
                                                     else -> false
                                                 }
                                             }
                                     } else {
-                                        Modifier.clickable { onToggle(group, !visible) }
+                                        Modifier.clickable {
+                                            workingHidden =
+                                                if (visible) workingHidden + group
+                                                else workingHidden - group
+                                        }
                                     },
                                 )
                                 .padding(horizontal = 22.dp, vertical = 14.dp),
