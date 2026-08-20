@@ -791,59 +791,6 @@ fun GuideScreen(
         visibleWindow = startMs to (startMs + spanMs)
         androidx.compose.runtime.SideEffect { windowCollapseTick++ }
     }
-    LaunchedEffect(windowStart, hourWidthPx, stripViewportPx) {
-        val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
-        val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
-        val emergencyMs = 15L * 60_000L
-        snapshotFlow {
-            // windowCollapseTick makes the E-3 post-collapse widening run even
-            // with no scroll motion (its bump lands post-frame, so the sliced
-            // walk starts on the first idle frame after the cheap swap).
-            Triple(horizontalScrollState.value, horizontalScrollState.isScrollInProgress, windowCollapseTick)
-        }.collect { (scroll, scrolling, _) ->
-            val rawStart = windowStart + (scroll / hourWidthPx * 3_600_000f).toLong()
-            val rawEnd = rawStart + spanMs
-            val (curStart, curEnd) = visibleWindow
-            // Viewport about to out-run the composed region (long fling).
-            val nearEdge = rawStart - emergencyMs < curStart || rawEnd + emergencyMs > curEnd
-            // Settled off-center by more than the emergency guard: re-center
-            // so the next page in either direction is pre-composed.
-            val settledDrift = !scrolling &&
-                kotlin.math.abs(rawStart - (curStart + padMs)) > emergencyMs
-            if (nearEdge) {
-                // Correctness first: catch up in one hop, whatever it costs.
-                visibleWindow = (rawStart - padMs) to (rawEnd + padMs)
-            } else if (settledDrift) {
-                // Idle re-center, SLICED: framestats put a whole-page
-                // extension at ~100ms composition + ~150-230ms display-list
-                // recording in a single frame. Walking the window edges an
-                // eighth-viewport per frame divides that burst across ~7
-                // frames of ~30-50ms each; a fresh gesture aborts mid-walk
-                // (the emergency path above keeps a rapid next press
-                // correct).
-                val targetStart = rawStart - padMs
-                val targetEnd = rawEnd + padMs
-                val stepMs = (spanMs / 8).coerceAtLeast(emergencyMs)
-                while (visibleWindow != targetStart to targetEnd) {
-                    if (horizontalScrollState.isScrollInProgress) break
-                    val (cs, ce) = visibleWindow
-                    val ns = when {
-                        cs < targetStart -> (cs + stepMs).coerceAtMost(targetStart)
-                        cs > targetStart -> (cs - stepMs).coerceAtLeast(targetStart)
-                        else -> cs
-                    }
-                    val ne = when {
-                        ce < targetEnd -> (ce + stepMs).coerceAtMost(targetEnd)
-                        ce > targetEnd -> (ce - stepMs).coerceAtLeast(targetEnd)
-                        else -> ce
-                    }
-                    visibleWindow = ns to ne
-                    androidx.compose.runtime.withFrameNanos { }
-                }
-            }
-        }
-    }
-
     // iOS GuideStore audit P3 #12: Rolling Prefetch trigger. Every time the
     // visible window shifts past 4h of cached-edge proximity, ask the VM to
     // fire a force-refresh. The VM itself handles single-flight + a 60s
@@ -1580,6 +1527,72 @@ fun GuideScreen(
         LaunchedEffect(guideNav) {
             snapshotFlow { guideNav.orphanedFocusRow }
                 .collect { if (it >= 0) guideNav.recoverOrphanedFocus() }
+        }
+        // Composed-window maintenance. Declared HERE, below guideNav, because
+        // the idle debounce reads the last nav key from it.
+        LaunchedEffect(windowStart, hourWidthPx, stripViewportPx) {
+            val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
+            val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
+            val emergencyMs = 15L * 60_000L
+            snapshotFlow {
+                // windowCollapseTick makes the E-3 post-collapse widening run even
+                // with no scroll motion (its bump lands post-frame, so the sliced
+                // walk starts on the first idle frame after the cheap swap).
+                Triple(horizontalScrollState.value, horizontalScrollState.isScrollInProgress, windowCollapseTick)
+            }.collect { (scroll, scrolling, _) ->
+                val rawStart = windowStart + (scroll / hourWidthPx * 3_600_000f).toLong()
+                val rawEnd = rawStart + spanMs
+                val (curStart, curEnd) = visibleWindow
+                // Blank RIGHT NOW: the viewport sits outside what is composed.
+                // Nothing to weigh here, catch up immediately.
+                val outrun = rawStart < curStart || rawEnd > curEnd
+                // Closing on the composed edge while the timeline is actually
+                // moving (a long fling). I-2: this used to fire whenever the pad
+                // was thinner than the emergency margin, MOTION OR NOT - which
+                // E-3's collapse guarantees, since it deliberately drops the pad
+                // to zero. So every group switch went: collapse to one cheap
+                // frame, then immediately re-extend the whole padded window in a
+                // SINGLE frame, which is the exact burst the sliced walk below
+                // exists to avoid. Requiring motion lets an idle post-collapse
+                // widening take the sliced path it was written for.
+                val nearEdge = outrun || (scrolling &&
+                    (rawStart - emergencyMs < curStart || rawEnd + emergencyMs > curEnd))
+                // Settled off-center by more than the emergency guard: re-center
+                // so the next page in either direction is pre-composed.
+                val settledDrift = !scrolling &&
+                    kotlin.math.abs(rawStart - (curStart + padMs)) > emergencyMs
+                if (nearEdge) {
+                    // Correctness first: catch up in one hop, whatever it costs.
+                    visibleWindow = (rawStart - padMs) to (rawEnd + padMs)
+                } else if (settledDrift) {
+                    // Idle re-center, SLICED: framestats put a whole-page
+                    // extension at ~100ms composition + ~150-230ms display-list
+                    // recording in a single frame. Walking the window edges an
+                    // eighth-viewport per frame divides that burst across ~7
+                    // frames of ~30-50ms each; a fresh gesture aborts mid-walk
+                    // (the emergency path above keeps a rapid next press
+                    // correct).
+                    val targetStart = rawStart - padMs
+                    val targetEnd = rawEnd + padMs
+                    val stepMs = (spanMs / 8).coerceAtLeast(emergencyMs)
+                    while (visibleWindow != targetStart to targetEnd) {
+                        if (horizontalScrollState.isScrollInProgress) break
+                        val (cs, ce) = visibleWindow
+                        val ns = when {
+                            cs < targetStart -> (cs + stepMs).coerceAtMost(targetStart)
+                            cs > targetStart -> (cs - stepMs).coerceAtLeast(targetStart)
+                            else -> cs
+                        }
+                        val ne = when {
+                            ce < targetEnd -> (ce + stepMs).coerceAtMost(targetEnd)
+                            ce > targetEnd -> (ce - stepMs).coerceAtLeast(targetEnd)
+                            else -> ce
+                        }
+                        visibleWindow = ns to ne
+                        androidx.compose.runtime.withFrameNanos { }
+                    }
+                }
+            }
         }
         // Task #138: keep guideNav's viewport clamp current so a freshly-
         // focused left-clipped cell anchors to the on-screen column, not its
