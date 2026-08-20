@@ -3046,9 +3046,17 @@ private fun ChannelGuideRow(
                 // halo clip further down. focusedCellAnchorMs is a plain var,
                 // not snapshot state, so reading it here subscribes nobody.
                 val focusHoldMs = if (rowIsFocused) guideNav.focusedCellAnchorMs else Long.MIN_VALUE
-                val sliceHaloMs = if (rowIsFocused) viewportSpanMs * 2 else 0L
-                var sliceLo = maxOf(windowStart, visibleStartMs - sliceHaloMs)
-                var sliceHi = minOf(windowEnd, visibleEndMs + sliceHaloMs)
+                // ONE raw viewport of slack on each side, for EVERY row. This
+                // is not about reaching distant focus targets (the window pad
+                // covers those) - it absorbs the window's own churn. E-3
+                // collapses the window to a bare viewport on a list swap and
+                // the settle-walker only re-widens over idle frames, so a row
+                // regularly composes against a window narrower than the one on
+                // screen. Without the slack, cells at the edge - including the
+                // one holding focus - drop out and come back as NEW groups.
+                val sliceHaloMs = viewportSpanMs
+                var sliceLo = (visibleStartMs - sliceHaloMs).coerceAtLeast(windowStart)
+                var sliceHi = (visibleEndMs + sliceHaloMs).coerceAtMost(windowEnd)
                 if (focusHoldMs != Long.MIN_VALUE) {
                     sliceLo = minOf(sliceLo, focusHoldMs.coerceAtLeast(windowStart))
                     sliceHi = maxOf(sliceHi, (focusHoldMs + 1).coerceAtMost(windowEnd))
@@ -3067,60 +3075,36 @@ private fun ChannelGuideRow(
                     // Window clip: skip programmes entirely outside the guide span.
                     if (rawEnd <= windowStart) continue
                     if (rawStart >= windowEnd) continue
-                    // Viewport clip: skip programmes outside the visible scroll
-                    // window (+/- pad). Keeps each row to a handful of composed
-                    // cells instead of all-in-window; the parent Box stays
-                    // totalWidth so the scroll range is unchanged.
-                    // EXCEPTION: the row that currently owns focus composes ALL of
-                    // its cells within the window, not just the viewport pad. A
-                    // horizontal scroll (page / bring-into-view) would otherwise move
-                    // the focused cell -- or its step target -- past the pad and
-                    // dispose it mid-move, orphaning focus; Compose then relocates
-                    // focus to the chrome above (the RIGHT/UP focus-loss + escape
-                    // bug). Keeping the whole focused row alive means focus always
-                    // has a live cell to step onto. Only the single focused row pays
-                    // this; every other row stays clipped to the pad.
-                    // rowIsFocused is hoisted to the row body as a derivedStateOf
-                    // (see above) so reading it here doesn't subscribe this row to
-                    // every lastFocusedChannelIndex change.
-                    if (!rowIsFocused &&
-                        (rawEnd <= visibleStartMs || rawStart >= visibleEndMs)
+                    // Viewport clip: skip programmes outside the composed
+                    // window. Keeps each row to a handful of cells instead of
+                    // all-in-window; the parent Box stays totalWidth so the
+                    // scroll range is unchanged.
+                    //
+                    // This clip is deliberately IDENTICAL for every row,
+                    // focused or not. There used to be an exception that
+                    // composed the focused row far wider, added so a focus
+                    // target could never sit on a disposed cell. It did the
+                    // opposite (Streamer trace 2026-08-20): the emitted cell
+                    // set CHANGED the instant a row gained focus, which makes
+                    // Compose rebuild the keyed cell groups - including the
+                    // very cell that was receiving focus. Every landing
+                    // disposed its own target, focus went wherever the focus
+                    // engine chose (top visible row on debug builds, the nav
+                    // circles on release), and the press after it hit no
+                    // handler at all. Uniform bounds mean a focus arrival
+                    // changes nothing about what this row emits, so the
+                    // landing cell survives. Measured: 20 presses, 20 rows,
+                    // zero disposes, versus 10-17 disposes with the exception.
+                    //
+                    // What the exception was protecting is covered elsewhere:
+                    // the window already carries a viewport of pad on each side
+                    // (task #190), which is wider than the 0.85-viewport page
+                    // stride, and the focus hold below keeps the cell that owns
+                    // focus alive even if the window drifts off it.
+                    if (focusHoldMs !in rawStart until rawEnd &&
+                        (rawEnd <= visibleStartMs - sliceHaloMs ||
+                            rawStart >= visibleEndMs + sliceHaloMs)
                     ) continue
-                    // Task #188 + I-1 (perf campaign 2026-08-20): BOUND the
-                    // focused-row exception. Composing the focused row's ENTIRE
-                    // window made its per-press cost scale with EPG size; the
-                    // #188 fix bounded it to "2x the visible span" - but that
-                    // was denominated in the PADDED window, which task #190
-                    // later grew to 3 viewports, silently re-ballooning the
-                    // focused row to ~15 viewports of cells (the 350-900ms
-                    // vertical hitches came back). The halo is now ONE RAW
-                    // viewport span beyond the composed window on each side:
-                    // the page stride is 0.85 viewport and the column snap and
-                    // retarget logic always pull focus back toward the
-                    // viewport first, so no reachable focus target can sit
-                    // further out than that.
-                    // FOCUS HOLD (Streamer bisect 2026-08-20): the halo is a
-                    // PERF knob and must never be the reason focus dies. I-1
-                    // first set it to ONE raw viewport, which left the focused
-                    // row zero slack: E-3 collapses the window to one bare
-                    // viewport on a list swap and the settle-walker only
-                    // re-widens on idle frames, so a walk down the guide
-                    // regularly ran with a window narrower and staler than the
-                    // halo assumed. The cell holding focus then fell outside
-                    // the clip, got disposed, and Compose relocated focus to
-                    // the first focusable in the list - the spontaneous yank
-                    // back to the top rows (release builds stranded it on the
-                    // nav circles instead). Two guards now: the halo is two
-                    // raw viewports (covers the 0.85-viewport page stride plus
-                    // a long cell, still EPG-size independent, still ~2x
-                    // cheaper than the pre-I-1 balloon), and the cell that
-                    // actually owns focus is kept unconditionally.
-                    if (rowIsFocused && focusHoldMs !in rawStart until rawEnd) {
-                        val haloMs = sliceHaloMs
-                        if (rawEnd <= visibleStartMs - haloMs ||
-                            rawStart >= visibleEndMs + haloMs
-                        ) continue
-                    }
                     val clippedStart = rawStart.coerceAtLeast(windowStart)
                     // Anti-overlap: clamp the cell end to the next programme's start
                     // so a feed with overlapping entries doesn't paint cells on top
@@ -3179,8 +3163,9 @@ private fun ChannelGuideRow(
                             ) {
                                 if (com.aeriotv.android.BuildConfig.DEBUG) {
                                     android.util.Log.i(
-                                        "GuideMove",
-                                        "DISPOSE FOCUSED CELL row=$channelIndex start=$rawStart"
+                                        "GuideNav",
+                                        "focus lifeline: cell disposed under focus " +
+                                            "row=$channelIndex cell=$rawStart",
                                     )
                                 }
                                 guideNav.noteFocusedCellDisposed(channelIndex)
@@ -4468,12 +4453,44 @@ private class GuideVerticalNavState {
         val firstFullyVisible = info.visibleItemsInfo
             .firstOrNull { it.offset >= viewportTop }?.index
             ?: listState.firstVisibleItemIndex
-        if (index > firstFullyVisible) {
+        // Row height comes from a measured sibling when one is composed (rows
+        // are uniform).
+        val rowPx = info.visibleItemsInfo.firstOrNull()?.size ?: 0
+        // Walking the guide moves ONE row past an edge, so prefer a continuous
+        // scroll over an anchor jump. scrollToItem re-anchors the list and
+        // recomposes its items: the cell that owns focus is disposed out from
+        // under the D-pad every single time the guide scrolls (Streamer trace
+        // 2026-08-20 - the disposes started at exactly the row where scrolling
+        // begins, and every one of them cost a focus recovery). scrollBy runs
+        // the same path a fling does, so composed items are shifted, not
+        // rebuilt, and focus survives. Big moves (page keys, jump-to-now, a
+        // target that is not composed at all) keep the jump.
+        val delta: Float = when {
+            item != null && index > firstFullyVisible ->
+                (item.offset + item.size - viewportBottom).toFloat()
+            item != null -> (item.offset - viewportTop).toFloat()
+            else -> {
+                // Not composed: estimate from the nearest composed edge, but
+                // only trust it for the walk case (a row or two past the edge).
+                val last = info.visibleItemsInfo.lastOrNull()
+                val first = info.visibleItemsInfo.firstOrNull()
+                when {
+                    rowPx <= 0 -> Float.NaN
+                    last != null && index > last.index ->
+                        (last.offset + last.size - viewportBottom +
+                            (index - last.index) * rowPx).toFloat()
+                    first != null && index < first.index ->
+                        (first.offset - viewportTop - (first.index - index) * rowPx).toFloat()
+                    else -> Float.NaN
+                }
+            }
+        }
+        if (!delta.isNaN() && rowPx > 0 && kotlin.math.abs(delta) <= rowPx * 3f) {
+            listState.scrollBy(delta)
+        } else if (index > firstFullyVisible) {
             // Below the fold: bottom-align. scrollOffset is the target item's
             // top relative to the viewport top, so bottom-aligning subtracts
-            // one row height from the viewport height. Row height comes from a
-            // measured sibling when one is composed (rows are uniform).
-            val rowPx = info.visibleItemsInfo.firstOrNull()?.size ?: 0
+            // one row height from the viewport height.
             val align = ((viewportBottom - viewportTop) - rowPx).coerceAtLeast(0)
             listState.scrollToItem(index, scrollOffset = -align)
         } else {
@@ -4598,3 +4615,5 @@ private class GuideLeadingEdgeBringIntoViewSpec(
         return if (abs(distance) > containerSize) 0f else distance
     }
 }
+
+
