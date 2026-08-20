@@ -293,24 +293,35 @@ fun ChannelListScreen(
             } else {
                 emptyMap()
             }
-            val groupRank: (com.aeriotv.android.core.data.M3UChannel) -> Int =
-                { ch -> if (clusterByGroup) groupRankIndex[ch.groupTitle] ?: Int.MAX_VALUE else 0 }
-            when (state.sortMode) {
-                SortMode.ByNumber -> byGroupAndSearch.sortedWith(
-                    compareBy(groupRank, { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE }, { it.name.lowercase() }),
+            // E-1 stage 1 (perf campaign 2026-08-19): Schwartzian transform,
+            // same rationale as GuideScreen.filteredChannels - the comparators
+            // allocated inside every comparison, on Main, per group switch.
+            val keyed = byGroupAndSearch.map { ch ->
+                ListSortKey(
+                    channel = ch,
+                    rank = if (clusterByGroup) groupRankIndex[ch.groupTitle] ?: Int.MAX_VALUE else 0,
+                    nameLower = ch.name.lowercase(),
+                    number = ch.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE,
+                    favorite = ch.id in favoriteIds,
                 )
-                SortMode.ByName -> byGroupAndSearch.sortedWith(
-                    compareBy(groupRank, { it.name.lowercase() }),
+            }
+            val sorted = when (state.sortMode) {
+                SortMode.ByNumber -> keyed.sortedWith(
+                    compareBy({ it.rank }, { it.number }, { it.nameLower }),
                 )
-                SortMode.FavoritesFirst -> byGroupAndSearch.sortedWith(
+                SortMode.ByName -> keyed.sortedWith(
+                    compareBy({ it.rank }, { it.nameLower }),
+                )
+                SortMode.FavoritesFirst -> keyed.sortedWith(
                     compareBy(
-                        groupRank,
-                        { it.id !in favoriteIds }, // false (favorited) sorts before true
-                        { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE },
-                        { it.name.lowercase() },
+                        { it.rank },
+                        { !it.favorite }, // favorited sorts first
+                        { it.number },
+                        { it.nameLower },
                     ),
                 )
             }
+            sorted.map { it.channel }
         }
     }
 
@@ -1736,3 +1747,12 @@ private fun formatTimeRange(programme: EPGProgramme): String {
     val end = timeFormat.format(java.util.Date(programme.endMillis))
     return "$start – $end"
 }
+
+/** E-1 stage 1: per-channel cached sort keys (see the filtered derivation). */
+private class ListSortKey(
+    val channel: com.aeriotv.android.core.data.M3UChannel,
+    val rank: Int,
+    val nameLower: String,
+    val number: Double,
+    val favorite: Boolean,
+)

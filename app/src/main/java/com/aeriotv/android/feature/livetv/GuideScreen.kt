@@ -669,25 +669,37 @@ fun GuideScreen(
                 // Number / Name / Favorites toggle was missing from the
                 // Guide): group clustering stays the primary key, then the
                 // selected mode orders within it.
+                // E-1 stage 1 (perf campaign 2026-08-19): Schwartzian
+                // transform. The comparators used to call name.lowercase()
+                // and channelNumber.toDoubleOrNull() INSIDE every comparison
+                // (~2 x N x log N allocations per derivation, on Main, on
+                // every group switch - the allocation storm behind the
+                // Streamer ANR record's 113,783 minor faults). Keys compute
+                // once per channel, the sort reads cached fields, ordering
+                // semantics are identical. Stage 2 moves the whole derivation
+                // into PlaylistViewModel on Dispatchers.Default.
+                .map { ch ->
+                    GuideSortKey(
+                        channel = ch,
+                        rank = if (clusterByGroup) groupRankIndex[ch.groupTitle] ?: Int.MAX_VALUE else 0,
+                        nameLower = ch.name.lowercase(),
+                        number = ch.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE,
+                        favorite = ch.id in favoriteIds,
+                    )
+                }
                 .sortedWith(
                     when (state.sortMode) {
-                        SortMode.ByName -> compareBy(
-                            { if (clusterByGroup) groupRankIndex[it.groupTitle] ?: Int.MAX_VALUE else 0 },
-                            { it.name.lowercase() },
-                        )
+                        SortMode.ByName -> compareBy({ it.rank }, { it.nameLower })
                         SortMode.FavoritesFirst -> compareBy(
-                            { if (clusterByGroup) groupRankIndex[it.groupTitle] ?: Int.MAX_VALUE else 0 },
-                            { it.id !in favoriteIds }, // false (favorited) sorts first
-                            { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE },
-                            { it.name.lowercase() },
+                            { it.rank },
+                            { !it.favorite }, // favorited sorts first
+                            { it.number },
+                            { it.nameLower },
                         )
-                        SortMode.ByNumber -> compareBy(
-                            { if (clusterByGroup) groupRankIndex[it.groupTitle] ?: Int.MAX_VALUE else 0 },
-                            { it.channelNumber?.toDoubleOrNull() ?: Double.MAX_VALUE },
-                            { it.name.lowercase() },
-                        )
+                        SortMode.ByNumber -> compareBy({ it.rank }, { it.number }, { it.nameLower })
                     },
                 )
+                .map { it.channel }
                 .toList()
         }
     }
@@ -4427,3 +4439,12 @@ private class GuideLeadingEdgeBringIntoViewSpec(
         return if (abs(distance) > containerSize) 0f else distance
     }
 }
+
+/** E-1 stage 1: per-channel cached sort keys (see filteredChannels). */
+private class GuideSortKey(
+    val channel: com.aeriotv.android.core.data.M3UChannel,
+    val rank: Int,
+    val nameLower: String,
+    val number: Double,
+    val favorite: Boolean,
+)

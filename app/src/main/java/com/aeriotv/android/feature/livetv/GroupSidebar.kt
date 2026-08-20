@@ -285,13 +285,18 @@ private fun GroupSidebarRow(
 /**
  * Debounce before a FOCUSED sidebar row becomes the previewed group, so a
  * fast scroll through the group list previews only where focus stops
- * instead of re-filtering the whole guide once per row. 90ms (down from the
- * Settings rail's 150ms, Logan 2026-08-06: switching felt slow) - still
- * comfortably above the ~50ms D-pad auto-repeat interval, so held scrolling
- * keeps coalescing while a deliberate step previews sooner. The remaining
- * switch latency is the guide grid rebuild itself (task #190).
+ * instead of re-filtering the whole guide once per row.
+ *
+ * E-2 (perf campaign 2026-08-19): raised 90ms -> 300ms. At 90ms every
+ * deliberate D-pad step (~200-300ms apart) fired its own full grid rebuild,
+ * measured at 1.1-1.4s of main-thread work per stop on the Streamer - queue a
+ * few and input dispatch times out (the group-switch ANR in tonight's
+ * dropbox). At 300ms a walk through the list coalesces to one rebuild at the
+ * resting row. Context for the 90ms history: Logan's 2026-08-06 "switching
+ * felt slow" was the REBUILD latency, not the debounce - E-1/E-3 attack the
+ * rebuild itself, and this value can come back down once a switch is cheap.
  */
-private const val SidebarPreviewDebounceMs = 90L
+private const val SidebarPreviewDebounceMs = 300L
 
 /**
  * DOCKED pane for the GUIDE surface (Logan 2026-07-20): a hard side menu -
