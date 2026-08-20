@@ -4233,29 +4233,45 @@ private class GuideVerticalNavState {
     }
 
     /** Scroll [listState] the minimum amount to bring [index] fully on-screen,
-     *  composing it if it was scrolled off entirely. */
+     *  composing it if it was scrolled off entirely.
+     *
+     *  Logan's ruling 2026-08-19: the previous "hold focus as the second
+     *  visible row and scroll the guide beneath it" behavior was NEVER the
+     *  design - it was a misreading of the 2026-07-17 reference study; the
+     *  reference guide (and Apple TV, and this app's own tvOS twin) all do
+     *  what this now does. The focus highlight WALKS down the visible rows
+     *  and the guide itself
+     *  scrolls only when focus reaches the bottom (or top) of the viewport.
+     *  A press whose target row is already fully visible therefore does NOT
+     *  scroll at all - which also makes most vertical presses free of the
+     *  LazyColumn re-layout the old always-scroll model paid (perf campaign:
+     *  vertical was 24.3% janky largely from the per-press reveal work).
+     *  Moving DOWN past the last fully-visible row bottom-aligns the target;
+     *  moving UP past the first fully-visible row top-aligns it. */
     private suspend fun ensureRowVisible(index: Int, listState: LazyListState) {
-        // Task #185, reference-guide lane model (Emby 50-down field study
-        // 2026-07-17): hold the focused row as the SECOND visible row (one
-        // context row above), so vertical navigation scrolls continuously and
-        // the focus ring never rides the top/bottom screen edge half-clipped.
-        // The old nearest-edge behaviour parked the ring on the bottom fold
-        // and only scrolled when focus was about to fall off, which read as
-        // sudden unpredictable jumps. At the top of the list this clamps to 0
-        // (rows 0/1 focus without scrolling); at the bottom the list runs out
-        // of scroll range and the focused row naturally rides lower, exactly
-        // like the reference guide.
-        //
-        // Task #188: skip the scroll when the list already sits exactly on
-        // the target. scrollToItem forces a LazyColumn re-layout even when
-        // positionally a no-op, which was a measurable slice of EVERY
-        // vertical press (the genuine row-reveal work stays, but the
-        // already-positioned case is now free).
-        val target = (index - 1).coerceAtLeast(0)
-        if (listState.firstVisibleItemIndex != target ||
-            listState.firstVisibleItemScrollOffset != 0
+        val info = listState.layoutInfo
+        val viewportTop = info.viewportStartOffset
+        val viewportBottom = info.viewportEndOffset
+        val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+        if (item != null && item.offset >= viewportTop &&
+            item.offset + item.size <= viewportBottom
         ) {
-            listState.scrollToItem(target)
+            return // fully visible: focus walks, the guide holds still
+        }
+        val firstFullyVisible = info.visibleItemsInfo
+            .firstOrNull { it.offset >= viewportTop }?.index
+            ?: listState.firstVisibleItemIndex
+        if (index > firstFullyVisible) {
+            // Below the fold: bottom-align. scrollOffset is the target item's
+            // top relative to the viewport top, so bottom-aligning subtracts
+            // one row height from the viewport height. Row height comes from a
+            // measured sibling when one is composed (rows are uniform).
+            val rowPx = info.visibleItemsInfo.firstOrNull()?.size ?: 0
+            val align = ((viewportBottom - viewportTop) - rowPx).coerceAtLeast(0)
+            listState.scrollToItem(index, scrollOffset = -align)
+        } else {
+            // Above the fold: top-align.
+            listState.scrollToItem(index)
         }
     }
 }
