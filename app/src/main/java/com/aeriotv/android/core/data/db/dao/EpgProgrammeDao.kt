@@ -86,6 +86,23 @@ interface EpgProgrammeDao {
         channelIds: List<String>,
     )
 
+    /** Delete only the region a feed ACTUALLY delivered for these channels:
+     *  rows overlapping [fromMillis, toMillis). Sister to
+     *  [deleteCoveredWindowForChannels], which deletes everything from
+     *  `fromMillis` onward and is therefore only correct for a feed that
+     *  covers a channel's whole present and future. */
+    @Query(
+        "DELETE FROM epg_programme WHERE playlistId = :playlistId " +
+            "AND endMillis > :fromMillis AND startMillis < :toMillis " +
+            "AND channelId IN (:channelIds)"
+    )
+    suspend fun deleteCoveredSpanForChannels(
+        playlistId: String,
+        fromMillis: Long,
+        toMillis: Long,
+        channelIds: List<String>,
+    )
+
     /**
      * Merge a fresh feed into one source's cached guide in a single
      * transaction so a reader never sees a half-written batch. The feed owns
@@ -116,6 +133,7 @@ interface EpgProgrammeDao {
         playlistId: String,
         rows: List<EpgProgrammeEntity>,
         nowMillis: Long,
+        replaceCoveredWindow: Boolean = true,
     ) {
         if (rows.isEmpty()) return
         // Drop degenerate programmes before they reach the cache. A row whose
@@ -130,13 +148,46 @@ interface EpgProgrammeDao {
         // point every source persists through, rather than in each parser.
         val drawable = rows.filter { it.endMillis - it.startMillis >= 30_000L }
         if (drawable.isEmpty()) return
-        // Chunked: SQLite caps host parameters (999 by default) and a feed can
-        // carry thousands of channels, so an unchunked IN (...) would throw.
-        drawable.asSequence()
-            .map { it.channelId }
-            .distinct()
-            .chunked(900)
-            .forEach { deleteCoveredWindowForChannels(playlistId, nowMillis, it) }
+        if (replaceCoveredWindow) {
+            // Delete only what this feed is ACTUALLY authoritative for: per
+            // channel, the span between its earliest and latest row here. The
+            // old code deleted everything from `now` onward for every channel
+            // the feed mentioned, which assumes any feed carrying a channel
+            // carries its whole present and future. That is false in two ways
+            // we have now seen on Logan's Streamer (2026-08-20, channels 17 and
+            // 18 blank at the current time while Dispatcharr and the upstream
+            // Teamarr feed both had the airing block): a feed can simply be
+            // sparser than the one before it, and a budget-truncated XMLTV
+            // parse returns a PARTIAL list that still went through this delete,
+            // wiping rows it never carried.
+            //
+            // Channels are grouped by identical span so a feed with one common
+            // schedule window still issues one DELETE per chunk, not one per
+            // channel. Chunked because SQLite caps host parameters at 999.
+            val spanByChannel = HashMap<String, LongArray>()
+            for (r in drawable) {
+                val cur = spanByChannel[r.channelId]
+                if (cur == null) {
+                    spanByChannel[r.channelId] = longArrayOf(r.startMillis, r.endMillis)
+                } else {
+                    if (r.startMillis < cur[0]) cur[0] = r.startMillis
+                    if (r.endMillis > cur[1]) cur[1] = r.endMillis
+                }
+            }
+            val channelsBySpan = HashMap<Pair<Long, Long>, MutableList<String>>()
+            for ((channelId, span) in spanByChannel) {
+                // Never reach back before `now`: already-aired rows are the
+                // catch-up archive and stay put (task #135/#137).
+                val from = maxOf(nowMillis, span[0])
+                if (span[1] <= from) continue
+                channelsBySpan.getOrPut(from to span[1]) { mutableListOf() }.add(channelId)
+            }
+            for ((span, channelIds) in channelsBySpan) {
+                channelIds.chunked(900).forEach {
+                    deleteCoveredSpanForChannels(playlistId, span.first, span.second, it)
+                }
+            }
+        }
         insertAll(drawable)
     }
 }

@@ -616,6 +616,7 @@ class PlaylistRepository @Inject constructor(
                         System.currentTimeMillis() + UPSTREAM_EPG_PER_SOURCE_MS,
                         phaseDeadline,
                     )
+                    val truncated = java.util.concurrent.atomic.AtomicBoolean(false)
                     val xmltv = runCatching {
                         // GH #53: parse against THIS feed's own guide keys, not
                         // the playlist's whole key set. tvg-id values are
@@ -623,9 +624,12 @@ class PlaylistRepository @Inject constructor(
                         // unrelated feeds; parsing globally let one provider's
                         // schedule land on another provider's channel.
                         fetchViaTempFile(layer.url, ".xmltv") { file ->
-                            XMLTVParser.parseFile(file, layer.channelKeys) {
-                                System.currentTimeMillis() >= sourceDeadline
-                            }
+                            XMLTVParser.parseFile(
+                                file,
+                                layer.channelKeys,
+                                shouldAbort = { System.currentTimeMillis() >= sourceDeadline },
+                                truncated = truncated,
+                            )
                         }
                     }.getOrElse {
                         if (it is CancellationException) throw it
@@ -636,8 +640,21 @@ class PlaylistRepository @Inject constructor(
                         // Merge per-source so a kill mid-phase loses at most
                         // one feed, not all of them. saveEpgToCache merges and
                         // prunes to the retention window.
-                        runCatching { saveEpgToCache(playlistId, xmltv) }
-                            .onFailure { Log.w("PlaylistRepo", "layered cache merge failed", it) }
+                        // A parse that ran out of budget returns a FRAGMENT of
+                        // the feed. Insert what it got, but do not let it delete
+                        // the covered window: the channels it mentions are not
+                        // the channels it fully carries, and the rows it never
+                        // reached are usually somebody else's good data.
+                        if (truncated.get()) {
+                            Log.w(
+                                "PlaylistRepo",
+                                "upstream source truncated by budget; merging insert-only " +
+                                    "(${xmltv.size} programmes)",
+                            )
+                        }
+                        runCatching {
+                            saveEpgToCache(playlistId, xmltv, authoritative = !truncated.get())
+                        }.onFailure { Log.w("PlaylistRepo", "layered cache merge failed", it) }
                         collected += xmltv.size
                     }
                 }
@@ -931,7 +948,14 @@ class PlaylistRepository @Inject constructor(
         epgProgrammeDao.deleteForPlaylist(playlistId)
     }
 
-    suspend fun saveEpgToCache(playlistId: String, programmes: List<EPGProgramme>) {
+    suspend fun saveEpgToCache(
+        playlistId: String,
+        programmes: List<EPGProgramme>,
+        /** False when [programmes] is a FRAGMENT of its feed (a budget-
+         *  truncated XMLTV parse). The merge then only inserts, and never
+         *  deletes a region this list cannot vouch for. */
+        authoritative: Boolean = true,
+    ) {
         val now = System.currentTimeMillis()
         val entities = withContext(Dispatchers.Default) {
             programmes.map { it.toCacheEntity(playlistId, now) }
@@ -942,7 +966,12 @@ class PlaylistRepository @Inject constructor(
         // (default 7 days). The old behaviour (full replace + drop everything
         // ended over an hour ago) erased exactly the programmes the catch-up
         // "Watch" action needs.
-        epgProgrammeDao.mergeForPlaylist(playlistId, entities, now)
+        epgProgrammeDao.mergeForPlaylist(
+            playlistId,
+            entities,
+            now,
+            replaceCoveredWindow = authoritative,
+        )
         // E-6: prune at most once per cycle. Upstream layering calls this once
         // PER SOURCE on purpose (so a kill mid-phase loses at most one feed),
         // and every one of those calls used to run a full-table retention

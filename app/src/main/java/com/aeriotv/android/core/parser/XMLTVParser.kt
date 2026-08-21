@@ -54,13 +54,14 @@ object XMLTVParser {
         file: java.io.File,
         knownChannelKeys: Set<String>? = null,
         shouldAbort: (() -> Boolean)? = null,
+        truncated: java.util.concurrent.atomic.AtomicBoolean? = null,
     ): List<EPGProgramme> {
         val head = ByteArray(2)
         val isGzip = file.inputStream().use { it.read(head) == 2 } &&
             head[0] == 0x1F.toByte() && head[1] == 0x8B.toByte()
         val base = file.inputStream().buffered()
         val stream = if (isGzip) GZIPInputStream(base) else base
-        return stream.use { parse(it, knownChannelKeys, shouldAbort) }
+        return stream.use { parse(it, knownChannelKeys, shouldAbort, truncated) }
     }
 
     /**
@@ -126,6 +127,9 @@ object XMLTVParser {
          * Wall-clock enforcement has to live INSIDE the loop.
          */
         shouldAbort: (() -> Boolean)? = null,
+        /** Set to true when [shouldAbort] cut the parse short, so the caller
+         *  knows the returned list is a FRAGMENT of the feed. */
+        truncated: java.util.concurrent.atomic.AtomicBoolean? = null,
     ): List<EPGProgramme> {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
@@ -176,6 +180,11 @@ object XMLTVParser {
                         "XMLTVParser",
                         "parse aborted by budget; keeping ${out.size} programmes parsed so far",
                     )
+                    // Tell the caller this list is a FRAGMENT. A partial
+                    // feed must not be treated as authoritative for the
+                    // channels it happens to mention, or the cache merge
+                    // deletes rows it never carried (mergeForPlaylist).
+                    truncated?.set(true)
                     return out
                 }
             }
