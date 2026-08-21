@@ -763,7 +763,7 @@ fun GuideScreen(
     //    of the composed edge, so fast scrubbing can never reveal blanks.
     var visibleWindow by remember(windowStart, hourWidthPx, stripViewportPx) {
         val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
-        val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
+        val padMs = (spanMs * 2).coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
         val startMs = windowStart +
             (horizontalScrollState.value.toFloat() / hourWidthPx * 3_600_000f).toLong()
         mutableStateOf((startMs - padMs) to (startMs + spanMs + padMs))
@@ -1549,8 +1549,13 @@ fun GuideScreen(
         // the idle debounce reads the last nav key from it.
         LaunchedEffect(windowStart, hourWidthPx, stripViewportPx) {
             val spanMs = (stripViewportPx / hourWidthPx * 3_600_000f).toLong()
-            val padMs = spanMs.coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
+            val padMs = (spanMs * 2).coerceAtLeast(GUIDE_VIEWPORT_PAD_MS)
             val emergencyMs = 15L * 60_000L
+            // Re-centre only after the viewport has drifted a WHOLE viewport,
+            // not 15 minutes. One Right press can cross a 3-hour programme, so
+            // a 15-minute threshold re-centred on nearly every press, and every
+            // re-centre re-slices each visible row.
+            val driftMs = spanMs
             snapshotFlow {
                 // windowCollapseTick makes the E-3 post-collapse widening run even
                 // with no scroll motion (its bump lands post-frame, so the sliced
@@ -1577,7 +1582,7 @@ fun GuideScreen(
                 // Settled off-center by more than the emergency guard: re-center
                 // so the next page in either direction is pre-composed.
                 val settledDrift = !scrolling &&
-                    kotlin.math.abs(rawStart - (curStart + padMs)) > emergencyMs
+                    kotlin.math.abs(rawStart - (curStart + padMs)) > driftMs
                 if (nearEdge) {
                     // Correctness first: catch up in one hop, whatever it costs.
                     visibleWindow = (rawStart - padMs) to (rawEnd + padMs)
@@ -1591,22 +1596,8 @@ fun GuideScreen(
                     // correct).
                     val targetStart = rawStart - padMs
                     val targetEnd = rawEnd + padMs
-                    val stepMs = (spanMs / 8).coerceAtLeast(emergencyMs)
-                    while (visibleWindow != targetStart to targetEnd) {
-                        if (horizontalScrollState.isScrollInProgress) break
-                        val (cs, ce) = visibleWindow
-                        val ns = when {
-                            cs < targetStart -> (cs + stepMs).coerceAtMost(targetStart)
-                            cs > targetStart -> (cs - stepMs).coerceAtLeast(targetStart)
-                            else -> cs
-                        }
-                        val ne = when {
-                            ce < targetEnd -> (ce + stepMs).coerceAtMost(targetEnd)
-                            ce > targetEnd -> (ce - stepMs).coerceAtLeast(targetEnd)
-                            else -> ce
-                        }
-                        visibleWindow = ns to ne
-                        androidx.compose.runtime.withFrameNanos { }
+                    if (visibleWindow != targetStart to targetEnd) {
+                        visibleWindow = targetStart to targetEnd
                     }
                 }
             }
