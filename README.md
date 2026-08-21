@@ -295,7 +295,32 @@ app/src/main/java/com/aeriotv/android/
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+Copyright (C) 2026 Logan Jones
+
+AerioTV for Android is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See [LICENSE](LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+An additional permission under GPL section 7 covers linking with the proprietary
+Google Play services client libraries. See [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).
+
+Releases up to and including v0.4.20 were published under the MIT License. That
+grant is not revoked: any copy obtained under MIT keeps its MIT rights to that
+snapshot in perpetuity. Everything from the relicensing commit forward is
+GPL-3.0-or-later.
+
+### Third-party components
+
+AerioTV bundles an FFmpeg build (LGPL-2.1-or-later) and depends on a number of
+Apache-2.0 libraries. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for
+the full list, the exact FFmpeg build configuration, and where to obtain the
+corresponding source. The same information is in the app under
+Settings > About > Open Source Licenses.
 
 ## Support
 

@@ -1617,6 +1617,7 @@ internal fun Modifier.collapsibleChrome(visibleFraction: Float): Modifier = this
  */
 private fun isSettingsTakeover(route: SettingsRoute): Boolean =
     route is SettingsRoute.LogViewer ||
+        route is SettingsRoute.Licenses ||
         route is SettingsRoute.EditPlaylist ||
         route is SettingsRoute.AddPlaylist ||
         route is SettingsRoute.AddMoreCategories
@@ -1730,10 +1731,12 @@ private fun SettingsTabContent(
             onAddPlaylist = {
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
             },
+            onOpenLicenses = { nav.push(SettingsRoute.Licenses) },
             viewModel = playlistVm,
         )
         is SettingsRoute.About -> SettingsScreen(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
+            onOpenLicenses = { nav.push(SettingsRoute.Licenses) },
             viewModel = playlistVm,
             content = SettingsRootContent.AboutOnly,
         )
@@ -1744,6 +1747,7 @@ private fun SettingsTabContent(
             onAddPlaylist = {
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
             },
+            onOpenLicenses = { nav.push(SettingsRoute.Licenses) },
             viewModel = playlistVm,
         )
         is SettingsRoute.AddPlaylist -> when (val st = r.step) {
@@ -1812,6 +1816,9 @@ private fun SettingsTabContent(
         is SettingsRoute.LogViewer -> com.aeriotv.android.feature.settings.LogViewerScreen(
             onBack = { nav.pop() },
         )
+        is SettingsRoute.Licenses -> com.aeriotv.android.feature.settings.LicensesScreen(
+            onBack = { nav.pop() },
+        )
         is SettingsRoute.Section -> when (r.section) {
             SettingsSection.Appearance -> AppearanceSettingsScreen(
                 onBack = { nav.pop() },
@@ -1875,7 +1882,7 @@ private fun SettingsTabContent(
                 ),
                 activePlaylistName = playlistState.playlist?.name,
                 // Log lines want the whole width; everything else fits a pane.
-                takeover = { it is SettingsRoute.LogViewer },
+                takeover = { it is SettingsRoute.LogViewer || it is SettingsRoute.Licenses },
                 detail = { renderRoute(it) },
             )
         } else {

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
@@ -120,6 +121,7 @@ fun SettingsScreen(
     onOpenPlaylistDetail: (String) -> Unit = {},
     onOpenPlaylists: () -> Unit = {},
     onAddPlaylist: () -> Unit = {},
+    onOpenLicenses: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
     // Phase B3: the two-pane hosts render the Playlists and About blocks as
     // detail panes. Rather than duplicate either block (and risk the copy
@@ -278,6 +280,7 @@ fun SettingsScreen(
                             openUrl(context, url)
                         }
                     },
+                    onOpenLicenses = onOpenLicenses,
                     onReportIssue = {
                         val url = "https://github.com/jonzey231/AerioTV-Android/issues/new"
                         if (isTv) {
@@ -603,6 +606,7 @@ private fun AboutSection(
     onCopy: () -> Unit,
     onOpenWebsite: () -> Unit,
     onReportIssue: () -> Unit,
+    onOpenLicenses: () -> Unit,
 ) {
     Column {
         if (showHeader) {
@@ -642,6 +646,12 @@ private fun AboutSection(
                 Icons.Outlined.BugReport,
                 onClick = onReportIssue,
                 external = true,
+            )
+            RowDivider()
+            AboutActionRow(
+                "Open Source Licenses",
+                Icons.Outlined.Description,
+                onClick = onOpenLicenses,
             )
         }
         Spacer(Modifier.height(16.dp))

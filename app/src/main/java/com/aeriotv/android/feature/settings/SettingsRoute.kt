@@ -61,6 +61,13 @@ sealed interface SettingsRoute {
      * that list, so About needs a destination of its own to stay reachable.
      */
     data object About : SettingsRoute
+
+    /**
+     * Open Source Licenses, pushed from the About block. A takeover like
+     * [LogViewer] rather than a pane: license texts are long, hard-wrapped
+     * documents that read badly in a narrow detail column.
+     */
+    data object Licenses : SettingsRoute
 }
 
 /**
@@ -209,6 +216,7 @@ class SettingsNavState(initial: List<SettingsRoute> = emptyList()) {
             is SettingsRoute.LogViewer -> "log"
             is SettingsRoute.AddMoreCategories -> "addmore"
             is SettingsRoute.About -> "about"
+            is SettingsRoute.Licenses -> "licenses"
         }
 }
 
@@ -231,11 +239,13 @@ internal fun encodeSettingsRoute(route: SettingsRoute): String = when (route) {
     is SettingsRoute.LogViewer -> "log"
     is SettingsRoute.AddMoreCategories -> "addmore"
     is SettingsRoute.About -> "about"
+    is SettingsRoute.Licenses -> "licenses"
 }
 
 internal fun decodeSettingsRoute(raw: String): SettingsRoute? = when {
     raw == "root" -> SettingsRoute.Root
     raw == "about" -> SettingsRoute.About
+    raw == "licenses" -> SettingsRoute.Licenses
     raw == "playlists" -> SettingsRoute.Playlists
     raw == "log" -> SettingsRoute.LogViewer
     raw == "addmore" -> SettingsRoute.AddMoreCategories
