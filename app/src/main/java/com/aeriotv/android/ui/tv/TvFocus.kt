@@ -241,7 +241,7 @@ fun TvKeyboardOnOkHost(content: @Composable () -> Unit) {
  * No-op on touch devices (these key events never fire).
  */
 @Composable
-fun Modifier.tvFormFieldInput(): Modifier {
+fun Modifier.tvFormFieldInput(horizontalFocusEscape: Boolean = false): Modifier {
     val gate = LocalTvKeyboardGate.current ?: return this.dpadFocusEscape()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -279,10 +279,18 @@ fun Modifier.tvFormFieldInput(): Modifier {
     // its KeyUp here and pops the keyboard on entry, the same spurious
     // release-click TvMenuGuard exists for.
     val sawOkDown = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    // GH #79: whether the FIELD ITSELF holds focus, as opposed to a focusable
+    // decoration inside it (the password-reveal eye). This modifier sits on
+    // the text field, which is an ANCESTOR of its trailing slot, so
+    // onPreviewKeyEvent gets first crack at keys headed for the eye too - and
+    // swallowing OK there popped the keyboard instead of letting the button
+    // click. OK is only intercepted when the field itself is focused.
+    val fieldItselfFocused = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     return this
         .bringIntoViewRequester(bringIntoViewRequester)
         .onSizeChanged { fieldSize.value = it }
         .onFocusEvent { state ->
+            fieldItselfFocused.value = state.isFocused
             // IME-Next path: focus hopped to this field with the gate still
             // armed (keyboard left open), so no OK press re-fires the scroll.
             // Re-park the newly focused field clear of the floating panel.
@@ -302,13 +310,39 @@ fun Modifier.tvFormFieldInput(): Modifier {
                 gate.armed = false
                 focusManager.moveFocus(FocusDirection.Up)
             }
+            // GH #79: a field with a trailing control (the password/API-key
+            // reveal eye) needs LEFT/RIGHT to WALK FOCUS, because the trailing
+            // button is unreachable otherwise. Up/Down are handled above and OK
+            // opens the keyboard, but left/right fell through to the text
+            // field, which eats them to move the text cursor - so on a remote
+            // there was simply no way to land on the eye and no way to see what
+            // you had typed. Only fields that opt in behave this way, and only
+            // secret fields opt in, where a cursor you cannot see moving
+            // through dots is worth nothing next to reaching the control.
+            // moveFocus returns false when there is nothing that way, and the
+            // event then falls through to the field unconsumed, exactly like
+            // the Up/Down branches.
+            event.type == KeyEventType.KeyDown && horizontalFocusEscape &&
+                (event.key == Key.DirectionRight || event.key == Key.DirectionLeft) -> {
+                gate.armed = false
+                // Next/Previous, NOT Right/Left: the reveal button lives in the
+                // field's own trailing slot, so its bounds sit INSIDE the
+                // field's bounds, and a directional search rejects a candidate
+                // it already contains (measured on an ATV emulator: the button
+                // reports focusable, and moveFocus(Right) still returned false).
+                // Traversal order walks into the decoration slot correctly.
+                focusManager.moveFocus(
+                    if (event.key == Key.DirectionRight) FocusDirection.Next
+                    else FocusDirection.Previous,
+                )
+            }
             // Swallow the down-press so the field's own key handling never
             // sees a half-click; act on the release.
-            event.type == KeyEventType.KeyDown && isOk -> {
+            event.type == KeyEventType.KeyDown && isOk && fieldItselfFocused.value -> {
                 sawOkDown.value = true
                 true
             }
-            event.type == KeyEventType.KeyUp && isOk -> {
+            event.type == KeyEventType.KeyUp && isOk && fieldItselfFocused.value -> {
                 if (sawOkDown.value) {
                     gate.armed = true
                     keyboard?.show()

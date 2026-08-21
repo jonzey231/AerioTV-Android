@@ -628,7 +628,8 @@ private fun IconTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth().tvFormFieldInput(),
+        modifier = Modifier.fillMaxWidth()
+            .tvFormFieldInput(horizontalFocusEscape = trailing != null),
         singleLine = true,
         placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         leadingIcon = {

@@ -397,7 +397,7 @@ fun AppBehaviorsSettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 8.dp)
-                            .tvFormFieldInput(),
+                            .tvFormFieldInput(horizontalFocusEscape = true),
                     )
                     Row(
                         modifier = Modifier
