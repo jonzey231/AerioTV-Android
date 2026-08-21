@@ -1696,7 +1696,13 @@ fun GuideScreen(
                 }
                 com.aeriotv.android.core.remote.GuideRemoteAction.JUMP_TO_TOP -> {
                     backScope.launch {
-                        listState.animateScrollToItem(0)
+// Jump, do not travel: on TV this is a REMOTE press asking to be
+                        // back at channel 1, and animateScrollToItem walks the list to
+                        // get there, which on a 600-channel guide reads as the screen
+                        // slowly scrolling up (Logan, vs Apple TV where the same press is
+                        // instant). tvOS calls proxy.scrollTo with NO withAnimation and
+                        // wraps it in a 0.25s ease only on iOS; this mirrors that split.
+                        if (isTv) listState.scrollToItem(0) else listState.animateScrollToItem(0)
                         if (isTv) guideNav.focusChannelAtNow(0, nowMillis, listState)
                     }
                     true
@@ -1814,7 +1820,8 @@ fun GuideScreen(
                 }
             } else if (!atTop) {
                 backScope.launch {
-                    listState.animateScrollToItem(0)
+                    // Same instant-on-TV jump as the JUMP_TO_TOP action above.
+                    if (isTv) listState.scrollToItem(0) else listState.animateScrollToItem(0)
                     // Land focus on the top channel's NOW cell, not the "All"
                     // group pill (user-reported: Back scrolled to top but left
                     // focus on the pill row).
@@ -1841,7 +1848,8 @@ fun GuideScreen(
         // Back-at-not-top branch above.
         LaunchedEffect(Unit) {
             miniPlayerVm.session.guideTopRequests.collect {
-                listState.animateScrollToItem(0)
+                // Same instant-on-TV jump as the Back ladder above.
+                if (isTv) listState.scrollToItem(0) else listState.animateScrollToItem(0)
                 if (isTv) guideNav.focusChannelAtNow(0, nowMillis, listState)
             }
         }
@@ -2316,7 +2324,25 @@ fun GuideScreen(
                         (outgoingStartPx - horizontalScrollState.value).toFloat().coerceAtLeast(0f)
                     else null
                     guideNav.beginVerticalMove(leadingEdgeTargetPx)
-                    navScope.launch {
+                    // Logan 2026-08-20: rapid TAPS made the guide run on after the
+                    // user stopped pressing - it kept scrolling a few rows past the
+                    // last click, where tvOS sticks to every press. The hold-repeat
+                    // throttle above deliberately exempts discrete taps (repeatCount
+                    // == 0) so a tap is always exactly one channel, so every tap
+                    // launched ANOTHER move coroutine while the previous one was
+                    // still in its focus-retry loop (up to 8 frames at 8ms) and
+                    // nothing cancelled it. The stale ones kept running, each
+                    // scrolling and re-focusing as the backlog drained.
+                    //
+                    // Cancel-and-replace: only the newest move survives. The target
+                    // is unaffected because it chains off pendingTargetIndex, which
+                    // was already read above, so five fast taps still land five rows
+                    // down - just in one move instead of five that fight each other.
+                    // moveFocusToChannel's finally is NonCancellable and gated on
+                    // the move generation, so a cancelled move cannot reset state
+                    // belonging to the one that replaced it.
+                    guideNav.verticalMoveJob?.cancel()
+                    guideNav.verticalMoveJob = navScope.launch {
                         guideNav.moveFocusToChannel(target, listState)
                     }
                     true
@@ -4079,6 +4105,10 @@ private class GuideVerticalNavState {
      *  reading -1 and escaping to the nav pill. -1 when no move is in flight. */
     var pendingTargetIndex by mutableStateOf(-1)
         private set
+
+    /** The in-flight vertical move, so a newer press can supersede it instead of
+     *  racing it. See the cancel-and-replace note in the vertical key handler. */
+    var verticalMoveJob: kotlinx.coroutines.Job? = null
 
     /** Anchor time (ms) the user is navigating along -- the start time of the
      *  focused cell, clamped to the guide window. Vertical moves target the cell
