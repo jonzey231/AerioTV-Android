@@ -23,6 +23,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -299,13 +300,21 @@ private fun LicenseBlurb(text: String) {
     )
 }
 
+/**
+ * Rows are laid out with real spacing and NO surrounding card.
+ *
+ * `SettingsNavRow` at its default `flat = false` already paints its own card
+ * through `settingsRowCard`, which includes `tvFocusScale(1.02f)`. Nesting
+ * those inside a `clip()`ped container (the shape `SettingsSectionGroup` uses)
+ * clips that 2% focus grow at the container edge and stacks two rounded edges
+ * on top of each other, which is what made the TV focus highlight look wrong.
+ * Standalone rows let the focus scale and border draw in full.
+ */
 @Composable
 private fun LicenseCard(content: @Composable () -> Unit) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) { content() }
 }
 
