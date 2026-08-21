@@ -1415,15 +1415,32 @@ fun GuideScreen(
                 val slotMs = if (isTv) 1_800_000L else 3_600_000L
                 val slotWidth = if (isTv) scaledHourWidth / 2 else scaledHourWidth
                 val slotCount = (windowDurationMs / slotMs).toInt()
-                Row(
+                // I-3 (perf campaign 2026-08-20): compose only the slots inside
+                // the window the rows are composing, placed at absolute offsets
+                // in a full-width Box. This used to be a Row of EVERY slot in
+                // the guide span - at TV half-hour granularity across a
+                // multi-day window that is hundreds to thousands of Text nodes,
+                // every one of them measured, laid out, and re-placed on every
+                // frame of a horizontal pan, while at most a dozen are on
+                // screen. The programme cells have been window-clipped for
+                // ages; the header ruler above them never was. Total width is
+                // unchanged, so cell alignment and the scroll range are
+                // untouched.
+                val (headerVisStart, headerVisEnd) = visibleWindow
+                val firstSlot = (((headerVisStart - windowStart) / slotMs) - 1)
+                    .coerceIn(0, (slotCount - 1).toLong().coerceAtLeast(0)).toInt()
+                val lastSlot = (((headerVisEnd - windowStart) / slotMs) + 1)
+                    .coerceIn(0, (slotCount - 1).toLong().coerceAtLeast(0)).toInt()
+                Box(
                     modifier = Modifier
                         .width(scaledHourWidth * hourCount)
                         .height(headerHeight),
                 ) {
-                    for (i in 0 until slotCount) {
+                    for (i in firstSlot..lastSlot) {
                         val slotStart = windowStart + i * slotMs
                         Box(
                             modifier = Modifier
+                                .offset(x = slotWidth * i)
                                 .width(slotWidth)
                                 .fillMaxHeight(),
                             contentAlignment = Alignment.CenterStart,

@@ -82,6 +82,18 @@ android {
     }
 
     buildTypes {
+        // LOCAL PERF BUILD (not for distribution): release settings but signed
+        // with the DEBUG key, so it installs over an existing debug install
+        // without wiping app data. Debug builds run non-optimized with Compose
+        // debug instrumentation, which inflates frame timings enough to swamp
+        // the differences a perf change makes; this variant is what device
+        // measurements should use. Build: :app:assembleGithubPerf
+        create("perf") {
+            initWith(getByName("release"))
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
