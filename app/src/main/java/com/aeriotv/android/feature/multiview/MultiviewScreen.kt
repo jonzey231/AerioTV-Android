@@ -29,6 +29,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Check
@@ -195,6 +199,9 @@ fun MultiviewScreen(
     // tvOS MultiviewTileView.tileContextMenu. Gated to N > 1 like tvOS
     // (no actions at all on a single tile).
     var tileMenuIndex by remember { mutableStateOf<Int?>(null) }
+    // Playback submenu (iOS parity 2026-08-28): per-tile RW/Pause/FF +
+    // conditional Return to Live, opened from the tile menu.
+    var playbackMenuIndex by remember { mutableStateOf<Int?>(null) }
     val tileMenuGuard = rememberTvMenuGuard()
     // Per-tile track sheets (indices into `selected`). Set from the tile menu;
     // the sheet reads/writes THAT tile's hoisted ExoPlayer.
@@ -666,7 +673,7 @@ fun MultiviewScreen(
                 if (selected.size < storeHandle.maxTiles) {
                     add(
                         TvMenuAction(
-                            label = "Add streams",
+                            label = "Add Channel",
                             icon = Icons.Filled.Add,
                             onClick = { addPickerOpen = true },
                         ),
@@ -675,9 +682,20 @@ fun MultiviewScreen(
                 // Swap Stream: re-point THIS tile at something else through
                 // the very same picker as "Add streams". No cap check here -
                 // the grid does not grow, so the tile count is unchanged.
+                // Playback submenu (iOS parity): RW 60s / Pause / FF 60s /
+                // conditional Return to Live for THIS tile's player.
                 add(
                     TvMenuAction(
-                        label = "Swap Stream",
+                        label = "Playback",
+                        icon = Icons.Filled.PlayArrow,
+                        onClick = { playbackMenuIndex = menuIdx },
+                    ),
+                )
+                // "Change Channel" (nee Swap Stream, renamed with iOS
+                // 2026-08-28 - it re-points the tile at another CHANNEL).
+                add(
+                    TvMenuAction(
+                        label = "Change Channel",
                         icon = Icons.Filled.SwapHoriz,
                         onClick = {
                             swapTargetTileId = menuTile.id
@@ -685,15 +703,6 @@ fun MultiviewScreen(
                         },
                     ),
                 )
-                if (menuIdx != focused) {
-                    add(
-                        TvMenuAction(
-                            label = "Make Audio",
-                            icon = Icons.Filled.VolumeUp,
-                            onClick = { storeHandle.setAudioFocus(menuIdx) },
-                        ),
-                    )
-                }
                 add(
                     TvMenuAction(
                         label = "Full-Screen in Grid",
@@ -819,6 +828,71 @@ fun MultiviewScreen(
             },
             guard = tileMenuGuard,
             onDismiss = { tileMenuIndex = null },
+        )
+    }
+
+    // Playback submenu (iOS Playback submenu twin): acts on the tile's
+    // own ExoPlayer. Each press dismisses (menu-dialog semantics, same
+    // as iOS's system menu); Return to Live appears only when the tile
+    // is live AND paused or sitting well behind the edge, and uses
+    // Exo's own seekToDefaultPosition (live-edge return).
+    val pbIdx = playbackMenuIndex
+    val pbTile = pbIdx?.let { selected.getOrNull(it) }
+    if (pbIdx != null && pbTile != null) {
+        val pbPlayer = tilePlayers[pbIdx]
+        TvActionMenuDialog(
+            title = "Playback",
+            actions = buildList {
+                add(
+                    TvMenuAction(
+                        label = "RW 60s",
+                        icon = Icons.Filled.FastRewind,
+                        onClick = {
+                            pbPlayer?.let { it.seekTo((it.currentPosition - 60_000L).coerceAtLeast(0L)) }
+                        },
+                    ),
+                )
+                add(
+                    TvMenuAction(
+                        label = if (pbPlayer?.playWhenReady == false) "Play" else "Pause",
+                        icon = if (pbPlayer?.playWhenReady == false) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                        onClick = {
+                            pbPlayer?.let { it.playWhenReady = !it.playWhenReady }
+                        },
+                    ),
+                )
+                add(
+                    TvMenuAction(
+                        label = "FF 60s",
+                        icon = Icons.Filled.FastForward,
+                        onClick = {
+                            pbPlayer?.let {
+                                val target = it.currentPosition + 60_000L
+                                val dur = it.duration
+                                it.seekTo(if (dur != C.TIME_UNSET) minOf(target, dur) else target)
+                            }
+                        },
+                    ),
+                )
+                val behindLive = pbPlayer != null && pbPlayer.isCurrentMediaItemLive &&
+                    (!pbPlayer.playWhenReady || pbPlayer.currentLiveOffset > 15_000L)
+                if (behindLive) {
+                    add(
+                        TvMenuAction(
+                            label = "Return to Live",
+                            icon = Icons.Filled.LiveTv,
+                            onClick = {
+                                pbPlayer?.let {
+                                    it.seekToDefaultPosition()
+                                    it.playWhenReady = true
+                                }
+                            },
+                        ),
+                    )
+                }
+            },
+            guard = tileMenuGuard,
+            onDismiss = { playbackMenuIndex = null },
         )
     }
 
