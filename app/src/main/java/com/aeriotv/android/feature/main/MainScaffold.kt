@@ -166,8 +166,8 @@ fun MainScaffold(
     /** Catch-up (task #136): url, title, progStartMillis, progEndMillis, panelTz. */
     onPlayCatchup: (String, String, String, Long, Long, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
     onLaunchMultiview: () -> Unit = {},
-    onWatchLive: (String, String, Boolean) -> Unit = { _, _, _ -> },
-    onWatchFromBeginning: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    onWatchLive: (String, String, Boolean, Long, Int?) -> Unit = { _, _, _, _, _ -> },
+    onWatchFromBeginning: (String, String, Boolean, Long, Int?, Boolean) -> Unit = { _, _, _, _, _, _ -> },
     onOpenSearch: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
@@ -1161,8 +1161,8 @@ private fun MainTabContent(
     onPlayRecording: (String, String) -> Unit,
     onPlayCatchup: (String, String, String, Long, Long, String, String) -> Unit,
     onLaunchMultiview: () -> Unit,
-    onWatchLive: (String, String, Boolean) -> Unit,
-    onWatchFromBeginning: (String, String, Boolean) -> Unit,
+    onWatchLive: (String, String, Boolean, Long, Int?) -> Unit,
+    onWatchFromBeginning: (String, String, Boolean, Long, Int?, Boolean) -> Unit,
     onOpenSearch: () -> Unit = {},
     // Lets a tab's own content change the selected tab (the TV Search tab's
     // Back returns to Live TV). Latches initialTabApplied at the call sites,

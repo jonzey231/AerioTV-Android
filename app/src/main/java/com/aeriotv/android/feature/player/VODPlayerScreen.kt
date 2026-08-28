@@ -184,6 +184,19 @@ fun VODPlayerScreen(
     posterUrl: String? = null,
     isDvr: Boolean = false,
     startAtLiveEdge: Boolean = true,
+    /** Tap-on-row semantics (iOS parity 2026-08-28): resume the saved
+     *  position when one exists, else start from the beginning. */
+    dvrAutoResume: Boolean = false,
+    /** The recording's scheduled end (effective end incl. post-roll);
+     *  0 = unknown. Drives the proactive Recording Ending prompt. */
+    recEndMillis: Long = 0L,
+    /** The finalized /file/ twin of an in-progress /hls/ URL. When the
+     *  growing playlist dies mid-watch (Dispatcharr finalized), the
+     *  player migrates here in place at the same position. */
+    completedUrl: String? = null,
+    /** Tune the recorded channel live (Recording Ending prompt's
+     *  Continue on Live TV); null when the channel can't be resolved. */
+    onContinueOnLive: (() -> Unit)? = null,
     /** Catch-up (task #136): the programme's UTC window + the panel timezone
      *  the timeshift URL's start was rendered in. When csEnd > csStart the
      *  player runs in catch-up mode: duration = programme length and seeks
@@ -360,6 +373,15 @@ fun VODPlayerScreen(
     // stands down the moment this flips, so a correction can never land on top
     // of a position the user chose.
     var userSeeked by remember { mutableStateOf(false) }
+    // In-progress DVR flow (iOS parity 2026-08-28). dvrActive flips OFF
+    // when the recording finalizes mid-watch and playback migrates to
+    // the completed /file/ item - the live-edge clamps and growing-
+    // window duration logic must stop applying to what is now a fixed
+    // file. One-shot migration; the end prompt is one-shot per session.
+    var dvrActive by remember { mutableStateOf(isDvr) }
+    var dvrMigrated by remember { mutableStateOf(false) }
+    var dvrEndPromptVisible by remember { mutableStateOf(false) }
+    var dvrEndPromptDismissed by remember { mutableStateOf(false) }
     // iOS PlayerView.scrubStep acceleration: consecutive same-direction
     // steps grow the multiplier (1 + count/2, capped 12x of the 10s base).
     var scrubAccelCount by remember { mutableIntStateOf(0) }
@@ -467,7 +489,7 @@ fun VODPlayerScreen(
         // sweep can't overrun the growing window and stall; plain VOD clamps
         // at the duration; unknown duration steps unclamped.
         val maxPos = if (durationMs > 0L) {
-            if (isDvr) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
+            if (dvrActive) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
         } else {
             Long.MAX_VALUE
         }
@@ -740,6 +762,7 @@ fun VODPlayerScreen(
                 // Close. Reported on the Google TV Streamer, 2026-08-15.
                 // There is nothing playing behind the card to transport anyway.
                 if (playbackErrorMessage != null) return@onPreviewKeyEvent false
+                if (dvrEndPromptVisible) return@onPreviewKeyEvent false
                 val handledKey = when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter,
                     Key.DirectionLeft, Key.DirectionRight,
@@ -800,7 +823,7 @@ fun VODPlayerScreen(
                                 scrubAccelCount = 0
                                 scrubLastDirection = 0
                                 val maxPos = if (durationMs > 0L) {
-                                    if (isDvr) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
+                                    if (dvrActive) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
                                 } else Long.MAX_VALUE
                                 val target = min(maxPos, positionMs + 10_000L)
                                 seekPlayer(target); reveal()
@@ -1034,6 +1057,28 @@ fun VODPlayerScreen(
                                         return
                                     }
                                 }
+                                // In-progress DVR: the /hls/ playlist DIES when
+                                // Dispatcharr finalizes the recording (404 ->
+                                // SPA HTML / parser error). The recording is
+                                // not gone - it became a file. Migrate in
+                                // place to the completed /file/ endpoint at
+                                // the same position (iOS parity) instead of
+                                // letting the retry loop hammer a URL that
+                                // will never come back.
+                                if (dvrActive && completedUrl != null && !dvrMigrated) {
+                                    dvrMigrated = true
+                                    dvrActive = false
+                                    dvrEndPromptVisible = false
+                                    val resumeAt = this@apply.currentPosition.coerceAtLeast(0L)
+                                    Log.i(TAG, "DVR finalized mid-watch: migrating to /file/ at ${resumeAt}ms")
+                                    this@apply.setMediaItem(
+                                        MediaItem.fromUri(completedUrl),
+                                        resumeAt,
+                                    )
+                                    this@apply.prepare()
+                                    this@apply.playWhenReady = true
+                                    return
+                                }
                                 // Task #150 (iOS parity): every other failure
                                 // surfaces the error card with the REAL error;
                                 // the card auto-retries and offers manual Retry.
@@ -1143,11 +1188,15 @@ fun VODPlayerScreen(
         // parsed and contentDuration arrives.
         LaunchedEffect(exoPlayer, savedPositionMs) {
             val player = exoPlayer ?: return@LaunchedEffect
-            // A DVR recording is not VOD: never restore a saved VOD position;
-            // the DVR catch-up effect below owns the start position.
-            if (isDvr) return@LaunchedEffect
+            // DVR: the tap path resumes the saved position (iOS parity,
+            // dvrAutoResume); explicit Start at Live / Watch from
+            // Beginning keep their own start handling.
+            if (isDvr && !dvrAutoResume) return@LaunchedEffect
             val pos = savedPositionMs ?: return@LaunchedEffect
             if (pos <= 0L) return@LaunchedEffect
+            // The from-beginning watcher would drag a DVR resume back to
+            // 0 for 45s; a deliberate restore counts as a user seek.
+            if (isDvr) userSeeked = true
             // Spin until the player has parsed duration. Bail out after
             // ~6s so a broken / DRM-locked stream doesn't leak this
             // coroutine.
@@ -1376,7 +1425,7 @@ fun VODPlayerScreen(
                     continue
                 }
                 positionMs = player.contentPosition.coerceAtLeast(0L)
-                durationMs = if (isDvr) {
+                durationMs = if (dvrActive) {
                     // Live HLS window: contentDuration is C.TIME_UNSET. Derive
                     // an effective right edge from the seekable window length,
                     // floored at positionMs (iOS PlayerView.timelineEndMs).
@@ -1583,13 +1632,13 @@ fun VODPlayerScreen(
                     },
                     onSkipForward = {
                         val maxPos = if (durationMs > 0) {
-                            if (isDvr) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
+                            if (dvrActive) (durationMs - 5_000L).coerceAtLeast(0L) else durationMs
                         } else {
                             Long.MAX_VALUE
                         }
                         seekPlayer(min(maxPos, positionMs + 10_000L))
                     },
-                    isDvr = isDvr,
+                    isDvr = dvrActive,
                     onSeekToLive = {
                         val p = exoPlayer ?: return@BottomChrome
                         p.seekToDefaultPosition()
@@ -1656,6 +1705,88 @@ fun VODPlayerScreen(
                         color = Color.White.copy(alpha = 0.7f),
                         textAlign = TextAlign.Center,
                     )
+                }
+            }
+        }
+
+        // Recording Ending prompt (iOS parity 2026-08-28): when the
+        // viewer is at the live edge and the scheduled end is within
+        // 20s, offer Continue on Live TV / Back to DVR / Keep Watching.
+        // Viewers behind the edge are never interrupted (the finalize
+        // migration serves them silently), and ignoring the prompt is
+        // safe - the migration dismisses it.
+        LaunchedEffect(exoPlayer, dvrActive, recEndMillis) {
+            if (!dvrActive || recEndMillis <= 0L) return@LaunchedEffect
+            val player = exoPlayer ?: return@LaunchedEffect
+            while (dvrActive) {
+                delay(2_000L)
+                if (dvrEndPromptVisible || dvrEndPromptDismissed) continue
+                if (System.currentTimeMillis() < recEndMillis - 20_000L) continue
+                val dur = player.contentDuration
+                val pos = player.currentPosition
+                if (dur > 0L && dur - pos < 30_000L) {
+                    Log.i(TAG, "DVR scheduled end imminent (edge viewer); raising prompt")
+                    dvrEndPromptVisible = true
+                }
+            }
+        }
+        if (dvrEndPromptVisible) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "Recording Ending",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White,
+                )
+                Text(
+                    text = "This recording is about to reach its scheduled end.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.85f),
+                    textAlign = TextAlign.Center,
+                )
+                val endPromptFocus = remember { FocusRequester() }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (onContinueOnLive != null) {
+                        Button(
+                            onClick = {
+                                dvrEndPromptDismissed = true
+                                dvrEndPromptVisible = false
+                                onContinueOnLive()
+                            },
+                            modifier = Modifier.focusRequester(endPromptFocus),
+                        ) {
+                            Text("Continue on Live TV")
+                        }
+                    }
+                    Button(onClick = {
+                        dvrEndPromptDismissed = true
+                        dvrEndPromptVisible = false
+                        onClose()
+                    }) {
+                        Text("Back to DVR")
+                    }
+                    Button(onClick = {
+                        dvrEndPromptDismissed = true
+                        dvrEndPromptVisible = false
+                    }) {
+                        Text("Keep Watching")
+                    }
+                }
+                if (isTvForm) {
+                    LaunchedEffect(Unit) {
+                        repeat(5) {
+                            if (runCatching { endPromptFocus.requestFocus() }.isSuccess) {
+                                return@LaunchedEffect
+                            }
+                            kotlinx.coroutines.delay(50)
+                        }
+                    }
                 }
             }
         }

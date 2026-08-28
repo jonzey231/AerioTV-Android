@@ -97,7 +97,7 @@ object Routes {
     // landing on the tabs. Plain navigate(SEARCH) keeps the default false.
     const val SEARCH = "search?fromPlayer={fromPlayer}"
     fun search(fromPlayer: Boolean) = "search?fromPlayer=$fromPlayer"
-    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
+    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&autoResume={autoResume}&recEnd={recEnd}&recChannelId={recChannelId}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
     // mini=true (Remote Control, Logan spec): the player mounts, primes
@@ -129,6 +129,12 @@ object Routes {
         title: String,
         isDvr: Boolean = false,
         fromStart: Boolean = false,
+        // Row tap (iOS parity): resume saved progress, else beginning.
+        autoResume: Boolean = false,
+        // Scheduled end + recorded channel, for the Recording Ending
+        // prompt and its Continue on Live TV hand-off. 0/-1 = unknown.
+        recEnd: Long = 0L,
+        recChannelId: Int = -1,
         // Catch-up (task #136): programme window + panel timezone enable the
         // player's re-tune scrubbing. csEnd <= csStart (defaults) = not catch-up.
         csStart: Long = 0L,
@@ -140,7 +146,8 @@ object Routes {
         csUuid: String = "",
     ) =
         "recording_player/${Uri.encode(playbackUrl)}/${Uri.encode(title)}" +
-            "?isDvr=$isDvr&fromStart=$fromStart&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
+            "?isDvr=$isDvr&fromStart=$fromStart&autoResume=$autoResume&recEnd=$recEnd&recChannelId=$recChannelId" +
+            "&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
 }
 
 /**
@@ -951,23 +958,30 @@ fun AerioTVNavHost(
                             launchSingleTop = true
                         }
                     },
-                    onWatchLive = { recordingUrl, recTitle, recIsDvr ->
+                    onWatchLive = { recordingUrl, recTitle, recIsDvr, recEnd, recChannelId ->
                         // Audit #50 / iOS v1.6.22: watch the in-progress server
                         // recording at the LIVE EDGE via the recording player
-                        // (X-API-Key headers). Was wrongly opening the live
-                        // channel via Routes.player(ch.id).
+                        // (X-API-Key headers).
                         if (recordingUrl.isNotBlank()) {
                             navController.navigate(
-                                Routes.recordingPlayer(recordingUrl, recTitle, isDvr = recIsDvr, fromStart = false)
+                                Routes.recordingPlayer(
+                                    recordingUrl, recTitle, isDvr = recIsDvr, fromStart = false,
+                                    recEnd = recEnd, recChannelId = recChannelId ?: -1,
+                                )
                             )
                         }
                     },
-                    onWatchFromBeginning = { recordingUrl, recTitle, recIsDvr ->
-                        // iOS Issue #29 'Watch from Beginning': same URL, start
-                        // at window start instead of the live edge.
+                    onWatchFromBeginning = { recordingUrl, recTitle, recIsDvr, recEnd, recChannelId, autoResume ->
+                        // iOS Issue #29 'Watch from Beginning' - and, with
+                        // autoResume (row tap), iOS 2026-08-28 tap semantics:
+                        // resume saved progress, else beginning.
                         if (recordingUrl.isNotBlank()) {
                             navController.navigate(
-                                Routes.recordingPlayer(recordingUrl, recTitle, isDvr = recIsDvr, fromStart = true)
+                                Routes.recordingPlayer(
+                                    recordingUrl, recTitle, isDvr = recIsDvr,
+                                    fromStart = !autoResume, autoResume = autoResume,
+                                    recEnd = recEnd, recChannelId = recChannelId ?: -1,
+                                )
                             )
                         }
                     },
@@ -1509,6 +1523,9 @@ fun AerioTVNavHost(
                     navArgument("title") { type = NavType.StringType },
                     navArgument("isDvr") { type = NavType.BoolType; defaultValue = false },
                     navArgument("fromStart") { type = NavType.BoolType; defaultValue = false },
+                    navArgument("autoResume") { type = NavType.BoolType; defaultValue = false },
+                    navArgument("recEnd") { type = NavType.LongType; defaultValue = 0L },
+                    navArgument("recChannelId") { type = NavType.IntType; defaultValue = -1 },
                     navArgument("csStart") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csEnd") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csTz") { type = NavType.StringType; defaultValue = "" },
@@ -1519,6 +1536,9 @@ fun AerioTVNavHost(
                 val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
                 val isDvr = entry.arguments?.getBoolean("isDvr") ?: false
                 val fromStart = entry.arguments?.getBoolean("fromStart") ?: false
+                val autoResume = entry.arguments?.getBoolean("autoResume") ?: false
+                val recEnd = entry.arguments?.getLong("recEnd") ?: 0L
+                val recChannelId = entry.arguments?.getInt("recChannelId") ?: -1
                 // A recording / catch-up playback must silence any LIVE session
                 // first: entering from the guide's Watch action (or DVR tab)
                 // skips PlayerScreen's launch teardown, so the persistent live
@@ -1570,6 +1590,25 @@ fun AerioTVNavHost(
                         )
                     } else emptyMap()
                 }
+                // Finalize migration target (iOS parity): the /file/ twin of
+                // an in-progress /hls/ URL, served with the same headers.
+                val completedUrl = remember(playbackUrl) {
+                    if (playbackUrl.endsWith("hls/index.m3u8")) {
+                        playbackUrl.removeSuffix("hls/index.m3u8") + "file/"
+                    } else null
+                }
+                // Continue on Live TV: resolve the recorded channel's guide id
+                // from the dispatcharr numeric id; null closure when absent.
+                val continueOnLive: (() -> Unit)? = if (recChannelId > 0) {
+                    {
+                        val liveId = playlistState.channels
+                            .firstOrNull { it.dispatcharrChannelId == recChannelId }?.id
+                        navController.popBackStack()
+                        if (liveId != null) {
+                            navController.navigate(Routes.player(liveId))
+                        }
+                    }
+                } else null
                 VODPlayerScreen(
                     streamUrl = playbackUrl,
                     title = title.ifBlank { "Recording" },
@@ -1601,7 +1640,11 @@ fun AerioTVNavHost(
                     progressVodType = "recording",
                     posterUrl = null,
                     isDvr = isDvr,
-                    startAtLiveEdge = isDvr && !fromStart,
+                    startAtLiveEdge = isDvr && !fromStart && !autoResume,
+                    dvrAutoResume = autoResume,
+                    recEndMillis = recEnd,
+                    completedUrl = completedUrl,
+                    onContinueOnLive = continueOnLive,
                 )
             }
         }

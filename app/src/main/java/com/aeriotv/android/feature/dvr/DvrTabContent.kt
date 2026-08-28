@@ -93,8 +93,11 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 fun DvrTabContent(
     modifier: Modifier = Modifier,
     onPlayRecording: (String, String) -> Unit = { _, _ -> },
-    onWatchLive: (String, String, Boolean) -> Unit = { _, _, _ -> },
-    onWatchFromBeginning: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    /** (url, title, isDvr, scheduledEndMillis, dispatcharrChannelId). */
+    onWatchLive: (String, String, Boolean, Long, Int?) -> Unit = { _, _, _, _, _ -> },
+    /** Last param = autoResume: true on row tap (resume saved position,
+     *  else beginning - iOS parity); false on the explicit menu action. */
+    onWatchFromBeginning: (String, String, Boolean, Long, Int?, Boolean) -> Unit = { _, _, _, _, _, _ -> },
     viewModel: DvrViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
@@ -324,10 +327,22 @@ fun DvrTabContent(
                         // Audit #50 / iOS v1.6.22: in-progress server rows that
                         // carry a server-reported URL offer Watch Live. Routes
                         // to the recording player at the live edge.
-                        rec.inProgressUrl?.let { onWatchLive(it, rec.title, rec.isDvr) }
+                        rec.inProgressUrl?.let {
+                            onWatchLive(it, rec.title, rec.isDvr, rec.endMillis, rec.dispatcharrChannelId)
+                        }
                     },
                     onWatchFromBeginning = {
-                        rec.inProgressUrl?.let { onWatchFromBeginning(it, rec.title, rec.isDvr) }
+                        rec.inProgressUrl?.let {
+                            onWatchFromBeginning(it, rec.title, rec.isDvr, rec.endMillis, rec.dispatcharrChannelId, false)
+                        }
+                    },
+                    onWatchAuto = {
+                        // Row tap (iOS parity 2026-08-28): resume the saved
+                        // position when one exists, else start from the
+                        // beginning. The player owns the decision.
+                        rec.inProgressUrl?.let {
+                            onWatchFromBeginning(it, rec.title, rec.isDvr, rec.endMillis, rec.dispatcharrChannelId, true)
+                        }
                     },
                     onPlay = {
                         // Audit task #43: both local (file://) and Dispatcharr
@@ -638,6 +653,7 @@ private fun RecordingRow(
     onPlay: () -> Unit,
     onWatchLive: () -> Unit,
     onWatchFromBeginning: () -> Unit,
+    onWatchAuto: () -> Unit = {},
     onSaveToDevice: () -> Unit,
     onRemoveCommercials: () -> Unit,
     onStopRecording: () -> Unit,
@@ -700,7 +716,7 @@ private fun RecordingRow(
                         when {
                             !rec.playbackUrl.isNullOrBlank() -> onPlay()
                             rec.status == DvrViewModel.Recording.Status.Recording &&
-                                rec.inProgressUrl != null -> onWatchFromBeginning()
+                                rec.inProgressUrl != null -> onWatchAuto()
                         }
                     },
                     onLongClick = { menuOpen = true; tvGuard.arm() },
