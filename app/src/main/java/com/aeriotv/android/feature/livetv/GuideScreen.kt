@@ -691,10 +691,12 @@ fun GuideScreen(
     val scheduledRecordingWindows = remember(dvrState.recordings) {
         dvrState.recordings.mapNotNull { rec ->
             val s = rec.effectiveStatus()
-            if (s == DvrViewModel.Recording.Status.Scheduled ||
-                s == DvrViewModel.Recording.Status.Recording
+            val chId = rec.dispatcharrChannelId
+            if (chId != null &&
+                (s == DvrViewModel.Recording.Status.Scheduled ||
+                    s == DvrViewModel.Recording.Status.Recording)
             ) {
-                rec.title.trim().lowercase() to (rec.startMillis until rec.endMillis)
+                chId to (rec.startMillis until rec.endMillis)
             } else {
                 null
             }
@@ -2583,7 +2585,14 @@ private data class GuideRowProgrammes(val items: List<EPGProgramme>)
 private data class GuideReminderKeys(val keys: Set<String>)
 
 @androidx.compose.runtime.Immutable
-private data class GuideRecordingWindows(val windows: List<Pair<String, LongRange>>)
+/** Dispatcharr channel id -> recording window for every Scheduled or
+ *  in-progress recording. CHANNEL IDENTITY decides, never the title: a
+ *  simulcast (same title, same slot, N channels) lit the record dot on
+ *  every airing under the old lowercased-title match (di5cord20 field
+ *  report 2026-08-25; Apple twin fix 24eb934). Rows with no bridgeable
+ *  id (local captures on non-Dispatcharr sources) lose their dot rather
+ *  than painting phantoms. */
+private data class GuideRecordingWindows(val windows: List<Pair<Int, LongRange>>)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -3223,6 +3232,7 @@ private fun ChannelGuideRow(
                         programme = programme,
                         channelName = channel.name,
                         channelId = channel.id,
+                        channelDispatcharrId = channel.dispatcharrChannelId,
                         widthDp = wDp,
                         cellStartDp = xDp,
                         isLive = isLive,
@@ -3357,6 +3367,7 @@ private fun ProgrammeCell(
     programme: EPGProgramme,
     channelName: String,
     channelId: String,
+    channelDispatcharrId: Int?,
     widthDp: androidx.compose.ui.unit.Dp,
     /** This cell's left edge in the scroll content (dp from the window start).
      *  Used to pin the title to the visible left edge for long programs that
@@ -3408,13 +3419,15 @@ private fun ProgrammeCell(
     // back-to-back programmes can both light up when pre/post-roll spills a
     // few minutes across the boundary; that recording genuinely captures part
     // of both, so the over-mark is acceptable.
-    val isRecordingSet = remember(programme, scheduledRecordingWindows) {
-        if (programme.isPlaceholder || scheduledRecordingWindows.windows.isEmpty()) {
+    val isRecordingSet = remember(programme, scheduledRecordingWindows, channelDispatcharrId) {
+        val chId = channelDispatcharrId
+        if (programme.isPlaceholder || chId == null ||
+            scheduledRecordingWindows.windows.isEmpty()
+        ) {
             false
         } else {
-            val title = programme.title.trim().lowercase()
-            scheduledRecordingWindows.windows.any { (recTitle, window) ->
-                recTitle == title &&
+            scheduledRecordingWindows.windows.any { (recChannelId, window) ->
+                recChannelId == chId &&
                     window.first < programme.endMillis &&
                     programme.startMillis < window.last
             }
