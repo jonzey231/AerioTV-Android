@@ -18,8 +18,8 @@ enum class SyncCategory(
         storageSuffix = "playlists",
     ),
     WatchProgress(
-        displayName = "VOD Watch Progress",
-        subtitle = "Resume points for movies + episodes",
+        displayName = "Watch Progress",
+        subtitle = "Resume points for movies, episodes, and recordings",
         fileName = "watch_progress.v1.json",
         storageSuffix = "watch_progress",
     ),

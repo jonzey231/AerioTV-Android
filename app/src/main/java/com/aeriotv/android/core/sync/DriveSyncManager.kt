@@ -336,7 +336,11 @@ class DriveSyncManager @Inject constructor(
         val rows = watchProgressDao.allOnce()
         return WatchProgressSnapshot(
             envelope = envelope(),
-            entries = rows.map { row ->
+            // URL-keyed rows never leave the device: they are device- and
+            // host-specific (LAN vs WAN base, file:// paths) so they can't
+            // match anywhere else, and they can leak hosts into the
+            // snapshot. Stable ids (movie/episode UUIDs, dvr-<id>) sync.
+            entries = rows.filter { !it.videoId.contains("://") }.map { row ->
                 WatchProgressSnapshotEntry(
                     videoId = row.videoId,
                     title = row.title,
@@ -344,6 +348,11 @@ class DriveSyncManager @Inject constructor(
                     positionMs = row.positionMs,
                     durationMs = row.durationMs,
                     updatedAt = row.updatedAt,
+                    vodType = row.vodType,
+                    seriesId = row.seriesId,
+                    seasonNumber = row.seasonNumber,
+                    episodeNumber = row.episodeNumber,
+                    isFinished = row.isFinished,
                 )
             },
         )
@@ -460,6 +469,14 @@ class DriveSyncManager @Inject constructor(
                     positionMs = remote.positionMs,
                     durationMs = remote.durationMs,
                     updatedAt = remote.updatedAt,
+                    // Fresh device: classification comes from the wire so the
+                    // row lands in the right rail (recordings/episodes were
+                    // arriving typed "movie" before the fields were synced).
+                    vodType = remote.vodType,
+                    seriesId = remote.seriesId,
+                    seasonNumber = remote.seasonNumber,
+                    episodeNumber = remote.episodeNumber,
+                    isFinished = remote.isFinished,
                 )
                 watchProgressDao.upsert(
                     base.copy(
@@ -468,6 +485,11 @@ class DriveSyncManager @Inject constructor(
                         positionMs = remote.positionMs,
                         durationMs = remote.durationMs,
                         updatedAt = remote.updatedAt,
+                        vodType = remote.vodType,
+                        seriesId = remote.seriesId ?: base.seriesId,
+                        seasonNumber = if (remote.seasonNumber > 0) remote.seasonNumber else base.seasonNumber,
+                        episodeNumber = if (remote.episodeNumber > 0) remote.episodeNumber else base.episodeNumber,
+                        isFinished = remote.isFinished || base.isFinished,
                     ),
                 )
             }

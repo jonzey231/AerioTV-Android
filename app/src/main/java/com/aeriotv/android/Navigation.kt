@@ -1589,7 +1589,16 @@ fun AerioTVNavHost(
                     },
                     onClose = { navController.popBackStack() },
                     loadingMessage = null,
-                    videoId = playbackUrl,
+                    // STABLE progress identity (2026-08-28, iOS parity): server
+                    // recordings key as dvr-<remoteID> (derived from the
+                    // /api/channels/recordings/<id>/ URL - same numeric id iOS
+                    // uses), so resume survives LAN/WAN base swaps AND syncs
+                    // across devices. URLs (local files, catch-up sessions)
+                    // stay as-is; the sync builder filters URL-shaped keys.
+                    videoId = Regex("/api/channels/recordings/(\\d+)/")
+                        .find(playbackUrl)?.groupValues?.get(1)
+                        ?.let { "dvr-" + it } ?: playbackUrl,
+                    progressVodType = "recording",
                     posterUrl = null,
                     isDvr = isDvr,
                     startAtLiveEdge = isDvr && !fromStart,

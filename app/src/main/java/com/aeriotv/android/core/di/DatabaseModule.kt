@@ -274,6 +274,21 @@ object DatabaseModule {
         }
     }
 
+    /** v24 (2026-08-28): recording watch-progress rows were keyed by raw
+     *  playback URL - device/host-specific (LAN vs WAN base, file://
+     *  paths), useless cross-device, and a URL leak in the Drive
+     *  snapshot. The player now keys server recordings as dvr-<id>;
+     *  legacy URL-keyed rows cannot be re-keyed without the recording
+     *  list, so they are dropped (matching the no-tombstones posture). */
+    private val MIGRATION_23_24 = object : Migration(23, 24) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "DELETE FROM watch_progress WHERE videoId LIKE 'http%' " +
+                    "OR videoId LIKE 'file%' OR videoId LIKE 'content%'",
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -282,7 +297,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 

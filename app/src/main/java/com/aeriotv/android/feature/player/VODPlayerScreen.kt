@@ -177,6 +177,10 @@ fun VODPlayerScreen(
     onClose: () -> Unit = {},
     loadingMessage: String? = null,
     videoId: String? = null,
+    /** WatchProgress classification for this playback ("movie",
+     *  "episode", or "recording"). Recordings must not land in the
+     *  movie Continue Watching rail, and the type now syncs. */
+    progressVodType: String? = null,
     posterUrl: String? = null,
     isDvr: Boolean = false,
     startAtLiveEdge: Boolean = true,
@@ -1290,7 +1294,38 @@ fun VODPlayerScreen(
                     posterUrl = latestPosterUrl,
                     positionMs = pos,
                     durationMs = dur,
+                    vodType = progressVodType,
                 )
+            }
+        }
+
+        // Exit flush + sync freshness (2026-08-28): the 5s loop loses the
+        // tail on close, and progress otherwise reaches Drive only on the
+        // 6h unmetered worker - cross-device resume felt broken. Persist
+        // the final position on dispose and nudge an expedited one-shot
+        // push (debounced by unique-work REPLACE; the worker re-checks
+        // the master/category/initial-pull gates itself).
+        val flushContext = androidx.compose.ui.platform.LocalContext.current
+        DisposableEffect(exoPlayer, videoId) {
+            onDispose {
+                val player = exoPlayer ?: return@onDispose
+                if (videoId.isNullOrBlank()) return@onDispose
+                val pos = player.contentPosition
+                val dur = player.contentDuration
+                if (pos > 0L && dur > 0L &&
+                    player.playbackState != androidx.media3.common.Player.STATE_ENDED
+                ) {
+                    watchVm.save(
+                        videoId = videoId,
+                        title = latestTitle,
+                        posterUrl = latestPosterUrl,
+                        positionMs = pos,
+                        durationMs = dur,
+                        vodType = progressVodType,
+                    )
+                }
+                com.aeriotv.android.core.sync.DriveSyncWorker
+                    .enqueueOneShotPush(flushContext.applicationContext)
             }
         }
 

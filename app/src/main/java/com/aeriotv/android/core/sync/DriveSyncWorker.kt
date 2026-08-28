@@ -101,10 +101,36 @@ class DriveSyncWorker @AssistedInject constructor(
             )
         }
 
+        /** One-shot near-immediate sync, for freshness events (player
+         * close just flushed a watch-progress row). Runs the same
+         * doWork() - every gate (master toggle, category, initial-pull
+         * guard, silent token restore) applies unchanged. CONNECTED
+         * (not unmetered): a single JSON per category is tiny. The
+         * 15s delay + unique-name REPLACE debounces bursts of closes
+         * into one run. */
+        private const val ONESHOT_NAME = "aeriotv-drive-sync-oneshot"
+
+        fun enqueueOneShotPush(context: Context) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+            val request = androidx.work.OneTimeWorkRequestBuilder<DriveSyncWorker>()
+                .setConstraints(constraints)
+                .setInitialDelay(15, TimeUnit.SECONDS)
+                .addTag(TAG)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                ONESHOT_NAME,
+                androidx.work.ExistingWorkPolicy.REPLACE,
+                request,
+            )
+        }
+
         /** Tear down the periodic schedule — invoked when the user signs out
          * or disables the master toggle. */
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_NAME)
+            WorkManager.getInstance(context).cancelUniqueWork(ONESHOT_NAME)
         }
     }
 }

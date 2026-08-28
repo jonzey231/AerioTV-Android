@@ -59,6 +59,17 @@ data class WatchProgressSnapshotEntry(
     val positionMs: Long,
     val durationMs: Long,
     val updatedAt: Long,
+    // 2026-08-28 (DVR + typed-rail sync; all defaulted so v1 snapshots
+    // still decode): classification travels with the row so a FRESH
+    // device puts an episode/recording in the right rail instead of
+    // defaulting everything to "movie". streamUrl / upNextQueue /
+    // playlistId stay deliberately off the wire (device-local, and
+    // recording URLs can embed hosts and auth material).
+    val vodType: String = "movie",
+    val seriesId: String? = null,
+    val seasonNumber: Int = 0,
+    val episodeNumber: Int = 0,
+    val isFinished: Boolean = false,
 )
 
 @Serializable

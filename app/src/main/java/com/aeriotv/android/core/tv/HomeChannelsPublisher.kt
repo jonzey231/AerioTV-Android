@@ -75,7 +75,8 @@ class HomeChannelsPublisher @Inject constructor(
                 playlistDao.observeActive(),
                 appPreferences.recentChannelIds,
                 favoriteChannelDao.observeAll(),
-                watchProgressDao.observeRecent(WATCH_NEXT_LIMIT * 2),
+                watchProgressDao.observeRecent(WATCH_NEXT_LIMIT * 2)
+                    .map { rows -> rows.filter { it.vodType != "recording" } },
             ) { playlists, recents, favorites, progress ->
                 PublishInputs(
                     activePlaylistId = playlists.firstOrNull()?.id,

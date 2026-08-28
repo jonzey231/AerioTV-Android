@@ -254,7 +254,7 @@ fun OnDemandTabContent(
         when (section) {
             OnDemandSection.ContinueWatching -> ContinueWatchingSubScreen(
                 viewModel = viewModel,
-                movieRows = continueWatchingRows.filter { it.vodType != "episode" },
+                movieRows = continueWatchingRows.filter { it.vodType != "episode" && it.vodType != "recording" },
                 episodeRows = continueWatchingRows.filter { it.vodType == "episode" },
                 onResumeMovie = onResumeMovie,
                 onEpisodeResume = onEpisodeResume,
