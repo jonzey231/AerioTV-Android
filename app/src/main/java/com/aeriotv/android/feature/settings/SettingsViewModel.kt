@@ -147,6 +147,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setLiveRewindDepthMinutes(value) }
     }
 
+    val liveRewindKeepRecent: Flow<Boolean> = prefs.liveRewindKeepRecent
+    fun setLiveRewindKeepRecent(value: Boolean) {
+        viewModelScope.launch { prefs.setLiveRewindKeepRecent(value) }
+    }
+
+    val liveRewindKeepCount: Flow<Int> = prefs.liveRewindKeepCount
+    fun setLiveRewindKeepCount(value: Int) {
+        viewModelScope.launch { prefs.setLiveRewindKeepCount(value) }
+    }
+
     val liveRewindRetentionHours: Flow<Int> = prefs.liveRewindRetentionHours
     fun setLiveRewindRetentionHours(value: Int) {
         viewModelScope.launch { prefs.setLiveRewindRetentionHours(value) }

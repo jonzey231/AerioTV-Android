@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var castSender: com.aeriotv.android.core.cast.AerioCastSender
     @Inject lateinit var companionHost: com.aeriotv.android.core.cast.companion.CompanionHostController
     @Inject lateinit var homeChannelsPublisher: com.aeriotv.android.core.tv.HomeChannelsPublisher
+    @Inject lateinit var timeshiftController: com.aeriotv.android.core.timeshift.TimeshiftController
 
     /**
      * Most recent deep-link target the activity has received from a
@@ -452,6 +453,15 @@ class MainActivity : ComponentActivity() {
             runCatching { exoWindowState.hide() }
             runCatching { exoHolder.stop() }
             AerioMediaPlaybackService.stop(this)
+        }
+        // Keep Recent Channels Live: retained background fillers are provider
+        // connections the user cannot see, so they never outlive the app
+        // being on screen (anti-ghost-stream rule; no FGS backs this
+        // convenience feature). PiP does not stop the activity, so the
+        // buffer-through-PiP directive is unaffected; config-change
+        // recreations are exempt like the TV playback stop above.
+        if (!isChangingConfigurations) {
+            runCatching { timeshiftController.stopAllRetained() }
         }
         // GH #40: never leave the launcher/home screen on a content-matched
         // resolution; onResume re-applies if a live player is still up.

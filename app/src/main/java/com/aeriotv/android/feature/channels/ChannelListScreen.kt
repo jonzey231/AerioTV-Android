@@ -288,14 +288,26 @@ fun ChannelListScreen(
         // Android TV drops the "Live TV" title bar entirely (wasted 10-foot
         // space): the Guide / Search / Sort controls move down onto the group-pill
         // control row (see below). Phone / tablet keep the titled app bar.
+        // Keep Recent Channels Live: header indicator (shared with the Guide).
+        val retainedVm: com.aeriotv.android.feature.livetv.RetainedChannelsViewModel = hiltViewModel()
+        val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
         if (!isTv) com.aeriotv.android.feature.livetv.LiveTvTopBar(
-            actionCount = if (canToggleViewMode) 4 else 3,
+            actionCount = (if (canToggleViewMode) 4 else 3) +
+                (if (retainedList.isNotEmpty()) 1 else 0),
             // The old CenterAlignedTopAppBar applied the status-bar inset
             // itself; LiveTvTopBar is inset-neutral (the Guide's Column
             // already statusBarsPadding()s), so THIS screen adds it here or
             // the bar rides up under the camera cutout (user report).
             modifier = Modifier.statusBarsPadding(),
         ) { buttonSize, iconSize ->
+            com.aeriotv.android.feature.livetv.RetainedChannelsAction(
+                viewModel = retainedVm,
+                buttonSize = buttonSize,
+                iconSize = iconSize,
+                onJumpToChannel = { id ->
+                    state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+                },
+            )
             if (canToggleViewMode) {
                 IconButton(onClick = onToggleViewMode, modifier = Modifier.size(buttonSize)) {
                     Icon(

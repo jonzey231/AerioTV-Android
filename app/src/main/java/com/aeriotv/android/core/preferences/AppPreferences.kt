@@ -1222,6 +1222,23 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_LIVE_REWIND_DEPTH_MIN] = value }
     }
 
+    /** Keep Recent Channels Live (iOS parity): flipped-away channels keep
+     *  buffering in the background so flipping back rewinds across the
+     *  time away. Off by default: each kept channel is an extra
+     *  simultaneous provider connection. */
+    val liveRewindKeepRecent: kotlinx.coroutines.flow.Flow<Boolean> =
+        store.data.map { it[KEY_LIVE_REWIND_KEEP_RECENT] ?: false }
+    suspend fun setLiveRewindKeepRecent(value: Boolean) {
+        store.edit { it[KEY_LIVE_REWIND_KEEP_RECENT] = value }
+    }
+
+    /** How many recent channels stay live (1-5, default 2). */
+    val liveRewindKeepCount: kotlinx.coroutines.flow.Flow<Int> =
+        store.data.map { (it[KEY_LIVE_REWIND_KEEP_COUNT] ?: 2).coerceIn(1, 5) }
+    suspend fun setLiveRewindKeepCount(value: Int) {
+        store.edit { it[KEY_LIVE_REWIND_KEEP_COUNT] = value.coerceIn(1, 5) }
+    }
+
     /** Live Rewind P2: the one-time feature prompt has been answered
      *  (either way). Never shown again once set. */
     val liveRewindPromptSeen: kotlinx.coroutines.flow.Flow<Boolean> =
@@ -1466,6 +1483,8 @@ class AppPreferences @Inject constructor(
         val KEY_LIVE_REWIND_DEPTH_MIN = intPreferencesKey("live_rewind_depth_minutes")
         val KEY_LIVE_REWIND_PROMPT_SEEN = booleanPreferencesKey("live_rewind_prompt_seen")
         val KEY_LIVE_REWIND_RETENTION_HOURS = intPreferencesKey("live_rewind_retention_hours")
+        val KEY_LIVE_REWIND_KEEP_RECENT = booleanPreferencesKey("live_rewind_keep_recent")
+        val KEY_LIVE_REWIND_KEEP_COUNT = intPreferencesKey("live_rewind_keep_count")
         val KEY_LIVE_REWIND_BUDGET_GB = intPreferencesKey("live_rewind_budget_gb")
         val KEY_DVR_CUSTOM_FOLDER_URI = stringPreferencesKey("dvr_custom_folder_uri")
         val KEY_DVR_KEEP_AWAKE = booleanPreferencesKey("dvr_keep_awake_during_recording")

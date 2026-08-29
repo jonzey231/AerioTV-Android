@@ -267,6 +267,42 @@ fun AppBehaviorsSettingsScreen(
                         onSelect = viewModel::setLiveRewindDepthMinutes,
                     )
                 }
+                // Keep Recent Channels Live (iOS parity): flipped-away
+                // channels keep buffering via their own connection so
+                // flipping back rewinds across the time away. Each kept
+                // channel is one extra simultaneous stream to the
+                // provider, hence the footer warning and the off default.
+                val keepRecent by viewModel.liveRewindKeepRecent.collectAsStateWithLifecycle(initialValue = false)
+                val keepCount by viewModel.liveRewindKeepCount.collectAsStateWithLifecycle(initialValue = 2)
+                SettingsSection(
+                    header = "Keep Recent Channels Live",
+                    footer = if (keepRecent) {
+                        "Channels you flip away from keep buffering so you can flip " +
+                            "back and rewind across the time you were away. Each kept " +
+                            "channel uses an extra connection to your provider; accounts " +
+                            "limited to one connection should leave this off. Oldest " +
+                            "channels stop first, and all stop when the app leaves the screen."
+                    } else {
+                        "Keep buffering the channels you most recently flipped away " +
+                            "from. Uses one extra provider connection per kept channel."
+                    },
+                ) {
+                    SettingsToggleRow(
+                        title = "Keep recent channels live",
+                        subtitle = "Buffer flipped-away channels in the background",
+                        checked = keepRecent,
+                        onCheckedChange = viewModel::setLiveRewindKeepRecent,
+                    )
+                    if (keepRecent) {
+                        SteppedSliderRow(
+                            label = "Channels to keep",
+                            values = listOf(1, 2, 3, 4, 5),
+                            selected = keepCount,
+                            format = { it.toString() },
+                            onSelect = viewModel::setLiveRewindKeepCount,
+                        )
+                    }
+                }
             }
 
             SettingsSection(

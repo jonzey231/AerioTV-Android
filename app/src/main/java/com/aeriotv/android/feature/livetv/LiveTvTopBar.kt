@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FiberSmartRecord
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -101,6 +102,39 @@ internal fun TvManageGroupsCircle(
                     .background(Color(0xFFFFA502)),
             )
         }
+    }
+}
+
+/**
+ * Keep Recent Channels Live: TV pill-row indicator circle, shown only
+ * while background channel buffers exist. Same 30dp capsule + focus-ring
+ * treatment as [TvManageGroupsCircle] so it reads as part of the row.
+ */
+@Composable
+internal fun TvRetainedChannelsCircle(
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Box(
+        modifier = modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .then(
+                if (focused) Modifier.border(2.dp, Color.White, CircleShape) else Modifier,
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.FiberSmartRecord,
+            contentDescription = "$count channels kept live",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
+        )
     }
 }
 

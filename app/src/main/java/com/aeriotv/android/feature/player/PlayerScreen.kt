@@ -432,6 +432,10 @@ fun PlayerScreen(
         val ch = currentChannel ?: return@LaunchedEffect
         val url = ch.url
         if (url.isBlank()) return@LaunchedEffect
+        // Keep Recent Channels Live: snapshot the OUTGOING channel's actual
+        // play URL (post LAN/WAN failover) before the holder re-primes, so
+        // a demotion can freeze the URL its retained filler should dial.
+        timeshiftController.noteChannelLeaving()
         // GH #33 companion remote: mirror the channel to the paired TV over the
         // LAN socket instead of priming locally. Dedup against the last channel
         // this phone sent so re-entering the player for the SAME channel (mini

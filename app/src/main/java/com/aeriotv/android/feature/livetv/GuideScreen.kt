@@ -1088,10 +1088,34 @@ fun GuideScreen(
         // that Row). LiveTvTopBar (shared with ChannelListScreen) keeps the
         // title truly screen-centered by shrinking the action cluster on
         // narrow displays like the Fold cover screen.
+        // Keep Recent Channels Live: header indicator appears only while at
+        // least one flipped-away channel is buffering in the background.
+        val retainedVm: RetainedChannelsViewModel = hiltViewModel()
+        val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
+        val jumpToRetained: (String) -> Unit = { id ->
+            state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+        }
+        // TV opens the shared dialog from its pill-row circle (phone's
+        // RetainedChannelsAction owns its own open state).
+        var showRetainedDialog by remember { mutableStateOf(false) }
+        if (showRetainedDialog) {
+            RetainedChannelsDialog(
+                viewModel = retainedVm,
+                onJumpToChannel = jumpToRetained,
+                onDismiss = { showRetainedDialog = false },
+            )
+        }
         if (!isTv) {
             LiveTvTopBar(
-                actionCount = if (canToggleViewMode) 4 else 3,
+                actionCount = (if (canToggleViewMode) 4 else 3) +
+                    (if (retainedList.isNotEmpty()) 1 else 0),
             ) { buttonSize, iconSize ->
+                RetainedChannelsAction(
+                    viewModel = retainedVm,
+                    buttonSize = buttonSize,
+                    iconSize = iconSize,
+                    onJumpToChannel = jumpToRetained,
+                )
                 if (canToggleViewMode) {
                     IconButton(onClick = onToggleViewMode, modifier = Modifier.size(buttonSize)) {
                         Icon(
@@ -1365,6 +1389,17 @@ fun GuideScreen(
                             hiddenGroupsCount = hiddenGroups.size,
                             onClick = { showManageGroups = true },
                         )
+                    }
+                    // Keep Recent Channels Live: TV indicator circle, only
+                    // while background buffers exist. Same pill-row circle
+                    // styling as Manage Groups so it joins the focus row.
+                    if (retainedList.isNotEmpty()) {
+                        item(key = "retained_channels") {
+                            TvRetainedChannelsCircle(
+                                count = retainedList.size,
+                                onClick = { showRetainedDialog = true },
+                            )
+                        }
                     }
                 }
             }

@@ -69,9 +69,14 @@ class TimeshiftBufferStore @Inject constructor(
         depthMs: Long,
         retentionMs: Long,
         budgetBytes: Long,
+        /** Session dirs the sweeps must not touch: live retained-channel
+         *  buffers (Keep Recent Channels Live). Without this, the LRU
+         *  budget pass eats the oldest retained channel's tail and the
+         *  retention pruner can delete a quiet-but-live buffer outright. */
+        protectedDirs: Set<File> = emptySet(),
     ): TimeshiftWriter {
-        pruneExpired(retentionMs)
-        enforceBudget(budgetBytes)
+        pruneExpired(retentionMs, protectedDirs)
+        enforceBudget(budgetBytes, protectedDirs)
         val startedAt = System.currentTimeMillis()
         val dir = File(rootDir, sessionDirName(startedAt))
         dir.mkdirs()
@@ -85,10 +90,10 @@ class TimeshiftBufferStore @Inject constructor(
     }
 
     /** Delete whole sessions whose newest data is older than [retentionMs]. */
-    fun pruneExpired(retentionMs: Long) {
+    fun pruneExpired(retentionMs: Long, protectedDirs: Set<File> = emptySet()) {
         val cutoff = System.currentTimeMillis() - retentionMs
         rootDir.listFiles()?.forEach { dir ->
-            if (!dir.isDirectory) return@forEach
+            if (!dir.isDirectory || dir in protectedDirs) return@forEach
             val newest = dir.listFiles()?.maxOfOrNull { it.lastModified() } ?: dir.lastModified()
             if (newest < cutoff) {
                 Log.i(TAG, "retention prune ${dir.name}")
@@ -97,8 +102,11 @@ class TimeshiftBufferStore @Inject constructor(
         }
     }
 
-    /** Evict oldest segments across sessions until total <= [budgetBytes]. */
-    fun enforceBudget(budgetBytes: Long) {
+    /** Evict oldest segments across sessions until total <= [budgetBytes].
+     *  [protectedDirs] segments still COUNT toward the total (they are real
+     *  bytes on the volume) but are never deleted here; each live writer's
+     *  own depth ring and session budget bound their growth. */
+    fun enforceBudget(budgetBytes: Long, protectedDirs: Set<File> = emptySet()) {
         if (budgetBytes <= 0) return
         val segs = rootDir.listFiles()
             ?.filter { it.isDirectory }
@@ -108,12 +116,15 @@ class TimeshiftBufferStore @Inject constructor(
         var total = segs.sumOf { it.length() }
         for (f in segs) {
             if (total <= budgetBytes) break
+            if (f.parentFile in protectedDirs) continue
             total -= f.length()
             f.delete()
         }
         // Drop session dirs that lost all their segments.
         rootDir.listFiles()?.forEach { dir ->
-            if (dir.isDirectory && dir.listFiles()?.none { it.name.endsWith(".ts") } != false) {
+            if (dir.isDirectory && dir !in protectedDirs &&
+                dir.listFiles()?.none { it.name.endsWith(".ts") } != false
+            ) {
                 dir.deleteRecursively()
             }
         }
