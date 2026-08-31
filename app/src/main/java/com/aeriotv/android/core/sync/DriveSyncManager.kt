@@ -455,6 +455,13 @@ class DriveSyncManager @Inject constructor(
 
     private suspend fun applyWatchProgressSnapshot(snapshot: WatchProgressSnapshot) {
         snapshot.entries.forEach { remote ->
+            // URL-keyed rows are legacy identity (dropped locally by
+            // MIGRATION_23_24 and excluded from pushes), but snapshots
+            // written by pre-fix builds still carry them and re-imported
+            // them on every restore (field find 2026-08-31: fresh install
+            // came back with http://...recordings/93/hls/... rows). Skip
+            // on apply too; the next push writes a clean snapshot.
+            if (remote.videoId.contains("://")) return@forEach
             val local = watchProgressDao.getOnce(remote.videoId)
             if (local == null || remote.updatedAt > local.updatedAt) {
                 // The snapshot only carries the synced position fields, so MERGE
