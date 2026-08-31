@@ -1466,7 +1466,11 @@ private fun Tile(
             Color.White.copy(alpha = 0.5f)
         isAudioFocused && audioFocusStyle == "themeFading" && !focusFadedOut ->
             MaterialTheme.colorScheme.primary
-        else -> Color.White.copy(alpha = 0.08f)
+        // No resting hairline: at zero tile spacing adjacent tiles'
+        // 1dp borders fused into full-height seam lines across the grid
+        // (Logan 2026-08-31: "ugly, looks like an overlooked artifact").
+        // Borders now appear only for focus / audio / drag states.
+        else -> Color.Transparent
     }
     val targetBorderWidth = when {
         isDropTarget -> 4.dp
@@ -1474,7 +1478,7 @@ private fun Tile(
         isRelocating -> 3.dp
         isAudioFocused && (audioFocusStyle == "grayPersistent" ||
                 (audioFocusStyle == "themeFading" && !focusFadedOut)) -> 2.dp
-        else -> 1.dp
+        else -> 0.dp
     }
     // Animate the border so the white D-pad ring EASES out (and back in) with
     // the chrome rather than popping. 350ms matches the chrome cross-fade feel.
