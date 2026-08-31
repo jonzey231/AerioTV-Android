@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FiberSmartRecord
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
@@ -172,6 +173,21 @@ fun MainScaffold(
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Keep Recent Channels Live: app-bar indicator + dialog live HERE (not
+    // in GuideScreen) so the TV circle is part of the nav bar's existing
+    // focus row and works from every content tab.
+    val retainedVm: com.aeriotv.android.feature.livetv.RetainedChannelsViewModel = hiltViewModel()
+    val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
+    var showRetainedDialog by remember { mutableStateOf(false) }
+    if (showRetainedDialog) {
+        com.aeriotv.android.feature.livetv.RetainedChannelsDialog(
+            viewModel = retainedVm,
+            onJumpToChannel = { id ->
+                state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+            },
+            onDismiss = { showRetainedDialog = false },
+        )
+    }
     val favoritesVm: FavoritesViewModel = hiltViewModel()
     val favorites by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
     // Show the Favorites tab only when the user has at least one favorite
@@ -468,6 +484,8 @@ fun MainScaffold(
                         .collapsibleChrome(barFraction),
                 ) {
                     TvTopTabBar(
+                        retainedCount = retainedList.size,
+                        onRetainedClick = { showRetainedDialog = true },
                         onRefresh = { viewModel.refreshPlaylist() },
                         refreshing = anyBackgroundWork,
                         tabs = tabs,
@@ -1255,6 +1273,13 @@ private fun TvTopTabBar(
      *  gesture hints can size themselves to the real gutter instead of a
      *  hard-coded guess. Logan 2026-08-10: the hint pill grew into the bar. */
     onLeftEdgeChanged: (Int) -> Unit = {},
+    /** Keep Recent Channels Live: count of flipped-away channels still
+     *  buffering. > 0 shows the indicator circle beside Refresh/Search -
+     *  the one spot that is focus-reachable on every content tab (the
+     *  guide's pill-row placement is skipped in sidebar group mode, and
+     *  a standalone strip was not reachable by D-pad; field 2026-08-31). */
+    retainedCount: Int = 0,
+    onRetainedClick: () -> Unit = {},
 ) {
     // Selection-follows-focus, but committed ONLY for focus moves BETWEEN pills
     // (real D-pad traversal of the bar), never for focus ENTERING the bar from
@@ -1398,6 +1423,13 @@ private fun TvTopTabBar(
                         onClick = onRefresh,
                         spinning = refreshing,
                     )
+                    if (retainedCount > 0) {
+                        TvBarCircleButton(
+                            icon = Icons.Filled.FiberSmartRecord,
+                            contentDescription = "$retainedCount channels kept live",
+                            onClick = onRetainedClick,
+                        )
+                    }
                     TvBarCircleButton(
                         icon = AppTab.Search.iconSelected,
                         contentDescription = AppTab.Search.label,

@@ -1095,16 +1095,6 @@ fun GuideScreen(
         val jumpToRetained: (String) -> Unit = { id ->
             state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
         }
-        // TV opens the shared dialog from its pill-row circle (phone's
-        // RetainedChannelsAction owns its own open state).
-        var showRetainedDialog by remember { mutableStateOf(false) }
-        if (showRetainedDialog) {
-            RetainedChannelsDialog(
-                viewModel = retainedVm,
-                onJumpToChannel = jumpToRetained,
-                onDismiss = { showRetainedDialog = false },
-            )
-        }
         if (!isTv) {
             LiveTvTopBar(
                 actionCount = (if (canToggleViewMode) 4 else 3) +
@@ -1389,17 +1379,6 @@ fun GuideScreen(
                             hiddenGroupsCount = hiddenGroups.size,
                             onClick = { showManageGroups = true },
                         )
-                    }
-                    // Keep Recent Channels Live: TV indicator circle, only
-                    // while background buffers exist. Same pill-row circle
-                    // styling as Manage Groups so it joins the focus row.
-                    if (retainedList.isNotEmpty()) {
-                        item(key = "retained_channels") {
-                            TvRetainedChannelsCircle(
-                                count = retainedList.size,
-                                onClick = { showRetainedDialog = true },
-                            )
-                        }
                     }
                 }
             }
