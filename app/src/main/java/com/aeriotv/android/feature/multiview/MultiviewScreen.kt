@@ -203,6 +203,13 @@ fun MultiviewScreen(
     // Playback submenu (iOS parity 2026-08-28): per-tile RW/Pause/FF +
     // conditional Return to Live, opened from the tile menu.
     var playbackMenuIndex by remember { mutableStateOf<Int?>(null) }
+    // Exit Multiview defers the store clear to disposal (see the menu
+    // action) so the grid never shows the empty placeholder mid-pop.
+    val exitClearRequested = remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { if (exitClearRequested.value) storeHandle.clear() }
+    }
+
     val tileMenuGuard = rememberTvMenuGuard()
     // Per-tile track sheets (indices into `selected`). Set from the tile menu;
     // the sheet reads/writes THAT tile's hoisted ExoPlayer.
@@ -600,20 +607,22 @@ fun MultiviewScreen(
                     // stay in the store and keep playing; the picker APPENDS.
                     onClick = { addPickerOpen = true },
                 ),
-                TvMenuAction(
-                    label = "Back to TV Guide",
-                    icon = Icons.AutoMirrored.Outlined.ArrowBack,
-                    onClick = { onClose() },
-                ),
+                // "Back to TV Guide" removed (Logan 2026-08-31): with Add
+                // streams in this menu and on the grid, a keep-tiles-and-
+                // leave option just duplicated the system Back flow.
                 TvMenuAction(
                     label = "Exit Multiview",
                     icon = Icons.Outlined.Close,
                     destructive = true,
-                    // onClose() BEFORE clear() so the recompose never lands
-                    // on the "No tiles selected." placeholder for a frame.
+                    // Only FLAG the clear here: clearing while the nav pop
+                    // animates recomposed the grid onto the "No tiles
+                    // selected." placeholder for a beat (field 2026-08-31).
+                    // The store is cleared in onDispose below, after the
+                    // screen is actually gone, so tiles keep rendering
+                    // through the exit transition.
                     onClick = {
+                        exitClearRequested.value = true
                         onClose()
-                        storeHandle.clear()
                     },
                 ),
             ),
