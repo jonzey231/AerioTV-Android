@@ -437,8 +437,25 @@ class AerioExoPlayerHolder @Inject constructor(
             // Task #150: remember the failure in user-showable form for the
             // unavailable overlay (self-heals below may still recover; the
             // text only surfaces if the stream ends up flagged unavailable).
-            _lastErrorText.value = error.cause?.message
-                ?.let { "${error.errorCodeName}: $it" } ?: error.errorCodeName
+            // OTA/ATSC channels are MPEG-2 video, which many phones/tablets
+            // have no decoder for (TV boxes generally do). Name the real
+            // constraint and point at the documented server-side fix instead
+            // of a raw decoder-init code (2026-09-01, mirrors the iOS card).
+            val causeChain = generateSequence(error as Throwable?) { it.cause }
+                .mapNotNull { it.message }
+                .joinToString(" ")
+            _lastErrorText.value = if (
+                error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED &&
+                causeChain.contains("mpeg2", ignoreCase = true)
+            ) {
+                "This channel broadcasts MPEG-2 video (over-the-air TV), which " +
+                    "this device can't decode. See the OTA / HDHomeRun section of " +
+                    "the AerioTV GitHub README for a Dispatcharr Stream Profile " +
+                    "that fixes this."
+            } else {
+                error.cause?.message
+                    ?.let { "${error.errorCodeName}: $it" } ?: error.errorCodeName
+            }
             // GH #8: the forced-PCM sink produced no audio / failed to init on
             // some devices. Rebuild once with the stock context sink (which is
             // the path that works everywhere) and replay. A plain forceReload
@@ -743,6 +760,7 @@ class AerioExoPlayerHolder @Inject constructor(
             .setHandleAudioBecomingNoisy(true)
             .build()
             .apply {
+                PlaybackActivityTracker.playerCreated()
                 addListener(LoggingPlayerListener)
                 addListener(watchdogListener)
                 // Always-on: network LOAD errors into the shareable log (GH #32).
@@ -1461,6 +1479,8 @@ class AerioExoPlayerHolder @Inject constructor(
             p.release()
         } catch (t: Throwable) {
             Log.w(TAG, "ExoPlayer release failed", t)
+        } finally {
+            PlaybackActivityTracker.playerReleased()
         }
     }
 
