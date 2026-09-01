@@ -672,58 +672,48 @@ class PlaylistViewModel @Inject constructor(
      * back-scroll window to match. Dedup by (channel, start) keeps the edge
      * where the fresh feed still overlaps history from doubling cells.
      */
-    private suspend fun mergeEpgHistory(playlist: PlaylistEntity) {
+    /**
+     * The ONLY way guide state is installed (guide rebuild, phase 2): read the
+     * retention window plus the forward window from Room and build a
+     * [com.aeriotv.android.core.guide.GuideCatalog] once. Fetch, cached paint,
+     * category enrichment and history all write to Room and then call this,
+     * so every path produces the same guide for the same cache. Unchanged
+     * channels keep their previous list instance (no recomposition).
+     */
+    private suspend fun rebuildGuideCatalog(playlist: PlaylistEntity, reason: String) {
+        val channels = _state.value.channels
+        if (channels.isEmpty()) return
         val retentionDays = playlist.epgRetentionDays.coerceIn(1, 30)
+        val windowHours = runCatching { appPreferences.epgWindowHours.first() }
+            .getOrDefault(24)
+            .let { if (it <= 0) 7 * 24 else it.coerceAtLeast(24) }
         val now = System.currentTimeMillis()
         val fromMillis = now - retentionDays * 24L * 60L * 60L * 1000L
-        val toMillis = now - 60L * 60L * 1000L
-        val historyRaw = runCatching {
-            repository.loadCachedEpg(playlist.id, fromMillis, toMillis)
-        }.getOrDefault(emptyList())
-        val historyHours = retentionDays * 24
-        if (historyRaw.isEmpty()) {
-            // Nothing retained yet (fresh install / first refresh); still widen
-            // the grid so history starts accumulating visibly from day one.
-            _state.update { it.copy(epgHistoryHours = historyHours) }
-            return
+        val toMillis = now + windowHours * 60L * 60L * 1000L
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val rows = runCatching { repository.loadCachedEpg(playlist.id, fromMillis, toMillis) }
+            .onFailure { Log.w(TAG, "rebuildGuideCatalog($reason): cache read failed", it) }
+            .getOrDefault(emptyList())
+        val previous = _state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog
+        val catalog = withContext(Dispatchers.Default) {
+            com.aeriotv.android.core.guide.GuideCatalog.build(
+                channels, rows, fromMillis, toMillis, previous = previous,
+            )
         }
-        // Off-main: this bridges the WHOLE retention window (up to 30 days).
-        // Catch-up depth multiplied that set by ~20x, and bridgeChannelIds is
-        // an O(rows) rebuild that was running on viewModelScope's Main
-        // dispatcher on every launch.
-        val channelsForHistory = _state.value.channels
-        val history = withContext(Dispatchers.Default) {
-            bridgeChannelIds(historyRaw, channelsForHistory)
-        }
-        // I-5: merge under the writer mutex, computed off Main; the update
-        // installs a prebuilt map instead of looping inside the CAS.
         epgWriteMutex.withLock {
-            val base = _state.value.epgByChannel
-            val merged = withContext(Dispatchers.Default) {
-                val out = HashMap(base)
-                for ((channelId, rows) in groupByChannel(history)) {
-                    val existing = out[channelId]
-                    out[channelId] = if (existing.isNullOrEmpty()) {
-                        rows
-                    } else {
-                        val seen = existing.asSequence().map { it.startMillis }.toHashSet()
-                        val fresh = rows.filter { it.startMillis !in seen }
-                        if (fresh.isEmpty()) existing
-                        else (fresh + existing).sortedBy { it.startMillis }
-                    }
-                }
-                out
-            }
-            // Re-run the placeholder/gap pass: this merge builds a fresh map
-            // and the gap cells (focusable "No info") must survive it, or the
-            // guide loses them the moment history or layering lands
-            // (Streamer 2026-09-01: holes came back after "layering landed").
-            val filled = withContext(Dispatchers.Default) {
-                withChannelNamePlaceholders(merged, channelsForHistory)
-            }
-            _state.update { it.copy(epgByChannel = filled, epgHistoryHours = historyHours) }
+            _state.update { it.copy(epgByChannel = catalog, epgHistoryHours = retentionDays * 24) }
         }
-        Log.i(TAG, "mergeEpgHistory: merged ${history.size} past programmes (${retentionDays}d window)")
+        Log.i(
+            TAG,
+            "guide catalog rebuilt ($reason): ${rows.size} rows -> ${catalog.size} channels " +
+                "in ${android.os.SystemClock.elapsedRealtime() - t0}ms",
+        )
+    }
+
+    private suspend fun mergeEpgHistory(playlist: PlaylistEntity) {
+        // History lives in Room; the catalog build already spans the whole
+        // retention window, so "merging history" is just a rebuild.
+        rebuildGuideCatalog(playlist, "history")
     }
 
     /**
@@ -814,16 +804,8 @@ class PlaylistViewModel @Inject constructor(
         }
         if (hasCache) {
             Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
-            val groupedCached = withContext(Dispatchers.Default) {
-                withChannelNamePlaceholders(groupByChannel(cached), channelsNowCached)
-            }
-            epgWriteMutex.withLock {
-                val base = _state.value.epgByChannel
-                val installed = withContext(Dispatchers.Default) {
-                    preserveEpgListIdentity(base, groupedCached)
-                }
-                _state.update { it.copy(epgByChannel = installed, isEpgLoading = false) }
-            }
+            rebuildGuideCatalog(playlist, "cache")
+            _state.update { it.copy(isEpgLoading = false) }
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
@@ -892,24 +874,14 @@ class PlaylistViewModel @Inject constructor(
                 // it belongs on Default; only the _state.update stays here
                 // (MutableStateFlow.update is thread-safe either way).
                 val channelsNow = _state.value.channels
-                val (programmes, grouped) = withContext(Dispatchers.Default) {
-                    // Same degenerate-programme rule the persistence chokepoint
-                    // applies (EpgProgrammeDao.mergeForPlaylist, >= 30s). These
-                    // rows used to reach the in-memory guide UNFILTERED while
-                    // only the DB got the clean set, so sliver cells showed in
-                    // the session that fetched and vanished after a relaunch.
-                    val bridged = bridgeChannelIds(rawProgrammes, channelsNow)
+                // Same degenerate-programme rule the persistence chokepoint
+                // applies (EpgProgrammeDao, >= 30s), so the in-memory guide and
+                // the DB always see the same set.
+                val programmes = withContext(Dispatchers.Default) {
+                    bridgeChannelIds(rawProgrammes, channelsNow)
                         .filter { it.endMillis - it.startMillis >= 30_000L }
-                    bridged to withChannelNamePlaceholders(
-                        groupByChannel(bridged), channelsNow,
-                    )
                 }
-                // Cheap channel count off the already-bucketed map instead of
-                // `programmes.map { it.channelId }.toSet().size` which used to
-                // allocate a fresh List + a Set over 60K rows on every cold
-                // launch just to log the count -- the actual allocation showed
-                // up in flame graphs as ~250ms of main-thread time.
-                Log.i(TAG, "EPG loaded: ${programmes.size} programmes across ${grouped.size} channels")
+                Log.i(TAG, "EPG loaded: ${programmes.size} programmes")
                 // Stamp the cache with the identity it was built for (see identityStale).
                 runCatching { appPreferences.setEpgIdentityHash(playlist.id, com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsNow)) }
                 // A fetch that yields ZERO programmes is a FAILED fetch, not an
@@ -935,13 +907,6 @@ class PlaylistViewModel @Inject constructor(
                         IllegalStateException("EPG fetch returned no programmes"),
                     )
                 }
-                epgWriteMutex.withLock {
-                    val base = _state.value.epgByChannel
-                    val installed = withContext(Dispatchers.Default) {
-                        preserveEpgListIdentity(base, grouped)
-                    }
-                    _state.update { it.copy(epgByChannel = installed, isEpgLoading = false) }
-                }
                 // Persist the fresh guide so the next launch is instant.
                 // Re-stamp the cache generation only HERE, on a SUCCESSFUL
                 // network fetch: a failed one must leave the old epoch alone
@@ -953,7 +918,14 @@ class PlaylistViewModel @Inject constructor(
                 // playlist's on-disk cache was rebuilt clean", so writing it
                 // before (or despite) a failed save would leave poisoned rows
                 // behind a clean stamp — the state the epoch exists to detect.
+                // Rows go to Room first; the guide is then rebuilt from Room so
+                // fetch, cache paint, enrichment and history all install the
+                // same way (one deterministic build, no map surgery).
                 runCatching { repository.saveEpgToCache(playlist.id, programmes) }
+                    .also {
+                        rebuildGuideCatalog(playlist, "fetch")
+                        _state.update { it.copy(isEpgLoading = false) }
+                    }
                     .onSuccess {
                         runCatching {
                             appPreferences.setEpgCacheEpochFor(playlist.id, EPG_CACHE_EPOCH)
@@ -977,40 +949,9 @@ class PlaylistViewModel @Inject constructor(
                     // something; short-circuits the recompose when the source
                     // already had categories baked in (XMLTV path).
                     if (enriched !== programmes) {
-                        val groupedEnriched = withChannelNamePlaceholders(
-                            groupByChannel(enriched), _state.value.channels,
-                        )
-                        // MERGE into the current map, never wholesale-replace:
-                        // this coroutine races mergeEpgHistory, and a replace
-                        // that lands second silently wiped every 7-day history
-                        // row (and with epgWindowHours=0 shrank the guide's
-                        // content width, clamping the shared scroll - a second
-                        // timeline-jump class). Enriched rows win their own
-                        // (channel, start) slots; everything else survives.
-                        // I-5: same mutex + off-main merge as mergeEpgHistory.
-                        epgWriteMutex.withLock {
-                            val base = _state.value.epgByChannel
-                            val merged = withContext(Dispatchers.Default) {
-                                val out = HashMap(base)
-                                for ((channelId, rows) in groupedEnriched) {
-                                    val existing = out[channelId]
-                                    out[channelId] = if (existing.isNullOrEmpty()) {
-                                        rows
-                                    } else {
-                                        val enrichedStarts =
-                                            rows.asSequence().map { it.startMillis }.toHashSet()
-                                        val keep = existing.filter { it.startMillis !in enrichedStarts }
-                                        if (keep.isEmpty()) rows
-                                        else (keep + rows).sortedBy { it.startMillis }
-                                    }
-                                }
-                                out
-                            }
-                            val filled = withContext(Dispatchers.Default) {
-                                withChannelNamePlaceholders(merged, _state.value.channels)
-                            }
-                            _state.update { it.copy(epgByChannel = filled) }
-                        }
+                        runCatching { repository.saveEpgToCache(playlist.id, enriched) }
+                            .onFailure { Log.w(TAG, "persisting enriched categories failed", it) }
+                        rebuildGuideCatalog(playlist, "enrich")
                         // Keep the cache enriched too so tints survive a relaunch
                         // -- but write ONLY the rows enrichment actually
                         // touched. E-6: this used to hand the whole feed back
