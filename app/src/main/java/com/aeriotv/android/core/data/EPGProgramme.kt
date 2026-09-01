@@ -27,6 +27,8 @@ data class EPGProgramme(
      * visible while scrolling and hides the (meaningless) time range.
      */
     val isPlaceholder: Boolean = false,
+    /** Guide rebuild: which source produced this row; decides span ownership at merge. */
+    val source: com.aeriotv.android.core.guide.GuideSource = com.aeriotv.android.core.guide.GuideSource.GRID,
 
     // --- EPG program metadata badges (guide cell / list / info sheet) ---
     // Sources differ (see the per-source matrix): XMLTV (M3U + Xtream xmltv.php)

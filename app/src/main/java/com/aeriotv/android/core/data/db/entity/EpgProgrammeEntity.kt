@@ -57,4 +57,6 @@ data class EpgProgrammeEntity(
     @ColumnInfo(defaultValue = "0") val isPremiere: Boolean = false,
     @ColumnInfo(defaultValue = "0") val isFinale: Boolean = false,
     @ColumnInfo(defaultValue = "0") val isRepeat: Boolean = false,
+    /** Guide rebuild: "grid" | "user_xmltv" | "upstream" | "playlist_xmltv" (GuideSource.name lowercased). */
+    @ColumnInfo(defaultValue = "grid") val source: String = "grid",
 )
