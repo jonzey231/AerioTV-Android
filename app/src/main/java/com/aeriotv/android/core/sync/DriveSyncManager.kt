@@ -446,7 +446,14 @@ class DriveSyncManager @Inject constructor(
         // when any playlist exists.
         val all = playlistDao.allOnce()
         if (all.isNotEmpty()) {
-            val targetId = all.firstOrNull { it.id == snapshot.active }?.id
+            // The active playlist is a PER-DEVICE choice (Streamer 2026-09-01:
+            // this device kept reverting to the "Kids" playlist because another
+            // device's snapshot said so). Keep this device's own active row when
+            // it still exists; consult the synced active id only when nothing
+            // here is active (first sync / the active playlist was deleted).
+            val localActive = all.firstOrNull { it.isActive }?.id
+            val targetId = localActive
+                ?: all.firstOrNull { it.id == snapshot.active }?.id
                 ?: all.minByOrNull { it.displayOrder }?.id
                 ?: all.first().id
             playlistDao.switchActive(targetId)
