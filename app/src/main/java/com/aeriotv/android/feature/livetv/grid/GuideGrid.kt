@@ -47,11 +47,13 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -268,6 +270,10 @@ private fun GridRow(
     val fmt = remember { SimpleDateFormat("h:mma", Locale.getDefault()) }
     val seam = 2f
     val padH = 8f
+    // Text layouts are measured once per (cell, width) and drawn many times:
+    // measuring through TextMeasurer on every draw was ~1 ms per row.
+    val textCache = remember(state.rows, row) { HashMap<Long, CellText>() }
+    val rangeCache = remember(state.rows, row) { HashMap<Long, String>() }
     Row(modifier = Modifier.fillMaxWidth().height(rowHeight)) {
         Rail(channel, railWidth, isFavorite)
         Canvas(
@@ -328,25 +334,31 @@ private fun GridRow(
                     )
                 }
                 if (w >= TEXT_MIN_PX) {
-                    clipRect(x0, 0f, x0 + w, size.height) {
-                        val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
-                        drawText(
-                            textMeasurer, cell.title,
-                            topLeft = Offset(x0 + padH, 6.dp.toPx()),
+                    val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
+                    val wantRange = !cell.isPlaceholder && size.height >= 40.dp.toPx()
+                    val key = cell.startMillis * 31 + textW
+                    val text = textCache.getOrPut(key) {
+                        val title = textMeasurer.measure(
+                            text = cell.title,
                             style = if (cell.isPlaceholder) titleDimStyle else titleStyle,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            size = Size(textW.toFloat(), 20.sp.toPx()),
+                            constraints = Constraints(maxWidth = textW, maxHeight = 20.sp.roundToPx()),
                         )
-                        if (!cell.isPlaceholder && size.height >= 40.dp.toPx()) {
-                            val range = fmt.format(Date(cell.startMillis)).lowercase(Locale.getDefault()) +
-                                " - " + fmt.format(Date(cell.endMillis)).lowercase(Locale.getDefault())
-                            drawText(
-                                textMeasurer, range,
-                                topLeft = Offset(x0 + padH, size.height - 6.dp.toPx() - 14.sp.toPx()),
-                                style = timeStyle, maxLines = 1, overflow = TextOverflow.Clip,
-                                size = Size(textW.toFloat(), 16.sp.toPx()),
+                        val range = if (wantRange) {
+                            val str = rangeCache.getOrPut(cell.startMillis) {
+                                fmt.format(Date(cell.startMillis)).lowercase(Locale.getDefault()) +
+                                    " - " + fmt.format(Date(cell.endMillis)).lowercase(Locale.getDefault())
+                            }
+                            textMeasurer.measure(
+                                text = str, style = timeStyle, maxLines = 1, overflow = TextOverflow.Clip,
+                                constraints = Constraints(maxWidth = textW, maxHeight = 16.sp.roundToPx()),
                             )
-                        }
+                        } else null
+                        CellText(title, range)
+                    }
+                    clipRect(x0, 0f, x0 + w, size.height) {
+                        drawText(text.title, topLeft = Offset(x0 + padH, 6.dp.toPx()))
+                        text.range?.let { drawText(it, topLeft = Offset(x0 + padH, size.height - 6.dp.toPx() - 14.sp.toPx())) }
                     }
                 }
             }
@@ -404,3 +416,5 @@ private const val TIMELINE_JUMP_MS = 2L * 3_600_000L + 30L * 60_000L
 private const val MIN_CELL_PX = 6f
 private const val TEXT_MIN_PX = 28f
 private val NOW_RED = Color(0xFFFF4757)
+
+private class CellText(val title: TextLayoutResult, val range: TextLayoutResult?)
