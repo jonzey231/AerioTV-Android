@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -113,9 +114,21 @@ fun GuideGrid(
     // Lane: keep the focused row two rows below the top edge once past it.
     // snapshotFlow, not effect keys: reading focusRow in composition would
     // recompose the whole grid (and every visible row) on each D-pad press.
-    LaunchedEffect(state, listState) {
+    val rowHeightPx = with(density) { rowHeight.toPx() }
+    LaunchedEffect(state, listState, rowHeightPx) {
         snapshotFlow { state.focusRow to state.rows }.collect { (row, _) ->
-            if (row >= 0) listState.scrollToItem((row - LANE_ROWS).coerceAtLeast(0))
+            if (row < 0) return@collect
+            val target = (row - LANE_ROWS).coerceAtLeast(0)
+            val current = listState.firstVisibleItemIndex
+            val delta = (target - current) * rowHeightPx - listState.firstVisibleItemScrollOffset
+            if (kotlin.math.abs(target - current) <= 3) {
+                // A one-row step goes through the scrollable so the lazy list
+                // PREFETCHES the next row after this frame; scrollToItem would
+                // compose the incoming row inside this press's measure pass.
+                if (delta != 0f) listState.scrollBy(delta)
+            } else {
+                listState.scrollToItem(target)
+            }
         }
     }
 
