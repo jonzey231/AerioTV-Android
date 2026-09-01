@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -53,6 +54,17 @@ fun LiveTVTabContent(
     val formFactor = rememberLiveTvFormFactor()
     val stored by settingsVm.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
     val guideRendererV2 by settingsVm.guideRendererV2.collectAsStateWithLifecycle(initialValue = false)
+    // Dev-only A/B hook for adb-driven measurement on the Streamer:
+    // `adb shell setprop debug.aerio.guide_v2 0|1` overrides the toggle for
+    // the next launch (unset = the toggle rules). Removed at cut-over.
+    val guideRendererOverride = remember {
+        runCatching {
+            java.io.BufferedReader(java.io.InputStreamReader(
+                Runtime.getRuntime().exec(arrayOf("getprop", "debug.aerio.guide_v2")).inputStream,
+            )).use { it.readLine()?.trim() }
+        }.getOrNull()?.takeIf { it == "0" || it == "1" }
+    }
+    val useNewGuide = when (guideRendererOverride) { "1" -> true; "0" -> false; else -> guideRendererV2 }
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
     // Per-device-type EPG badge visibility, provided to the guide / list / info
     // sheet below so they hide the badges when the user turns them off.
@@ -121,7 +133,7 @@ fun LiveTVTabContent(
                 onPlayCatchup = onPlayCatchup,
             )
         }
-        LiveTVViewMode.Guide -> if (guideRendererV2) {
+        LiveTVViewMode.Guide -> if (useNewGuide) {
             com.aeriotv.android.feature.livetv.grid.GuideScreen2(
                 onChannelClick = onChannelClick,
                 viewModel = viewModel,
