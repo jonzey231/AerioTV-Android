@@ -72,6 +72,8 @@ class GuideMatchMaps private constructor(
      *  the source has no tvg-id (Apple: numberToChannelID). Never consulted
      *  for grid rows, so a number can never collide with a grid tvg-id. */
     val numberToChannel: Map<String, GuideChannelId>,
+    /** Every loaded canonical id: rows already keyed `disp:`/`m3u:` attach directly. */
+    val canonicalIds: Set<String>,
 ) {
     /**
      * All canonical ids a raw feed key resolves to; empty when unknown.
@@ -80,6 +82,9 @@ class GuideMatchMaps private constructor(
      *   xmltv row: tvg-id -> number -> uuid -> drop
      */
     fun resolve(rawKey: String, source: GuideSource = GuideSource.GRID): Set<GuideChannelId> {
+        if (rawKey.startsWith("disp:") || rawKey.startsWith("m3u:")) {
+            return if (rawKey in canonicalIds) setOf(GuideChannelId(rawKey)) else emptySet()
+        }
         val key = normalize(rawKey)
         if (key.isEmpty()) return emptySet()
         tvgIdToChannels[key]?.let { return it }
@@ -106,8 +111,10 @@ class GuideMatchMaps private constructor(
             val byTvg = HashMap<String, MutableSet<GuideChannelId>>(channels.size * 2)
             val byUuid = HashMap<String, GuideChannelId>()
             val byNumber = HashMap<String, GuideChannelId>()
+            val canonical = HashSet<String>(channels.size * 2)
             for (ch in channels) {
                 val id = ch.guideChannelId()
+                canonical.add(id.value)
                 // Dispatcharr rows carry the server-bound guide key in tvgID and
                 // their own declared tvg-id in rawAttributes; Apple keeps BOTH as
                 // keys for the same channel, so a feed keyed either way lands.
@@ -122,7 +129,7 @@ class GuideMatchMaps private constructor(
                 val number = normalize(ch.channelNumber.orEmpty())
                 if (number.isNotEmpty()) byNumber.putIfAbsent(number, id)
             }
-            return GuideMatchMaps(byTvg, byUuid, byNumber)
+            return GuideMatchMaps(byTvg, byUuid, byNumber, canonical)
         }
     }
 }

@@ -35,6 +35,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
@@ -647,6 +648,16 @@ class PlaylistRepository @Inject constructor(
                     // download has its own stall floor in PlaylistFetcher.
                     var sourceDeadline = Long.MAX_VALUE
                     val truncated = java.util.concurrent.atomic.AtomicBoolean(false)
+                    // Conditional GET: an upstream feed the server says is
+                    // unchanged since the last complete parse is neither
+                    // downloaded nor parsed (validators are stored only after
+                    // an untruncated parse, so a budget-cut feed retries).
+                    val stored = runCatching { appPreferences.feedValidators(layer.url).first() }.getOrNull()
+                    val sent = stored?.let { (etag, lastModified) ->
+                        if (etag == null && lastModified == null) null
+                        else com.aeriotv.android.core.network.FeedValidators(etag, lastModified)
+                    }
+                    var fresh: com.aeriotv.android.core.network.FeedValidators? = null
                     val xmltv = runCatching {
                         // GH #53: parse against THIS feed's own guide keys, not
                         // the playlist's whole key set. tvg-id values are
@@ -654,7 +665,7 @@ class PlaylistRepository @Inject constructor(
                         // unrelated feeds; parsing globally let one provider's
                         // schedule land on another provider's channel.
                         val fetchStartMs = System.currentTimeMillis()
-                        fetchViaTempFile(layer.url, ".xmltv") { file ->
+                        val result = fetchViaTempFileIfChanged(layer.url, ".xmltv", sent) { file ->
                             downloadMs += System.currentTimeMillis() - fetchStartMs
                             sourceDeadline = minOf(
                                 System.currentTimeMillis() + UPSTREAM_EPG_PER_SOURCE_MS,
@@ -667,10 +678,21 @@ class PlaylistRepository @Inject constructor(
                                 truncated = truncated,
                             )
                         }
+                        if (result == null) {
+                            Log.i("PlaylistRepo", "upstream source unchanged (304); parse skipped")
+                            emptyList()
+                        } else {
+                            fresh = result.second
+                            result.first
+                        }
                     }.getOrElse {
                         if (it is CancellationException) throw it
                         Log.w("PlaylistRepo", "upstream EPG source skipped: ${it.javaClass.simpleName}")
                         emptyList()
+                    }
+                    val complete = fresh?.takeIf { !truncated.get() && (it.etag != null || it.lastModified != null) }
+                    if (complete != null) {
+                        runCatching { appPreferences.setFeedValidators(layer.url, complete.etag, complete.lastModified) }
                     }
                     if (xmltv.isNotEmpty()) {
                         // Merge per-source so a kill mid-phase loses at most
@@ -1495,6 +1517,29 @@ class PlaylistRepository @Inject constructor(
      * that has an epg-keyed replacement - and cheap (favorites and recents
      * are both small), so it simply runs on every XC fetch.
      */
+    /**
+     * [fetchViaTempFile] as a conditional GET (upstream layering only):
+     * null when the feed is unchanged since [validators] were taken, without
+     * a download or a parse. Local files always parse.
+     */
+    private suspend fun <T> fetchViaTempFileIfChanged(
+        url: String,
+        suffix: String,
+        validators: com.aeriotv.android.core.network.FeedValidators?,
+        parse: (java.io.File) -> T,
+    ): Pair<T, com.aeriotv.android.core.network.FeedValidators?>? = withContext(layeringDispatcher) {
+        if (url.startsWith("file:", ignoreCase = true)) {
+            return@withContext fetchViaTempFile(url, suffix, parse) to null
+        }
+        val tmp = java.io.File.createTempFile("aerio_dl", suffix, context.cacheDir)
+        try {
+            val fresh = fetcher.fetchToFileIfChanged(url, tmp, validators) ?: return@withContext null
+            parse(tmp) to fresh
+        } finally {
+            tmp.delete()
+        }
+    }
+
     /**
      * The pre-0.4.11 XC live fetch, kept as the fallback for panels whose
      * player_api is broken while get.php still works. Same streaming

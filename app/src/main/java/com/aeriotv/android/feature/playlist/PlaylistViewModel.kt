@@ -657,7 +657,11 @@ class PlaylistViewModel @Inject constructor(
     private fun loadEpgIfConfigured(playlist: PlaylistEntity, forceRefresh: Boolean = false) {
         viewModelScope.launch {
             doLoadEpg(playlist, forceRefresh)
-            mergeEpgHistory(playlist)
+            // doLoadEpg rebuilds the catalog on every path that has rows; the
+            // fallback covers a failed fetch over a history-only cache.
+            if (_state.value.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog) {
+                rebuildGuideCatalog(playlist, "history")
+            }
         }
     }
 
@@ -1317,7 +1321,9 @@ class PlaylistViewModel @Inject constructor(
             // The purge above dropped retained history too; re-merge whatever
             // survives (nothing on a true clean slate, task #135 semantics:
             // "Refresh EPG Data" is the user's reset-everything hammer).
-            mergeEpgHistory(active)
+            if (_state.value.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog) {
+                rebuildGuideCatalog(active, "history")
+            }
             // Re-read the row so lastEpgRefreshedAt (stamped in Room by the
             // repo) reaches the detail card's "Last refreshed" footer.
             val updated = repository.activePlaylist()
