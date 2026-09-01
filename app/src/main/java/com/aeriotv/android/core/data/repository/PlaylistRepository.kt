@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -549,12 +550,27 @@ class PlaylistRepository @Inject constructor(
      */
     private val inFlightLoads = ConcurrentHashMap<String, CompletableDeferred<Result<List<EPGProgramme>>>>()
 
+    /** Two threads at THREAD_PRIORITY_BACKGROUND for the upstream-layering
+     *  download + gunzip + parse. This work used to run on Dispatchers.Default
+     *  at normal priority, and a 2026-08-31 simpleperf capture on the Google TV
+     *  Streamer showed it costing ~34% of the app's CPU (inflate_fast + XMLTV
+     *  parse) while four multiview decoders ran -- the MediaCodec loops spent
+     *  22s of a 20s window combined in the runnable state waiting for a core,
+     *  which WAS the multiview stutter. Background priority means decoders and
+     *  renderers always preempt this; the feeds just finish a little later. */
+    private val layeringDispatcher = java.util.concurrent.Executors.newFixedThreadPool(2) { r ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "EpgLayering").apply { priority = Thread.MIN_PRIORITY }
+    }.asCoroutineDispatcher()
+
     /** Owns the background upstream-layering jobs. Supervisor so one playlist's
-     *  failed layering never cancels another's; Default because the work is a
-     *  CPU-bound parse. Repository is a @Singleton, so this scope lives for the
-     *  process -- layering outlives the screen that triggered it, which is the
-     *  point: the user keeps browsing on the grid while history accumulates. */
-    private val layeringScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+     *  failed layering never cancels another's. Repository is a @Singleton, so
+     *  this scope lives for the process -- layering outlives the screen that
+     *  triggered it, which is the point: the user keeps browsing on the grid
+     *  while history accumulates. */
+    private val layeringScope = CoroutineScope(SupervisorJob() + layeringDispatcher)
 
     /** One layering job per playlist. A refresh while one is running reuses it
      *  rather than downloading the same feeds twice in parallel. */
@@ -730,11 +746,16 @@ class PlaylistRepository @Inject constructor(
         playlist: PlaylistEntity,
         knownChannelKeys: Set<String>? = null,
     ): Result<List<EPGProgramme>> =
-        // Parse + grid-mapping run on Default, NOT the caller's (Main) dispatcher.
-        // A large provider EPG is hundreds of thousands of programmes; parsing
-        // that XMLTV / mapping the Dispatcharr grid on Main froze the UI for
-        // minutes before the guide could paint.
-        withContext(Dispatchers.Default) { runCatching {
+        // Parse + grid-mapping run OFF the caller's (Main) dispatcher -- a
+        // large provider EPG is hundreds of thousands of programmes, and
+        // parsing on Main froze the UI for minutes. It runs on the
+        // background-PRIORITY EPG dispatcher, not Dispatchers.Default: thread
+        // priority only bites under contention, so when nothing is playing
+        // this parses exactly as fast as Default did, and when four multiview
+        // decoders own the cores (2026-08-31 Streamer stutter hunt: this very
+        // parse at normal priority starved the MediaCodec loops) the decoders
+        // win every time.
+        withContext(layeringDispatcher) { runCatching {
         val sourceType = playlist.resolvedSourceType()
         // Breadcrumbs bracketing base resolution: the 2026-08 hang sat
         // somewhere between the ViewModel's "fetching EPG" line and the first
@@ -887,7 +908,7 @@ class PlaylistRepository @Inject constructor(
      * programmes that have already ended.
      */
     suspend fun loadCachedEpg(playlistId: String): List<EPGProgramme> =
-        withContext(Dispatchers.Default) {
+        withContext(layeringDispatcher) {
             epgProgrammeDao.forPlaylist(playlistId).map { it.toProgramme() }
         }
 
@@ -906,7 +927,7 @@ class PlaylistRepository @Inject constructor(
         fromMillis: Long,
         toMillis: Long,
     ): List<EPGProgramme> =
-        withContext(Dispatchers.Default) {
+        withContext(layeringDispatcher) {
             epgProgrammeDao
                 .forPlaylistInWindow(playlistId, fromMillis, toMillis)
                 .map { it.toProgramme() }
@@ -925,7 +946,7 @@ class PlaylistRepository @Inject constructor(
      * guide-jump path is complete; wire this into the Search VM when #41 lands.
      */
     suspend fun searchEpg(playlistId: String, query: String): List<EPGProgramme> =
-        withContext(Dispatchers.Default) {
+        withContext(layeringDispatcher) {
             val q = query.trim()
             if (q.isBlank()) return@withContext emptyList()
             val like = "%" + q.replace("%", "\\%").replace("_", "\\_") + "%"
@@ -957,7 +978,7 @@ class PlaylistRepository @Inject constructor(
         authoritative: Boolean = true,
     ) {
         val now = System.currentTimeMillis()
-        val entities = withContext(Dispatchers.Default) {
+        val entities = withContext(layeringDispatcher) {
             programmes.map { it.toCacheEntity(playlistId, now) }
         }
         // Catch-up (task #135): MERGE the feed instead of replacing the whole
@@ -1013,7 +1034,7 @@ class PlaylistRepository @Inject constructor(
     suspend fun updateEpgRowsInCache(playlistId: String, programmes: List<EPGProgramme>) {
         if (programmes.isEmpty()) return
         val now = System.currentTimeMillis()
-        val entities = withContext(Dispatchers.Default) {
+        val entities = withContext(layeringDispatcher) {
             programmes.mapNotNull { p ->
                 // Same drawability floor mergeForPlaylist applies; an enriched
                 // row must not sneak past the one filter every write shares.
@@ -1522,7 +1543,15 @@ class PlaylistRepository @Inject constructor(
         url: String,
         suffix: String,
         parse: (java.io.File) -> T,
-    ): T = withContext(Dispatchers.IO) {
+        // NOT Dispatchers.IO: IO shares the CoroutineScheduler worker pool
+        // (and normal thread priority) with Dispatchers.Default, so hopping
+        // here silently undid the background-priority context the EPG paths
+        // set up -- simpleperf still showed the download + XMLTV parse on a
+        // "DefaultDispatch" thread starving the multiview decoders. The
+        // dedicated niced pool blocks safely on network/file IO; that is
+        // exactly what it exists for. Main-thread callers still get hopped
+        // off Main, which is all the old IO hop was really for.
+    ): T = withContext(layeringDispatcher) {
         // Task #45 file import: an imported source is a file:// URI pointing
         // at the copy the picker flow stored under filesDir/imports/. No
         // download needed -- parse it in place (refresh re-reads the same
@@ -1626,10 +1655,12 @@ class PlaylistRepository @Inject constructor(
         accountProfileIds: List<Int> = emptyList(),
         username: String? = null,
         password: String? = null,
-        // Dispatchers.IO for the same main-thread reason as fetchViaTempFile:
-        // the Dispatcharr branch decodes multi-MB JSON bodies and sorts/maps
-        // the full channel list, and callers arrive on Main.
-    ): List<M3UChannel> = withContext(Dispatchers.IO) { when (sourceType) {
+        // The niced EPG/parse pool for the same main-thread reason the old
+        // Dispatchers.IO hop existed (the Dispatcharr branch decodes multi-MB
+        // JSON bodies and sorts/maps the full channel list, and callers arrive
+        // on Main) -- but IO shares Default's normal-priority worker pool and
+        // starved the multiview decoders; see fetchViaTempFile.
+    ): List<M3UChannel> = withContext(layeringDispatcher) { when (sourceType) {
         SourceType.M3uUrl -> {
             // GH #26: stream the download to a temp file + line-parse it.
             // A full XC-panel M3U runs 100-200MB; fetchBytes materialized

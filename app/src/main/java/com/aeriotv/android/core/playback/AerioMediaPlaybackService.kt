@@ -93,7 +93,11 @@ class AerioMediaPlaybackService : MediaLibraryService() {
         // wants; the controller no-ops off-TV / without Cast, so this is safe on
         // every device. Playback itself still runs through the shared ExoPlayer
         // the receiver drives via the fullscreen player.
-        mediaSession?.let { castReceiver.publishSessionToken(it.sessionCompatToken) }
+        mediaSession?.let {
+            castReceiver.publishSessionToken(
+                android.support.v4.media.session.MediaSessionCompat.Token.fromToken(it.platformToken),
+            )
+        }
 
         // Let Media3 own the foreground notification so it shows the REAL
         // now-playing (channel name, programme, logo, play/pause/next) pulled
@@ -325,7 +329,9 @@ class AerioMediaPlaybackService : MediaLibraryService() {
                 mediaSession?.let {
                     setStyle(
                         androidx.media.app.NotificationCompat.MediaStyle()
-                            .setMediaSession(it.sessionCompatToken),
+                            .setMediaSession(
+                                android.support.v4.media.session.MediaSessionCompat.Token.fromToken(it.platformToken),
+                            ),
                     )
                 }
             }

@@ -23,7 +23,7 @@ credentials = "1.6.0"
 googleId = "1.2.0"
 work = "2.10.5"
 mediaCompat = "1.7.0"
-media3 = "1.4.1"
+media3 = "1.11.0"
 # Google Cast. cast-framework is the phone/tablet SENDER (Cast button, session
 # manager, RemoteMediaClient). cast-tv is the Android-TV RECEIVER library
 # (Cast Connect: CastReceiverContext + MediaManager) that lets the AerioTV ATV

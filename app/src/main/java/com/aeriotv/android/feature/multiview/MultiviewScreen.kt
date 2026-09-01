@@ -1613,6 +1613,45 @@ private fun ExoTile(
     val tileError = remember { mutableStateOf<String?>(null) }
     val tileRetryRef = remember { mutableStateOf<(() -> Unit)?>(null) }
     val tileRetrySerial = remember { mutableIntStateOf(0) }
+    // TEMP DIAGNOSTIC (2026-08-31 tile frame-drop hunt). Remove once fixed.
+    // Reads DecoderCounters once a second and logs DELTAS. The previous
+    // AnalyticsListener approach was useless here: onVideoFrameProcessingOffset
+    // has exactly one caller in media3 1.11.0 (MediaCodecVideoRenderer.onStopped),
+    // so it reported a single whole-session mean at teardown with no time course.
+    // totalVideoFrameProcessingOffsetUs / videoFrameProcessingOffsetCount IS
+    // earlyUs (fed from videoFrameReleaseInfo.getEarlyUs() at all three exits:
+    // render, skip, drop), so per-second deltas give the live lateness curve.
+    // Counters reset on renderer disable/enable, hence the negative guard.
+    // Read with: adb logcat -s AerioTileDiag
+    LaunchedEffect(tile.id) {
+        var lastRend = 0; var lastSkip = 0; var lastDrop = 0; var lastKf = 0
+        var lastOffUs = 0L; var lastOffN = 0
+        while (true) {
+            kotlinx.coroutines.delay(1_000)
+            val p = playerRef.value ?: continue
+            val c = p.videoDecoderCounters ?: continue
+            c.ensureUpdated()
+            val dRend = c.renderedOutputBufferCount - lastRend
+            val dSkip = c.skippedOutputBufferCount - lastSkip
+            val dDrop = c.droppedBufferCount - lastDrop
+            val dKf = c.droppedToKeyframeCount - lastKf
+            val dOffUs = c.totalVideoFrameProcessingOffsetUs - lastOffUs
+            val dN = c.videoFrameProcessingOffsetCount - lastOffN
+            lastRend = c.renderedOutputBufferCount
+            lastSkip = c.skippedOutputBufferCount
+            lastDrop = c.droppedBufferCount
+            lastKf = c.droppedToKeyframeCount
+            lastOffUs = c.totalVideoFrameProcessingOffsetUs
+            lastOffN = c.videoFrameProcessingOffsetCount
+            // A counter reset makes deltas meaningless for this tick.
+            if (dN <= 0 || dRend < 0 || dSkip < 0 || dDrop < 0) continue
+            Log.i(
+                "AerioTileDiag",
+                "[$channelName] rend=$dRend skip=$dSkip drop=$dDrop toKf=$dKf " +
+                    "earlyMs=${dOffUs / dN / 1000} n=$dN buf=${p.totalBufferedDuration}",
+            )
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -1629,7 +1668,18 @@ private fun ExoTile(
             } else {
                 val minBufferMs = maxOf(5_000, cachingMs)
                 DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(minBufferMs, maxOf(15_000, minBufferMs), 1_000, 3_000)
+                    // Start/rebuffer cushions raised 1s/3s -> 4s/5s (field
+                    // 2026-08-31): a tile that starts ~1s behind live has no
+                    // slack, so every network/demux wobble drops frames, and
+                    // the grid only smooths out after minutes of micro-stalls
+                    // have DRIFTED it a few seconds behind the edge anyway.
+                    // Dispatcharr serves its join backlog at line rate, so a
+                    // 4s opening cushion fills in a moment and the tile is
+                    // stable from the first minute - the same start-behind
+                    // shape the smooth reference players use. Latency is not
+                    // a cost here: multiview tiles are glanceable feeds, not
+                    // the reaction-time fullscreen player.
+                    .setBufferDurationsMs(minBufferMs, maxOf(15_000, minBufferMs), 4_000, 5_000)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build()
             }
@@ -1659,7 +1709,15 @@ private fun ExoTile(
                     httpFactory
                 }
             val renderersFactory =
-                com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough)
+                com.aeriotv.android.core.playback.aerioRenderersFactory(
+                    ctx,
+                    audioPassthrough,
+                    // Tiles present late frames rather than discarding them:
+                    // with N concurrent sessions the decoder has no headroom to
+                    // burst ahead, so stock's drop-to-catch-up never catches up
+                    // and the tile renders at the 100ms force-render floor.
+                    tolerateLateFrames = true,
+                )
             // Route raw .ts / /proxy/ts via TsExtractor like the Live
             // TV holder; HLS via HlsMediaSource; everything else via
             // the default factory. Same routing logic as
@@ -1671,10 +1729,14 @@ private fun ExoTile(
                 .setRenderersFactory(renderersFactory)
                 .setLoadControl(loadControl)
                 .setHandleAudioBecomingNoisy(false) // tile is muted-by-default; don't react
-                // Event-driven playback loop instead of the fixed 10ms
-                // doSomeWork cadence; up to 9 busy-scheduling loops are
-                // measurable on a TV SoC. Tiles only, not the main holder.
-                .experimentalSetDynamicSchedulingEnabled(true)
+                // NOTE (field 2026-08-31, Streamer): the experimental
+                // dynamic-scheduling flag (media3 1.4) used to be enabled
+                // here to skip the fixed 10ms doSomeWork cadence - and the
+                // tiles stuttered while the fullscreen player (stock
+                // scheduling) and TiviMate on the same box ran the same
+                // channels smoothly. The experimental scheduler is the
+                // multiview-only difference; removed. Revisit only on a
+                // media3 line whose release notes call it stable.
                 .build()
                 .apply {
                     // CRITICAL multiview audio-budget gate. Each tile is a
@@ -1691,15 +1753,39 @@ private fun ExoTile(
                     // and no sink is created. This is the Media3 equivalent
                     // of the libmpv `aid=no` knob the original multiview used
                     // (the migration wrongly collapsed aid+mute to volume).
+                    //
+                    // A 2026-08-31 attempt to keep every tile's audio track
+                    // alive (mute via volume=0, on the theory that an
+                    // AudioTrack-driven clock resists drift) was a 3x
+                    // regression -- rendered frames per tile fell from ~28fps
+                    // to ~8fps and flush-count went from 1 to 32-48 -- and the
+                    // metric that motivated it was misread: the "33 dropped /
+                    // 64k rendered" session was the 18-minute FULLSCREEN
+                    // player, not a tile. In the trace, the one tile that did
+                    // carry audio performed identically to its three muted
+                    // siblings. The audio clock anchors nothing here. Reverted.
                     trackSelectionParameters = trackSelectionParameters
                         .buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !isAudioFocused)
                         .build()
                     volume = 1f
                     playWhenReady = !paused
+                    // Same rule as the fullscreen holder: media3's renderer
+                    // votes Surface.setFrameRate from the container-signaled
+                    // fps. With N tiles that is N independent 59.94/60 votes
+                    // hitting SurfaceFlinger's adaptive-refresh logic - and
+                    // since the tiles moved to SurfaceView those votes
+                    // actually land (TextureView hints were dropped). One
+                    // display, one owner: no per-tile votes.
+                    setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
                 }
             playerRef.value = player
             onPlayer(player)
+            // Balanced 1:1 with playerReleased() in onRelease. MUST stay in
+            // factory: the update lambda re-runs on every recomposition, and
+            // counting there latched isPlaybackActive true for the process
+            // lifetime (permanently deferring PlaylistRefreshWorker).
+            com.aeriotv.android.core.playback.PlaybackActivityTracker.playerCreated()
 
             // Bounded re-prepare on fatal error, copying the cooldown shape
             // of AerioExoPlayerHolder.forceReload (5s cooldown, 3 attempts,
@@ -1842,7 +1928,10 @@ private fun ExoTile(
         onRelease = { _ ->
             Log.i(TAG, "Tile ExoPlayer releasing: $channelName")
             onPlayer(null)
-            playerRef.value?.release()
+            playerRef.value?.let {
+                it.release()
+                com.aeriotv.android.core.playback.PlaybackActivityTracker.playerReleased()
+            }
             playerRef.value = null
         },
     )

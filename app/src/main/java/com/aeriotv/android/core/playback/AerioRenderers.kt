@@ -63,6 +63,13 @@ fun aerioRenderersFactory(
     // is untouched; a single finite VOD stream is a few % of one core, video
     // stays hardware-decoded. MUST stay false for the live holder + multiview.
     preferSoftwareAudio: Boolean = false,
+    // Multiview tiles only. Widens the video renderer's late-frame drop
+    // thresholds so a tile that is running a few hundred ms behind PRESENTS
+    // its frames instead of discarding them. See AerioMediaCodecVideoRenderer
+    // .shouldDropOutputBuffer for the measurement that motivated it. MUST stay
+    // false for the fullscreen/VOD/DVR players: they have decoder headroom, so
+    // stock catch-up works and low latency is worth more there.
+    tolerateLateFrames: Boolean = false,
 ): DefaultRenderersFactory {
     val factory = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
@@ -112,6 +119,7 @@ fun aerioRenderersFactory(
                     eventListener,
                     MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
                     vetoCodecReuse = forceVideoCodecReinit,
+                    tolerateLateFrames = tolerateLateFrames,
                 ),
             )
         }
@@ -235,9 +243,12 @@ private class PtsSmoothingAudioSink(sink: AudioSink) : ForwardingAudioSink(sink)
         return ok
     }
 
-    override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
+    // media3 1.11: the (Format, Int, IntArray?) overload is final on
+    // ForwardingAudioSink; the AudioSinkConfig variant is the overridable
+    // one and the final overload funnels into it.
+    override fun configure(config: androidx.media3.exoplayer.audio.AudioSink.AudioSinkConfig) {
         resetSmoothing()
-        super.configure(inputFormat, specifiedBufferSize, outputChannels)
+        super.configure(config)
     }
 
     override fun flush() { resetSmoothing(); super.flush() }
@@ -278,6 +289,7 @@ private class AerioMediaCodecVideoRenderer(
     eventListener: VideoRendererEventListener?,
     maxDroppedFramesToNotify: Int,
     private val vetoCodecReuse: Boolean,
+    private val tolerateLateFrames: Boolean = false,
 ) : MediaCodecVideoRenderer(
     context,
     codecAdapterFactory,
@@ -411,12 +423,56 @@ private class AerioMediaCodecVideoRenderer(
         return super.getDecoderInfos(mediaCodecSelector, baseLayer, requiresSecureDecoder)
     }
 
+    /**
+     * Late-frame policy for multiview tiles (2026-08-31, Google TV Streamer).
+     *
+     * Stock media3 drops any frame more than 30ms late and force-renders one
+     * every 100ms, on the assumption that dropping lets the pipeline catch up.
+     * That assumption holds only when the decoder can burst ahead of realtime.
+     * With four concurrent 1080p60 AVC sessions this SoC has no such headroom,
+     * so dropping buys nothing and the tile parks in the dead band forever.
+     *
+     * Measured, per tile, 4-up (per-second DecoderCounters deltas):
+     *   60.2 frame decisions/sec  -- the decoder IS delivering the full 58.8fps
+     *   11.8 rendered/sec, 48.4 dropped/sec, 0 skipped
+     *   earlyUs in the -500..-30ms dead band in 55 of 60 samples (mean -273ms)
+     * and the time course oscillates: whenever earlyUs recovered to ~0 the same
+     * tile rendered 41-49fps, then fell back to 7-8fps once it slipped past
+     * -30ms. The frames exist; the policy is throwing them away.
+     *
+     * So for tiles: render everything down to -800ms (a glanceable tile being
+     * a quarter-second behind live costs nothing, judder costs everything),
+     * drop individual frames between -800ms and -2s to attempt catch-up, and
+     * keep a keyframe resync beyond -2s for a genuine fall-behind. The
+     * fullscreen player is untouched and keeps stock thresholds.
+     */
+    override fun shouldDropOutputBuffer(
+        earlyUs: Long,
+        elapsedRealtimeUs: Long,
+        isLastBuffer: Boolean,
+    ): Boolean {
+        if (!tolerateLateFrames) return super.shouldDropOutputBuffer(earlyUs, elapsedRealtimeUs, isLastBuffer)
+        return earlyUs < LATE_FRAME_DROP_US && !isLastBuffer
+    }
+
+    override fun shouldDropBuffersToKeyframe(
+        earlyUs: Long,
+        elapsedRealtimeUs: Long,
+        isLastBuffer: Boolean,
+    ): Boolean {
+        if (!tolerateLateFrames) return super.shouldDropBuffersToKeyframe(earlyUs, elapsedRealtimeUs, isLastBuffer)
+        // Raised in step with the drop threshold: a codec flush is a visible
+        // hitch, so it must not fire inside the band we now render through.
+        return earlyUs < LATE_FRAME_KEYFRAME_US && !isLastBuffer
+    }
+
     override fun canReuseCodec(
         codecInfo: MediaCodecInfo,
         oldFormat: Format,
         newFormat: Format,
+        sameSession: Boolean,
     ): DecoderReuseEvaluation {
-        val evaluation = super.canReuseCodec(codecInfo, oldFormat, newFormat)
+        val evaluation = super.canReuseCodec(codecInfo, oldFormat, newFormat, sameSession)
         if (!vetoCodecReuse) return evaluation
         // Stock already vetoed reuse (a real format/config change) -- respect it.
         if (evaluation.result == DecoderReuseEvaluation.REUSE_RESULT_NO) return evaluation
@@ -441,5 +497,12 @@ private class AerioMediaCodecVideoRenderer(
             DecoderReuseEvaluation.REUSE_RESULT_NO,
             DecoderReuseEvaluation.DISCARD_REASON_WORKAROUND,
         )
+    }
+
+    private companion object {
+        /** Render late frames down to this; beyond it, drop to try to catch up. */
+        const val LATE_FRAME_DROP_US = -800_000L
+        /** Beyond this a tile is genuinely lost: resync to a keyframe. */
+        const val LATE_FRAME_KEYFRAME_US = -2_000_000L
     }
 }
