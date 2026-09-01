@@ -95,10 +95,27 @@ fun bridgeChannelIds(
         programmes, maps, com.aeriotv.android.core.guide.GuideSource.GRID,
     )
     if (result.unresolvedCount > 0) {
+        // TEMP DIAGNOSTIC (rebuild phase 2): for each sampled unresolved key,
+        // say which channel FIELD would have matched it under the old bridge,
+        // so the identity maps can be corrected from evidence, not guesses.
+        val byNumber = channels.associateBy { it.channelNumber?.trim()?.lowercase().orEmpty() }
+        val byIntId = channels.associateBy { it.dispatcharrChannelId?.toString().orEmpty() }
+        val byRawTvg = channels.associateBy { it.rawAttributes["tvg-id"]?.trim()?.lowercase().orEmpty() }
+        val byTvg = channels.associateBy { it.tvgID.trim().lowercase() }
+        val classified = result.unresolvedKeys.map { k ->
+            val hits = buildList {
+                byTvg[k]?.let { add("tvgID=" + it.name) }
+                byRawTvg[k]?.let { add("rawTvg=" + it.name) }
+                byNumber[k]?.let { add("number=" + it.name) }
+                byIntId[k]?.let { add("intId=" + it.name) }
+            }
+            "$k -> ${if (hits.isEmpty()) "no channel field" else hits.joinToString("|")}"
+        }
         android.util.Log.i(
             "GuideIdentity",
-            "attach: ${result.attachedCount} attached, ${result.unresolvedCount} unresolved " +
-                "(sample ${result.unresolvedKeys})",
+            "attach: ${result.attachedCount} attached, ${result.unresolvedCount} unresolved; " +
+                "channels=${channels.size} withTvg=${channels.count { it.tvgID.isNotBlank() }} " +
+                "sample: $classified",
         )
     }
     return result.resolved.map { it.programme }
