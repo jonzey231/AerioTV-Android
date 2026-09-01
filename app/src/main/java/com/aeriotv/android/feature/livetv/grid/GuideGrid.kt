@@ -222,8 +222,13 @@ fun GuideGrid(
     }
 }
 
-private fun pageRows(listState: LazyListState): Int =
-    (listState.layoutInfo.visibleItemsInfo.size - 1).coerceAtLeast(1)
+/** Rows per page: the fully visible rows minus one, so a page keeps one row of context. Deterministic (no partial-row dependence). */
+private fun pageRows(listState: LazyListState): Int {
+    val info = listState.layoutInfo
+    val rowH = info.visibleItemsInfo.firstOrNull()?.size ?: return 1
+    val viewport = info.viewportEndOffset - info.viewportStartOffset
+    return ((viewport / rowH) - 1).coerceAtLeast(1)
+}
 
 @Composable
 private fun TimeHeader(
@@ -257,8 +262,12 @@ private fun TimeHeader(
                     val x = (t - vs) * pxPerMs
                     drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
                     val label = fmt.format(Date(t)).lowercase(Locale.getDefault())
-                    // A label whose slot started before the edge hugs the edge (Apple: clipped cell text aligns to the clipped edge).
-                    drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, (size.height - 16.sp.toPx()) / 2f), style = labelStyle, maxLines = 1)
+                    // A label whose slot started before the edge hugs the edge (clipped
+                    // text aligns to the clipped edge) unless the next label would collide.
+                    val nextX = (t + slot - vs) * pxPerMs
+                    if (x >= 0f || nextX >= 72.dp.toPx()) {
+                        drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, (size.height - 16.sp.toPx()) / 2f), style = labelStyle, maxLines = 1)
+                    }
                     t += slot
                 }
             }
