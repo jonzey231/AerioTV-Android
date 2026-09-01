@@ -61,6 +61,9 @@ fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
     val out = LinkedHashMap<String, String>(maps.tvgIdToChannels.size + maps.uuidToChannel.size)
     for ((key, ids) in maps.tvgIdToChannels) out[key] = ids.first().value
     for ((key, id) in maps.uuidToChannel) out.putIfAbsent(key, id.value)
+    // Numbers are in the parser's known-key set (Apple's channelMatchKeys
+    // includes them); the attach step decides per source whether they match.
+    for ((key, id) in maps.numberToChannel) out.putIfAbsent(key, id.value)
     return out
 }
 
@@ -83,6 +86,7 @@ fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
 fun bridgeChannelIds(
     programmes: List<EPGProgramme>,
     channels: List<M3UChannel>,
+    source: com.aeriotv.android.core.guide.GuideSource = com.aeriotv.android.core.guide.GuideSource.GRID,
 ): List<EPGProgramme> {
     // Rebuilt: attach through explicit match maps, ONE-TO-MANY (a tvg-id
     // shared by several channels lands its programmes on every one of them,
@@ -91,9 +95,7 @@ fun bridgeChannelIds(
     if (programmes.isEmpty() || channels.isEmpty()) return programmes
     val maps = com.aeriotv.android.core.guide.GuideMatchMaps.build(channels)
     if (maps.isEmpty) return emptyList()
-    val result = com.aeriotv.android.core.guide.GuideIngest.attach(
-        programmes, maps, com.aeriotv.android.core.guide.GuideSource.GRID,
-    )
+    val result = com.aeriotv.android.core.guide.GuideIngest.attach(programmes, maps, source)
     if (result.unresolvedCount > 0) {
         // TEMP DIAGNOSTIC (rebuild phase 2): for each sampled unresolved key,
         // say which channel FIELD would have matched it under the old bridge,

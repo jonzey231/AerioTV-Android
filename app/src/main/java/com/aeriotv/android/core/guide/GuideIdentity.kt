@@ -67,17 +67,37 @@ private fun sha1Hex(s: String): String {
 class GuideMatchMaps private constructor(
     val tvgIdToChannels: Map<String, Set<GuideChannelId>>,
     val uuidToChannel: Map<String, GuideChannelId>,
+    /** Channel number -> channel, first wins. XMLTV rows ONLY, after a tvg-id
+     *  miss: Dispatcharr's /output/epg keys programmes by channel number when
+     *  the source has no tvg-id (Apple: numberToChannelID). Never consulted
+     *  for grid rows, so a number can never collide with a grid tvg-id. */
+    val numberToChannel: Map<String, GuideChannelId>,
 ) {
-    /** All canonical ids a raw feed key resolves to; empty when unknown. */
-    fun resolve(rawKey: String): Set<GuideChannelId> {
+    /**
+     * All canonical ids a raw feed key resolves to; empty when unknown.
+     * Precedence mirrors Apple exactly:
+     *   grid row:  tvg-id -> uuid -> drop
+     *   xmltv row: tvg-id -> number -> uuid -> drop
+     */
+    fun resolve(rawKey: String, source: GuideSource = GuideSource.GRID): Set<GuideChannelId> {
         val key = normalize(rawKey)
         if (key.isEmpty()) return emptySet()
         tvgIdToChannels[key]?.let { return it }
+        if (source != GuideSource.GRID) numberToChannel[key]?.let { return setOf(it) }
         uuidToChannel[key]?.let { return setOf(it) }
         return emptySet()
     }
 
-    val isEmpty: Boolean get() = tvgIdToChannels.isEmpty() && uuidToChannel.isEmpty()
+    val isEmpty: Boolean get() = tvgIdToChannels.isEmpty() && uuidToChannel.isEmpty() && numberToChannel.isEmpty()
+
+    /** Raw keys a parser may keep for [source]: the known-channel filter set. */
+    fun knownKeys(source: GuideSource): Set<String> {
+        val out = LinkedHashSet<String>(tvgIdToChannels.size + uuidToChannel.size + numberToChannel.size)
+        out.addAll(tvgIdToChannels.keys)
+        out.addAll(uuidToChannel.keys)
+        if (source != GuideSource.GRID) out.addAll(numberToChannel.keys)
+        return out
+    }
 
     companion object {
         fun normalize(raw: String): String = raw.trim().lowercase()
@@ -85,17 +105,24 @@ class GuideMatchMaps private constructor(
         fun build(channels: List<M3UChannel>): GuideMatchMaps {
             val byTvg = HashMap<String, MutableSet<GuideChannelId>>(channels.size * 2)
             val byUuid = HashMap<String, GuideChannelId>()
+            val byNumber = HashMap<String, GuideChannelId>()
             for (ch in channels) {
                 val id = ch.guideChannelId()
-                val declared = normalize(ch.tvgID.ifBlank { ch.rawAttributes["tvg-id"].orEmpty() })
-                if (declared.isNotEmpty()) byTvg.getOrPut(declared) { linkedSetOf() }.add(id)
+                // Dispatcharr rows carry the server-bound guide key in tvgID and
+                // their own declared tvg-id in rawAttributes; Apple keeps BOTH as
+                // keys for the same channel, so a feed keyed either way lands.
+                for (raw in listOf(ch.tvgID, ch.rawAttributes["tvg-id"].orEmpty())) {
+                    val key = normalize(raw)
+                    if (key.isNotEmpty()) byTvg.getOrPut(key) { linkedSetOf() }.add(id)
+                }
                 if (ch.id.startsWith("disp:")) {
-                    // Dummy-EPG channels are keyed by their uuid in the grid.
                     val uuid = normalize(ch.id.removePrefix("disp:"))
                     if (uuid.isNotEmpty()) byUuid.putIfAbsent(uuid, id)
                 }
+                val number = normalize(ch.channelNumber.orEmpty())
+                if (number.isNotEmpty()) byNumber.putIfAbsent(number, id)
             }
-            return GuideMatchMaps(byTvg, byUuid)
+            return GuideMatchMaps(byTvg, byUuid, byNumber)
         }
     }
 }
@@ -149,7 +176,7 @@ object GuideIngest {
         var unresolved = 0
         val sample = LinkedHashSet<String>()
         for (p in programmes) {
-            val targets = maps.resolve(p.channelId)
+            val targets = maps.resolve(p.channelId, source)
             if (targets.isEmpty()) {
                 unresolved++
                 if (sample.size < unresolvedSample) sample.add(GuideMatchMaps.normalize(p.channelId))

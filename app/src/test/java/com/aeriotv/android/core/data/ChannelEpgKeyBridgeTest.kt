@@ -24,9 +24,10 @@ class ChannelEpgKeyBridgeTest {
         val bridge = buildChannelEpgKeyBridge(listOf(espn, knbc))
         assertEquals(knbc.guideMatchKey, bridge["19"])
         assertEquals(espn.guideMatchKey, bridge["espn.us"])
-        // Channel number "1" and the integer id are not keys any more.
-        assertNull(bridge["1"])
-        assertNull(bridge["15019"])
+        // The integer id is not a key. Channel numbers stay in the parser's
+        // known-key set (Apple's channelMatchKeys) but only attach on XMLTV.
+        assertNull(bridge["19"].takeIf { it == espn.guideMatchKey })
+        assertEquals(espn.guideMatchKey, bridge["1"])
     }
 
     @Test

@@ -34,9 +34,12 @@ class GuideIdentityTest {
         val byChannel = result.resolved.groupBy({ it.channelId }, { it.programme.title })
         assertEquals(listOf("The Kelly Clarkson Show"), byChannel[knbc.guideChannelId()])
         assertEquals(listOf("SportsCenter"), byChannel[espn.guideChannelId()])
-        // "1" is nobody's tvg-id: dropped and counted, never matched by channel number.
+        // "1" is nobody's tvg-id: on the GRID path it is dropped, never matched
+        // by channel number; on an XMLTV path the number fallback applies.
         assertEquals(1, result.unresolvedCount)
         assertEquals(listOf("1"), result.unresolvedKeys)
+        val xml = GuideIngest.attach(listOf(prog("1", "Number One")), maps, GuideSource.PLAYLIST_XMLTV)
+        assertEquals(listOf(espn.guideChannelId()), xml.resolved.map { it.channelId })
     }
 
     @Test
