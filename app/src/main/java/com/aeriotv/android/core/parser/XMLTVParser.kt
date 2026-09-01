@@ -25,6 +25,10 @@ import java.util.zip.GZIPInputStream
  * 0x1F 0x8B) and streams through [GZIPInputStream]. iOS backlog item 1.
  */
 object XMLTVParser {
+    // Compiled once. These used to be constructed inside parseEpisodeNum,
+    // i.e. compiled fresh for every programme in every feed.
+    private val SEASON_EPISODE_REGEX = Regex("[Ss]\\s*(\\d{1,4})\\s*[Ee]\\s*(\\d{1,4})")
+    private val NXM_REGEX = Regex("(\\d{1,4})\\s*[xX]\\s*(\\d{1,4})")
 
     private val xmltvFmtTz: ThreadLocal<SimpleDateFormat> = ThreadLocal.withInitial {
         SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US)
@@ -153,6 +157,8 @@ object XMLTVParser {
         val out = mutableListOf<EPGProgramme>()
 
         var insideProgramme = false
+
+        var skippingProgramme = false
         var channelId = ""
         var startStr = ""
         var stopStr = ""
@@ -193,8 +199,17 @@ object XMLTVParser {
                     text.setLength(0)
                     when (parser.name) {
                         "programme" -> {
-                            insideProgramme = true
                             channelId = parser.getAttributeValue(null, "channel").orEmpty()
+                            // Decide the channel filter HERE, not at the END tag:
+                            // a 224MB national feed is ~99% programmes for channels
+                            // this playlist never matches, and accumulating their
+                            // titles/descs/categories and running the episode-num
+                            // regexes on each cost ~85s of parse for zero output
+                            // (Streamer, 2026-09-01). Skipped programmes now cost
+                            // one attribute read and nothing else.
+                            skippingProgramme = knownChannelKeys != null &&
+                                channelId.trim().lowercase().let { it.isEmpty() || it !in knownChannelKeys }
+                            insideProgramme = !skippingProgramme
                             startStr = parser.getAttributeValue(null, "start").orEmpty()
                             stopStr = parser.getAttributeValue(null, "stop").orEmpty()
                             title = ""
@@ -239,14 +254,9 @@ object XMLTVParser {
                         }
                     }
                     if (parser.name == "programme") {
+                        val skipUnknown = skippingProgramme
                         insideProgramme = false
-                        // Filter-during-parse (P3 #13): drop the programme
-                        // before any further work when its channel key isn't
-                        // one we'd ever match against. The bridge step
-                        // downstream uses the SAME candidate-key shape, so a
-                        // miss here is a guaranteed miss there.
-                        val skipUnknown = knownChannelKeys != null &&
-                            channelId.trim().lowercase().let { it.isEmpty() || it !in knownChannelKeys }
+                        skippingProgramme = false
                         if (!skipUnknown) {
                             val startMs = parseXMLTVDate(startStr)
                             val stopMs = parseXMLTVDate(stopStr)
@@ -300,10 +310,10 @@ object XMLTVParser {
                 ?.substringBefore("/")?.trim()?.toIntOrNull()?.let { it + 1 }
             return part(0) to part(1)
         }
-        Regex("[Ss]\\s*(\\d{1,4})\\s*[Ee]\\s*(\\d{1,4})").find(value)?.let {
+        SEASON_EPISODE_REGEX.find(value)?.let {
             return it.groupValues[1].toIntOrNull() to it.groupValues[2].toIntOrNull()
         }
-        Regex("(\\d{1,4})\\s*[xX]\\s*(\\d{1,4})").find(value)?.let {
+        NXM_REGEX.find(value)?.let {
             return it.groupValues[1].toIntOrNull() to it.groupValues[2].toIntOrNull()
         }
         return null to null
