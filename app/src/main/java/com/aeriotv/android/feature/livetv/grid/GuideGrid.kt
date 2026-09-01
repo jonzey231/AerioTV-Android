@@ -93,6 +93,7 @@ fun GuideGrid(
     var gridFocused by remember { mutableStateOf(false) }
     var leftHoldLatched by remember { mutableStateOf(false) }
     var okLongLatched by remember { mutableStateOf(false) }
+    var okDownSeen by remember { mutableStateOf(false) }
 
     // Lane: keep the focused row two rows below the top edge once past it.
     LaunchedEffect(state.focusRow, state.rows) {
@@ -135,13 +136,16 @@ fun GuideGrid(
                     val cell = state.focusedCell()
                     if (channel == null || cell == null) return@handler true
                     if (down) {
-                        if (repeat == 0) okLongLatched = false
+                        if (repeat == 0) { okLongLatched = false; okDownSeen = true }
                         if (!okLongLatched && repeat >= OK_LONG_REPEATS) {
                             okLongLatched = true
                             onOpenMenu(channel, cell)
                         }
-                    } else if (up && !okLongLatched) {
-                        onPlay(channel, cell)
+                    } else if (up) {
+                        // Only a press that STARTED on the grid plays: the KeyUp of
+                        // the press that opened the tab must not tune a channel.
+                        if (okDownSeen && !okLongLatched) onPlay(channel, cell)
+                        okDownSeen = false
                     }
                     true
                 }
@@ -215,12 +219,15 @@ private fun TimeHeader(
             val slot = 30 * 60_000L
             var t = (vs / slot) * slot
             val ve = vs + (size.width / pxPerMs).toLong()
-            while (t < ve) {
-                val x = (t - vs) * pxPerMs
-                drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-                val label = fmt.format(Date(t)).lowercase(Locale.getDefault())
-                drawText(textMeasurer, label, topLeft = Offset(x + 6f, (size.height - 16.sp.toPx()) / 2f), style = labelStyle, maxLines = 1)
-                t += slot
+            clipRect {
+                while (t < ve) {
+                    val x = (t - vs) * pxPerMs
+                    drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+                    val label = fmt.format(Date(t)).lowercase(Locale.getDefault())
+                    // A label whose slot started before the edge hugs the edge (Apple: clipped cell text aligns to the clipped edge).
+                    drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, (size.height - 16.sp.toPx()) / 2f), style = labelStyle, maxLines = 1)
+                    t += slot
+                }
             }
             drawLine(rule, Offset(0f, size.height - 1f), Offset(size.width, size.height - 1f), strokeWidth = 1f)
         }
