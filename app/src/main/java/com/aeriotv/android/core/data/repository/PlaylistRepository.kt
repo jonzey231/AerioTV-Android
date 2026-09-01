@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -554,7 +555,23 @@ class PlaylistRepository @Inject constructor(
      *  CPU-bound parse. Repository is a @Singleton, so this scope lives for the
      *  process -- layering outlives the screen that triggered it, which is the
      *  point: the user keeps browsing on the grid while history accumulates. */
-    private val layeringScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** Two threads at THREAD_PRIORITY_BACKGROUND for every EPG/playlist
+     *  download + gunzip + parse. simpleperf on the Google TV Streamer
+     *  (2026-08-31) showed this work at normal priority costing ~34% of the
+     *  app's CPU while four multiview decoders ran; the MediaCodec loops spent
+     *  22s of a 20s window combined waiting for a core. Thread priority only
+     *  bites under contention: idle, this parses exactly as fast as
+     *  Dispatchers.Default did; under playback, decoders win every time.
+     *  NOT Dispatchers.IO for the hops either: IO shares Default's
+     *  normal-priority worker pool. */
+    private val layeringDispatcher = java.util.concurrent.Executors.newFixedThreadPool(2) { r ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "EpgWork").apply { priority = Thread.MIN_PRIORITY }
+    }.asCoroutineDispatcher()
+
+    private val layeringScope = CoroutineScope(SupervisorJob() + layeringDispatcher)
 
     /** One layering job per playlist. A refresh while one is running reuses it
      *  rather than downloading the same feeds twice in parallel. */
@@ -759,7 +776,7 @@ class PlaylistRepository @Inject constructor(
         // A large provider EPG is hundreds of thousands of programmes; parsing
         // that XMLTV / mapping the Dispatcharr grid on Main froze the UI for
         // minutes before the guide could paint.
-        withContext(Dispatchers.Default) { runCatching {
+        withContext(layeringDispatcher) { runCatching {
         val sourceType = playlist.resolvedSourceType()
         // Breadcrumbs bracketing base resolution: the 2026-08 hang sat
         // somewhere between the ViewModel's "fetching EPG" line and the first
@@ -912,7 +929,7 @@ class PlaylistRepository @Inject constructor(
      * programmes that have already ended.
      */
     suspend fun loadCachedEpg(playlistId: String): List<EPGProgramme> =
-        withContext(Dispatchers.Default) {
+        withContext(layeringDispatcher) {
             epgProgrammeDao.forPlaylist(playlistId).map { it.toProgramme() }
         }
 
@@ -931,7 +948,7 @@ class PlaylistRepository @Inject constructor(
         fromMillis: Long,
         toMillis: Long,
     ): List<EPGProgramme> =
-        withContext(Dispatchers.Default) {
+        withContext(layeringDispatcher) {
             epgProgrammeDao
                 .forPlaylistInWindow(playlistId, fromMillis, toMillis)
                 .map { it.toProgramme() }
@@ -950,7 +967,7 @@ class PlaylistRepository @Inject constructor(
      * guide-jump path is complete; wire this into the Search VM when #41 lands.
      */
     suspend fun searchEpg(playlistId: String, query: String): List<EPGProgramme> =
-        withContext(Dispatchers.Default) {
+        withContext(layeringDispatcher) {
             val q = query.trim()
             if (q.isBlank()) return@withContext emptyList()
             val like = "%" + q.replace("%", "\\%").replace("_", "\\_") + "%"
@@ -982,7 +999,7 @@ class PlaylistRepository @Inject constructor(
         authoritative: Boolean = true,
     ) {
         val now = System.currentTimeMillis()
-        val entities = withContext(Dispatchers.Default) {
+        val entities = withContext(layeringDispatcher) {
             programmes.map { it.toCacheEntity(playlistId, now) }
         }
         // Catch-up (task #135): MERGE the feed instead of replacing the whole
@@ -1038,7 +1055,7 @@ class PlaylistRepository @Inject constructor(
     suspend fun updateEpgRowsInCache(playlistId: String, programmes: List<EPGProgramme>) {
         if (programmes.isEmpty()) return
         val now = System.currentTimeMillis()
-        val entities = withContext(Dispatchers.Default) {
+        val entities = withContext(layeringDispatcher) {
             programmes.mapNotNull { p ->
                 // Same drawability floor mergeForPlaylist applies; an enriched
                 // row must not sneak past the one filter every write shares.
@@ -1547,7 +1564,7 @@ class PlaylistRepository @Inject constructor(
         url: String,
         suffix: String,
         parse: (java.io.File) -> T,
-    ): T = withContext(Dispatchers.IO) {
+    ): T = withContext(layeringDispatcher) {
         // Task #45 file import: an imported source is a file:// URI pointing
         // at the copy the picker flow stored under filesDir/imports/. No
         // download needed -- parse it in place (refresh re-reads the same
@@ -1654,7 +1671,7 @@ class PlaylistRepository @Inject constructor(
         // Dispatchers.IO for the same main-thread reason as fetchViaTempFile:
         // the Dispatcharr branch decodes multi-MB JSON bodies and sorts/maps
         // the full channel list, and callers arrive on Main.
-    ): List<M3UChannel> = withContext(Dispatchers.IO) { when (sourceType) {
+    ): List<M3UChannel> = withContext(layeringDispatcher) { when (sourceType) {
         SourceType.M3uUrl -> {
             // GH #26: stream the download to a temp file + line-parse it.
             // A full XC-panel M3U runs 100-200MB; fetchBytes materialized

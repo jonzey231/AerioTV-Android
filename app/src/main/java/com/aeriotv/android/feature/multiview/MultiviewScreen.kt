@@ -1700,6 +1700,7 @@ private fun ExoTile(
                 }
             playerRef.value = player
             onPlayer(player)
+            com.aeriotv.android.core.playback.PlaybackActivityTracker.playerCreated()
 
             // Bounded re-prepare on fatal error, copying the cooldown shape
             // of AerioExoPlayerHolder.forceReload (5s cooldown, 3 attempts,
@@ -1842,7 +1843,10 @@ private fun ExoTile(
         onRelease = { _ ->
             Log.i(TAG, "Tile ExoPlayer releasing: $channelName")
             onPlayer(null)
-            playerRef.value?.release()
+            playerRef.value?.let {
+                it.release()
+                com.aeriotv.android.core.playback.PlaybackActivityTracker.playerReleased()
+            }
             playerRef.value = null
         },
     )

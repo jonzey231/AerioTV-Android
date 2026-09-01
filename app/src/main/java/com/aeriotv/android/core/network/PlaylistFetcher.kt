@@ -112,7 +112,108 @@ class PlaylistFetcher @Inject constructor() {
      *  full XC-panel M3U (or a provider XMLTV guide) runs 100-200MB -- the
      *  exact 155MB allocation that OOM'd a 256MB-heap phone while adding a
      *  playlist. The caller owns (and deletes) the file. */
+    /** Raw OkHttp client for [fetchToFile]. Ktor's OkHttp engine pumps the
+     *  response body through a producer coroutine on Dispatchers.Default at
+     *  normal priority, and simpleperf on the Google TV Streamer (2026-08-31)
+     *  showed that pump -- gzip inflate included -- starving four multiview
+     *  decoders while EPG feeds downloaded. A synchronous OkHttp call streams
+     *  and decompresses on the CALLING thread instead, so a caller on the
+     *  background-priority EPG dispatcher does all of this work niced. */
+    private val streamingClient = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        // No call-level total timeout, same reasoning as the ktor config
+        // below: a total cap is a hidden minimum-bandwidth requirement.
+        .build()
+
     suspend fun fetchToFile(
+        url: String,
+        dest: File,
+        userAgent: String? = null,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): File {
+        val reqBuilder = okhttp3.Request.Builder().url(url)
+        if (userAgent != null) reqBuilder.header("User-Agent", userAgent)
+        for ((k, v) in extraHeaders) reqBuilder.header(k, v)
+        streamingClient.newCall(reqBuilder.build()).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException(
+                    "HTTP ${response.code} ${response.message} from ${LogSanitizer.redactUrl(url)}",
+                )
+            }
+            if (response.code == 204) throw emptyBodyError(204, url)
+            val body = response.body ?: throw emptyBodyError(response.code, url)
+            // Fail early and legibly rather than dying with ENOSPC half a
+            // gigabyte in (cheap TV box, nearly-full data partition).
+            // contentLength is -1 when OkHttp transparently gunzips, which
+            // also (correctly) skips the truncation check below -- the
+            // decompressed size is unknowable up front.
+            val expected = body.contentLength()
+            val free = dest.parentFile?.usableSpace ?: Long.MAX_VALUE
+            if (expected > 0 && free < expected + SPACE_HEADROOM_BYTES) {
+                throw IllegalStateException(
+                    "Not enough free space to download this playlist: it needs about " +
+                        "${expected / 1_000_000}MB but only ${free / 1_000_000}MB is free. " +
+                        "Free up some space and try again.",
+                )
+            }
+            if (expected > LARGE_DOWNLOAD_BYTES) {
+                Log.i(TAG, "large download starting: ~${expected / 1_000_000}MB")
+            }
+            var total = 0L
+            var nextMark = PROGRESS_LOG_BYTES
+            // Minimum-throughput floor: readTimeout only fails TOTAL silence; a
+            // middlebox trickling a few bytes every 25s resets it forever.
+            var windowStart = System.currentTimeMillis()
+            var windowBytes = 0L
+            body.byteStream().use { input ->
+                dest.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        total += n
+                        windowBytes += n
+                        val nowMs = System.currentTimeMillis()
+                        if (nowMs - windowStart >= THROUGHPUT_WINDOW_MS) {
+                            if (windowBytes < THROUGHPUT_FLOOR_BYTES) {
+                                throw IllegalStateException(
+                                    "Download stalled: only ${windowBytes / 1024}KB arrived in the " +
+                                        "last ${THROUGHPUT_WINDOW_MS / 1000}s " +
+                                        "(${total / 1_000_000}MB downloaded so far). " +
+                                        "The server is barely responding; try again later.",
+                                )
+                            }
+                            windowStart = nowMs
+                            windowBytes = 0L
+                        }
+                        if (total >= nextMark) {
+                            Log.i(TAG, "download progress: ${total / 1_000_000}MB")
+                            nextMark += PROGRESS_LOG_BYTES
+                        }
+                    }
+                }
+            }
+            if (dest.length() == 0L) throw emptyBodyError(response.code, url)
+            // Content-Length disagreeing with what landed = died mid-stream. A
+            // truncated body parses into a legitimate-looking partial playlist.
+            if (expected > 0 && total < expected) {
+                throw IllegalStateException(
+                    "The playlist download ended early (${total / 1_000_000}MB of " +
+                        "${expected / 1_000_000}MB). The connection dropped part-way " +
+                        "through; please try again.",
+                )
+            }
+            if (expected > LARGE_DOWNLOAD_BYTES) {
+                Log.i(TAG, "large download complete: ${total / 1_000_000}MB")
+            }
+        }
+        return dest
+    }
+
+    @Suppress("unused")
+    private suspend fun fetchToFileViaKtor(
         url: String,
         dest: File,
         userAgent: String? = null,

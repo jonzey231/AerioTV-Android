@@ -714,7 +714,14 @@ class PlaylistViewModel @Inject constructor(
                 }
                 out
             }
-            _state.update { it.copy(epgByChannel = merged, epgHistoryHours = historyHours) }
+            // Re-run the placeholder/gap pass: this merge builds a fresh map
+            // and the gap cells (focusable "No info") must survive it, or the
+            // guide loses them the moment history or layering lands
+            // (Streamer 2026-09-01: holes came back after "layering landed").
+            val filled = withContext(Dispatchers.Default) {
+                withChannelNamePlaceholders(merged, channelsForHistory)
+            }
+            _state.update { it.copy(epgByChannel = filled, epgHistoryHours = historyHours) }
         }
         Log.i(TAG, "mergeEpgHistory: merged ${history.size} past programmes (${retentionDays}d window)")
     }
@@ -995,7 +1002,10 @@ class PlaylistViewModel @Inject constructor(
                                 }
                                 out
                             }
-                            _state.update { it.copy(epgByChannel = merged) }
+                            val filled = withContext(Dispatchers.Default) {
+                                withChannelNamePlaceholders(merged, _state.value.channels)
+                            }
+                            _state.update { it.copy(epgByChannel = filled) }
                         }
                         // Keep the cache enriched too so tints survive a relaunch
                         // -- but write ONLY the rows enrichment actually
@@ -1093,7 +1103,10 @@ class PlaylistViewModel @Inject constructor(
                 // scroll across. Every hole of 5+ minutes inside the guide
                 // window now gets a focusable "No info" placeholder cell, the
                 // same shape the empty-channel placeholder above uses.
-                out[key] = withGapPlaceholders(out.getValue(key), key, start, end)
+                // Strip previous gap cells first so re-running on an already
+                // filled map (history/layering merges) never stacks them.
+                val real = out.getValue(key).filterNot { it.isPlaceholder && it.title == "No info" }
+                out[key] = withGapPlaceholders(real.sortedBy { it.startMillis }, key, start, end)
             }
         }
         return out
