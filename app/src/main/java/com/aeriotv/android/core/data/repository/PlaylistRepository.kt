@@ -88,11 +88,14 @@ private const val MAX_UPSTREAM_EPG_SOURCES = 3
 
 /** Ceiling on ONE upstream feed. A single slow or enormous XMLTV must not be
  *  able to stall the EPG load behind it. */
-private const val UPSTREAM_EPG_PER_SOURCE_MS = 90L * 1000L
+// Raised 90s -> 5min (2026-09-01): the parse now runs on the background-
+// priority EpgWork pool, so a long parse no longer competes with playback;
+// at 90s the 224MB national feed kept 6,575 programmes and dropped the rest.
+private const val UPSTREAM_EPG_PER_SOURCE_MS = 5L * 60L * 1000L
 
 /** Ceiling on the whole upstream-layering phase. This is bonus history, not
  *  the user's guide: past this the grid ships as-is. */
-private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 3L * 60L * 1000L
+private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 12L * 60L * 1000L
 
 /** Orphaned download temp files older than this are swept at startup. The
  *  download path deletes its temp in a `finally`, but a process death mid
