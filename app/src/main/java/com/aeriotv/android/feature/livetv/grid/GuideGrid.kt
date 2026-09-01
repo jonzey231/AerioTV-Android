@@ -57,7 +57,16 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil3.compose.AsyncImage
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.toBitmap
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import java.text.SimpleDateFormat
@@ -94,6 +103,8 @@ fun GuideGrid(
     val hourWidthPx = with(density) { hourWidth.toPx() }
     val pxPerMs = hourWidthPx / 3_600_000f
     val textMeasurer = rememberTextMeasurer(cacheSize = 512)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val logoCache = remember(context) { GuideLogoCache(context.applicationContext) }
     var gridFocused by remember { mutableStateOf(false) }
     var leftHoldLatched by remember { mutableStateOf(false) }
     var okLongLatched by remember { mutableStateOf(false) }
@@ -163,6 +174,7 @@ fun GuideGrid(
         }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalLogoCache provides logoCache) {
     Column(
         modifier = modifier
             .focusRequester(focusRequester)
@@ -193,6 +205,7 @@ fun GuideGrid(
                 )
             }
         }
+    }
     }
 }
 
@@ -274,36 +287,75 @@ private fun GridRow(
     // measuring through TextMeasurer on every draw was ~1 ms per row.
     val textCache = remember(state.rows, row) { HashMap<Long, CellText>() }
     val rangeCache = remember(state.rows, row) { HashMap<Long, String>() }
-    Row(modifier = Modifier.fillMaxWidth().height(rowHeight)) {
-        Rail(channel, railWidth, isFavorite)
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(row) {
-                    detectTapGestures(
-                        onTap = { pos ->
-                            val t = state.viewportStartMs + (pos.x / pxPerMs).toLong()
-                            state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onPlay(channel, cell) }
-                        },
-                        onLongPress = { pos ->
-                            val t = state.viewportStartMs + (pos.x / pxPerMs).toLong()
-                            state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onOpenMenu(channel, cell) }
-                        },
-                    )
+    val railWidthPx = with(LocalDensity.current) { railWidth.toPx() }
+    val logos = LocalLogoCache.current
+    val onSurface = colors.onSurface
+    val tertiary = colors.tertiary
+    val surface = colors.surface
+    val railNumberStyle = TextStyle(color = tertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    val railNameStyle = TextStyle(color = onSurface, fontSize = 11.sp)
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(rowHeight)
+            .pointerInput(row) {
+                detectTapGestures(
+                    onTap = { pos ->
+                        if (pos.x < railWidthPx) { onTapFocus(row, state.rows.cells(row).first()); onPlay(channel, state.rows.cells(row).first()); return@detectTapGestures }
+                        val t = state.viewportStartMs + ((pos.x - railWidthPx) / pxPerMs).toLong()
+                        state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onPlay(channel, cell) }
+                    },
+                    onLongPress = { pos ->
+                        val t = state.viewportStartMs + ((pos.x - railWidthPx).coerceAtLeast(0f) / pxPerMs).toLong()
+                        state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onOpenMenu(channel, cell) }
+                    },
+                )
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures { _, dx ->
+                    state.scrollViewportTo(state.viewportStartMs - (dx / pxPerMs).toLong())
                 }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures { _, dx ->
-                        state.scrollViewportTo(state.viewportStartMs - (dx / pxPerMs).toLong())
-                    }
-                },
-        ) {
-            Trace.beginSection("GuideGrid.row")
+            },
+    ) {
+        Trace.beginSection("GuideGrid.row")
+        // Rail: number, logo, name. Drawn here so a row is ONE draw node and
+        // composing a newly visible row costs nothing measurable.
+        drawRect(surface, topLeft = Offset.Zero, size = Size(railWidthPx, size.height))
+        val number = textCache.getOrPut(RAIL_NUMBER_KEY) {
+            CellText(textMeasurer.measure(channel.channelNumber.orEmpty(), style = railNumberStyle, maxLines = 1, constraints = Constraints(maxWidth = 30.dp.roundToPx())), null)
+        }
+        drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
+        val nameW = (railWidthPx - 44.dp.toPx()).toInt().coerceAtLeast(1)
+        val name = textCache.getOrPut(RAIL_NAME_KEY) {
+            CellText(textMeasurer.measure((if (isFavorite) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
+        }
+        val logo = if (channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
+        val logoH = 24.dp.toPx(); val logoW = 36.dp.toPx()
+        val nameX = 36.dp.toPx() + (nameW - name.title.size.width) / 2f
+        if (logo != null) {
+            val top = (size.height - logoH - name.title.size.height - 2.dp.toPx()) / 2f
+            val scale = minOf(logoW / logo.width, logoH / logo.height)
+            val dw = logo.width * scale; val dh = logo.height * scale
+            drawImage(
+                logo,
+                dstOffset = IntOffset((36.dp.toPx() + (nameW - dw) / 2f).toInt(), (top + (logoH - dh) / 2f).toInt()),
+                dstSize = IntSize(dw.toInt(), dh.toInt()),
+            )
+            drawText(name.title, topLeft = Offset(nameX, top + logoH + 2.dp.toPx()))
+        } else {
+            drawText(name.title, topLeft = Offset(nameX, (size.height - name.title.size.height) / 2f))
+        }
+        drawLine(colors.primary.copy(alpha = 0.2f), Offset(railWidthPx - 0.5f, 0f), Offset(railWidthPx - 0.5f, size.height), strokeWidth = 1.dp.toPx())
+
+        // Programme strip.
+        clipRect(railWidthPx, 0f, size.width, size.height) {
+        translate(left = railWidthPx) {
+            val stripW = size.width - railWidthPx
             val vs = state.viewportStartMs
-            val ve = vs + (size.width / pxPerMs).toLong()
+            val ve = vs + (stripW / pxPerMs).toLong()
             val focusStart = focusedCellStart
             val focusedHere = gridFocused && focusStart != Long.MIN_VALUE
             val cells = state.rows.cells(row)
-            // First cell that can intersect the viewport.
             var i = state.rows.cellIndexAt(row, vs).let { if (it < 0) 0 else it }
             while (i < cells.size) {
                 val cell = cells[i]
@@ -311,7 +363,7 @@ private fun GridRow(
                 i++
                 if (cell.endMillis <= vs) continue
                 val x0 = ((cell.startMillis - vs) * pxPerMs).coerceAtLeast(0f)
-                val x1 = ((cell.endMillis - vs) * pxPerMs).coerceAtMost(size.width)
+                val x1 = ((cell.endMillis - vs) * pxPerMs).coerceAtMost(stripW)
                 val w = (x1 - x0 - seam).coerceAtLeast(MIN_CELL_PX)
                 val focused = focusedHere && cell.startMillis == focusStart
                 val airing = nowMs in cell.startMillis until cell.endMillis
@@ -366,54 +418,47 @@ private fun GridRow(
                 val x = (nowMs - vs) * pxPerMs
                 drawLine(NOW_RED, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
             }
-            drawLine(colors.primary.copy(alpha = 0.25f), Offset(0f, size.height - 0.75f), Offset(size.width, size.height - 0.75f), strokeWidth = 0.75f.dp.toPx())
-            Trace.endSection()
         }
+        }
+        drawLine(colors.primary.copy(alpha = 0.25f), Offset(0f, size.height - 0.75f), Offset(size.width, size.height - 0.75f), strokeWidth = 0.75f.dp.toPx())
+        Trace.endSection()
     }
 }
 
-@Composable
-private fun Rail(channel: M3UChannel, railWidth: Dp, isFavorite: Boolean) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .width(railWidth)
-            .fillMaxSize()
-            .background(colors.surface)
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            channel.channelNumber.orEmpty(),
-            style = MaterialTheme.typography.labelMedium,
-            color = colors.tertiary,
-            maxLines = 1,
-            modifier = Modifier.width(30.dp),
-        )
-        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (channel.tvgLogo.isNotBlank()) {
-                AsyncImage(
-                    model = channel.tvgLogo,
-                    contentDescription = null,
-                    modifier = Modifier.width(36.dp).height(24.dp),
-                )
-            }
-            Text(
-                (if (isFavorite) "★ " else "") + channel.name,
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+/**
+ * Channel logos as bitmaps for the row draw pass. A miss enqueues a Coil
+ * load; when it lands the snapshot map changes and the rows that read the
+ * url redraw. Bounded by the number of distinct logo urls in the playlist.
+ */
+class GuideLogoCache(private val context: android.content.Context) {
+    private val bitmaps = mutableStateMapOf<String, ImageBitmap?>()
+    private val inFlight = HashSet<String>()
+
+    fun bitmap(url: String): ImageBitmap? {
+        bitmaps[url]?.let { return it }
+        if (bitmaps.containsKey(url) || !inFlight.add(url)) return null
+        val request = ImageRequest.Builder(context)
+            .data(url)
+            .size(128, 128)
+            .target(
+                onSuccess = { image -> bitmaps[url] = image.toBitmap().asImageBitmap(); inFlight.remove(url) },
+                onError = { bitmaps[url] = null; inFlight.remove(url) },
             )
-        }
+            .build()
+        SingletonImageLoader.get(context).enqueue(request)
+        return null
     }
 }
+
+val LocalLogoCache = staticCompositionLocalOf<GuideLogoCache> { error("GuideLogoCache not provided") }
 
 private const val LANE_ROWS = 2
 private const val HOLD_LEFT_REPEATS = 4
 private const val OK_LONG_REPEATS = 1
 private const val TIMELINE_JUMP_MS = 2L * 3_600_000L + 30L * 60_000L
 private const val MIN_CELL_PX = 6f
+private const val RAIL_NUMBER_KEY = Long.MIN_VALUE + 1
+private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
 private const val TEXT_MIN_PX = 28f
 private val NOW_RED = Color(0xFFFF4757)
 
