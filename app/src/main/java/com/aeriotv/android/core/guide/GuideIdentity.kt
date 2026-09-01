@@ -183,7 +183,9 @@ object GuideIngest {
         var unresolved = 0
         val sample = LinkedHashSet<String>()
         for (p in programmes) {
-            val targets = maps.resolve(p.channelId, source)
+            // A row tagged at parse time (XMLTV sources) keeps its own source
+            // so number-keyed rows resolve the same way the catalog resolves them.
+            val targets = maps.resolve(p.channelId, if (p.source != GuideSource.GRID) p.source else source)
             if (targets.isEmpty()) {
                 unresolved++
                 if (sample.size < unresolvedSample) sample.add(GuideMatchMaps.normalize(p.channelId))

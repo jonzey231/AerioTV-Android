@@ -29,7 +29,7 @@ class GuideCanonicalKeyTest {
     fun attachCountsCanonicalRowsAsResolved() {
         val maps = GuideMatchMaps.build(listOf(espn))
         val r = GuideIngest.attach(listOf(row(espn.guideChannelId().value), row("espn.us"), row("nope")), maps, GuideSource.GRID)
-        assertEquals(1, r.unresolved)
-        assertEquals(2, r.programmes.size)
+        assertEquals(1, r.unresolvedCount)
+        assertEquals(2, r.resolved.size)
     }
 }
