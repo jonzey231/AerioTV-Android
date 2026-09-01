@@ -63,34 +63,32 @@ val M3UChannel.guideMatchKey: String
 fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
     if (channels.isEmpty()) return emptyMap()
     val out = LinkedHashMap<String, String>(channels.size * 4)
+    // Two passes (Streamer 2026-09-01): a channel's REAL guide id must win over
+    // another channel's incidental numeric id. Importing a second server's
+    // channels put a KNBC with tvg-id "19" next to an ESPN whose Dispatcharr
+    // channel id is 19; single-pass putIfAbsent handed "19" to whichever row
+    // iterated first (ESPN), so KNBC's programmes bridged onto ESPN (Kelly
+    // Clarkson on ESPN HD) and two feeds then fought over ESPN's window,
+    // leaving holes. Pass 1 claims every declared tvg-id; pass 2 adds the
+    // number / id / uuid fallbacks only where nothing real claimed the key.
     for (ch in channels) {
         val canonical = ch.guideMatchKey
-        val candidates = listOfNotNull(
-            ch.tvgID,
+        for (raw in listOfNotNull(ch.tvgID, ch.rawAttributes["tvg-id"])) {
+            val key = raw.trim().lowercase()
+            if (key.isNotEmpty()) out.putIfAbsent(key, canonical)
+        }
+    }
+    for (ch in channels) {
+        val canonical = ch.guideMatchKey
+        val fallbacks = listOfNotNull(
             ch.channelNumber,
             ch.dispatcharrChannelId?.toString(),
             ch.rawAttributes["channel-id"],
             ch.rawAttributes["channel-uuid"],
             ch.rawAttributes["uuid"],
-            // GH #53: a Dispatcharr channel whose EPG assignment is a dummy
-            // source is keyed canonically by its UUID (its grid rows arrive
-            // that way, and siblings sharing one dummy EPGData must not
-            // collapse onto one key). Its own tvg-id is still a valid inbound
-            // key though, so a tvg-id-keyed feed the user configured
-            // separately can still find it.
-            ch.rawAttributes["tvg-id"],
-            // GH #35: Dispatcharr Dummy / no-EPG grid programmes are keyed by
-            // str(channel.uuid) (Dispatcharr apps/epg/api_views.py::EPGGridAPIView),
-            // NOT the channel's real tvg-id. These are exactly the OTA subchannels
-            // that carry major.minor numbers like "5.1", so the guide looked blank
-            // for float-numbered channels. The server UUID lives only inside the
-            // channel id ("disp:<uuid>") and rawAttributes is empty for Dispatcharr
-            // channels, so expose the bare UUID here as a bridge candidate. Mirrors
-            // the iOS uuidToChannelID third key (EPGGuideView.swift:947). Derived
-            // from `id` (not rawAttributes) so cache-restored cold starts bridge too.
             ch.id.takeIf { it.startsWith("disp:") }?.removePrefix("disp:"),
         )
-        for (raw in candidates) {
+        for (raw in fallbacks) {
             val key = raw.trim().lowercase()
             if (key.isNotEmpty()) out.putIfAbsent(key, canonical)
         }

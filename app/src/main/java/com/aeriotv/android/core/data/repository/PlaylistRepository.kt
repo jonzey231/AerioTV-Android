@@ -668,8 +668,17 @@ class PlaylistRepository @Inject constructor(
                                     "(${xmltv.size} programmes)",
                             )
                         }
+                        // Insert-only, ALWAYS (2026-09-01): the Dispatcharr grid is
+                        // the authority for now/future. An authoritative layer
+                        // merge deletes each mentioned channel's covered window
+                        // and re-inserts only what the feed carries, so a feed
+                        // that merely mentions a channel (or lands on it through
+                        // a key collision) wiped the grid's rows and left holes
+                        // (ESPN HD 4:00-6:00 on the Streamer). Layering exists to
+                        // ADD history and detail; dedupSameAiring collapses any
+                        // same-airing overlap downstream.
                         runCatching {
-                            saveEpgToCache(playlistId, xmltv, authoritative = !truncated.get())
+                            saveEpgToCache(playlistId, xmltv, authoritative = false)
                         }.onFailure { Log.w("PlaylistRepo", "layered cache merge failed", it) }
                         collected += xmltv.size
                     }
