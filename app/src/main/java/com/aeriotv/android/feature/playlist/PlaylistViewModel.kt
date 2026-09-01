@@ -796,13 +796,15 @@ class PlaylistViewModel @Inject constructor(
         // list (still hydrating) or an empty cache proves nothing about
         // identity. In-memory pass over what loadCachedEpg already returned
         // and the bridge that was built anyway; no extra queries.
-        val identityStale = withContext(Dispatchers.Default) {
-            if (!hasCache || channelsForBridge.isEmpty()) return@withContext false
-            val canonicalKeys = channelsForBridge.mapTo(HashSet()) { it.guideMatchKey }
-            val cachedKeys = cached.mapTo(HashSet()) { it.channelId }
-            val matched = cachedKeys.count { it in canonicalKeys }
-            matched == 0 || matched < cachedKeys.size * 0.2
-        }
+        // Identity-hash staleness (docs/guide-semantics.md section 4): a
+        // different set of loaded canonical ids means the cache was built for
+        // a different channel list -> refetch. Same set -> paint from cache and
+        // let the age rule decide. Replaces the old "fewer than 20 % of cached
+        // keys match" ratio, which fired on every launch of a merged playlist
+        // and again mid-session after layering landed.
+        val identityHash = com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsForBridge)
+        val storedHash = appPreferences.epgIdentityHash(playlist.id).first()
+        val identityStale = hasCache && channelsForBridge.isNotEmpty() && storedHash != identityHash
         if (identityStale) {
             Log.w(
                 TAG,
@@ -908,6 +910,8 @@ class PlaylistViewModel @Inject constructor(
                 // launch just to log the count -- the actual allocation showed
                 // up in flame graphs as ~250ms of main-thread time.
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes across ${grouped.size} channels")
+                // Stamp the cache with the identity it was built for (see identityStale).
+                runCatching { appPreferences.setEpgIdentityHash(playlist.id, com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsNow)) }
                 // A fetch that yields ZERO programmes is a FAILED fetch, not an
                 // empty guide, and it must not be allowed to overwrite anything.
                 // Installing it wiped the 6,916 rows the cached paint had just
@@ -1154,49 +1158,13 @@ class PlaylistViewModel @Inject constructor(
      * two describe the same airing. O(n) per bucket and allocation-light:
      * a single ArrayList is built only when at least one merge happens.
      */
-    private fun dedupSameAiring(sorted: List<EPGProgramme>): List<EPGProgramme> {
-        if (sorted.size <= 1) return sorted
-        // Cheap two-pass: detect first whether ANY pair merges so the
-        // common (no-dup) case allocates nothing. Most XMLTV feeds and
-        // Xtream xmltv.php fall into this fast path.
-        val needsMerge = run {
-            var i = 0
-            while (i + 1 < sorted.size) {
-                if (isSameAiring(sorted[i], sorted[i + 1])) return@run true
-                i++
-            }
-            false
-        }
-        if (!needsMerge) return sorted
-        val out = ArrayList<EPGProgramme>(sorted.size)
-        for (next in sorted) {
-            val prev = out.lastOrNull()
-            if (prev != null && isSameAiring(prev, next)) {
-                out[out.lastIndex] = mergeProgrammes(prev, next)
-            } else {
-                out.add(next)
-            }
-        }
-        return out
-    }
+    private fun dedupSameAiring(sorted: List<EPGProgramme>): List<EPGProgramme> =
+        com.aeriotv.android.core.guide.GuideMerge.dedup(sorted)
 
     /** Same-airing predicate: 60s start-delta with same non-blank title,
      *  OR > 80% time overlap of the union span. */
-    private fun isSameAiring(a: EPGProgramme, b: EPGProgramme): Boolean {
-        val titleEq = a.title.isNotBlank() &&
-            a.title.trim().equals(b.title.trim(), ignoreCase = false)
-        val startDelta = kotlin.math.abs(a.startMillis - b.startMillis)
-        if (titleEq && startDelta <= 60_000L) return true
-        val overlap = kotlin.math.max(
-            0L,
-            kotlin.math.min(a.endMillis, b.endMillis) -
-                kotlin.math.max(a.startMillis, b.startMillis),
-        )
-        val span = kotlin.math.max(a.endMillis, b.endMillis) -
-            kotlin.math.min(a.startMillis, b.startMillis)
-        if (span <= 0L) return false
-        return overlap.toDouble() / span.toDouble() > 0.8
-    }
+    private fun isSameAiring(a: EPGProgramme, b: EPGProgramme): Boolean =
+        com.aeriotv.android.core.guide.GuideMerge.isDuplicate(a, b)
 
     /** Merge per iOS: keep the longer description, the existing non-blank
      *  category, the existing-else-new dispatcharrProgramId, widen the
@@ -1208,30 +1176,8 @@ class PlaylistViewModel @Inject constructor(
      *  finale but never repeat) and a custom-XMLTV entry (repeat + sub-title) --
      *  so coalesce the optionals and OR the flags, or one source's badges are
      *  silently dropped. */
-    private fun mergeProgrammes(a: EPGProgramme, b: EPGProgramme): EPGProgramme {
-        val title = if (a.title.isNotBlank()) a.title else b.title
-        val description = if (a.description.length >= b.description.length) a.description else b.description
-        val category = a.category.takeIf { it.isNotBlank() } ?: b.category
-        val pid = a.dispatcharrProgramId ?: b.dispatcharrProgramId
-        val start = kotlin.math.min(a.startMillis, b.startMillis)
-        val end = kotlin.math.max(a.endMillis, b.endMillis)
-        return a.copy(
-            title = title,
-            description = description,
-            category = category,
-            startMillis = start,
-            endMillis = end,
-            dispatcharrProgramId = pid,
-            subTitle = a.subTitle ?: b.subTitle,
-            season = a.season ?: b.season,
-            episode = a.episode ?: b.episode,
-            isNew = a.isNew || b.isNew,
-            isLiveBroadcast = a.isLiveBroadcast || b.isLiveBroadcast,
-            isPremiere = a.isPremiere || b.isPremiere,
-            isFinale = a.isFinale || b.isFinale,
-            isRepeat = a.isRepeat || b.isRepeat,
-        )
-    }
+    private fun mergeProgrammes(a: EPGProgramme, b: EPGProgramme): EPGProgramme =
+        com.aeriotv.android.core.guide.GuideMerge.merge(a, b)
 
     /**
      * Catch-up (task #133): resolve a past programme on a catch-up-capable
