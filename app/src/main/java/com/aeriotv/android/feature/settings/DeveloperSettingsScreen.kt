@@ -106,6 +106,7 @@ fun DeveloperSettingsScreen(
         entry.debugLogger()
     }
     val loggingEnabled by settingsVm.debugLoggingEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val guideRendererV2 by settingsVm.guideRendererV2.collectAsStateWithLifecycle(initialValue = false)
 
     val isTv = rememberIsTvDevice()
     var pendingEnable by remember { mutableStateOf(false) }
@@ -155,6 +156,21 @@ fun DeveloperSettingsScreen(
                     onRequestEnable = { pendingEnable = true },
                     onRequestDisable = { pendingDisable = true },
                 )
+            }
+            item("guide_renderer") {
+                SettingsSection(
+                    header = "Live TV guide",
+                    footer = "Rebuilt guide grid: the grid owns focus, rows draw in one pass, " +
+                        "holes are selectable. Device-local; off uses the current guide.",
+                ) {
+                    SettingsToggleRow(
+                        title = "New guide renderer",
+                        subtitle = if (guideRendererV2) "On" else "Off",
+                        leadingIcon = Icons.Filled.BugReport,
+                        checked = guideRendererV2,
+                        onCheckedChange = { settingsVm.setGuideRendererV2(it) },
+                    )
+                }
             }
 
             if (logFileExists) {

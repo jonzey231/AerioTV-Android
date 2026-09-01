@@ -333,6 +333,13 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_GUIDE_TUNE_IN_MINI] = value }
     }
 
+    /** Developer, device-local: the rebuilt guide grid renderer (feature/guide-rebuild phase 3). */
+    val guideRendererV2: Flow<Boolean> =
+        store.data.map { it[KEY_GUIDE_RENDERER_V2] ?: false }
+    suspend fun setGuideRendererV2(value: Boolean) {
+        store.edit { it[KEY_GUIDE_RENDERER_V2] = value }
+    }
+
     /**
      * GH #38: refresh rate to request at app STARTUP (TV boxes), so the
      * display is already on the user's main content rate before the first
@@ -1461,6 +1468,7 @@ class AppPreferences @Inject constructor(
         val KEY_SYNC_REMOTE_CONTROL_MAP = booleanPreferencesKey("sync_remote_control_map")
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
+        val KEY_GUIDE_RENDERER_V2 = booleanPreferencesKey("guide_renderer_v2")
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
         val KEY_MATCH_CONTENT_RESOLUTION = booleanPreferencesKey("match_content_resolution")

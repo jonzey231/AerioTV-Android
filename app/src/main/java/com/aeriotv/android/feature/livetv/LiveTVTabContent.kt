@@ -52,6 +52,7 @@ fun LiveTVTabContent(
 ) {
     val formFactor = rememberLiveTvFormFactor()
     val stored by settingsVm.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
+    val guideRendererV2 by settingsVm.guideRendererV2.collectAsStateWithLifecycle(initialValue = false)
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
     // Per-device-type EPG badge visibility, provided to the guide / list / info
     // sheet below so they hide the badges when the user turns them off.
@@ -120,7 +121,19 @@ fun LiveTVTabContent(
                 onPlayCatchup = onPlayCatchup,
             )
         }
-        LiveTVViewMode.Guide -> GuideScreen(
+        LiveTVViewMode.Guide -> if (guideRendererV2) {
+            com.aeriotv.android.feature.livetv.grid.GuideScreen2(
+                onChannelClick = onChannelClick,
+                viewModel = viewModel,
+                modifier = modifier,
+                viewMode = mode,
+                canToggleViewMode = canToggle,
+                onToggleViewMode = toggleMode,
+                onLaunchMultiview = onLaunchMultiview,
+                onOpenSearch = onOpenSearch,
+                onPlayCatchup = onPlayCatchup,
+            )
+        } else GuideScreen(
             onChannelClick = onChannelClick,
             viewModel = viewModel,
             modifier = modifier,
