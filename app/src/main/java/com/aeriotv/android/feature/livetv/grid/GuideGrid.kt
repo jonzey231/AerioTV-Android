@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -96,9 +97,12 @@ fun GuideGrid(
     var okDownSeen by remember { mutableStateOf(false) }
 
     // Lane: keep the focused row two rows below the top edge once past it.
-    LaunchedEffect(state.focusRow, state.rows) {
-        val row = state.focusRow
-        if (row >= 0) listState.scrollToItem((row - LANE_ROWS).coerceAtLeast(0))
+    // snapshotFlow, not effect keys: reading focusRow in composition would
+    // recompose the whole grid (and every visible row) on each D-pad press.
+    LaunchedEffect(state, listState) {
+        snapshotFlow { state.focusRow to state.rows }.collect { (row, _) ->
+            if (row >= 0) listState.scrollToItem((row - LANE_ROWS).coerceAtLeast(0))
+        }
     }
 
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
