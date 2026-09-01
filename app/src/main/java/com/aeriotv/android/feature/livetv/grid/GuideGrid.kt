@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -255,6 +256,12 @@ private fun GridRow(
 ) {
     val channel = state.rows.channel(row)
     val colors = MaterialTheme.colorScheme
+    // Only the row that gains or loses focus redraws on a vertical move:
+    // derivedStateOf notifies the draw scope only when THIS row's answer
+    // changes, instead of every visible row re-recording its cells.
+    val focusedCellStart by remember(state, row) {
+        derivedStateOf { if (state.focusRow == row) state.focusCellStartMs else Long.MIN_VALUE }
+    }
     val titleStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     val titleDimStyle = titleStyle.copy(color = Color.White.copy(alpha = 0.55f), fontWeight = FontWeight.Normal)
     val timeStyle = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
@@ -287,8 +294,8 @@ private fun GridRow(
             Trace.beginSection("GuideGrid.row")
             val vs = state.viewportStartMs
             val ve = vs + (size.width / pxPerMs).toLong()
-            val focusedHere = gridFocused && state.focusRow == row
-            val focusStart = state.focusCellStartMs
+            val focusStart = focusedCellStart
+            val focusedHere = gridFocused && focusStart != Long.MIN_VALUE
             val cells = state.rows.cells(row)
             // First cell that can intersect the viewport.
             var i = state.rows.cellIndexAt(row, vs).let { if (it < 0) 0 else it }

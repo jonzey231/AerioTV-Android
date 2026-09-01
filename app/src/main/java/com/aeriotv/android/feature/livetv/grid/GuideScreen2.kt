@@ -52,6 +52,8 @@ import com.aeriotv.android.core.tv.TvActionMenuDialog
 import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.collections.CollectionsViewModel
+import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
+import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
 import com.aeriotv.android.feature.livetv.EmptyGroupNotice
 import com.aeriotv.android.feature.livetv.GroupSortMode
@@ -103,6 +105,9 @@ fun GuideScreen2(
     val remindersVm: RemindersViewModel = hiltViewModel()
     val collectionsVm: CollectionsViewModel = hiltViewModel()
     val multiviewStore = rememberMultiviewStoreHandle()
+    val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
+    val miniState by miniPlayerVm.state.collectAsStateWithLifecycle()
+    val miniActive = miniState is MiniPlayerSession.State.Active
     val isTv = rememberLiveTvFormFactor().isTv
     val context = LocalContext.current
     val canRecordToServer = LocalCanRecordToServer.current
@@ -182,7 +187,10 @@ fun GuideScreen2(
         }
     }
 
-    BackHandler(enabled = menuFor == null && programInfoTarget == null && recordTarget == null) {
+    // With a mini player up, Back belongs to the player host (expand / close),
+    // exactly as the old guide: the ladder must never finish the Activity
+    // while a stream is playing.
+    BackHandler(enabled = !miniActive && menuFor == null && programInfoTarget == null && recordTarget == null) {
         when (grid.back(nowMs)) {
             GuideGridState.BackStep.RESTORED_NOW_AND_TOP, GuideGridState.BackStep.TOP -> Unit
             GuideGridState.BackStep.NONE -> {
