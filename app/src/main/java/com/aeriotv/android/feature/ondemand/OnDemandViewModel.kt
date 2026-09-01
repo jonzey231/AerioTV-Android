@@ -355,7 +355,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 },
                 onFailure = { t ->
-                    Log.w(TAG, "VOD movies load-more failed", t)
+                    warnUnlessCancelled("VOD movies load-more failed", t)
                     _state.update { it.copy(isLoadingMore = false) }
                 },
             )
@@ -390,7 +390,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 },
                 onFailure = { t ->
-                    Log.w(TAG, "VOD series load-more failed", t)
+                    warnUnlessCancelled("VOD series load-more failed", t)
                     _state.update { it.copy(isLoadingMoreSeries = false) }
                 },
             )
@@ -481,7 +481,7 @@ class OnDemandViewModel @Inject constructor(
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                         dispatcharrClient.getVODMoviesByCategory(base, key, catName)
                     }
-                }.onFailure { Log.w(TAG, "VOD movies cat='$catName' failed; continuing", it) }.getOrNull()
+                }.onFailure { warnUnlessCancelled("VOD movies cat='$catName' failed; continuing", it) }.getOrNull()
                 if (firstPage != null) {
                     // Presence is the category's own signal, independent of the
                     // row cap and the shared `seen` de-dup set.
@@ -509,7 +509,7 @@ class OnDemandViewModel @Inject constructor(
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                             dispatcharrClient.getVODMoviesPage(captured, key)
                         }
-                    }.onFailure { Log.w(TAG, "VOD movies cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
+                    }.onFailure { warnUnlessCancelled("VOD movies cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
                     if (p == null) break
                     p.results.forEach { m ->
                         if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
@@ -589,13 +589,13 @@ class OnDemandViewModel @Inject constructor(
                         }
                     }
                     nextResult.exceptionOrNull()?.let { t ->
-                        Log.w(TAG, "VOD movies next-page fetch failed; stopping", t)
+                        warnUnlessCancelled("VOD movies next-page fetch failed; stopping", t)
                         nextUrl = null
                     }
                 }
             },
             onFailure = { t ->
-                Log.w(TAG, "getVODMovies failed", t)
+                warnUnlessCancelled("getVODMovies failed", t)
                 _state.update { it.copy(isLoading = false, error = t.message ?: t::class.simpleName) }
             },
         )
@@ -663,7 +663,7 @@ class OnDemandViewModel @Inject constructor(
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                         dispatcharrClient.getVODSeriesByCategory(base, key, catName)
                     }
-                }.onFailure { Log.w(TAG, "VOD series cat='$catName' failed; continuing", it) }.getOrNull()
+                }.onFailure { warnUnlessCancelled("VOD series cat='$catName' failed; continuing", it) }.getOrNull()
                 if (firstPage != null) {
                     if (firstPage.count > 0 || firstPage.results.isNotEmpty()) groupsWithContent += catName
                     if (!capped) {
@@ -685,7 +685,7 @@ class OnDemandViewModel @Inject constructor(
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                             dispatcharrClient.getVODSeriesPage(captured, key)
                         }
-                    }.onFailure { Log.w(TAG, "VOD series cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
+                    }.onFailure { warnUnlessCancelled("VOD series cat='$catName' next-page failed; stopping cat", it) }.getOrNull()
                     if (p == null) break
                     p.results.forEach { s ->
                         if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
@@ -750,13 +750,13 @@ class OnDemandViewModel @Inject constructor(
                         }
                     }
                     nextResult.exceptionOrNull()?.let { t ->
-                        Log.w(TAG, "VOD series next-page fetch failed; stopping", t)
+                        warnUnlessCancelled("VOD series next-page fetch failed; stopping", t)
                         nextUrl = null
                     }
                 }
             },
             onFailure = { t ->
-                Log.w(TAG, "getVODSeries failed", t)
+                warnUnlessCancelled("getVODSeries failed", t)
                 _state.update { it.copy(isLoadingSeries = false, seriesError = t.message ?: t::class.simpleName) }
             },
         )
@@ -815,7 +815,7 @@ class OnDemandViewModel @Inject constructor(
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.getVODCategories(base, key)
             }
-        }.onFailure { Log.w(TAG, "getVODCategories failed; proceeding without groups", it) }
+        }.onFailure { warnUnlessCancelled("getVODCategories failed; proceeding without groups", it) }
             .getOrDefault(emptyList())
             .filter { it.enabledOnAnyAccount }
         val movieCats = categories.filter { it.categoryType == "movie" }
@@ -960,7 +960,7 @@ class OnDemandViewModel @Inject constructor(
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.getVODMoviesPage(url, key)
             }
-        }.onFailure { Log.w(TAG, "KnownFor movie search failed", it) }
+        }.onFailure { warnUnlessCancelled("KnownFor movie search failed", it) }
             .getOrNull()?.results ?: return null
         val match = results.firstOrNull { !it.tmdbId.isNullOrBlank() && it.tmdbId == item.id }
             ?: results.firstOrNull { normalizeVodTitle(it.displayName) == wantTitle }
@@ -991,7 +991,7 @@ class OnDemandViewModel @Inject constructor(
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.getVODSeriesPage(url, key)
             }
-        }.onFailure { Log.w(TAG, "KnownFor series search failed", it) }
+        }.onFailure { warnUnlessCancelled("KnownFor series search failed", it) }
             .getOrNull()?.results ?: return null
         val match = results.firstOrNull { !it.tmdbId.isNullOrBlank() && it.tmdbId == item.id }
             ?: results.firstOrNull { normalizeVodTitle(it.displayName) == wantTitle }
@@ -1099,7 +1099,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 },
                 onFailure = { t ->
-                    Log.w(TAG, "getMovieProviderInfo($movieId) failed", t)
+                    warnUnlessCancelled("getMovieProviderInfo($movieId) failed", t)
                     _state.update { it.copy(movieProviderInfoLoading = it.movieProviderInfoLoading - movieId) }
                 },
             )
@@ -1131,7 +1131,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 },
                 onFailure = { t ->
-                    Log.w(TAG, "getSeriesProviderInfo($seriesId) failed", t)
+                    warnUnlessCancelled("getSeriesProviderInfo($seriesId) failed", t)
                     _state.update { it.copy(seriesProviderInfoLoading = it.seriesProviderInfoLoading - seriesId) }
                 },
             )
@@ -1466,7 +1466,7 @@ class OnDemandViewModel @Inject constructor(
                         st.copy(seriesProviderInfo = st.seriesProviderInfo + (seriesId to info))
                     }
                 }.onFailure { t ->
-                    Log.w(TAG, "prime getSeriesProviderInfo($seriesId) failed; loading episodes anyway", t)
+                    warnUnlessCancelled("prime getSeriesProviderInfo($seriesId) failed; loading episodes anyway", t)
                 }
             }
             _state.update { it.copy(seriesProviderInfoLoading = it.seriesProviderInfoLoading - seriesId) }
@@ -1485,7 +1485,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 },
                 onFailure = { t ->
-                    Log.w(TAG, "getSeriesEpisodes($seriesId) failed", t)
+                    warnUnlessCancelled("getSeriesEpisodes($seriesId) failed", t)
                     _state.update { st ->
                         st.copy(
                             episodesLoadingFor = st.episodesLoadingFor - seriesId,
@@ -1697,9 +1697,9 @@ class OnDemandViewModel @Inject constructor(
         // -uinely 500s / returns empty for the unfiltered query) rather than the
         // normal path. iOS never walks categories at all.
         val movieFast = runCatching { xtreamApi.getVodStreams(base, user, pass) }
-            .onFailure { Log.w(TAG, "XC getVodStreams failed", it) }.getOrDefault(emptyList())
+            .onFailure { warnUnlessCancelled("XC getVodStreams failed", it) }.getOrDefault(emptyList())
         val seriesFast = runCatching { xtreamApi.getSeries(base, user, pass) }
-            .onFailure { Log.w(TAG, "XC getSeries failed", it) }.getOrDefault(emptyList())
+            .onFailure { warnUnlessCancelled("XC getSeries failed", it) }.getOrDefault(emptyList())
         // Also fetch the full category lists (id + name) so each movie / series
         // can be tagged with its group display name -- the Manage Groups filter
         // sheet on the On Demand tab needs human-readable group names. Cheap
@@ -1707,9 +1707,9 @@ class OnDemandViewModel @Inject constructor(
         // probe succeeded. Stashed on the VM so the lazy per-category walk
         // (loadXtreamItemsIfNeeded) re-uses the same lookup.
         val movieCats = runCatching { xtreamApi.getVodCategories(base, user, pass) }
-            .onFailure { Log.w(TAG, "XC getVodCategories failed", it) }.getOrDefault(emptyList())
+            .onFailure { warnUnlessCancelled("XC getVodCategories failed", it) }.getOrDefault(emptyList())
         val seriesCats = runCatching { xtreamApi.getSeriesCategories(base, user, pass) }
-            .onFailure { Log.w(TAG, "XC getSeriesCategories failed", it) }.getOrDefault(emptyList())
+            .onFailure { warnUnlessCancelled("XC getSeriesCategories failed", it) }.getOrDefault(emptyList())
         movieCategoryNames = movieCats.associate { it.id to it.name }
         seriesCategoryNames = seriesCats.associate { it.id to it.name }
         if (movieFast.isNotEmpty()) {
@@ -1833,7 +1833,7 @@ class OnDemandViewModel @Inject constructor(
                 }
             },
             onFailure = { t ->
-                Log.w(TAG, "XC getSeriesEpisodes($seriesId) failed", t)
+                warnUnlessCancelled("XC getSeriesEpisodes($seriesId) failed", t)
                 _state.update { st ->
                     st.copy(
                         episodesLoadingFor = st.episodesLoadingFor - seriesId,
@@ -1904,4 +1904,14 @@ class OnDemandViewModel @Inject constructor(
          *  is an exact display title, so a small page is plenty. */
         const val KNOWN_FOR_SEARCH_PAGE_SIZE = 25
     }
+
+    /** VOD category fetches are cancelled wholesale whenever the user leaves
+     *  On Demand mid-load; each cancelled job used to log a full
+     *  JobCancellationException stack at W (864 lines in one release-build
+     *  session, 2026-09-01). Cancellation is not a failure: stay silent. */
+    private fun warnUnlessCancelled(message: String, t: Throwable) {
+        if (t is kotlinx.coroutines.CancellationException) return
+        Log.w(TAG, message, t)
+    }
+
 }
