@@ -1085,9 +1085,53 @@ class PlaylistViewModel @Inject constructor(
                         isPlaceholder = true,
                     ),
                 )
+            } else {
+                // Gap filler (Streamer 2026-09-01): a channel WITH programmes but
+                // a hole in its schedule (ESPN HD blank 4:00-6:00, NFL Network
+                // 4:00-5:00) rendered nothing for the hole, so the D-pad could
+                // not land on it - the user had to move to a neighbour row and
+                // scroll across. Every hole of 5+ minutes inside the guide
+                // window now gets a focusable "No info" placeholder cell, the
+                // same shape the empty-channel placeholder above uses.
+                out[key] = withGapPlaceholders(out.getValue(key), key, start, end)
             }
         }
         return out
+    }
+
+    private fun withGapPlaceholders(
+        sorted: List<EPGProgramme>,
+        key: String,
+        windowStart: Long,
+        windowEnd: Long,
+    ): List<EPGProgramme> {
+        val minGapMs = 5 * 60_000L
+        val out = ArrayList<EPGProgramme>(sorted.size + 4)
+        var cursor = windowStart
+        var added = 0
+        fun gap(from: Long, to: Long) {
+            if (to - from < minGapMs) return
+            added++
+            out.add(
+                EPGProgramme(
+                    channelId = key,
+                    title = "No info",
+                    description = "",
+                    startMillis = from,
+                    endMillis = to,
+                    category = "",
+                    isPlaceholder = true,
+                ),
+            )
+        }
+        for (p in sorted) {
+            if (p.startMillis > cursor) gap(cursor, minOf(p.startMillis, windowEnd))
+            out.add(p)
+            if (p.endMillis > cursor) cursor = p.endMillis
+        }
+        if (cursor < windowEnd) gap(cursor, windowEnd)
+        // Gaps are inserted in walk order, so `out` is already start-sorted.
+        return if (added == 0) sorted else out
     }
 
     /**
