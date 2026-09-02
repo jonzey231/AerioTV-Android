@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -82,21 +83,21 @@ fun TvActionMenuDialog(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-            modifier = Modifier.width(300.dp),
+            modifier = Modifier.width(250.dp),
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 22.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 10.dp),
+                    modifier = Modifier.padding(bottom = 8.dp),
                 )
                 actions.forEach { action ->
                     TvMenuCapsule(
@@ -137,7 +138,10 @@ private fun TvMenuCapsule(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(38.dp)
+            // Clip BEFORE clickable so the focus/press highlight follows the
+            // capsule instead of painting a square behind the ring.
+            .clip(RoundedCornerShape(19.dp))
             .onFocusChanged {
                 focused = it.isFocused
                 if (!it.isFocused) okLatched = false
@@ -160,10 +164,10 @@ private fun TvMenuCapsule(
             // (2dp white border) marks the focused capsule like everywhere else.
             .background(
                 color = Color.White.copy(alpha = if (focused) 0.14f else 0.08f),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(19.dp),
             )
             .then(
-                if (focused) Modifier.border(2.dp, Color.White, RoundedCornerShape(24.dp)) else Modifier,
+                if (focused) Modifier.border(2.dp, Color.White, RoundedCornerShape(19.dp)) else Modifier,
             )
             .clickable(enabled = enabled, onClick = onActivate),
         verticalAlignment = Alignment.CenterVertically,
@@ -171,7 +175,7 @@ private fun TvMenuCapsule(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.bodyMedium,
             color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
