@@ -70,6 +70,8 @@ import coil3.request.ImageRequest
 import coil3.toBitmap
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.remote.GuideRemoteAction
+import com.aeriotv.android.core.remote.RemoteSlot
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -97,7 +99,12 @@ fun GuideGrid(
     onOpenMenu: (M3UChannel, EPGProgramme) -> Unit,
     /** UP at the top row; return true if focus was taken. */
     onLeaveTop: () -> Boolean,
-    onHoldLeft: () -> Unit,
+    /** Remote map lookup for a slot (media keys, held Left/Right). */
+    remoteAction: (RemoteSlot) -> GuideRemoteAction,
+    /** Sidebar group mode: a held Left always opens the docked group menu, whatever the map says. */
+    holdLeftOpensGroups: Boolean,
+    /** Host-level actions (group pills, mini player, program info, search). Return true if handled. */
+    onHostAction: (GuideRemoteAction) -> Boolean,
     focusRequester: FocusRequester,
     listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier,
@@ -110,6 +117,7 @@ fun GuideGrid(
     val logoCache = remember(context) { GuideLogoCache(context.applicationContext) }
     var gridFocused by remember { mutableStateOf(false) }
     var leftHoldLatched by remember { mutableStateOf(false) }
+    var rightHoldLatched by remember { mutableStateOf(false) }
     var okLongLatched by remember { mutableStateOf(false) }
     var okDownSeen by remember { mutableStateOf(false) }
 
@@ -134,6 +142,18 @@ fun GuideGrid(
         }
     }
 
+    val runAction: (GuideRemoteAction) -> Boolean = { action ->
+        when (action) {
+            GuideRemoteAction.JUMP_TO_NOW -> { state.anchorToNow(nowMs); true }
+            GuideRemoteAction.JUMP_TO_TOP -> { state.anchorToNow(nowMs); state.focusRowAt(0); true }
+            GuideRemoteAction.TIMELINE_BACK -> { state.panBy(-(state.viewportDurationMs * 0.85f).toLong()); true }
+            GuideRemoteAction.TIMELINE_FORWARD -> { state.panBy((state.viewportDurationMs * 0.85f).toLong()); true }
+            GuideRemoteAction.PAGE_UP -> { state.moveRows(-pageRows(listState)); true }
+            GuideRemoteAction.PAGE_DOWN -> { state.moveRows(+pageRows(listState)); true }
+            GuideRemoteAction.NONE -> true
+            else -> onHostAction(action)
+        }
+    }
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
         val repeat = (event.nativeKeyEvent as? AndroidKeyEvent)?.repeatCount ?: 0
         val down = event.type == KeyEventType.KeyDown
@@ -147,23 +167,39 @@ fun GuideGrid(
                     true
                 }
                 Key.DirectionDown -> { if (down) state.moveRows(+1); true }
-                Key.DirectionRight -> { if (down) state.pan(+1); true }
+                Key.DirectionRight -> {
+                    if (down) {
+                        if (repeat == 0) rightHoldLatched = false
+                        if (!rightHoldLatched && repeat >= HOLD_LEFT_REPEATS) {
+                            rightHoldLatched = true
+                            runAction(remoteAction(RemoteSlot.RIGHT_LONG))
+                        } else if (repeat == 0) {
+                            state.pan(+1)
+                        }
+                    }
+                    true
+                }
                 Key.DirectionLeft -> {
                     if (down) {
                         if (repeat == 0) leftHoldLatched = false
                         if (!leftHoldLatched && repeat >= HOLD_LEFT_REPEATS) {
                             leftHoldLatched = true
-                            onHoldLeft()
+                            // Held Left is the group menu unless the user mapped it away.
+                            val mapped = if (holdLeftOpensGroups) GuideRemoteAction.FOCUS_GROUP_PILLS else remoteAction(RemoteSlot.LEFT_LONG)
+                            runAction(if (mapped == GuideRemoteAction.NONE) GuideRemoteAction.FOCUS_GROUP_PILLS else mapped)
                         } else if (repeat == 0) {
                             state.pan(-1)
                         }
                     }
                     true
                 }
-                Key.PageUp, Key.ChannelUp -> { if (down) state.moveRows(-pageRows(listState)); true }
-                Key.PageDown, Key.ChannelDown -> { if (down) state.moveRows(+pageRows(listState)); true }
-                Key.MediaRewind, Key.MediaPrevious -> { if (down) state.panBy(-TIMELINE_JUMP_MS); true }
-                Key.MediaFastForward, Key.MediaNext -> { if (down) state.panBy(+TIMELINE_JUMP_MS); true }
+                Key.PageUp -> { if (down) state.moveRows(-pageRows(listState)); true }
+                Key.PageDown -> { if (down) state.moveRows(+pageRows(listState)); true }
+                Key.ChannelUp -> { if (down && repeat == 0) runAction(remoteAction(RemoteSlot.CHANNEL_UP).orDefault(GuideRemoteAction.PAGE_UP)); true }
+                Key.ChannelDown -> { if (down && repeat == 0) runAction(remoteAction(RemoteSlot.CHANNEL_DOWN).orDefault(GuideRemoteAction.PAGE_DOWN)); true }
+                Key.MediaRewind, Key.MediaPrevious -> { if (down && repeat == 0) runAction(remoteAction(RemoteSlot.REWIND).orDefault(GuideRemoteAction.TIMELINE_BACK)); true }
+                Key.MediaFastForward, Key.MediaNext -> { if (down && repeat == 0) runAction(remoteAction(RemoteSlot.FFWD).orDefault(GuideRemoteAction.TIMELINE_FORWARD)); true }
+                Key.MediaPlayPause, Key.MediaPlay -> { if (down && repeat == 0) runAction(remoteAction(RemoteSlot.PLAY_PAUSE).orDefault(GuideRemoteAction.RESUME_PLAYER)); true }
                 Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                     val channel = state.focusRow.takeIf { it >= 0 }?.let { state.rows.channel(it) }
                     val cell = state.focusedCell()
@@ -497,7 +533,7 @@ val LocalLogoCache = staticCompositionLocalOf<GuideLogoCache> { error("GuideLogo
 private const val LANE_ROWS = 2
 private const val HOLD_LEFT_REPEATS = 4
 private const val OK_LONG_REPEATS = 1
-private const val TIMELINE_JUMP_MS = 2L * 3_600_000L + 30L * 60_000L
+private fun GuideRemoteAction.orDefault(default: GuideRemoteAction) = if (this == GuideRemoteAction.NONE) default else this
 private const val MIN_CELL_PX = 6f
 private const val RAIL_NUMBER_KEY = Long.MIN_VALUE + 1
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2

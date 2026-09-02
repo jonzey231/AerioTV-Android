@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
@@ -57,6 +59,7 @@ import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
 import com.aeriotv.android.feature.livetv.EmptyGroupNotice
 import com.aeriotv.android.feature.livetv.GroupSortMode
+import com.aeriotv.android.feature.livetv.GuideGroupSidebarPane
 import com.aeriotv.android.feature.livetv.LiveTVViewMode
 import com.aeriotv.android.feature.livetv.ProgramInfoSheet
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
@@ -139,6 +142,11 @@ fun GuideScreen2(
     val reminderKeys = remember(reminders) { reminders.mapTo(HashSet()) { it.reminderKey } }
     val collections by collectionsVm.collections.collectAsStateWithLifecycle(initialValue = emptyList())
     val stagedMultiview by multiviewStore.selected.collectAsStateWithLifecycle(initialValue = emptyList())
+    val groupSelector by settingsVm.guideGroupSelector.collectAsStateWithLifecycle(initialValue = "pills")
+    val sidebarGroupMode = isTv && groupSelector == "sidebar"
+    val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
+    var groupSidebarOpen by remember { mutableStateOf(false) }
+    var sidebarOriginalGroup by remember { mutableStateOf<String?>(null) }
 
     val tvComfortScale = if (isTv) displayScaleLiveTv.coerceIn(0.85f, 1.75f) else 1f
     val fontScale = LocalConfiguration.current.fontScale
@@ -159,6 +167,14 @@ fun GuideScreen2(
         listOf(PlaylistViewModel.ALL_GROUPS) + allGroupNames.filter {
             it !in hiddenGroups && !it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
         }
+    }
+    // Pills: collections placed at the beginning, then the groups, then the rest.
+    val pillItems = remember(groups, collections) {
+        val begin = collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING }
+        val end = collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING }
+        begin.map { ChannelCollection.token(it.id) to it.name } +
+            groups.map { it to it } +
+            end.map { ChannelCollection.token(it.id) to it.name }
     }
     val displayChannels by produceState(
         initialValue = computeDisplayChannels(
@@ -201,10 +217,40 @@ fun GuideScreen2(
         }
     }
 
+    val openGroupMenu: () -> Boolean = {
+        if (sidebarGroupMode) {
+            sidebarOriginalGroup = state.selectedGroup
+            groupSidebarOpen = true
+            true
+        } else runCatching { pillsFocus.requestFocus() }.isSuccess
+    }
+    val hostAction: (com.aeriotv.android.core.remote.GuideRemoteAction) -> Boolean = { action ->
+        when (action) {
+            com.aeriotv.android.core.remote.GuideRemoteAction.FOCUS_GROUP_PILLS -> openGroupMenu()
+            com.aeriotv.android.core.remote.GuideRemoteAction.RESUME_PLAYER -> { if (miniActive) miniPlayerVm.session.requestResume(); true }
+            com.aeriotv.android.core.remote.GuideRemoteAction.CLOSE_MINI_PLAYER -> { if (miniActive) miniPlayerVm.session.dismiss(); true }
+            com.aeriotv.android.core.remote.GuideRemoteAction.PROGRAM_INFO -> {
+                val row = grid.focusRow; val cell = grid.focusedCell()
+                if (row >= 0 && cell != null && !cell.isPlaceholder) {
+                    val ch = grid.rows.channel(row)
+                    programInfoTarget = cell.toInfoTarget(ch.name, ch.dispatcharrChannelId)
+                }
+                true
+            }
+            com.aeriotv.android.core.remote.GuideRemoteAction.OPEN_SEARCH -> { onOpenSearch(); true }
+            else -> false
+        }
+    }
+    BackHandler(enabled = groupSidebarOpen) {
+        sidebarOriginalGroup?.takeIf { it != state.selectedGroup }?.let { viewModel.onGroupSelected(it) }
+        groupSidebarOpen = false
+        runCatching { gridFocus.requestFocus() }
+    }
+
     // With a mini player up, Back belongs to the player host (expand / close),
     // exactly as the old guide: the ladder must never finish the Activity
     // while a stream is playing.
-    BackHandler(enabled = !miniActive && menuFor == null && programInfoTarget == null && recordTarget == null) {
+    BackHandler(enabled = !miniActive && !groupSidebarOpen && menuFor == null && programInfoTarget == null && recordTarget == null) {
         when (grid.back(nowMs)) {
             GuideGridState.BackStep.RESTORED_NOW_AND_TOP, GuideGridState.BackStep.TOP -> Unit
             GuideGridState.BackStep.NONE -> {
@@ -216,9 +262,24 @@ fun GuideScreen2(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        GroupPills(
+    Row(modifier = modifier.fillMaxSize()) {
+    if (groupSidebarOpen) {
+        GuideGroupSidebarPane(
             groups = groups,
+            selectedToken = state.selectedGroup,
+            topOffset = 0.dp,
+            onPreview = { token -> viewModel.onGroupSelected(token) },
+            onCommit = { token ->
+                if (token != state.selectedGroup) viewModel.onGroupSelected(token)
+                groupSidebarOpen = false
+                runCatching { gridFocus.requestFocus() }
+            },
+            hiddenGroupCount = hiddenGroups.size,
+        )
+    }
+    Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+        if (!sidebarGroupMode) GroupPills(
+            items = pillItems,
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
             firstPillFocus = pillsFocus,
@@ -248,12 +309,15 @@ fun GuideScreen2(
                     else onChannelClick(channel)
                 },
                 onOpenMenu = { channel, cell -> menuFor = channel to cell; menuGuard.arm() },
-                onLeaveTop = { runCatching { pillsFocus.requestFocus() }.isSuccess },
-                onHoldLeft = { runCatching { pillsFocus.requestFocus() } },
+                onLeaveTop = { if (sidebarGroupMode) false else runCatching { pillsFocus.requestFocus() }.isSuccess },
+                remoteAction = { slot -> remoteMap.guideAction(slot) },
+                holdLeftOpensGroups = sidebarGroupMode,
+                onHostAction = hostAction,
                 focusRequester = gridFocus,
                 modifier = Modifier.fillMaxSize(),
             )
         }
+    }
     }
 
     menuFor?.let { (channel, cell) ->
@@ -312,7 +376,7 @@ fun GuideScreen2(
 
 @Composable
 private fun GroupPills(
-    groups: List<String>,
+    items: List<Pair<String, String>>,
     selected: String,
     onSelect: (String) -> Unit,
     firstPillFocus: FocusRequester,
@@ -324,14 +388,14 @@ private fun GroupPills(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.fillMaxWidth().height(44.dp),
     ) {
-        items(groups, key = { it }) { group ->
+        items(items, key = { it.first }) { (group, label) ->
             var focused by remember { mutableStateOf(false) }
             val isSelected = group == selected
             val colors = MaterialTheme.colorScheme
             Box(
                 modifier = Modifier
                     .padding(end = 8.dp)
-                    .then(if (group == groups.firstOrNull()) Modifier.focusRequester(firstPillFocus) else Modifier)
+                    .then(if (group == items.firstOrNull()?.first) Modifier.focusRequester(firstPillFocus) else Modifier)
                     .onFocusChanged { focused = it.isFocused }
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
@@ -348,7 +412,7 @@ private fun GroupPills(
                     .clickable { onSelect(group) }
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                Text(group, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             }
         }
     }
