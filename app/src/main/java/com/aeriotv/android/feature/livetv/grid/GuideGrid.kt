@@ -113,6 +113,8 @@ fun GuideGrid(
     /** Host-level actions (group pills, mini player, program info, search). Return true if handled. */
     onHostAction: (GuideRemoteAction) -> Boolean,
     focusRequester: FocusRequester,
+    /** Reports whether the grid node holds focus, so the host can settle launch focus. */
+    onGridFocusChanged: (Boolean) -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier,
 ) {
@@ -260,7 +262,7 @@ fun GuideGrid(
                 left = FocusRequester.Cancel
                 right = FocusRequester.Cancel
             }
-            .onFocusChanged { gridFocused = it.isFocused }
+            .onFocusChanged { gridFocused = it.isFocused; onGridFocusChanged(it.isFocused) }
             .focusable()
             .onPreviewKeyEvent(keyHandler),
     ) {

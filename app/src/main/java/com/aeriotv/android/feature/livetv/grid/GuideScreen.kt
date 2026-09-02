@@ -237,9 +237,18 @@ fun GuideScreen(
     val menuGuard = rememberTvMenuGuard()
 
     // Land focus on the grid on entry (TV).
+    // Launch focus belongs to the grid. The tab host places its own initial
+    // focus on the nav pill a beat after we compose (it used to lose that race
+    // only because the old guide composed first), so keep asking for about a
+    // second until the grid actually holds focus.
+    var gridHasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(isTv, rows.isEmpty) {
         if (isTv && !rows.isEmpty) {
-            repeat(10) { if (runCatching { gridFocus.requestFocus() }.isSuccess) return@LaunchedEffect; delay(16L) }
+            repeat(12) {
+                if (gridHasFocus) return@LaunchedEffect
+                runCatching { gridFocus.requestFocus() }
+                delay(100L)
+            }
         }
     }
 
@@ -418,6 +427,7 @@ fun GuideScreen(
                 holdLeftOpensGroups = sidebarGroupMode,
                 onHostAction = hostAction,
                 focusRequester = gridFocus,
+                onGridFocusChanged = { gridHasFocus = it },
                 modifier = Modifier.fillMaxSize(),
             )
             }
