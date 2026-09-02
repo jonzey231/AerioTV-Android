@@ -208,37 +208,51 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "You'll know when casting stops",
-            body = "If a cast to your TV drops because the connection was " +
-                "lost, AerioTV now tells you with a notification instead of " +
-                "silently going quiet, even when the app is in the " +
-                "background. Stopping a cast yourself never triggers it.",
+            title = "A rebuilt Live TV guide",
+            body = "The guide grid was rewritten from the ground up. It draws " +
+                "each row in one pass, the D-pad answers in a frame, and " +
+                "focus never gets lost: schedule gaps are selectable cells, " +
+                "held Left opens your groups without moving the timeline, " +
+                "and focus walks down to the seventh row before the guide " +
+                "scrolls, the same as Apple TV.",
         ),
         WhatsNewItem(
-            title = "Guide reads better on every TV",
-            body = "The bottom line of each guide cell (the time and badges) " +
-                "no longer gets cut off on TVs with larger text sizes, and " +
-                "the row height now follows your text scaling.",
+            title = "Guide data lands on the right channel",
+            body = "Every channel now has one stable identity, so a program " +
+                "can no longer show up on the wrong channel when two " +
+                "sources share a number, blanks stop appearing after an " +
+                "upstream guide loads, and the guide no longer refetches " +
+                "itself while you are in it.",
         ),
         WhatsNewItem(
-            title = "Page the guide with your remote's channel keys",
-            body = "Channel up and down jump the guide a full screen of " +
-                "channels at a time.",
+            title = "Guide cells and menus match Apple TV",
+            body = "Cells show the episode subtitle, description, time, " +
+                "season and episode, and Live, New and Repeat badges. The " +
+                "long-press menu offers Favorites, Multiview, Collections, " +
+                "Program Info and Record from Now in a compact card.",
         ),
         WhatsNewItem(
-            title = "Pick which badges you see",
-            body = "New, Repeat, Live, Premiere, and Finale pills can each " +
-                "be turned on or off under Settings, App Behaviors. Repeat " +
-                "also now appears with Dispatcharr Direct Connect when you " +
-                "open a program's info.",
+            title = "Keep Recent Channels Live",
+            body = "Recently watched channels can stay buffered in the " +
+                "background so switching back is instant. Configure it " +
+                "under Settings; the Live TV tab shows an indicator while " +
+                "channels are retained.",
         ),
         WhatsNewItem(
-            title = "Smaller fixes",
-            body = "The multiview channel picker follows your custom group " +
-                "order. Channel names in the Guide can be hidden under " +
-                "Appearance. Recordings can start after the listed start " +
-                "time with a negative Start Early, for events that begin " +
-                "partway into a program.",
+            title = "DVR and multiview polish",
+            body = "A Recording Ending prompt lets you extend or finish a " +
+                "recording, playback resumes with a tap, and recordings " +
+                "keep their watch progress in sync. Multiview tiles gain a " +
+                "Playback submenu and Change Channel, and the exit menu is " +
+                "cleaner.",
+        ),
+        WhatsNewItem(
+            title = "Open source and smaller fixes",
+            body = "AerioTV for Android is now licensed under GPL-3.0 with " +
+                "an in-app licenses screen. Your active playlist no longer " +
+                "flips when another device syncs, the password reveal " +
+                "button is reachable with a remote, and MPEG-2 channels " +
+                "explain what to configure on the server.",
         ),
     )
 }
