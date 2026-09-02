@@ -509,7 +509,8 @@ private fun GridRow(
                     airing -> Color.White.copy(alpha = 0.12f)
                     else -> Color.White.copy(alpha = 0.05f)
                 }
-                val radius = if (focused) CornerRadius(4.dp.toPx()) else CornerRadius.Zero
+                // Logan 2026-09-02: the ring follows the cell's own square shape.
+                val radius = CornerRadius.Zero
                 drawRoundRect(fill, topLeft = Offset(x0, 2f), size = Size(w, size.height - 4f), cornerRadius = radius)
                 if (focused) {
                     // Apple TV draws a 4pt ring at 1080p (about 4px); Android TV
