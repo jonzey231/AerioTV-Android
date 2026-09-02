@@ -1864,8 +1864,12 @@ private fun ExoTile(
             // constructor-time XML attr; the layout pins it to texture_view
             // so N tiles share the app window layer instead of N
             // punch-through SurfaceViews (TV HWC overlay-budget stutter).
+            // SurfaceView tiles (default, see tileViewIsSurface): the HWC/MDP
+            // composes the decoder buffers directly. The scaling property
+            // exists in case a device's scaler exposes 1088-row padding.
+            val surfaceTiles = tileViewIsSurface
             val playerView = LayoutInflater.from(ctx)
-                .inflate(R.layout.multiview_tile_player, null) as PlayerView
+                .inflate(if (surfaceTiles) R.layout.multiview_tile_player_surface else R.layout.multiview_tile_player, null) as PlayerView
             playerView.apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1876,6 +1880,11 @@ private fun ExoTile(
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 setPlayer(player)
             }
+            if (surfaceTiles && tileScalingIsCrop) {
+                player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+            }
+            Log.i(TAG, "Tile view: ${if (surfaceTiles) "SurfaceView" else "TextureView"} scaling=${if (tileScalingIsCrop) "crop" else "fit"}")
+            playerView
         },
         update = { view ->
             val player = playerRef.value ?: return@AndroidView
@@ -2212,3 +2221,22 @@ private val tileAudioStrategyCached: String by lazy {
         )).use { it.readLine()?.trim() }
     }.getOrNull().let { if (it == "pcm" || it == "gate") it else "track" }
 }
+
+/**
+ * Tile video view. Default SurfaceView (2026-09-02, measured on the Google TV
+ * Streamer): the display hardware composes the four decoder buffers directly
+ * and the grid runs a steady 60fps with zero dropped frames once settled;
+ * TextureView tiles cost HWUI ~19ms per frame (MDP fence waits) and held the
+ * grid at 30fps. `adb shell setprop debug.aerio.tile_view texture` restores
+ * the TextureView path for comparison.
+ */
+private val tileViewIsSurface: Boolean by lazy { readDebugProp("debug.aerio.tile_view") != "texture" }
+
+/** Dev-only: `adb shell setprop debug.aerio.tile_scaling crop|fit` for SurfaceView tiles. */
+private val tileScalingIsCrop: Boolean by lazy { readDebugProp("debug.aerio.tile_scaling") == "crop" }
+
+private fun readDebugProp(name: String): String? = runCatching {
+    java.io.BufferedReader(java.io.InputStreamReader(
+        Runtime.getRuntime().exec(arrayOf("getprop", name)).inputStream,
+    )).use { it.readLine()?.trim() }
+}.getOrNull()

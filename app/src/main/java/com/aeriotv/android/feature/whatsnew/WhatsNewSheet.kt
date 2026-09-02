@@ -242,10 +242,10 @@ private object WhatsNewContent {
             title = "DVR and multiview polish",
             body = "A Recording Ending prompt lets you extend or finish a " +
                 "recording, playback resumes with a tap, and recordings " +
-                "keep their watch progress in sync. Multiview tiles gain a " +
-                "Playback submenu and Change Channel, switching the audio " +
-                "tile no longer pauses the picture, and the exit menu is " +
-                "cleaner.",
+                "keep their watch progress in sync. Multiview tiles now " +
+                "render through the display hardware for a steady 60 fps " +
+                "grid, gain a Playback submenu and Change Channel, and the " +
+                "exit menu is cleaner.",
         ),
         WhatsNewItem(
             title = "Open source and smaller fixes",

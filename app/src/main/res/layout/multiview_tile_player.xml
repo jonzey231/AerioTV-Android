@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Multiview tile video surface. Exists only to set surface_type, which
-     PlayerView reads at constructor time and cannot change later. TextureView
-     tiles composite through the single app window layer instead of N
-     punch-through SurfaceViews, which overflow the TV compositor's overlay
-     plane budget and read as stutter/tearing in larger grids. The fullscreen
-     player (PersistentExoWindow) stays on SurfaceView. -->
+<!-- Multiview tile on a TextureView: the comparison path kept behind
+     debug.aerio.tile_view=texture. Default tiles use
+     multiview_tile_player_surface.xml (SurfaceView), measured 2026-09-02 as
+     the only path that reaches 60fps 4-up on the Google TV Streamer. -->
 <androidx.media3.ui.PlayerView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
