@@ -243,7 +243,8 @@ private object WhatsNewContent {
             body = "A Recording Ending prompt lets you extend or finish a " +
                 "recording, playback resumes with a tap, and recordings " +
                 "keep their watch progress in sync. Multiview tiles gain a " +
-                "Playback submenu and Change Channel, and the exit menu is " +
+                "Playback submenu and Change Channel, switching the audio " +
+                "tile no longer pauses the picture, and the exit menu is " +
                 "cleaner.",
         ),
         WhatsNewItem(
