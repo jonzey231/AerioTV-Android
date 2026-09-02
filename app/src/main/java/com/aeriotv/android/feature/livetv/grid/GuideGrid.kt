@@ -127,6 +127,8 @@ fun GuideGrid(
     var gridFocused by remember { mutableStateOf(false) }
     var leftHoldLatched by remember { mutableStateOf(false) }
     var rightHoldLatched by remember { mutableStateOf(false) }
+    var leftDownSeen by remember { mutableStateOf(false) }
+    var rightDownSeen by remember { mutableStateOf(false) }
     var okLongLatched by remember { mutableStateOf(false) }
     var okDownSeen by remember { mutableStateOf(false) }
 
@@ -195,29 +197,34 @@ fun GuideGrid(
                     true
                 }
                 Key.DirectionDown -> { if (down) state.moveRows(+1); true }
+                // Left/Right pan on RELEASE, not on press (Logan 2026-09-02): a
+                // held Left opens the group sidebar and must not pan the
+                // timeline first; a held Right maps to its own action too.
                 Key.DirectionRight -> {
                     if (down) {
-                        if (repeat == 0) rightHoldLatched = false
+                        if (repeat == 0) { rightHoldLatched = false; rightDownSeen = true }
                         if (!rightHoldLatched && held) {
                             rightHoldLatched = true
                             runAction(remoteAction(RemoteSlot.RIGHT_LONG))
-                        } else if (repeat == 0) {
-                            state.pan(+1)
                         }
+                    } else if (up) {
+                        if (rightDownSeen && !rightHoldLatched) state.pan(+1)
+                        rightDownSeen = false
                     }
                     true
                 }
                 Key.DirectionLeft -> {
                     if (down) {
-                        if (repeat == 0) leftHoldLatched = false
+                        if (repeat == 0) { leftHoldLatched = false; leftDownSeen = true }
                         if (!leftHoldLatched && held) {
                             leftHoldLatched = true
                             // Held Left is the group menu unless the user mapped it away.
                             val mapped = if (holdLeftOpensGroups) GuideRemoteAction.FOCUS_GROUP_PILLS else remoteAction(RemoteSlot.LEFT_LONG)
                             runAction(if (mapped == GuideRemoteAction.NONE) GuideRemoteAction.FOCUS_GROUP_PILLS else mapped)
-                        } else if (repeat == 0) {
-                            state.pan(-1)
                         }
+                    } else if (up) {
+                        if (leftDownSeen && !leftHoldLatched) state.pan(-1)
+                        leftDownSeen = false
                     }
                     true
                 }
