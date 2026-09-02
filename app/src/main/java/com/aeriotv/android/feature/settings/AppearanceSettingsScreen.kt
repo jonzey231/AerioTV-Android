@@ -125,6 +125,7 @@ fun AppearanceSettingsScreen(
     val showChannelNumbers by viewModel.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNames by viewModel.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val showProgramSubtitles by viewModel.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
+    val timeFormat by viewModel.timeFormat.collectAsStateWithLifecycle(initialValue = "system")
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
     var accentPickerOpen by remember { mutableStateOf(false) }
@@ -265,6 +266,22 @@ fun AppearanceSettingsScreen(
                         value = scaleLiveTV,
                         onValueChange = viewModel::setDisplayScaleLiveTV,
                     )
+                }
+
+                // TIME FORMAT card: every clock in the app (guide header,
+                // cell ranges, program info, DVR) follows this.
+                settingsCard(
+                    header = "Time Format",
+                    footer = "System follows your device's clock setting. Applies to the Guide, program info, and recordings.",
+                ) {
+                    TIME_FORMAT_OPTIONS.forEachIndexed { i, (value, label) ->
+                        if (i > 0) DividerRow()
+                        CheckRow(
+                            title = label,
+                            selected = timeFormat == value,
+                            onClick = { viewModel.setTimeFormat(value) },
+                        )
+                    }
                 }
 
                 // CATEGORY COLORS card — master toggle that gates the
@@ -482,6 +499,12 @@ private fun LazyListScope.settingsCard(
         }
     }
 }
+
+private val TIME_FORMAT_OPTIONS = listOf(
+    "system" to "System",
+    "12" to "12-hour",
+    "24" to "24-hour",
+)
 
 @Composable
 private fun DividerRow() {
@@ -766,6 +789,40 @@ private fun PreviewCard(theme: AppTheme, customAccentHex: String?) {
                         .background(accent),
                 )
             }
+        }
+    }
+}
+
+/** Flat single-choice row for this page's cards: same wash/padding as
+ *  [ToggleRow], a check mark instead of the On/Off indicator. */
+@Composable
+private fun CheckRow(
+    title: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .dpadFocusWash()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }

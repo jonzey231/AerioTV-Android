@@ -558,7 +558,7 @@ private fun MinuteRadioFlow(
 }
 
 private fun formatTimeRange(target: ProgramInfoTarget): String {
-    val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
+    val timeFormat = com.aeriotv.android.core.ui.ClockFormat.short()
     val dateFormat = DateFormat.getDateInstance(DateFormat.MEDIUM)
     return "${dateFormat.format(Date(target.startMillis))} at " +
             "${timeFormat.format(Date(target.startMillis))} – " +

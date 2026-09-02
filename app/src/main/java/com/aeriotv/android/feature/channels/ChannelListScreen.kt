@@ -1695,7 +1695,7 @@ private fun formatRemaining(programme: EPGProgramme): String {
 }
 
 private fun formatTimeRange(programme: EPGProgramme): String {
-    val timeFormat = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
+    val timeFormat = com.aeriotv.android.core.ui.ClockFormat.short()
     val start = timeFormat.format(java.util.Date(programme.startMillis))
     val end = timeFormat.format(java.util.Date(programme.endMillis))
     return "$start – $end"

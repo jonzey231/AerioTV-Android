@@ -46,6 +46,10 @@ data class EpgFlag(val label: String, val color: Color)
  */
 val LocalShowEpgBadges = androidx.compose.runtime.staticCompositionLocalOf { true }
 
+/** Settings > Appearance > Channel List: what the guide rail draws. */
+data class GuideRailPrefs(val logos: Boolean = true, val numbers: Boolean = true, val names: Boolean = true)
+val LocalGuideRailPrefs = androidx.compose.runtime.staticCompositionLocalOf { GuideRailPrefs() }
+
 /** Settings > Appearance > Channel List > Show Program Subtitles. */
 val LocalShowProgramSubtitles = androidx.compose.runtime.staticCompositionLocalOf { true }
 

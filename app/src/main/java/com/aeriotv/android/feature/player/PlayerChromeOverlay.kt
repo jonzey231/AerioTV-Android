@@ -2008,7 +2008,7 @@ private fun formatRemaining(programme: EPGProgramme): String {
 }
 
 private fun formatTimeRange(programme: EPGProgramme): String {
-    val tf = DateFormat.getTimeInstance(DateFormat.SHORT)
+    val tf = com.aeriotv.android.core.ui.ClockFormat.short()
     return "${tf.format(Date(programme.startMillis))} – ${tf.format(Date(programme.endMillis))}"
 }
 

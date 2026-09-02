@@ -62,6 +62,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setShowChannelNames(value) }
     }
     val showProgramSubtitles: Flow<Boolean> = prefs.showProgramSubtitles
+    val timeFormat: Flow<String> = prefs.timeFormat
+    fun setTimeFormat(value: String) {
+        viewModelScope.launch { prefs.setTimeFormat(value) }
+    }
     fun setShowProgramSubtitles(value: Boolean) {
         viewModelScope.launch { prefs.setShowProgramSubtitles(value) }
     }

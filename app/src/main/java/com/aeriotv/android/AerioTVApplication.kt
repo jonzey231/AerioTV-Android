@@ -139,6 +139,14 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
 
     override fun onCreate() {
         super.onCreate()
+        // Time Format: seed the process-wide clock mode and follow the pref.
+        com.aeriotv.android.core.ui.ClockFormat.init(this)
+        appScope.launch {
+            appPreferences.timeFormat.collect {
+                com.aeriotv.android.core.ui.ClockFormat.mode.value =
+                    com.aeriotv.android.core.ui.ClockFormat.fromPref(it)
+            }
+        }
         dispatcharrWarmup.bind()
         // Track foreground state so reminders that fire while the app is open
         // surface as an in-app banner instead of a system notification.

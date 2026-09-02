@@ -60,6 +60,9 @@ fun LiveTVTabContent(
     val showEpgBadges by settingsVm.showEpgBadges(formFactor.isTv)
         .collectAsStateWithLifecycle(initialValue = true)
     val showProgramSubtitles by settingsVm.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
+    val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val hiddenEpgBadges by settingsVm.hiddenEpgBadges
         .collectAsStateWithLifecycle(initialValue = emptySet())
 
@@ -109,6 +112,8 @@ fun LiveTVTabContent(
     CompositionLocalProvider(
         LocalShowEpgBadges provides showEpgBadges,
         com.aeriotv.android.core.ui.LocalShowProgramSubtitles provides showProgramSubtitles,
+        com.aeriotv.android.core.ui.LocalGuideRailPrefs provides
+            com.aeriotv.android.core.ui.GuideRailPrefs(showChannelLogos, showChannelNumbers, showChannelNames),
         com.aeriotv.android.core.ui.LocalHiddenEpgBadges provides hiddenEpgBadges,
     ) {
     when (mode) {

@@ -62,7 +62,7 @@ fun EditRecordingSheet(
     val newStart = recording.startMillis - preRoll * 60_000L
     val newEnd = recording.endMillis + postRoll * 60_000L
     val canSave = newEnd > newStart && title.trim().isNotEmpty()
-    val timeFmt = DateFormat.getTimeInstance(DateFormat.SHORT)
+    val timeFmt = com.aeriotv.android.core.ui.ClockFormat.short()
 
     com.aeriotv.android.ui.FormFactorModal(
         onDismiss = onDismiss,

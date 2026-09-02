@@ -155,6 +155,16 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Settings > Appearance > Time Format: "system" (default, follows the
+     * device's 24-hour setting), "12", or "24". Drive-synced as "timeFormat",
+     * the same key Apple uses.
+     */
+    val timeFormat: Flow<String> = store.data.map { it[KEY_TIME_FORMAT] ?: "system" }
+    suspend fun setTimeFormat(value: String) {
+        store.edit { it[KEY_TIME_FORMAT] = value }
+    }
+
+    /**
      * Whether the EPG program badges (LIVE / NEW / PREMIERE / FINALE / REPEAT +
      * season/episode pill) render in the guide, channel list, and info sheet.
      * Default ON. Stored + Drive-synced PER DEVICE TYPE (a separate value for TV
@@ -1083,6 +1093,7 @@ class AppPreferences @Inject constructor(
         // the user's Dark/Light/System choice follows them to every device.
         data[KEY_APPEARANCE_MODE]?.let { out["appearanceMode"] = it }
         data[KEY_DEFAULT_TAB]?.let { out["defaultTab"] = it }
+        data[KEY_TIME_FORMAT]?.let { out["timeFormat"] = it }
         // NOTE: defaultLiveTVView is intentionally NOT synced -- it is a per-device
         // preference (the right default is form-factor specific: TV -> Guide,
         // phone -> List). Syncing one global value made a phone's "list" clobber a
@@ -1136,6 +1147,7 @@ class AppPreferences @Inject constructor(
             keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME] = it }
             keys["appearanceMode"]?.let { prefs[KEY_APPEARANCE_MODE] = it }
             keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB] = it }
+            keys["timeFormat"]?.let { prefs[KEY_TIME_FORMAT] = it }
             // defaultLiveTVView is per-device now (see snapshotSyncablePreferences);
             // ignore any legacy value carried in an older Drive snapshot so it can
             // never re-clobber this device's form-factor default.
@@ -1460,6 +1472,7 @@ class AppPreferences @Inject constructor(
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
         val KEY_SHOW_CHANNEL_NAMES = booleanPreferencesKey("ui_show_channel_names")
         val KEY_SHOW_PROGRAM_SUBTITLES = booleanPreferencesKey("ui_show_program_subtitles")
+        val KEY_TIME_FORMAT = stringPreferencesKey("ui_time_format")
         val KEY_HIDDEN_EPG_BADGES = stringPreferencesKey("ui_hidden_epg_badges")
         val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")
         val KEY_SHOW_EPG_BADGES_MOBILE = booleanPreferencesKey("ui_show_epg_badges_mobile")

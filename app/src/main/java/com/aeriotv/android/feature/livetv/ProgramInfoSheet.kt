@@ -1,5 +1,7 @@
 package com.aeriotv.android.feature.livetv
 
+import com.aeriotv.android.core.ui.rememberClockMode
+import com.aeriotv.android.core.ui.ClockFormat
 import android.content.res.Configuration
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -394,7 +396,8 @@ private fun ProgramInfoBody(
 
 @Composable
 private fun InfoColumnsRow(target: ProgramInfoTarget, rowPadding: Dp) {
-    val timeFormat = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
+    val clockMode = rememberClockMode()
+    val timeFormat = remember(clockMode) { ClockFormat.short(clockMode) }
     val dateFormat = remember { DateFormat.getDateInstance(DateFormat.MEDIUM) }
     val airs = "${timeFormat.format(Date(target.startMillis))} – ${timeFormat.format(Date(target.endMillis))}"
     val date = dateFormat.format(Date(target.startMillis))

@@ -680,7 +680,7 @@ private fun RecordingRow(
         DvrViewModel.Recording.Status.Unknown -> "Unknown"
     }
     val dateFmt = DateFormat.getDateInstance(DateFormat.MEDIUM)
-    val timeFmt = DateFormat.getTimeInstance(DateFormat.SHORT)
+    val timeFmt = com.aeriotv.android.core.ui.ClockFormat.short()
     val dateLabel = "${dateFmt.format(Date(rec.startMillis))} at " +
             "${timeFmt.format(Date(rec.startMillis))} – ${timeFmt.format(Date(rec.endMillis))}"
 

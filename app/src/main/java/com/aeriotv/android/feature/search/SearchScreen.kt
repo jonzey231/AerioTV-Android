@@ -349,8 +349,8 @@ private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when 
         detail = result.series.plot?.takeIf { it.isNotBlank() },
     )
     is SearchViewModel.Result.Epg -> {
-        val range = TIME_FMT.format(Date(result.programme.startMillis)) +
-            " - " + TIME_FMT.format(Date(result.programme.endMillis))
+        val range = timeFmt().format(Date(result.programme.startMillis)) +
+            " - " + timeFmt().format(Date(result.programme.endMillis))
         ResultDisplay(
             title = result.programme.title,
             subtitle = listOfNotNull(
@@ -394,4 +394,4 @@ private fun CenterMessage(icon: ImageVector, title: String, subtitle: String? = 
     }
 }
 
-private val TIME_FMT = SimpleDateFormat("h:mm a", Locale.getDefault())
+private fun timeFmt() = com.aeriotv.android.core.ui.ClockFormat.short()

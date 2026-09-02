@@ -1,5 +1,7 @@
 package com.aeriotv.android.feature.livetv.grid
 
+import com.aeriotv.android.core.ui.rememberClockMode
+import com.aeriotv.android.core.ui.ClockFormat
 import android.os.Trace
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.Canvas
@@ -334,10 +336,11 @@ private fun TimeHeader(
         fontWeight = FontWeight.Medium,
     )
     val rule = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-    val fmt = remember { SimpleDateFormat("h:mma", Locale.getDefault()) }
+    val clockMode = rememberClockMode()
+    val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     Row(modifier = Modifier.fillMaxWidth().height(headerHeight)) {
         Box(modifier = Modifier.width(railWidth).fillMaxSize(), contentAlignment = Alignment.Center) {
-            val clock = remember(nowMs / 60_000L) { SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(nowMs)) }
+            val clock = remember(nowMs / 60_000L, clockMode) { ClockFormat.short(clockMode).format(Date(nowMs)) }
             Text(clock, style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -403,15 +406,17 @@ private fun GridRow(
     val showBadges = com.aeriotv.android.core.ui.LocalShowEpgBadges.current
     val showSubtitles = com.aeriotv.android.core.ui.LocalShowProgramSubtitles.current
     val hiddenBadges = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
-    val shortFmt = remember { SimpleDateFormat("h:mm", Locale.getDefault()) }
+    val clockMode = rememberClockMode()
+    val rail = com.aeriotv.android.core.ui.LocalGuideRailPrefs.current
+    val shortFmt = remember(clockMode) { ClockFormat.guideShort(clockMode) }
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
-    val fmt = remember { SimpleDateFormat("h:mma", Locale.getDefault()) }
+    val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     val seam = 2f
     val padH = 8f
     // Text layouts are measured once per (cell, width) and drawn many times:
     // measuring through TextMeasurer on every draw was ~1 ms per row.
-    val textCache = remember(state.rows, row, showBadges, showSubtitles) { HashMap<Long, CellText>() }
-    val rangeCache = remember(state.rows, row) { HashMap<Long, String>() }
+    val textCache = remember(state.rows, row, showBadges, showSubtitles, clockMode, rail) { HashMap<Long, CellText>() }
+    val rangeCache = remember(state.rows, row, clockMode) { HashMap<Long, String>() }
     val railWidthPx = with(LocalDensity.current) { railWidth.toPx() }
     val logos = LocalLogoCache.current
     val onSurface = colors.onSurface
@@ -464,16 +469,23 @@ private fun GridRow(
         val narrowRail = railWidthPx < 100.dp.toPx()
         val nameLeft = 4.dp.toPx()
         val nameW = (railWidthPx - 8.dp.toPx()).toInt().coerceAtLeast(1)
-        if (narrowRail) drawText(number.title, topLeft = Offset(3.dp.toPx(), 2.dp.toPx()))
-        else drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
-        val name = textCache.getOrPut(RAIL_NAME_KEY) {
-            CellText(textMeasurer.measure((if (isFavorite) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
+        // Settings > Appearance > Channel List toggles (Show Channel Logos /
+        // Numbers / Names): each element is skipped when off, and the rest
+        // re-centre in the freed space.
+        if (rail.numbers) {
+            if (narrowRail) drawText(number.title, topLeft = Offset(3.dp.toPx(), 2.dp.toPx()))
+            else drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
         }
-        val logo = if (channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
+        val name = if (rail.names) textCache.getOrPut(RAIL_NAME_KEY) {
+            CellText(textMeasurer.measure((if (isFavorite) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
+        } else null
+        val logo = if (rail.logos && channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
         val logoH = 24.dp.toPx(); val logoW = 36.dp.toPx()
-        val nameX = nameLeft + (nameW - name.title.size.width) / 2f
+        val nameH = name?.title?.size?.height ?: 0
+        val nameX = nameLeft + (nameW - (name?.title?.size?.width ?: 0)) / 2f
         if (logo != null) {
-            val top = (size.height - logoH - name.title.size.height - 2.dp.toPx()) / 2f
+            val gap = if (name != null) 2.dp.toPx() else 0f
+            val top = (size.height - logoH - nameH - gap) / 2f
             val scale = minOf(logoW / logo.width, logoH / logo.height)
             val dw = logo.width * scale; val dh = logo.height * scale
             drawImage(
@@ -481,9 +493,9 @@ private fun GridRow(
                 dstOffset = IntOffset((nameLeft + (nameW - dw) / 2f).toInt(), (top + (logoH - dh) / 2f).toInt()),
                 dstSize = IntSize(dw.toInt(), dh.toInt()),
             )
-            drawText(name.title, topLeft = Offset(nameX, top + logoH + 2.dp.toPx()))
-        } else {
-            drawText(name.title, topLeft = Offset(nameX, (size.height - name.title.size.height) / 2f))
+            name?.let { drawText(it.title, topLeft = Offset(nameX, top + logoH + gap)) }
+        } else name?.let {
+            drawText(it.title, topLeft = Offset(nameX, (size.height - nameH) / 2f))
         }
         if (channel.hasCatchup) {
             val iconPx = 12.dp.toPx()
