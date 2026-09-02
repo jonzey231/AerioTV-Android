@@ -2201,8 +2201,14 @@ private fun mvFormatTime(ms: Long): String {
  * keeps the track selected behind a swallowing sink (experimental; its
  * pacing variants all dropped frames so far).
  */
-private fun tileAudioStrategy(): String = runCatching {
-    java.io.BufferedReader(java.io.InputStreamReader(
-        Runtime.getRuntime().exec(arrayOf("getprop", "debug.aerio.tile_audio")).inputStream,
-    )).use { it.readLine()?.trim() }
-}.getOrNull().let { if (it == "pcm" || it == "gate") it else "track" }
+private fun tileAudioStrategy(): String = tileAudioStrategyCached
+
+/** Read ONCE per process: the exec-based read was running on every tile
+ *  update and its process spawns were a measurable GC load (2026-09-02). */
+private val tileAudioStrategyCached: String by lazy {
+    runCatching {
+        java.io.BufferedReader(java.io.InputStreamReader(
+            Runtime.getRuntime().exec(arrayOf("getprop", "debug.aerio.tile_audio")).inputStream,
+        )).use { it.readLine()?.trim() }
+    }.getOrNull().let { if (it == "pcm" || it == "gate") it else "track" }
+}
