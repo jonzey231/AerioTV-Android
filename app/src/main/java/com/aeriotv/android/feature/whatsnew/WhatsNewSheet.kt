@@ -208,52 +208,36 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "A rebuilt Live TV guide",
-            body = "The guide grid was rewritten from the ground up. It draws " +
-                "each row in one pass, the D-pad answers in a frame, and " +
-                "focus never gets lost: schedule gaps are selectable cells, " +
-                "held Left opens your groups without moving the timeline, " +
-                "and focus walks down to the seventh row before the guide " +
-                "scrolls, the same as Apple TV.",
+            title = "Time Format",
+            body = "Settings > Appearance > Time Format switches every clock " +
+                "in the app between System, 12-hour and 24-hour: the guide " +
+                "header and cell times, program info, search, and recordings.",
         ),
         WhatsNewItem(
-            title = "Guide data lands on the right channel",
-            body = "Every channel now has one stable identity, so a program " +
-                "can no longer show up on the wrong channel when two " +
-                "sources share a number, blanks stop appearing after an " +
-                "upstream guide loads, and the guide no longer refetches " +
-                "itself while you are in it.",
+            title = "Show Program Subtitles",
+            body = "A new Appearance > Channel List toggle hides the episode " +
+                "or match name under each program title, for EPG feeds that " +
+                "repeat the description there.",
         ),
         WhatsNewItem(
-            title = "Guide cells and menus match Apple TV",
-            body = "Cells show the episode subtitle, description, time, " +
-                "season and episode, and Live, New and Repeat badges. The " +
-                "long-press menu offers Favorites, Multiview, Collections, " +
-                "Program Info and Record from Now in a compact card.",
+            title = "Match Content Resolution: no more frozen picture",
+            body = "After the display switches resolution, the video surface " +
+                "is re-attached once the TV settles, so the first channel " +
+                "after a UHD or HD change no longer freezes on some devices. " +
+                "The output refresh rate now follows the content too, so " +
+                "50 fps channels play at 50 Hz instead of a 3:2 cadence.",
         ),
         WhatsNewItem(
-            title = "Keep Recent Channels Live",
-            body = "Recently watched channels can stay buffered in the " +
-                "background so switching back is instant. Configure it " +
-                "under Settings; the Live TV tab shows an indicator while " +
-                "channels are retained.",
+            title = "Channel list opens on the channel you are watching",
+            body = "Pressing Left while watching now lands focus on the " +
+                "current channel instead of the top of the list, Right closes " +
+                "it without changing channel, and backing out to the guide " +
+                "lands on the channel still playing.",
         ),
         WhatsNewItem(
-            title = "DVR and multiview polish",
-            body = "A Recording Ending prompt lets you extend or finish a " +
-                "recording, playback resumes with a tap, and recordings " +
-                "keep their watch progress in sync. Multiview tiles now " +
-                "render through the display hardware for a steady 60 fps " +
-                "grid, gain a Playback submenu and Change Channel, and the " +
-                "exit menu is cleaner.",
-        ),
-        WhatsNewItem(
-            title = "Open source and smaller fixes",
-            body = "AerioTV for Android is now licensed under GPL-3.0 with " +
-                "an in-app licenses screen. Your active playlist no longer " +
-                "flips when another device syncs, the password reveal " +
-                "button is reachable with a remote, and MPEG-2 channels " +
-                "explain what to configure on the server.",
+            title = "TV guide group pills",
+            body = "One press switches groups, and the focus highlight " +
+                "follows the pill's rounded shape.",
         ),
     )
 }
