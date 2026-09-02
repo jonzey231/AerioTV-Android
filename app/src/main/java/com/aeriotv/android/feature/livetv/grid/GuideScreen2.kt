@@ -17,6 +17,27 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.TravelExplore
+import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.text.input.ImeAction
+import com.aeriotv.android.feature.channels.SortMenu
+import com.aeriotv.android.feature.collections.CollectionPill
+import com.aeriotv.android.feature.livetv.LiveTvPillsRow
+import com.aeriotv.android.feature.livetv.LiveTvTopBar
+import com.aeriotv.android.feature.livetv.ManageGroupsSheet
+import com.aeriotv.android.feature.livetv.RetainedChannelsAction
+import com.aeriotv.android.feature.livetv.RetainedChannelsViewModel
+import com.aeriotv.android.feature.livetv.TvGroupPicker
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -146,6 +167,8 @@ fun GuideScreen2(
     val sidebarGroupMode = isTv && groupSelector == "sidebar"
     val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
     var groupSidebarOpen by remember { mutableStateOf(false) }
+    var searchActive by remember { mutableStateOf(false) }
+    var showManageGroups by remember { mutableStateOf(false) }
     var sidebarOriginalGroup by remember { mutableStateOf<String?>(null) }
 
     val tvComfortScale = if (isTv) displayScaleLiveTv.coerceIn(0.85f, 1.75f) else 1f
@@ -217,6 +240,20 @@ fun GuideScreen2(
         }
     }
 
+    val collectionPillItem: @Composable (ChannelCollection) -> Unit = { c ->
+        val token = ChannelCollection.token(c.id)
+        CollectionPill(
+            collection = c,
+            selected = state.selectedGroup == token,
+            isTv = isTv,
+            onSelect = { viewModel.onGroupSelected(token) },
+            onSetPlacement = { p -> collectionsVm.setPlacement(c.id, p) },
+            onDelete = {
+                if (state.selectedGroup == token) viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
+                collectionsVm.delete(c.id)
+            },
+        )
+    }
     val openGroupMenu: () -> Boolean = {
         if (sidebarGroupMode) {
             sidebarOriginalGroup = state.selectedGroup
@@ -274,11 +311,74 @@ fun GuideScreen2(
                 groupSidebarOpen = false
                 runCatching { gridFocus.requestFocus() }
             },
+            onManageGroups = { showManageGroups = true },
             hiddenGroupCount = hiddenGroups.size,
         )
     }
-    Column(modifier = Modifier.weight(1f).fillMaxSize()) {
-        if (!sidebarGroupMode) GroupPills(
+    Column(modifier = Modifier.weight(1f).fillMaxSize().then(if (isTv) Modifier else Modifier.statusBarsPadding())) {
+        if (!isTv) {
+            val retainedVm: RetainedChannelsViewModel = hiltViewModel()
+            val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
+            LiveTvTopBar(
+                actionCount = (if (canToggleViewMode) 4 else 3) + (if (retainedList.isNotEmpty()) 1 else 0),
+            ) { buttonSize, iconSize ->
+                RetainedChannelsAction(
+                    viewModel = retainedVm, buttonSize = buttonSize, iconSize = iconSize,
+                    onJumpToChannel = { id -> state.channels.firstOrNull { it.id == id }?.let(onChannelClick) },
+                )
+                if (canToggleViewMode) {
+                    IconButton(onClick = onToggleViewMode, modifier = Modifier.size(buttonSize)) {
+                        Icon(
+                            imageVector = if (viewMode == LiveTVViewMode.Guide) Icons.Filled.ViewList else Icons.Filled.CalendarMonth,
+                            contentDescription = if (viewMode == LiveTVViewMode.Guide) "Switch to List" else "Switch to Guide",
+                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(iconSize),
+                        )
+                    }
+                }
+                IconButton(onClick = onOpenSearch, modifier = Modifier.size(buttonSize)) {
+                    Icon(Icons.Filled.TravelExplore, contentDescription = "Search", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(iconSize))
+                }
+                IconButton(
+                    onClick = { searchActive = !searchActive; if (!searchActive) viewModel.onSearchQueryChange("") },
+                    modifier = Modifier.size(buttonSize),
+                ) {
+                    Icon(
+                        Icons.Outlined.Search,
+                        contentDescription = if (searchActive) "Close search" else "Search channels",
+                        tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+                SortMenu(currentMode = state.sortMode, onSelect = viewModel::onSortModeChange, buttonSize = buttonSize, iconSize = iconSize)
+            }
+            if (searchActive) {
+                OutlinedTextField(
+                    value = state.searchQuery,
+                    onValueChange = viewModel::onSearchQueryChange,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    singleLine = true,
+                    placeholder = { Text("Search channels") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    trailingIcon = if (state.searchQuery.isNotEmpty()) {
+                        { IconButton(onClick = { viewModel.onSearchQueryChange("") }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") } }
+                    } else null,
+                    shape = RoundedCornerShape(14.dp),
+                    keyboardOptions = com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions(imeAction = ImeAction.Search),
+                )
+            }
+            if (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty()) {
+                LiveTvPillsRow(
+                    groups = groups,
+                    selectedGroup = state.selectedGroup,
+                    onSelectGroup = { viewModel.onGroupSelected(it) },
+                    collections = collections,
+                    hiddenGroupsCount = hiddenGroups.size,
+                    onManageGroups = { showManageGroups = true },
+                    collectionPillItem = collectionPillItem,
+                )
+            }
+        }
+        if (isTv && !sidebarGroupMode) GroupPills(
             items = pillItems,
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
@@ -292,6 +392,7 @@ fun GuideScreen2(
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
+            val gridContent: @Composable () -> Unit = {
             GuideGrid(
                 state = grid,
                 nowMs = nowMs,
@@ -316,8 +417,38 @@ fun GuideScreen2(
                 focusRequester = gridFocus,
                 modifier = Modifier.fillMaxSize(),
             )
+            }
+            if (isTv) gridContent() else PullToRefreshBox(
+                isRefreshing = state.isLoading,
+                onRefresh = { viewModel.refreshPlaylist() },
+                modifier = Modifier.fillMaxSize(),
+            ) { gridContent() }
         }
     }
+    }
+
+    if (showManageGroups) {
+        if (isTv) {
+            TvGroupPicker(
+                allGroups = allGroupNames, hiddenGroups = hiddenGroups,
+                onDismiss = { showManageGroups = false; runCatching { gridFocus.requestFocus() } },
+                reorderEnabled = true, sortMode = groupSortMode,
+                onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
+                onCommit = { hidden, order ->
+                    if (hidden != hiddenGroups) settingsVm.setHiddenGroups(hidden)
+                    order?.let { settingsVm.setGroupOrder(it) }
+                },
+            )
+        } else {
+            ManageGroupsSheet(
+                allGroups = allGroupNames, hiddenGroups = hiddenGroups,
+                onSave = { settingsVm.setHiddenGroups(it) },
+                onDismiss = { showManageGroups = false },
+                reorderEnabled = true, sortMode = groupSortMode,
+                onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
+                onReorder = { settingsVm.setGroupOrder(it) },
+            )
+        }
     }
 
     menuFor?.let { (channel, cell) ->

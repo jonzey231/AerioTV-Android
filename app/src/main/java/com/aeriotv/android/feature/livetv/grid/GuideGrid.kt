@@ -260,7 +260,7 @@ fun GuideGrid(
                     rowHeight = rowHeight,
                     railWidth = railWidth,
                     pxPerMs = pxPerMs,
-                    gridFocused = gridFocused || !isTv,
+                    gridFocused = gridFocused,
                     isFavorite = rows.channel(row).id in favoriteIds,
                     recordingWindows = rows.channel(row).dispatcharrChannelId?.let { recordingWindows[it] } ?: emptyList(),
                     textMeasurer = textMeasurer,
@@ -414,21 +414,25 @@ private fun GridRow(
         val number = textCache.getOrPut(RAIL_NUMBER_KEY) {
             CellText(textMeasurer.measure(channel.channelNumber.orEmpty(), style = railNumberStyle, maxLines = 1, constraints = Constraints(maxWidth = 30.dp.roundToPx())), null)
         }
-        drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
-        val nameW = (railWidthPx - 44.dp.toPx()).toInt().coerceAtLeast(1)
+        // Narrow (phone) rail: number tucked top-left, logo and name centred across the full rail.
+        val narrowRail = railWidthPx < 100.dp.toPx()
+        val nameLeft = if (narrowRail) 4.dp.toPx() else 36.dp.toPx()
+        val nameW = (railWidthPx - nameLeft - 4.dp.toPx()).toInt().coerceAtLeast(1)
+        if (narrowRail) drawText(number.title, topLeft = Offset(3.dp.toPx(), 2.dp.toPx()))
+        else drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
         val name = textCache.getOrPut(RAIL_NAME_KEY) {
             CellText(textMeasurer.measure((if (isFavorite) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
         }
         val logo = if (channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
         val logoH = 24.dp.toPx(); val logoW = 36.dp.toPx()
-        val nameX = 36.dp.toPx() + (nameW - name.title.size.width) / 2f
+        val nameX = nameLeft + (nameW - name.title.size.width) / 2f
         if (logo != null) {
             val top = (size.height - logoH - name.title.size.height - 2.dp.toPx()) / 2f
             val scale = minOf(logoW / logo.width, logoH / logo.height)
             val dw = logo.width * scale; val dh = logo.height * scale
             drawImage(
                 logo,
-                dstOffset = IntOffset((36.dp.toPx() + (nameW - dw) / 2f).toInt(), (top + (logoH - dh) / 2f).toInt()),
+                dstOffset = IntOffset((nameLeft + (nameW - dw) / 2f).toInt(), (top + (logoH - dh) / 2f).toInt()),
                 dstSize = IntSize(dw.toInt(), dh.toInt()),
             )
             drawText(name.title, topLeft = Offset(nameX, top + logoH + 2.dp.toPx()))
