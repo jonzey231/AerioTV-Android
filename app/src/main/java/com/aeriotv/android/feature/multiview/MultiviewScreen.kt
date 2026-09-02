@@ -1595,6 +1595,7 @@ private fun ExoTile(
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel,
     // Phase 3: fired once a VOD tile reaches end-of-file.
     onFinished: () -> Unit,
+    retainedVm: com.aeriotv.android.feature.livetv.RetainedChannelsViewModel = hiltViewModel(),
 ) {
     val url = tile.resolvedUrl
     val channelName = tile.displayName
@@ -1603,8 +1604,17 @@ private fun ExoTile(
     val isVod = tile.kind == TileKind.Vod
     val currentUrlRef = remember { mutableStateOf("") }
     val playerRef = remember { mutableStateOf<ExoPlayer?>(null) }
+    val statsStopRef = remember { mutableStateOf<java.util.concurrent.atomic.AtomicBoolean?>(null) }
+    val audioGateRef = remember { mutableStateOf<com.aeriotv.android.core.playback.TileAudioGate?>(null) }
     // Once-only resume seek guard (first STATE_READY for a VOD tile).
     val didResumeRef = remember(tile.id) { mutableStateOf(false) }
+    // A channel kept live in the background (Keep Recent Channels Live) holds
+    // one of the server's stream slots; opening the same channel as a tile
+    // then gets HTTP 503 and the tile never starts (Logan 2026-09-02, ESPN HD).
+    // Release the retained buffer first; the tile's own connection replaces it.
+    LaunchedEffect(tile.id) {
+        if (tile.kind == com.aeriotv.android.feature.multiview.TileKind.Live) retainedVm.stop(tile.id)
+    }
     // Task #150 (iOS parity): per-tile playback-error overlay. Set when the
     // bounded re-prepare gives up (or the format is unplayable); cleared by
     // STATE_READY. The retry lambda is hoisted out of the AndroidView
@@ -1662,8 +1672,18 @@ private fun ExoTile(
             // mixed by the platform in any number, so every tile can keep its
             // audio track selected and focus changes are a volume flip. The
             // passthrough setting still governs the fullscreen player.
+            // A/B hook (dev only, 2026-09-02): `adb shell setprop debug.aerio.tile_audio track`
+            // restores the old track-disable strategy for a same-channels comparison.
+            val audioStrategy = tileAudioStrategy()
+            val legacyTrackAudio = audioStrategy == "track"
+            val audioGate = if (audioStrategy == "gate") com.aeriotv.android.core.playback.TileAudioGate(initiallyMuted = !isAudioFocused) else null
+            audioGateRef.value = audioGate
             val renderersFactory =
-                com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough = false)
+                com.aeriotv.android.core.playback.aerioRenderersFactory(
+                    ctx,
+                    audioPassthrough = legacyTrackAudio && audioPassthrough,
+                    tileAudioGate = audioGate,
+                )
             // Route raw .ts / /proxy/ts via TsExtractor like the Live
             // TV holder; HLS via HlsMediaSource; everything else via
             // the default factory. Same routing logic as
@@ -1671,6 +1691,8 @@ private fun ExoTile(
             // constructed per-prepare in buildTileMediaSource below
             // rather than being passed as a top-level MediaSource.Factory,
             // because we route by URL shape at call time.
+            val statsStoppedRef = java.util.concurrent.atomic.AtomicBoolean(false)
+            statsStopRef.value = statsStoppedRef
             val player = ExoPlayer.Builder(ctx)
                 .setRenderersFactory(renderersFactory)
                 .setLoadControl(loadControl)
@@ -1692,8 +1714,43 @@ private fun ExoTile(
                     // failure ("Audio sink error" with 4 passthrough AC-3 sinks)
                     // is handled by the listener below: a tile whose audio sink
                     // fails falls back to a disabled audio track.
-                    volume = if (isAudioFocused) 1f else 0f
+                    volume = if (audioStrategy == "pcm" && !isAudioFocused) 0f else 1f
+                    if (legacyTrackAudio) {
+                        trackSelectionParameters = trackSelectionParameters
+                            .buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !isAudioFocused)
+                            .build()
+                        volume = 1f
+                    }
                     playWhenReady = !paused
+                    // Per-tile render statistics every 10 s from the decoder
+                    // counters: dropped frames and the average frame processing
+                    // offset (how early/late frames are released; a judder
+                    // proxy). INFO so release builds report it.
+                    val statsHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                    val statsStopped = statsStoppedRef
+                    val statsPlayer = this
+                    statsHandler.postDelayed(object : Runnable {
+                        private var lastDropped = 0
+                        private var lastRendered = 0
+                        private var lastOffsetUs = 0L
+                        private var lastOffsetCount = 0
+                        override fun run() {
+                            val c = statsPlayer.videoDecoderCounters
+                            if (c != null) {
+                                c.ensureUpdated()
+                                val dropped = c.droppedBufferCount - lastDropped
+                                val rendered = c.renderedOutputBufferCount - lastRendered
+                                val offUs = c.totalVideoFrameProcessingOffsetUs - lastOffsetUs
+                                val offN = c.videoFrameProcessingOffsetCount - lastOffsetCount
+                                lastDropped = c.droppedBufferCount; lastRendered = c.renderedOutputBufferCount
+                                lastOffsetUs = c.totalVideoFrameProcessingOffsetUs; lastOffsetCount = c.videoFrameProcessingOffsetCount
+                                val avgMs = if (offN > 0) offUs / offN / 1000.0 else 0.0
+                                Log.i("TileStats", "$channelName audio=$audioStrategy dropped=$dropped frames=$rendered avgOffsetMs=${"%.1f".format(avgMs)} maxConsecDrop=${c.maxConsecutiveDroppedBufferCount}")
+                            }
+                            if (!statsStopped.get()) statsHandler.postDelayed(this, 10_000L)
+                        }
+                    }, 10_000L)
                 }
             playerRef.value = player
             onPlayer(player)
@@ -1847,8 +1904,16 @@ private fun ExoTile(
             // video never stalls on the switch. A tile that had to fall back to
             // a disabled audio track (sink failure) is re-enabled when it gains
             // focus so the focused tile is always audible.
-            player.volume = if (isAudioFocused) 1f else 0f
-            if (isAudioFocused && player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO)) {
+            val strategy = tileAudioStrategy()
+            audioGateRef.value?.muted = !isAudioFocused
+            player.volume = if (strategy == "pcm" && !isAudioFocused) 0f else 1f
+            if (strategy == "track") {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !isAudioFocused)
+                    .build()
+                player.volume = 1f
+            } else if (isAudioFocused && player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO)) {
                 player.trackSelectionParameters = player.trackSelectionParameters
                     .buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
@@ -1858,6 +1923,7 @@ private fun ExoTile(
         },
         onRelease = { _ ->
             Log.i(TAG, "Tile ExoPlayer releasing: $channelName")
+            statsStopRef.value?.set(true)
             onPlayer(null)
             playerRef.value?.let {
                 it.release()
@@ -2123,3 +2189,20 @@ private fun mvFormatTime(ms: Long): String {
     val s = totalSecs % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
+
+/**
+ * Tile audio strategy. Default "track": only the audio-focused tile has its
+ * audio track selected; the others have it disabled (measured 2026-09-02 on
+ * the Streamer: zero dropped frames on every muted tile). Re-enabling the
+ * track on a focus switch makes the live source reconnect, so the newly
+ * focused tile pauses briefly. The alternatives stay behind a dev-only A/B
+ * switch (`adb shell setprop debug.aerio.tile_audio pcm|gate`): "pcm" keeps
+ * every tile decoding into a real sink with volume 0/1 (judders), "gate"
+ * keeps the track selected behind a swallowing sink (experimental; its
+ * pacing variants all dropped frames so far).
+ */
+private fun tileAudioStrategy(): String = runCatching {
+    java.io.BufferedReader(java.io.InputStreamReader(
+        Runtime.getRuntime().exec(arrayOf("getprop", "debug.aerio.tile_audio")).inputStream,
+    )).use { it.readLine()?.trim() }
+}.getOrNull().let { if (it == "pcm" || it == "gate") it else "track" }

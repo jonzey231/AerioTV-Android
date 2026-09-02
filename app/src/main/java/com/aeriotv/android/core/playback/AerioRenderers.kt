@@ -63,6 +63,11 @@ fun aerioRenderersFactory(
     // is untouched; a single finite VOD stream is a few % of one core, video
     // stays hardware-decoded. MUST stay false for the live holder + multiview.
     preferSoftwareAudio: Boolean = false,
+    // Multiview tiles only: a gate that swallows audio while the tile is not
+    // the audio-focused one, so the audio TRACK stays selected (no track
+    // re-selection, no source re-load on a focus switch) while no AudioTrack
+    // exists and the tile's clock runs off the wall clock like a muted tile.
+    tileAudioGate: TileAudioGate? = null,
 ): DefaultRenderersFactory {
     val factory = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
@@ -70,6 +75,15 @@ fun aerioRenderersFactory(
             enableFloatOutput: Boolean,
             enableAudioTrackPlaybackParams: Boolean,
         ): AudioSink? {
+            if (tileAudioGate != null) {
+                @Suppress("DEPRECATION")
+                val tileSink = DefaultAudioSink.Builder()
+                    .setAudioCapabilities(AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build()
+                return GatedTileAudioSink(AudioSyncShiftSink(PtsSmoothingAudioSink(tileSink)), tileAudioGate)
+            }
             if (audioPassthrough) {
                 android.util.Log.i("AerioPlayerDiag", "audio sink -> stock context sink (passthrough on)")
                 return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
@@ -83,6 +97,34 @@ fun aerioRenderersFactory(
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                 .build()
             return AudioSyncShiftSink(PtsSmoothingAudioSink(pcmSink))
+        }
+
+        override fun buildAudioRenderers(
+            context: Context,
+            extensionRendererMode: Int,
+            mediaCodecSelector: MediaCodecSelector,
+            enableDecoderFallback: Boolean,
+            audioSink: AudioSink,
+            eventHandler: Handler,
+            eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
+            out: ArrayList<Renderer>,
+        ) {
+            if (tileAudioGate == null) {
+                super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+                return
+            }
+            // Multiview tile: the audio renderer is NOT a media clock. The tile
+            // runs on ExoPlayer's standalone clock in every state, which is the
+            // clock a tile with no audio track uses (measured smooth on the
+            // Streamer), so muting or unmuting the sink never changes the
+            // clock and never re-selects tracks. The audible tile's sink plays
+            // at the standalone clock's pace; the sync error is bounded by the
+            // AudioTrack start latency, which multiview tolerates.
+            out.add(object : androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(
+                context, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener, audioSink,
+            ) {
+                override fun getMediaClock(): androidx.media3.exoplayer.MediaClock? = null
+            })
         }
 
         override fun buildVideoRenderers(
@@ -441,5 +483,110 @@ private class AerioMediaCodecVideoRenderer(
             DecoderReuseEvaluation.REUSE_RESULT_NO,
             DecoderReuseEvaluation.DISCARD_REASON_WORKAROUND,
         )
+    }
+}
+
+/**
+ * Per-tile audio gate for multiview. [muted] is flipped from the main thread
+ * on audio-focus changes; the sink reads it on the playback thread.
+ */
+class TileAudioGate(initiallyMuted: Boolean) {
+    @Volatile var muted: Boolean = initiallyMuted
+}
+
+/**
+ * Multiview tile sink (2026-09-02). The tile keeps its audio track selected
+ * and decoding at all times; this sink decides what happens to the PCM:
+ *
+ * - muted: buffers are swallowed at real-time pace (no AudioTrack is ever
+ *   created) and the sink reports no position; the tile's audio renderer is
+ *   clockless (see buildAudioRenderers), so the tile runs on ExoPlayer's
+ *   standalone clock exactly as a tile with no audio track does (smooth).
+ * - audible: buffers go to the real [DefaultAudioSink] and its position
+ *   takes over once the AudioTrack has started.
+ *
+ * Flipping the gate never touches track selection, so ExoPlayer never
+ * re-selects tracks or re-loads the source (the freeze the old strategy had).
+ * Muting drains the real sink on the next playback-thread call.
+ */
+@OptIn(UnstableApi::class)
+private class GatedTileAudioSink(
+    sink: AudioSink,
+    private val gate: TileAudioGate,
+) : ForwardingAudioSink(sink) {
+    /** The real sink has received buffers since the last flush (an AudioTrack may exist). */
+    private var realActive = false
+    // Muted pacing: accept audio no faster than real time, like a real sink
+    // would, so the audio renderer neither drains the whole buffer ahead
+    // (which starves it and parks the player in BUFFERING) nor stalls.
+    private var playing = false
+    private var anchorPtsUs = AudioSink.CURRENT_POSITION_NOT_SET
+    private var anchorWallUs = 0L
+    private var endOfStream = false
+
+    private fun wallUs() = android.os.SystemClock.elapsedRealtime() * 1000L
+    private fun pacedNowUs(): Long =
+        if (anchorPtsUs == AudioSink.CURRENT_POSITION_NOT_SET) AudioSink.CURRENT_POSITION_NOT_SET
+        else if (playing) anchorPtsUs + (wallUs() - anchorWallUs) else anchorPtsUs
+    private fun reanchor(ptsUs: Long) { anchorPtsUs = ptsUs; anchorWallUs = wallUs() }
+
+    /** Playback thread: the gate closed while the real sink held audio; drop it. */
+    private fun drainRealIfMuted() {
+        if (gate.muted && realActive) {
+            super.pause()
+            super.flush()
+            realActive = false
+        }
+    }
+
+    override fun handleBuffer(buffer: java.nio.ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
+        drainRealIfMuted()
+        if (gate.muted) {
+            if (anchorPtsUs == AudioSink.CURRENT_POSITION_NOT_SET) reanchor(presentationTimeUs)
+            // Hold the buffer (not consumed) until its time is within a small
+            // cushion of the paced clock; the renderer retries on its next pass.
+            if (presentationTimeUs > pacedNowUs() + MUTED_CUSHION_US) return false
+            buffer.position(buffer.limit())
+            return true
+        }
+        val ok = super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        if (ok) { realActive = true; reanchor(presentationTimeUs) }
+        return ok
+    }
+
+    override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
+        drainRealIfMuted()
+        if (!realActive) return AudioSink.CURRENT_POSITION_NOT_SET
+        return super.getCurrentPositionUs(sourceEnded)
+    }
+
+    override fun play() {
+        if (anchorPtsUs != AudioSink.CURRENT_POSITION_NOT_SET) reanchor(pacedNowUs())
+        playing = true
+        super.play()
+    }
+
+    override fun pause() {
+        if (anchorPtsUs != AudioSink.CURRENT_POSITION_NOT_SET) reanchor(pacedNowUs())
+        playing = false
+        super.pause()
+    }
+
+    override fun flush() {
+        realActive = false; anchorPtsUs = AudioSink.CURRENT_POSITION_NOT_SET; endOfStream = false
+        super.flush()
+    }
+
+    override fun reset() {
+        realActive = false; anchorPtsUs = AudioSink.CURRENT_POSITION_NOT_SET; endOfStream = false
+        super.reset()
+    }
+
+    override fun hasPendingData(): Boolean = if (gate.muted) !endOfStream else super.hasPendingData()
+    override fun isEnded(): Boolean = if (gate.muted) endOfStream else super.isEnded()
+    override fun playToEndOfStream() { if (gate.muted) endOfStream = true else super.playToEndOfStream() }
+
+    private companion object {
+        const val MUTED_CUSHION_US = 250_000L
     }
 }
