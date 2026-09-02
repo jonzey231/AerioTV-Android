@@ -119,8 +119,10 @@ runs at background thread priority.
   of five minutes or more, so the D-pad can land on it and play the channel.
 - Empty row (no visible programmes): a single focusable strip the width of the
   viewport, pinned on screen.
-- Lane: the focused row is held at a stable upper lane; vertical scroll is
-  continuous by row.
+- Lane: focus walks DOWN through the visible rows until it sits on the
+  seventh row, then the list scrolls under it one row per press; going UP it
+  walks to the top visible row before the list scrolls (Logan 2026-09-02,
+  matched to Apple TV).
 - Back / Menu ladder on the guide: timeline away from now -> restore now and
   top; else top channel; the tab hosts decide anything beyond that. Double
   press while a mini player is up = scroll to top (300 ms debounce); a single

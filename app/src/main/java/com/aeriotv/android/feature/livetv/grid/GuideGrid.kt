@@ -134,9 +134,17 @@ fun GuideGrid(
     LaunchedEffect(state, listState, rowHeightPx) {
         snapshotFlow { state.focusRow to state.rows }.collect { (row, _) ->
             if (row < 0) return@collect
-            val target = (row - LANE_ROWS).coerceAtLeast(0)
+            // Apple TV lane (Logan 2026-09-02): focus walks DOWN through the
+            // visible rows until it sits on the seventh row, then the list
+            // scrolls under it; going UP it walks to the top row first.
             val current = listState.firstVisibleItemIndex
-            val delta = (target - current) * rowHeightPx - listState.firstVisibleItemScrollOffset
+            val offset = listState.firstVisibleItemScrollOffset
+            val target = when {
+                row > current + LANE_ROWS -> row - LANE_ROWS
+                row < current || (row == current && offset != 0) -> row
+                else -> current
+            }.coerceAtLeast(0)
+            val delta = if (target == current && row != current) 0f else (target - current) * rowHeightPx - offset
             if (kotlin.math.abs(target - current) <= 3) {
                 // A one-row step goes through the scrollable so the lazy list
                 // PREFETCHES the next row after this frame; scrollToItem would
@@ -602,7 +610,8 @@ class GuideLogoCache(private val context: android.content.Context) {
 
 val LocalLogoCache = staticCompositionLocalOf<GuideLogoCache> { error("GuideLogoCache not provided") }
 
-private const val LANE_ROWS = 2
+/** Focus lane: the seventh visible row (index 6), as on Apple TV. */
+private const val LANE_ROWS = 6
 private const val HOLD_LEFT_REPEATS = 4
 private const val OK_LONG_REPEATS = 1
 private fun GuideRemoteAction.orDefault(default: GuideRemoteAction) = if (this == GuideRemoteAction.NONE) default else this
