@@ -90,6 +90,8 @@ fun GuideGrid(
     railWidth: Dp,
     headerHeight: Dp,
     favoriteIds: Set<String>,
+    /** Scheduled / in-progress recording windows by Dispatcharr channel id (record dots). */
+    recordingWindows: Map<Int, List<LongRange>>,
     isTv: Boolean,
     onPlay: (M3UChannel, EPGProgramme) -> Unit,
     onOpenMenu: (M3UChannel, EPGProgramme) -> Unit,
@@ -208,6 +210,7 @@ fun GuideGrid(
                     pxPerMs = pxPerMs,
                     gridFocused = gridFocused || !isTv,
                     isFavorite = rows.channel(row).id in favoriteIds,
+                    recordingWindows = rows.channel(row).dispatcharrChannelId?.let { recordingWindows[it] } ?: emptyList(),
                     textMeasurer = textMeasurer,
                     onPlay = onPlay,
                     onOpenMenu = onOpenMenu,
@@ -286,6 +289,7 @@ private fun GridRow(
     pxPerMs: Float,
     gridFocused: Boolean,
     isFavorite: Boolean,
+    recordingWindows: List<LongRange>,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
     onPlay: (M3UChannel, EPGProgramme) -> Unit,
     onOpenMenu: (M3UChannel, EPGProgramme) -> Unit,
@@ -302,6 +306,7 @@ private fun GridRow(
     val titleStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     val titleDimStyle = titleStyle.copy(color = Color.White.copy(alpha = 0.55f), fontWeight = FontWeight.Normal)
     val timeStyle = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+    val descStyle = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
     val fmt = remember { SimpleDateFormat("h:mma", Locale.getDefault()) }
     val seam = 2f
     val padH = 8f
@@ -398,7 +403,9 @@ private fun GridRow(
                 val radius = if (focused) CornerRadius(4.dp.toPx()) else CornerRadius.Zero
                 drawRoundRect(fill, topLeft = Offset(x0, 2f), size = Size(w, size.height - 4f), cornerRadius = radius)
                 if (focused) {
-                    val bw = 4.dp.toPx()
+                    // Apple TV draws a 4pt ring at 1080p (about 4px); Android TV
+                    // density is 2x, so 2dp is the same visual weight (Logan 2026-09-01).
+                    val bw = 2.dp.toPx()
                     drawRoundRect(
                         Color.White,
                         topLeft = Offset(x0 + bw / 2, 2f + bw / 2),
@@ -410,6 +417,7 @@ private fun GridRow(
                 if (w >= TEXT_MIN_PX) {
                     val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
                     val wantRange = !cell.isPlaceholder && size.height >= 40.dp.toPx()
+                    val wantDesc = wantRange && cell.description.isNotBlank() && size.height >= 50.dp.toPx()
                     val key = cell.startMillis * 31 + textW
                     val text = textCache.getOrPut(key) {
                         val title = textMeasurer.measure(
@@ -418,6 +426,10 @@ private fun GridRow(
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             constraints = Constraints(maxWidth = textW, maxHeight = 20.sp.roundToPx()),
                         )
+                        val desc = if (wantDesc) textMeasurer.measure(
+                            text = cell.description, style = descStyle, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            constraints = Constraints(maxWidth = textW, maxHeight = 16.sp.roundToPx()),
+                        ) else null
                         val range = if (wantRange) {
                             val str = rangeCache.getOrPut(cell.startMillis) {
                                 fmt.format(Date(cell.startMillis)).lowercase(Locale.getDefault()) +
@@ -428,11 +440,19 @@ private fun GridRow(
                                 constraints = Constraints(maxWidth = textW, maxHeight = 16.sp.roundToPx()),
                             )
                         } else null
-                        CellText(title, range)
+                        CellText(title, range, desc)
+                    }
+                    val recording = !cell.isPlaceholder && recordingWindows.any { win ->
+                        cell.startMillis < win.last && cell.endMillis > win.first
                     }
                     clipRect(x0, 0f, x0 + w, size.height) {
-                        drawText(text.title, topLeft = Offset(x0 + padH, 6.dp.toPx()))
-                        text.range?.let { drawText(it, topLeft = Offset(x0 + padH, size.height - 6.dp.toPx() - 14.sp.toPx())) }
+                        val titleTop = if (text.desc != null) 3.dp.toPx() else 6.dp.toPx()
+                        drawText(text.title, topLeft = Offset(x0 + padH, titleTop))
+                        text.desc?.let { drawText(it, topLeft = Offset(x0 + padH, titleTop + text.title.size.height - 1.dp.toPx())) }
+                        text.range?.let { drawText(it, topLeft = Offset(x0 + padH, size.height - 4.dp.toPx() - it.size.height)) }
+                        if (recording) {
+                            drawCircle(NOW_RED, radius = 4.dp.toPx(), center = Offset(x0 + w - 10.dp.toPx(), 10.dp.toPx()))
+                        }
                     }
                 }
             }
@@ -484,4 +504,4 @@ private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
 private const val TEXT_MIN_PX = 28f
 private val NOW_RED = Color(0xFFFF4757)
 
-private class CellText(val title: TextLayoutResult, val range: TextLayoutResult?)
+private class CellText(val title: TextLayoutResult, val range: TextLayoutResult?, val desc: TextLayoutResult? = null)

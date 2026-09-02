@@ -1,6 +1,5 @@
 package com.aeriotv.android.feature.livetv.grid
 
-import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -52,6 +51,7 @@ import com.aeriotv.android.core.tv.TvActionMenuDialog
 import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.collections.CollectionsViewModel
+import com.aeriotv.android.feature.dvr.DvrViewModel
 import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
@@ -108,6 +108,20 @@ fun GuideScreen2(
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val miniState by miniPlayerVm.state.collectAsStateWithLifecycle()
     val miniActive = miniState is MiniPlayerSession.State.Active
+    val miniChannelId = (miniState as? MiniPlayerSession.State.Active)?.channel?.id
+    val dvrVm: DvrViewModel = hiltViewModel()
+    val dvrState by dvrVm.state.collectAsStateWithLifecycle()
+    val recordingWindows = remember(dvrState.recordings) {
+        val out = HashMap<Int, MutableList<LongRange>>()
+        for (rec in dvrState.recordings) {
+            val st = rec.effectiveStatus()
+            val chId = rec.dispatcharrChannelId ?: continue
+            if (st == DvrViewModel.Recording.Status.Scheduled || st == DvrViewModel.Recording.Status.Recording) {
+                out.getOrPut(chId) { ArrayList() }.add(rec.startMillis until rec.endMillis)
+            }
+        }
+        out as Map<Int, List<LongRange>>
+    }
     val isTv = rememberLiveTvFormFactor().isTv
     val context = LocalContext.current
     val canRecordToServer = LocalCanRecordToServer.current
@@ -194,8 +208,10 @@ fun GuideScreen2(
         when (grid.back(nowMs)) {
             GuideGridState.BackStep.RESTORED_NOW_AND_TOP, GuideGridState.BackStep.TOP -> Unit
             GuideGridState.BackStep.NONE -> {
+                // Logan 2026-09-01: Back at the top of the guide must never close
+                // the app. Last rung resets a filtered group to All; at All it
+                // is a no-op (consumed) so the app stays up.
                 if (state.selectedGroup != PlaylistViewModel.ALL_GROUPS) viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
-                else (context as? Activity)?.finish()
             }
         }
     }
@@ -223,8 +239,14 @@ fun GuideScreen2(
                 railWidth = railWidth,
                 headerHeight = headerHeight,
                 favoriteIds = favoriteIds,
+                recordingWindows = recordingWindows,
                 isTv = isTv,
-                onPlay = { channel, _ -> onChannelClick(channel) },
+                onPlay = { channel, _ ->
+                    // OK on the channel already in the corner mini promotes the
+                    // mini to fullscreen instead of re-tuning the same stream.
+                    if (isTv && miniChannelId == channel.id) miniPlayerVm.session.requestResume()
+                    else onChannelClick(channel)
+                },
                 onOpenMenu = { channel, cell -> menuFor = channel to cell; menuGuard.arm() },
                 onLeaveTop = { runCatching { pillsFocus.requestFocus() }.isSuccess },
                 onHoldLeft = { runCatching { pillsFocus.requestFocus() } },

@@ -140,7 +140,8 @@ runs at background thread priority.
   re-render on a clock tick.
 - No per-cell progress bar; the now-airing cell is tinted, not filled.
 - Focus visual: flat (no scale), a translucent white fill plus a 4 pt white
-  border, white text.
+  border, white text. ANDROID draws the border at 2 dp: TV density is 2x, so
+  2 dp is the same on-screen weight as Apple's 4 pt at 1080p (Logan 2026-09-01).
 - ANDROID draws each visible row's cells in one pass and keeps one focus owner
   (the grid); Apple keeps per-cell native focus with the corrective snap. Both
   must produce the behaviours in section 6.
