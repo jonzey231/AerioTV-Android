@@ -275,10 +275,6 @@ class SettingsViewModel @Inject constructor(
     fun setDebugLoggingEnabled(value: Boolean) {
         viewModelScope.launch { prefs.setDebugLoggingEnabled(value) }
     }
-    val guideRendererV2: Flow<Boolean> = prefs.guideRendererV2
-    fun setGuideRendererV2(value: Boolean) {
-        viewModelScope.launch { prefs.setGuideRendererV2(value) }
-    }
 
     val autoResumeLastChannel: Flow<Boolean> = prefs.autoResumeLastChannel
     fun setAutoResumeLastChannel(value: Boolean) {

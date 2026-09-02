@@ -106,7 +106,7 @@ import kotlinx.coroutines.withContext
  * cut-over phase once the grid itself passes the acceptance gates.
  */
 @Composable
-fun GuideScreen2(
+fun GuideScreen(
     onChannelClick: (M3UChannel) -> Unit,
     viewMode: LiveTVViewMode,
     canToggleViewMode: Boolean,

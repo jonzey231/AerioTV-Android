@@ -14,6 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.ui.LocalShowEpgBadges
 import com.aeriotv.android.feature.channels.ChannelListScreen
+import com.aeriotv.android.feature.livetv.grid.GuideScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.scale.WithDisplayScale
@@ -53,18 +54,6 @@ fun LiveTVTabContent(
 ) {
     val formFactor = rememberLiveTvFormFactor()
     val stored by settingsVm.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
-    val guideRendererV2 by settingsVm.guideRendererV2.collectAsStateWithLifecycle(initialValue = false)
-    // Dev-only A/B hook for adb-driven measurement on the Streamer:
-    // `adb shell setprop debug.aerio.guide_v2 0|1` overrides the toggle for
-    // the next launch (unset = the toggle rules). Removed at cut-over.
-    val guideRendererOverride = remember {
-        runCatching {
-            java.io.BufferedReader(java.io.InputStreamReader(
-                Runtime.getRuntime().exec(arrayOf("getprop", "debug.aerio.guide_v2")).inputStream,
-            )).use { it.readLine()?.trim() }
-        }.getOrNull()?.takeIf { it == "0" || it == "1" }
-    }
-    val useNewGuide = when (guideRendererOverride) { "1" -> true; "0" -> false; else -> guideRendererV2 }
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
     // Per-device-type EPG badge visibility, provided to the guide / list / info
     // sheet below so they hide the badges when the user turns them off.
@@ -133,19 +122,7 @@ fun LiveTVTabContent(
                 onPlayCatchup = onPlayCatchup,
             )
         }
-        LiveTVViewMode.Guide -> if (useNewGuide) {
-            com.aeriotv.android.feature.livetv.grid.GuideScreen2(
-                onChannelClick = onChannelClick,
-                viewModel = viewModel,
-                modifier = modifier,
-                viewMode = mode,
-                canToggleViewMode = canToggle,
-                onToggleViewMode = toggleMode,
-                onLaunchMultiview = onLaunchMultiview,
-                onOpenSearch = onOpenSearch,
-                onPlayCatchup = onPlayCatchup,
-            )
-        } else GuideScreen(
+        LiveTVViewMode.Guide -> GuideScreen(
             onChannelClick = onChannelClick,
             viewModel = viewModel,
             modifier = modifier,
