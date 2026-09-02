@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,12 +75,23 @@ internal fun ChannelListOverlay(
 
     // Focus follows the stage: list on open + whenever the sidebar closes
     // (group pick or Right/Back), sidebar row when it slides in.
+    // Landing row: the channel already playing when it is in this group
+    // (Logan 2026-09-02: "default focus should be on the channel already
+    // watching"), else the top of the list.
+    val landingIndex = remember(entries, currentChannelId) {
+        entries.indexOfFirst { it.id == currentChannelId }.coerceAtLeast(0)
+    }
     LaunchedEffect(sidebarOpen, activeGroup) {
         if (sidebarOpen) {
             runCatching { sidebarFocus.requestFocus() }
         } else {
-            runCatching { listState.scrollToItem(0) }
-            runCatching { listFocus.requestFocus() }
+            runCatching { listState.scrollToItem(landingIndex) }
+            // The landing row only composes after the scroll lands; retry a
+            // few frames so the request finds it.
+            repeat(6) {
+                if (runCatching { listFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                withFrameNanos { }
+            }
         }
     }
 
@@ -176,7 +188,7 @@ internal fun ChannelListOverlay(
                             nowTitle = nowTitleFor(ch),
                             isPlaying = ch.id == currentChannelId,
                             onClick = { onSelect(ch) },
-                            modifier = if (index == 0) {
+                            modifier = if (index == landingIndex) {
                                 Modifier.focusRequester(listFocus)
                             } else {
                                 Modifier
