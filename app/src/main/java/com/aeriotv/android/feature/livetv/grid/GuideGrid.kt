@@ -32,6 +32,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -169,6 +170,10 @@ fun GuideGrid(
             else -> onHostAction(action)
         }
     }
+    // UP out of the grid must land on the CURRENT tab's pill (Logan
+    // 2026-09-02), never on whichever pill is geometrically nearest: the nav
+    // switches tabs on focus, so a geometric search opened On Demand.
+    val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
         val native = event.nativeKeyEvent as? AndroidKeyEvent
         val repeat = native?.repeatCount ?: 0
@@ -181,7 +186,10 @@ fun GuideGrid(
             when (event.key) {
                 Key.DirectionUp -> {
                     if (!down) return@handler true
-                    if (!state.moveRows(-1)) return@handler onLeaveTop()
+                    if (!state.moveRows(-1)) {
+                        if (onLeaveTop()) return@handler true
+                        return@handler topNav?.let { runCatching { it.requestFocus() }.isSuccess } ?: false
+                    }
                     true
                 }
                 Key.DirectionDown -> { if (down) state.moveRows(+1); true }
@@ -247,6 +255,11 @@ fun GuideGrid(
     Column(
         modifier = modifier
             .focusRequester(focusRequester)
+            .focusProperties {
+                if (topNav != null) up = topNav
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+            }
             .onFocusChanged { gridFocused = it.isFocused }
             .focusable()
             .onPreviewKeyEvent(keyHandler),

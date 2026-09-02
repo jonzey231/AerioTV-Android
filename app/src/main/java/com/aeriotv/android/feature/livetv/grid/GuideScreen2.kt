@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -519,10 +520,11 @@ private fun GroupPills(
     onDown: () -> Boolean,
 ) {
     val listState = rememberLazyListState()
+    val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
     LazyRow(
         state = listState,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-        modifier = Modifier.fillMaxWidth().height(44.dp),
+        modifier = Modifier.fillMaxWidth().height(44.dp).focusProperties { if (topNav != null) up = topNav },
     ) {
         items(items, key = { it.first }) { (group, label) ->
             var focused by remember { mutableStateOf(false) }
