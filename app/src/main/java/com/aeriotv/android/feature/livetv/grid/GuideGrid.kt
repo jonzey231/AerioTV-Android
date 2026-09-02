@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.livetv.grid
 
+import com.aeriotv.android.core.ui.subtitleIsRedundant
 import com.aeriotv.android.core.ui.rememberClockMode
 import com.aeriotv.android.core.ui.ClockFormat
 import android.os.Trace
@@ -570,7 +571,7 @@ private fun GridRow(
                             // the title or the description (feeds that promote
                             // sub-title into <desc>), and the Appearance
                             // toggle drops the line entirely.
-                            val sub = cell.subTitle?.takeIf { showSubtitles && it.isNotBlank() && it != cell.title && it != cell.description }
+                            val sub = cell.subTitle?.takeIf { showSubtitles && !subtitleIsRedundant(it, cell.title, cell.description) }
                                 ?.let { measure(it, subStyle, 15.sp.toPx()) }
                             val desc = cell.description.takeIf { it.isNotBlank() }?.let { measure(it, descStyle, 15.sp.toPx()) }
                             val range = rangeCache.getOrPut(cell.startMillis) {

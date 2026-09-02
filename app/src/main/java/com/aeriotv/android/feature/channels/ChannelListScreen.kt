@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.channels
 
+import com.aeriotv.android.core.ui.subtitleIsRedundant
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutLinearInEasing
@@ -1089,7 +1090,10 @@ internal fun ChannelRow(
                         // added as a new line, so the list's cross-row alignment
                         // is preserved.
                         text = listOfNotNull(
-                            nowProgramme?.subTitle?.takeIf { LocalShowProgramSubtitles.current && it.isNotBlank() },
+                            nowProgramme?.subTitle?.takeIf {
+                                LocalShowProgramSubtitles.current &&
+                                    !subtitleIsRedundant(it, nowProgramme.title, nowProgramme.description)
+                            },
                             nowProgramme?.description?.takeIf { it.isNotBlank() },
                         ).joinToString(" · ").ifBlank { " " },
                         style = MaterialTheme.typography.bodySmall,
@@ -1575,7 +1579,9 @@ private fun UpcomingProgrammeRow(
                 // GH #34: surface the XMLTV <sub-title> (match/episode name) in
                 // the expanded schedule so back-to-back same-title programmes are
                 // distinguishable.
-                programme.subTitle?.takeIf { LocalShowProgramSubtitles.current && it.isNotBlank() }?.let { sub ->
+                programme.subTitle?.takeIf {
+                    LocalShowProgramSubtitles.current && !subtitleIsRedundant(it, programme.title, programme.description)
+                }?.let { sub ->
                     Text(
                         text = sub,
                         style = MaterialTheme.typography.bodySmall,

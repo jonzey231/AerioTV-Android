@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.livetv
 
+import com.aeriotv.android.core.ui.subtitleIsRedundant
 import com.aeriotv.android.core.ui.rememberClockMode
 import com.aeriotv.android.core.ui.ClockFormat
 import android.content.res.Configuration
@@ -313,7 +314,7 @@ private fun ProgramInfoBody(
                     }
                 }
             }
-            target.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+            target.subTitle?.takeIf { !subtitleIsRedundant(it, target.title, target.description) }?.let { sub ->
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = sub,

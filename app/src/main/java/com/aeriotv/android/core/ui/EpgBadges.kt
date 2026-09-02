@@ -50,6 +50,23 @@ val LocalShowEpgBadges = androidx.compose.runtime.staticCompositionLocalOf { tru
 data class GuideRailPrefs(val logos: Boolean = true, val numbers: Boolean = true, val names: Boolean = true)
 val LocalGuideRailPrefs = androidx.compose.runtime.staticCompositionLocalOf { GuideRailPrefs() }
 
+/**
+ * True when the XMLTV sub-title would only repeat what the title or the
+ * description already says: equal to either, or the description begins with
+ * the sub-title in square brackets ("[Der Tote im Heizungsraum] ..."), which
+ * is how Schedules Direct's German lineups ship their synopses (Dispatcharr
+ * passes episodeTitle150 and description1000 through verbatim; XC clients
+ * never see the sub-title field, so only Direct Connect showed both lines).
+ */
+fun subtitleIsRedundant(sub: String?, title: String?, description: String?): Boolean {
+    val s = sub?.trim().orEmpty()
+    if (s.isEmpty()) return true
+    if (s == title?.trim()) return true
+    val d = description?.trim().orEmpty()
+    if (d.isEmpty()) return false
+    return d == s || d.startsWith("[$s]")
+}
+
 /** Settings > Appearance > Channel List > Show Program Subtitles. */
 val LocalShowProgramSubtitles = androidx.compose.runtime.staticCompositionLocalOf { true }
 
