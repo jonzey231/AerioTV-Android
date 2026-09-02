@@ -1232,6 +1232,31 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_LIVE_REWIND_KEEP_RECENT] = value }
     }
 
+    /** Guide rebuild (docs/guide-semantics.md s.4): the identity fingerprint
+     *  (GuideIdentityHash) the playlist's EPG cache was last built for. Empty
+     *  when never stamped. */
+    fun epgIdentityHash(playlistId: String): kotlinx.coroutines.flow.Flow<String> =
+        store.data.map { it[keyEpgIdentityHash(playlistId)] ?: "" }
+    suspend fun setEpgIdentityHash(playlistId: String, hash: String) {
+        store.edit { it[keyEpgIdentityHash(playlistId)] = hash }
+    }
+
+    /**
+     * ETag / Last-Modified from the last COMPLETE parse of an upstream EPG
+     * feed, keyed by feed url (guide rebuild: unchanged feeds are not
+     * re-downloaded or re-parsed). Either half may be null.
+     */
+    fun feedValidators(url: String): kotlinx.coroutines.flow.Flow<Pair<String?, String?>> =
+        store.data.map { p ->
+            val raw = p[keyFeedValidators(url)] ?: return@map null to null
+            val i = raw.indexOf('\n')
+            if (i < 0) raw.ifEmpty { null } to null
+            else raw.substring(0, i).ifEmpty { null } to raw.substring(i + 1).ifEmpty { null }
+        }
+    suspend fun setFeedValidators(url: String, etag: String?, lastModified: String?) {
+        store.edit { it[keyFeedValidators(url)] = (etag ?: "") + "\n" + (lastModified ?: "") }
+    }
+
     /** How many recent channels stay live (1-5, default 2). */
     val liveRewindKeepCount: kotlinx.coroutines.flow.Flow<Int> =
         store.data.map { (it[KEY_LIVE_REWIND_KEEP_COUNT] ?: 2).coerceIn(1, 5) }
@@ -1410,6 +1435,12 @@ class AppPreferences @Inject constructor(
          *  AddToMultiview sheet still shows only its first few. */
         const val RECENT_CHANNELS_CAP = 25
         val KEY_RECENT_CHANNEL_IDS = stringPreferencesKey("recent_channel_ids")
+        /** Guide rebuild: per-playlist identity fingerprint the EPG cache was built for. */
+        private fun keyEpgIdentityHash(playlistId: String) = stringPreferencesKey("epg_identity_hash_$playlistId")
+        private fun keyFeedValidators(url: String): androidx.datastore.preferences.core.Preferences.Key<String> {
+            val d = java.security.MessageDigest.getInstance("SHA-1").digest(url.toByteArray())
+            return stringPreferencesKey("feed_validators_" + d.joinToString("") { "%02x".format(it) })
+        }
         val KEY_SELECTED_THEME = stringPreferencesKey("selected_theme")
         val KEY_APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")

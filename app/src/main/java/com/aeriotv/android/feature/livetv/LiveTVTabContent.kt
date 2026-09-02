@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -13,6 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.ui.LocalShowEpgBadges
 import com.aeriotv.android.feature.channels.ChannelListScreen
+import com.aeriotv.android.feature.livetv.grid.GuideScreen
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.scale.WithDisplayScale

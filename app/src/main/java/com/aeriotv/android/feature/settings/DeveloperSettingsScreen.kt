@@ -156,7 +156,6 @@ fun DeveloperSettingsScreen(
                     onRequestDisable = { pendingDisable = true },
                 )
             }
-
             if (logFileExists) {
                 item("log-file") {
                     LogFileSection(

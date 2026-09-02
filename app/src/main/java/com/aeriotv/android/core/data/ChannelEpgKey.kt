@@ -1,5 +1,7 @@
 package com.aeriotv.android.core.data
 
+import com.aeriotv.android.core.guide.guideChannelId
+
 /**
  * Canonical lookup key for joining a [M3UChannel] to its EPG programmes.
  *
@@ -31,19 +33,7 @@ package com.aeriotv.android.core.data
  * the Android equivalent falls out of the data shape naturally.
  */
 val M3UChannel.guideMatchKey: String
-    get() {
-        val tvg = tvgID.takeIf { it.isNotBlank() }
-        if (tvg != null) return tvg
-        val num = channelNumber?.takeIf { it.isNotBlank() }
-        if (num != null) return num
-        val dispatcharrInt = dispatcharrChannelId?.toString()
-        if (dispatcharrInt != null) return dispatcharrInt
-        val uuidAttr = rawAttributes["channel-id"]?.takeIf { it.isNotBlank() }
-            ?: rawAttributes["channel-uuid"]?.takeIf { it.isNotBlank() }
-            ?: rawAttributes["uuid"]?.takeIf { it.isNotBlank() }
-        if (uuidAttr != null) return uuidAttr
-        return id
-    }
+    get() = this.guideChannelId().value
 
 /**
  * Build a case-insensitive map from any candidate key (tvg-id, channel
@@ -61,38 +51,19 @@ val M3UChannel.guideMatchKey: String
  * bucket because they both resolve to the same key.
  */
 fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
+    // Rebuilt on the guide identity module: keys are the raw feed keys a
+    // programme may carry (declared tvg-ids, dummy-EPG uuids), values the
+    // canonical id of the first channel that claims them. Callers that need
+    // the full one-to-many attachment use bridgeChannelIds; callers that need
+    // the raw-key SET (the parser's known-channel filter) use .keys.
     if (channels.isEmpty()) return emptyMap()
-    val out = LinkedHashMap<String, String>(channels.size * 4)
-    // Two passes (Streamer 2026-09-01): a channel's REAL guide id must win over
-    // another channel's incidental numeric id. Importing a second server's
-    // channels put a KNBC with tvg-id "19" next to an ESPN whose Dispatcharr
-    // channel id is 19; single-pass putIfAbsent handed "19" to whichever row
-    // iterated first (ESPN), so KNBC's programmes bridged onto ESPN (Kelly
-    // Clarkson on ESPN HD) and two feeds then fought over ESPN's window,
-    // leaving holes. Pass 1 claims every declared tvg-id; pass 2 adds the
-    // number / id / uuid fallbacks only where nothing real claimed the key.
-    for (ch in channels) {
-        val canonical = ch.guideMatchKey
-        for (raw in listOfNotNull(ch.tvgID, ch.rawAttributes["tvg-id"])) {
-            val key = raw.trim().lowercase()
-            if (key.isNotEmpty()) out.putIfAbsent(key, canonical)
-        }
-    }
-    for (ch in channels) {
-        val canonical = ch.guideMatchKey
-        val fallbacks = listOfNotNull(
-            ch.channelNumber,
-            ch.dispatcharrChannelId?.toString(),
-            ch.rawAttributes["channel-id"],
-            ch.rawAttributes["channel-uuid"],
-            ch.rawAttributes["uuid"],
-            ch.id.takeIf { it.startsWith("disp:") }?.removePrefix("disp:"),
-        )
-        for (raw in fallbacks) {
-            val key = raw.trim().lowercase()
-            if (key.isNotEmpty()) out.putIfAbsent(key, canonical)
-        }
-    }
+    val maps = com.aeriotv.android.core.guide.GuideMatchMaps.build(channels)
+    val out = LinkedHashMap<String, String>(maps.tvgIdToChannels.size + maps.uuidToChannel.size)
+    for ((key, ids) in maps.tvgIdToChannels) out[key] = ids.first().value
+    for ((key, id) in maps.uuidToChannel) out.putIfAbsent(key, id.value)
+    // Numbers are in the parser's known-key set (Apple's channelMatchKeys
+    // includes them); the attach step decides per source whether they match.
+    for ((key, id) in maps.numberToChannel) out.putIfAbsent(key, id.value)
     return out
 }
 
@@ -115,14 +86,39 @@ fun buildChannelEpgKeyBridge(channels: List<M3UChannel>): Map<String, String> {
 fun bridgeChannelIds(
     programmes: List<EPGProgramme>,
     channels: List<M3UChannel>,
+    source: com.aeriotv.android.core.guide.GuideSource = com.aeriotv.android.core.guide.GuideSource.GRID,
 ): List<EPGProgramme> {
+    // Rebuilt: attach through explicit match maps, ONE-TO-MANY (a tvg-id
+    // shared by several channels lands its programmes on every one of them,
+    // as the Apple guide does), and never through channel numbers or integer
+    // ids. Unmatched programmes are dropped; they can never render anyway.
     if (programmes.isEmpty() || channels.isEmpty()) return programmes
-    val bridge = buildChannelEpgKeyBridge(channels)
-    if (bridge.isEmpty()) return programmes
-    return programmes.map { prog ->
-        val raw = prog.channelId.trim().lowercase()
-        if (raw.isEmpty()) return@map prog
-        val canonical = bridge[raw] ?: return@map prog
-        if (canonical == prog.channelId) prog else prog.copy(channelId = canonical)
+    val maps = com.aeriotv.android.core.guide.GuideMatchMaps.build(channels)
+    if (maps.isEmpty) return emptyList()
+    val result = com.aeriotv.android.core.guide.GuideIngest.attach(programmes, maps, source)
+    if (result.unresolvedCount > 0) {
+        // TEMP DIAGNOSTIC (rebuild phase 2): for each sampled unresolved key,
+        // say which channel FIELD would have matched it under the old bridge,
+        // so the identity maps can be corrected from evidence, not guesses.
+        val byNumber = channels.associateBy { it.channelNumber?.trim()?.lowercase().orEmpty() }
+        val byIntId = channels.associateBy { it.dispatcharrChannelId?.toString().orEmpty() }
+        val byRawTvg = channels.associateBy { it.rawAttributes["tvg-id"]?.trim()?.lowercase().orEmpty() }
+        val byTvg = channels.associateBy { it.tvgID.trim().lowercase() }
+        val classified = result.unresolvedKeys.map { k ->
+            val hits = buildList {
+                byTvg[k]?.let { add("tvgID=" + it.name) }
+                byRawTvg[k]?.let { add("rawTvg=" + it.name) }
+                byNumber[k]?.let { add("number=" + it.name) }
+                byIntId[k]?.let { add("intId=" + it.name) }
+            }
+            "$k -> ${if (hits.isEmpty()) "no channel field" else hits.joinToString("|")}"
+        }
+        android.util.Log.i(
+            "GuideIdentity",
+            "attach: ${result.attachedCount} attached, ${result.unresolvedCount} unresolved; " +
+                "channels=${channels.size} withTvg=${channels.count { it.tvgID.isNotBlank() }} " +
+                "sample: $classified",
+        )
     }
+    return result.resolved.map { it.programme }
 }

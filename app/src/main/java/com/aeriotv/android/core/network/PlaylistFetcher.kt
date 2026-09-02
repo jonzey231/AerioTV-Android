@@ -132,10 +132,38 @@ class PlaylistFetcher @Inject constructor() {
         userAgent: String? = null,
         extraHeaders: Map<String, String> = emptyMap(),
     ): File {
+        fetchToFileInternal(url, dest, userAgent, extraHeaders, validators = null)
+        return dest
+    }
+
+    /**
+     * [fetchToFile] as a conditional GET: sends the validators kept from the
+     * last full download and returns null when the server answers 304 Not
+     * Modified, so an unchanged upstream EPG feed costs one round trip
+     * instead of a download plus a full parse. A server that sends neither
+     * ETag nor Last-Modified simply always downloads.
+     */
+    suspend fun fetchToFileIfChanged(
+        url: String,
+        dest: File,
+        validators: FeedValidators?,
+    ): FeedValidators? = fetchToFileInternal(url, dest, null, emptyMap(), validators)
+
+    /** The response validators, or null on 304 (only when [validators] were sent). */
+    private fun fetchToFileInternal(
+        url: String,
+        dest: File,
+        userAgent: String?,
+        extraHeaders: Map<String, String>,
+        validators: FeedValidators?,
+    ): FeedValidators? {
         val reqBuilder = okhttp3.Request.Builder().url(url)
         if (userAgent != null) reqBuilder.header("User-Agent", userAgent)
         for ((k, v) in extraHeaders) reqBuilder.header(k, v)
-        streamingClient.newCall(reqBuilder.build()).execute().use { response ->
+        validators?.etag?.let { reqBuilder.header("If-None-Match", it) }
+        validators?.lastModified?.let { reqBuilder.header("If-Modified-Since", it) }
+        return streamingClient.newCall(reqBuilder.build()).execute().use { response ->
+            if (validators != null && response.code == 304) return@use null
             if (!response.isSuccessful) {
                 throw IllegalStateException(
                     "HTTP ${response.code} ${response.message} from ${LogSanitizer.redactUrl(url)}",
@@ -208,8 +236,8 @@ class PlaylistFetcher @Inject constructor() {
             if (expected > LARGE_DOWNLOAD_BYTES) {
                 Log.i(TAG, "large download complete: ${total / 1_000_000}MB")
             }
+            FeedValidators(response.header("ETag"), response.header("Last-Modified"))
         }
-        return dest
     }
 
     @Suppress("unused")
@@ -336,3 +364,6 @@ class PlaylistFetcher @Inject constructor() {
         const val THROUGHPUT_FLOOR_BYTES = 256L * 1024
     }
 }
+
+/** Cache validators from the last full download of a feed (conditional GET). */
+data class FeedValidators(val etag: String?, val lastModified: String?)
