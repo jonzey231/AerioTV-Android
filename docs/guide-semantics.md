@@ -114,6 +114,8 @@ runs at background thread priority.
 - LEFT/RIGHT pan the timeline by half an hour per press and then retarget
   focus, on the same row, to the cell containing the anchor. The focus ring
   rides the viewport; it never slides off screen.
+  ANDROID pans on the key RELEASE, and only when no hold action fired, so a
+  held Left opens the group sidebar without first moving the timeline.
 - Holes: Apple draws nothing and leaves focus where it was when the anchor
   falls in a hole. ANDROID synthesises a focusable "No info" cell for any hole
   of five minutes or more, so the D-pad can land on it and play the channel.
