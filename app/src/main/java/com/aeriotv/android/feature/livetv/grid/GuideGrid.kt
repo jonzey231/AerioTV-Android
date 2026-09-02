@@ -464,7 +464,7 @@ private fun GridRow(
                         style = Stroke(width = bw),
                     )
                 }
-                if (w >= TEXT_MIN_PX) {
+                if (w >= 40.dp.toPx()) {
                     val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
                     val wantRange = !cell.isPlaceholder && size.height >= 40.dp.toPx()
                     val wantDesc = wantRange && cell.description.isNotBlank() && size.height >= 50.dp.toPx()
@@ -551,7 +551,6 @@ private fun GuideRemoteAction.orDefault(default: GuideRemoteAction) = if (this =
 private const val MIN_CELL_PX = 6f
 private const val RAIL_NUMBER_KEY = Long.MIN_VALUE + 1
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
-private const val TEXT_MIN_PX = 28f
 private val NOW_RED = Color(0xFFFF4757)
 
 private class CellText(val title: TextLayoutResult, val range: TextLayoutResult?, val desc: TextLayoutResult? = null)

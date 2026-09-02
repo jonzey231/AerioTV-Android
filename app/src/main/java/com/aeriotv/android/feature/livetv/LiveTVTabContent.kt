@@ -64,7 +64,9 @@ fun LiveTVTabContent(
             )).use { it.readLine()?.trim() }
         }.getOrNull()?.takeIf { it == "0" || it == "1" }
     }
-    val useNewGuide = when (guideRendererOverride) { "1" -> true; "0" -> false; else -> guideRendererV2 }
+    // TV only until the phone/tablet chrome of the new renderer lands.
+    val useNewGuide = com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor().isTv &&
+        when (guideRendererOverride) { "1" -> true; "0" -> false; else -> guideRendererV2 }
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
     // Per-device-type EPG badge visibility, provided to the guide / list / info
     // sheet below so they hide the badges when the user turns them off.
