@@ -124,6 +124,7 @@ fun AppearanceSettingsScreen(
     val showChannelLogos by viewModel.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNumbers by viewModel.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNames by viewModel.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
+    val showProgramSubtitles by viewModel.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
     var accentPickerOpen by remember { mutableStateOf(false) }
@@ -293,6 +294,13 @@ fun AppearanceSettingsScreen(
                         subtitle = "Display each channel's name in the Guide's channel column.",
                         checked = showChannelNames,
                         onCheckedChange = viewModel::setShowChannelNames,
+                    )
+                    DividerRow()
+                    ToggleRow(
+                        title = "Show Program Subtitles",
+                        subtitle = "Display the episode or match name under each program title in the Guide and Live TV list. Turn off if your EPG repeats the description there.",
+                        checked = showProgramSubtitles,
+                        onCheckedChange = viewModel::setShowProgramSubtitles,
                     )
                 }
 

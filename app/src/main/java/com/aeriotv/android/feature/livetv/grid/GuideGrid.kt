@@ -401,6 +401,7 @@ private fun GridRow(
     val badgeStyle = TextStyle(color = Color.White, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
     val outline = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     val showBadges = com.aeriotv.android.core.ui.LocalShowEpgBadges.current
+    val showSubtitles = com.aeriotv.android.core.ui.LocalShowProgramSubtitles.current
     val hiddenBadges = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
     val shortFmt = remember { SimpleDateFormat("h:mm", Locale.getDefault()) }
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
@@ -409,7 +410,7 @@ private fun GridRow(
     val padH = 8f
     // Text layouts are measured once per (cell, width) and drawn many times:
     // measuring through TextMeasurer on every draw was ~1 ms per row.
-    val textCache = remember(state.rows, row) { HashMap<Long, CellText>() }
+    val textCache = remember(state.rows, row, showBadges, showSubtitles) { HashMap<Long, CellText>() }
     val rangeCache = remember(state.rows, row) { HashMap<Long, String>() }
     val railWidthPx = with(LocalDensity.current) { railWidth.toPx() }
     val logos = LocalLogoCache.current
@@ -545,7 +546,12 @@ private fun GridRow(
                         )
                         val title = measure(cell.title, if (cell.isPlaceholder) titleDimStyle else titleStyle, 20.sp.toPx())
                         if (cell.isPlaceholder || !tall) CellText(title, null) else {
-                            val sub = cell.subTitle?.takeIf { it.isNotBlank() }?.let { measure(it, subStyle, 15.sp.toPx()) }
+                            // Apple parity: the sub-title never double-prints
+                            // the title or the description (feeds that promote
+                            // sub-title into <desc>), and the Appearance
+                            // toggle drops the line entirely.
+                            val sub = cell.subTitle?.takeIf { showSubtitles && it.isNotBlank() && it != cell.title && it != cell.description }
+                                ?.let { measure(it, subStyle, 15.sp.toPx()) }
                             val desc = cell.description.takeIf { it.isNotBlank() }?.let { measure(it, descStyle, 15.sp.toPx()) }
                             val range = rangeCache.getOrPut(cell.startMillis) {
                                 shortFmt.format(Date(cell.startMillis)) + " - " + shortFmt.format(Date(cell.endMillis))

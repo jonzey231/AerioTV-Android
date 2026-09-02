@@ -143,6 +143,18 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Whether the programme SUBTITLE line (the XMLTV sub-title: episode or
+     * match name, drawn italic under the title) renders in the Guide cells
+     * and the Live TV list. Some EPG providers repeat the description in
+     * the sub-title, so the two lines read as duplicates; turning this off
+     * leaves title + description. Default ON.
+     */
+    val showProgramSubtitles: Flow<Boolean> = store.data.map { it[KEY_SHOW_PROGRAM_SUBTITLES] ?: true }
+    suspend fun setShowProgramSubtitles(value: Boolean) {
+        store.edit { it[KEY_SHOW_PROGRAM_SUBTITLES] = value }
+    }
+
+    /**
      * Whether the EPG program badges (LIVE / NEW / PREMIERE / FINALE / REPEAT +
      * season/episode pill) render in the guide, channel list, and info sheet.
      * Default ON. Stored + Drive-synced PER DEVICE TYPE (a separate value for TV
@@ -1447,6 +1459,7 @@ class AppPreferences @Inject constructor(
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
         val KEY_SHOW_CHANNEL_NAMES = booleanPreferencesKey("ui_show_channel_names")
+        val KEY_SHOW_PROGRAM_SUBTITLES = booleanPreferencesKey("ui_show_program_subtitles")
         val KEY_HIDDEN_EPG_BADGES = stringPreferencesKey("ui_hidden_epg_badges")
         val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")
         val KEY_SHOW_EPG_BADGES_MOBILE = booleanPreferencesKey("ui_show_epg_badges_mobile")

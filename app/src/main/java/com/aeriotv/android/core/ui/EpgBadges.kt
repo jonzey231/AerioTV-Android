@@ -46,6 +46,9 @@ data class EpgFlag(val label: String, val color: Color)
  */
 val LocalShowEpgBadges = androidx.compose.runtime.staticCompositionLocalOf { true }
 
+/** Settings > Appearance > Channel List > Show Program Subtitles. */
+val LocalShowProgramSubtitles = androidx.compose.runtime.staticCompositionLocalOf { true }
+
 /**
  * Labels of badge kinds the user has hidden under the master switch (Logan,
  * 2026-08-19). Provided at the Live TV level; EpgFlagsRow and the program-info

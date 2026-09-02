@@ -110,6 +110,7 @@ import com.aeriotv.android.core.tv.TvActionMenuDialog
 import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.ui.EpgFlagsRow
 import com.aeriotv.android.core.ui.LocalShowEpgBadges
+import com.aeriotv.android.core.ui.LocalShowProgramSubtitles
 import com.aeriotv.android.core.ui.SeasonEpisodePill
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
@@ -1088,7 +1089,7 @@ internal fun ChannelRow(
                         // added as a new line, so the list's cross-row alignment
                         // is preserved.
                         text = listOfNotNull(
-                            nowProgramme?.subTitle?.takeIf { it.isNotBlank() },
+                            nowProgramme?.subTitle?.takeIf { LocalShowProgramSubtitles.current && it.isNotBlank() },
                             nowProgramme?.description?.takeIf { it.isNotBlank() },
                         ).joinToString(" · ").ifBlank { " " },
                         style = MaterialTheme.typography.bodySmall,
@@ -1574,7 +1575,7 @@ private fun UpcomingProgrammeRow(
                 // GH #34: surface the XMLTV <sub-title> (match/episode name) in
                 // the expanded schedule so back-to-back same-title programmes are
                 // distinguishable.
-                programme.subTitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                programme.subTitle?.takeIf { LocalShowProgramSubtitles.current && it.isNotBlank() }?.let { sub ->
                     Text(
                         text = sub,
                         style = MaterialTheme.typography.bodySmall,

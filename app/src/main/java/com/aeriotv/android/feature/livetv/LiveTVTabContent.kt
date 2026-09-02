@@ -59,6 +59,7 @@ fun LiveTVTabContent(
     // sheet below so they hide the badges when the user turns them off.
     val showEpgBadges by settingsVm.showEpgBadges(formFactor.isTv)
         .collectAsStateWithLifecycle(initialValue = true)
+    val showProgramSubtitles by settingsVm.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
     val hiddenEpgBadges by settingsVm.hiddenEpgBadges
         .collectAsStateWithLifecycle(initialValue = emptySet())
 
@@ -107,6 +108,7 @@ fun LiveTVTabContent(
     // be free-scaling). Match that scoping rule here.
     CompositionLocalProvider(
         LocalShowEpgBadges provides showEpgBadges,
+        com.aeriotv.android.core.ui.LocalShowProgramSubtitles provides showProgramSubtitles,
         com.aeriotv.android.core.ui.LocalHiddenEpgBadges provides hiddenEpgBadges,
     ) {
     when (mode) {

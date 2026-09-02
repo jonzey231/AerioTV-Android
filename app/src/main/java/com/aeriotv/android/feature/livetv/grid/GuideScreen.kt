@@ -2,6 +2,9 @@ package com.aeriotv.android.feature.livetv.grid
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -537,18 +540,23 @@ private fun GroupPills(
         modifier = Modifier.fillMaxWidth().height(44.dp).focusProperties { if (topNav != null) up = topNav },
     ) {
         items(items, key = { it.first }) { (group, label) ->
-            var focused by remember { mutableStateOf(false) }
+            // One focus target only: clickable() already contributes it, and a
+            // separate focusable() nested a second one (first OK moved focus
+            // inward and drew the default square ripple, the second OK
+            // selected). Same pattern as the phone LiveTvTopBar pills. The
+            // clip keeps the focus/pressed drawing inside the capsule.
+            val interaction = remember { MutableInteractionSource() }
+            val focused by interaction.collectIsFocusedAsState()
             val isSelected = group == selected
             val colors = MaterialTheme.colorScheme
             Box(
                 modifier = Modifier
                     .padding(end = 8.dp)
                     .then(if (group == items.firstOrNull()?.first) Modifier.focusRequester(firstPillFocus) else Modifier)
-                    .onFocusChanged { focused = it.isFocused }
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
                     }
-                    .focusable()
+                    .clip(RoundedCornerShape(15.dp))
                     .background(
                         when {
                             isSelected -> colors.primary.copy(alpha = 0.35f)
@@ -557,7 +565,7 @@ private fun GroupPills(
                         RoundedCornerShape(15.dp),
                     )
                     .border(if (focused) 2.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(15.dp))
-                    .clickable { onSelect(group) }
+                    .clickable(interactionSource = interaction, indication = null) { onSelect(group) }
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
