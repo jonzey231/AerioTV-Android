@@ -1364,6 +1364,25 @@ class PlaylistViewModel @Inject constructor(
                 vodEnabled = vodEnabled,
                 epgRetentionDays = epgRetentionDays.coerceIn(1, 30),
             )
+            // GH #83: Edit Playlist reads state.playlist, so reflect the
+            // edited fields there NOW (the repository writes the DB row early
+            // too); a failed save puts the previous values back.
+            _state.update {
+                it.copy(
+                    playlist = active.copy(
+                        name = request.name ?: active.name,
+                        urlString = request.url.trimEnd('/'),
+                        lanUrlString = request.lanUrl?.trimEnd('/'),
+                        epgUrl = request.epgUrl,
+                        apiKey = request.apiKey ?: active.apiKey,
+                        username = request.username,
+                        password = request.password,
+                        dispatcharrProfileId = request.dispatcharrProfileId,
+                        vodEnabled = request.vodEnabled,
+                        epgRetentionDays = request.epgRetentionDays,
+                    ),
+                )
+            }
             repository.loadAndPersist(request, existingId = active.id).fold(
                 onSuccess = { (entity, channels) ->
                     _state.update {
@@ -1380,6 +1399,7 @@ class PlaylistViewModel @Inject constructor(
                     Log.w(TAG, "saveEdits failed", t)
                     _state.update {
                         it.copy(
+                            playlist = active,
                             isLoading = false,
                             error = loadFailureMessage("Save failed", t),
                         )

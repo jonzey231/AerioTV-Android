@@ -126,6 +126,10 @@ fun GuideScreen(
         channelUuid: String,
     ) -> Unit = { _, _, _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
+    /** Favorites tab on TV (Logan 2026-09-02): the grid shows only the
+     *  starred channels in their favorites order; no group pills, no
+     *  sidebar, no search / sort. */
+    favoritesOnly: Boolean = false,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -169,7 +173,7 @@ fun GuideScreen(
     val collections by collectionsVm.collections.collectAsStateWithLifecycle(initialValue = emptyList())
     val stagedMultiview by multiviewStore.selected.collectAsStateWithLifecycle(initialValue = emptyList())
     val groupSelector by settingsVm.guideGroupSelector.collectAsStateWithLifecycle(initialValue = "pills")
-    val sidebarGroupMode = isTv && groupSelector == "sidebar"
+    val sidebarGroupMode = isTv && groupSelector == "sidebar" && !favoritesOnly
     val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(false) }
@@ -205,7 +209,7 @@ fun GuideScreen(
             groups.map { it to it } +
             end.map { ChannelCollection.token(it.id) to it.name }
     }
-    val displayChannels by produceState(
+    val groupedChannels by produceState(
         initialValue = computeDisplayChannels(
             state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
             allGroupNames, groupSortMode, hiddenGroups, favoriteIds, collections,
@@ -220,6 +224,13 @@ fun GuideScreen(
             )
         }
     }
+    // favoritesOnly: the starred channels in the user's favorites order,
+    // joined against the loaded playlist so stale rows fall away.
+    val favoriteChannels = remember(favoritesList, state.channels) {
+        val byId = state.channels.associateBy { it.id }
+        favoritesList.mapNotNull { byId[it.channelId] }
+    }
+    val displayChannels = if (favoritesOnly) favoriteChannels else groupedChannels
 
     // Grid window: history back to the retention edge, forward to the EPG window.
     val historyHours = state.epgHistoryHours.coerceAtLeast(1)
@@ -283,7 +294,8 @@ fun GuideScreen(
         )
     }
     val openGroupMenu: () -> Boolean = {
-        if (sidebarGroupMode) {
+        if (favoritesOnly) false
+        else if (sidebarGroupMode) {
             sidebarOriginalGroup = state.selectedGroup
             groupSidebarOpen = true
             true
@@ -406,7 +418,7 @@ fun GuideScreen(
                 )
             }
         }
-        if (isTv && !sidebarGroupMode) GroupPills(
+        if (isTv && !sidebarGroupMode && !favoritesOnly) GroupPills(
             items = pillItems,
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
@@ -438,7 +450,7 @@ fun GuideScreen(
                     else onChannelClick(channel)
                 },
                 onOpenMenu = { channel, cell -> menuFor = channel to cell; menuGuard.arm() },
-                onLeaveTop = { if (sidebarGroupMode) false else runCatching { pillsFocus.requestFocus() }.isSuccess },
+                onLeaveTop = { if (sidebarGroupMode || favoritesOnly) false else runCatching { pillsFocus.requestFocus() }.isSuccess },
                 remoteAction = { slot -> remoteMap.guideAction(slot) },
                 holdLeftOpensGroups = sidebarGroupMode,
                 onHostAction = hostAction,

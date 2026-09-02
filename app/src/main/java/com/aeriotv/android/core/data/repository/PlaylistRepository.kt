@@ -304,16 +304,44 @@ class PlaylistRepository @Inject constructor(
                 emptyList()
             }
 
-        val channels = fetchChannelsFor(
-            sourceType = sourceType,
-            base = normalisedBase,
-            userEpgUrl = request.epgUrl,
-            apiKey = resolvedApiKey,
-            profileId = request.dispatcharrProfileId,
-            accountProfileIds = accountProfileIds,
-            username = request.username,
-            password = request.password,
-        )
+        // GH #83: an EDIT shows its new values immediately. The full entity
+        // used to land only after the channel fetch, so the Playlists page
+        // kept showing the old URL (or credentials) for the whole sync and
+        // users re-opened Edit thinking the save was lost. Write the editable
+        // fields to the existing row now; a failed fetch restores the row.
+        val previous = existingId?.let { dao.byId(it) }
+        if (previous != null) {
+            dao.update(
+                previous.copy(
+                    name = request.name?.takeIf { it.isNotBlank() } ?: previous.name,
+                    urlString = normalisedBase,
+                    lanUrlString = request.lanUrl?.trimEnd('/')?.takeIf { it.isNotBlank() },
+                    epgUrl = request.epgUrl?.takeIf { it.isNotBlank() },
+                    apiKey = resolvedApiKey?.takeIf { it.isNotBlank() } ?: previous.apiKey,
+                    username = request.username?.takeIf { it.isNotBlank() },
+                    password = request.password?.takeIf { it.isNotBlank() },
+                    dispatcharrProfileId = request.dispatcharrProfileId,
+                    vodEnabled = request.vodEnabled,
+                    epgRetentionDays = request.epgRetentionDays.coerceIn(1, 30),
+                ),
+            )
+        }
+
+        val channels = try {
+            fetchChannelsFor(
+                sourceType = sourceType,
+                base = normalisedBase,
+                userEpgUrl = request.epgUrl,
+                apiKey = resolvedApiKey,
+                profileId = request.dispatcharrProfileId,
+                accountProfileIds = accountProfileIds,
+                username = request.username,
+                password = request.password,
+            )
+        } catch (t: Throwable) {
+            if (previous != null) runCatching { dao.update(previous) }
+            throw t
+        }
 
         // Capture the connected user's Dispatcharr account level (10 = admin,
         // 1 = standard, 0 = streamer). Only admins can POST server recordings,

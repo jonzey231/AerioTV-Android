@@ -196,10 +196,18 @@ fun MainScaffold(
     // orphan rows pointing at channel ids that no longer exist - the user
     // would see the tab, tap it, and find an empty "No Favorites" body
     // even though the DB count was non-zero.
+    // GH #81: an EMPTY channel list is "still loading" (playlist refresh,
+    // return from the player, sync apply), not "no favorites". Dropping the
+    // flag there removed the Favorites tab for a frame, and the tabs
+    // fallback below bounced the user to Live TV every time. Keep the last
+    // verdict until channels are back; an empty favorites list is a real
+    // DB emission and still retires the tab.
+    var lastRenderableFavorites by remember { mutableStateOf(false) }
     val hasRenderableFavorites = remember(favorites, state.channels) {
-        if (favorites.isEmpty() || state.channels.isEmpty()) return@remember false
+        if (favorites.isEmpty()) return@remember false
+        if (state.channels.isEmpty()) return@remember lastRenderableFavorites
         val visibleIds = state.channels.asSequence().map { it.id }.toHashSet()
-        favorites.any { it.channelId in visibleIds }
+        favorites.any { it.channelId in visibleIds }.also { lastRenderableFavorites = it }
     }
     // Dynamic On Demand + DVR tabs (iOS MainTabView.hasVOD / hasRecordings
     // parity). Both ViewModels are hoisted here so the tabs can appear / vanish
@@ -362,15 +370,29 @@ fun MainScaffold(
         }
     }
 
-    // Back from any secondary tab (Favorites / DVR / On Demand / Settings)
-    // returns to Live TV instead of exiting the app -- Live TV is the home tab.
-    // On Live TV this handler is disabled so Back falls through to the default
-    // (mini-player / exit). The Settings sub-screen BackHandler in
-    // SettingsTabContent is composed DEEPER and is enabled only while a
-    // sub-screen is open, so it takes priority there; this only fires on a
-    // tab root.
-    androidx.activity.compose.BackHandler(enabled = selectedTab != AppTab.LiveTV) {
-        selectedTab = AppTab.LiveTV
+    // Back from any secondary tab returns to the HOME tab instead of exiting
+    // the app. Home is the user's Default Tab when it is set and present
+    // (GH #81: a Favorites-first user expects Back to land on Favorites,
+    // not Live TV), else Live TV. On the home tab this handler is disabled
+    // so Back falls through to the default (mini-player / exit). The
+    // Settings sub-screen BackHandler in SettingsTabContent is composed
+    // DEEPER and is enabled only while a sub-screen is open, so it takes
+    // priority there; this only fires on a tab root.
+    val homeTab = AppTab.entries.firstOrNull { it.name == defaultTabPref }
+        ?.takeIf { it in tabs && it != AppTab.Search } ?: AppTab.LiveTV
+    // TV: the leaving tab's content nodes vanish, and Compose's fallback
+    // hands focus to the LEFTMOST pill (Live TV) while the home tab is
+    // selected (Logan 2026-09-02 screenshot). Ask for the home pill instead;
+    // the bar treats a non-UP focus arrival as a fallback, so selection does
+    // not follow it.
+    // Focus the home pill BEFORE the tab switches (the pill already exists),
+    // so the leaving content's nodes vanish with focus already parked there
+    // and no fallback flashes the Live TV pill (Logan: "less than a quarter
+    // of a second on Live TV before settling on Favorites").
+    val focusPill = remember { mutableStateOf<((AppTab) -> Unit)?>(null) }
+    androidx.activity.compose.BackHandler(enabled = selectedTab != homeTab) {
+        focusPill.value?.invoke(homeTab)
+        selectedTab = homeTab
         initialTabApplied = true
     }
 
@@ -442,6 +464,9 @@ fun MainScaffold(
         // for the same entry/exit focus redirects the pills use.
         val pillRequesters = remember(tabs) {
             (tabs + AppTab.Search).associateWith { FocusRequester() }
+        }
+        androidx.compose.runtime.SideEffect {
+            focusPill.value = { tab -> runCatching { pillRequesters[tab]?.requestFocus() } }
         }
         // Chrome-collapse channel: long content surfaces (the On Demand grids)
         // set this true while scrolled down so the tab bar shrinks away. See

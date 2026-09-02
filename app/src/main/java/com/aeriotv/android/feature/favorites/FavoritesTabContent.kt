@@ -124,6 +124,21 @@ fun FavoritesTabContent(
         }
     }
 
+    // TV: Favorites is the GUIDE filtered to the starred channels, not a
+    // list (Logan 2026-09-02: "should definitely be addressed"). The phone
+    // keeps the reorderable list below.
+    if (isTv && channels.isNotEmpty()) {
+        com.aeriotv.android.feature.livetv.grid.GuideScreen(
+            onChannelClick = onChannelClick,
+            viewMode = com.aeriotv.android.feature.livetv.LiveTVViewMode.Guide,
+            canToggleViewMode = false,
+            onToggleViewMode = {},
+            favoritesOnly = true,
+            modifier = modifier.fillMaxSize(),
+        )
+        return
+    }
+
     Column(modifier = modifier.fillMaxSize()) {
         CenterAlignedTopAppBar(
             title = {
