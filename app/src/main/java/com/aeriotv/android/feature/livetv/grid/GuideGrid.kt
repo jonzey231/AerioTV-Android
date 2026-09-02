@@ -49,6 +49,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -371,10 +373,21 @@ private fun GridRow(
     val surface = colors.surface
     val railNumberStyle = TextStyle(color = tertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     val railNameStyle = TextStyle(color = onSurface, fontSize = 11.sp)
+    // TalkBack: one node per row (channel + what is on now). Read in
+    // composition on the 30 s tick only, never per press.
+    val rowDescription = remember(channel.id, nowMs / 60_000L) {
+        val onNow = state.rows.cellAt(row, nowMs)?.takeIf { !it.isPlaceholder }?.title
+        buildString {
+            channel.channelNumber?.let { append(it).append(", ") }
+            append(channel.name)
+            if (onNow != null) append(", now: ").append(onNow)
+        }
+    }
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
             .height(rowHeight)
+            .semantics { contentDescription = rowDescription }
             .pointerInput(row) {
                 detectTapGestures(
                     onTap = { pos ->
