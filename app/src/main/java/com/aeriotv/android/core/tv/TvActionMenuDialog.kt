@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -70,82 +72,104 @@ fun TvActionMenuDialog(
     guard: TvMenuGuard,
     onDismiss: () -> Unit,
 ) {
+    // Apple TV look (Logan 2026-09-02): a centred translucent card, the
+    // title on top, one capsule per action, the focused capsule white with
+    // accent text, and a Cancel capsule closing the list.
+    val accent = MaterialTheme.colorScheme.primary
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.background,
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.width(300.dp),
         ) {
-            Column(modifier = Modifier.padding(vertical = 10.dp)) {
+            Column(
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(bottom = 10.dp),
                 )
                 actions.forEach { action ->
-                    val tint = if (action.destructive) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.primary
-                    var rowFocused by remember { mutableStateOf(false) }
-                    // OK activates only when this row saw the press start:
-                    // KeyDown (repeatCount 0) latches, KeyUp fires if latched.
-                    // Repeats belong to a press that began before the dialog
-                    // opened, so they must not latch.
-                    var okLatched by remember { mutableStateOf(false) }
-                    val activate = guard.wrap { onDismiss(); action.onClick() }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged {
-                                rowFocused = it.isFocused
-                                if (!it.isFocused) okLatched = false
-                            }
-                            .onPreviewKeyEvent { event ->
-                                val isOk = event.key == Key.DirectionCenter ||
-                                    event.key == Key.Enter ||
-                                    event.key == Key.NumPadEnter
-                                if (!isOk) return@onPreviewKeyEvent false
-                                when (event.type) {
-                                    KeyEventType.KeyDown -> {
-                                        if (event.nativeKeyEvent.repeatCount == 0) okLatched = true
-                                        true
-                                    }
-                                    KeyEventType.KeyUp -> {
-                                        val latched = okLatched
-                                        okLatched = false
-                                        if (latched && action.enabled) activate()
-                                        true
-                                    }
-                                    else -> false
-                                }
-                            }
-                            .background(
-                                if (rowFocused) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                                else Color.Transparent,
-                            )
-                            .clickable(
-                                enabled = action.enabled,
-                                onClick = activate,
-                            )
-                            .padding(horizontal = 24.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        if (action.icon != null) {
-                            Icon(action.icon, contentDescription = null, tint = tint)
-                        }
-                        val textColor = if (action.destructive) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onBackground
-                        Text(
-                            text = action.label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (action.enabled) textColor else textColor.copy(alpha = 0.4f),
-                        )
-                    }
+                    TvMenuCapsule(
+                        label = action.label,
+                        enabled = action.enabled,
+                        destructive = action.destructive,
+                        accent = accent,
+                        onActivate = guard.wrap { onDismiss(); action.onClick() },
+                    )
                 }
+                TvMenuCapsule(
+                    label = "Cancel",
+                    enabled = true,
+                    destructive = false,
+                    accent = accent,
+                    onActivate = guard.wrap { onDismiss() },
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun TvMenuCapsule(
+    label: String,
+    enabled: Boolean,
+    destructive: Boolean,
+    accent: Color,
+    onActivate: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    var okLatched by remember { mutableStateOf(false) }
+    val textColor = when {
+        !enabled -> accent.copy(alpha = 0.35f)
+        destructive -> MaterialTheme.colorScheme.error
+        else -> accent
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (!it.isFocused) okLatched = false
+            }
+            .onPreviewKeyEvent { event ->
+                val isOk = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
+                if (!isOk) return@onPreviewKeyEvent false
+                when (event.type) {
+                    KeyEventType.KeyDown -> { if (event.nativeKeyEvent.repeatCount == 0) okLatched = true; true }
+                    KeyEventType.KeyUp -> {
+                        val latched = okLatched
+                        okLatched = false
+                        if (latched && enabled) onActivate()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .background(
+                color = if (focused) Color.White else Color.White.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(24.dp),
+            )
+            .clickable(enabled = enabled, onClick = onActivate),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (focused && enabled) accent else textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
     }
 }

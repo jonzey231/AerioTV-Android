@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.text.input.ImeAction
 import com.aeriotv.android.feature.channels.SortMenu
+import com.aeriotv.android.feature.collections.AddToCollectionFlow
 import com.aeriotv.android.feature.collections.CollectionPill
 import com.aeriotv.android.feature.livetv.LiveTvPillsRow
 import com.aeriotv.android.feature.livetv.LiveTvTopBar
@@ -168,6 +169,7 @@ fun GuideScreen2(
     val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(false) }
+    var collectionPickerFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showManageGroups by remember { mutableStateOf(false) }
     var sidebarOriginalGroup by remember { mutableStateOf<String?>(null) }
 
@@ -427,6 +429,18 @@ fun GuideScreen2(
     }
     }
 
+    collectionPickerFor?.let { (chId, chName) ->
+        AddToCollectionFlow(
+            channelId = chId,
+            channelName = chName,
+            isTv = isTv,
+            collections = collections,
+            onToggleMember = collectionsVm::toggleMember,
+            onCreate = collectionsVm::create,
+            onClose = { collectionPickerFor = null; runCatching { gridFocus.requestFocus() } },
+        )
+    }
+
     if (showManageGroups) {
         if (isTv) {
             TvGroupPicker(
@@ -456,43 +470,34 @@ fun GuideScreen2(
         val isLive = nowMs in cell.startMillis until cell.endMillis
         val inMultiview = stagedMultiview.any { it.id == channel.id }
         val key = reminderKey(channel.name, cell.title, cell.startMillis)
+        val isFavorite = channel.id in favoriteIds
+        val atCap = stagedMultiview.size >= 4
+        val canAddToMultiview = channel.url.isNotBlank() && (!atCap || inMultiview)
+        val canRecord = notEnded && (isLive || canRecordToServer)
+        val replayable = !cell.isPlaceholder && channel.canReplay(cell, nowMs)
+        // Apple TV order (Logan 2026-09-02): Favorites, Multiview, Collection,
+        // Program Info, Record from Now, then the Android-only extras.
         val actions = buildList {
-            if (!cell.isPlaceholder && channel.canReplay(cell, nowMs)) {
-                add(TvMenuAction(label = "Watch from start") {
-                    menuFor = null
+            add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites") { favoritesVm.toggle(channel) })
+            add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
+            add(TvMenuAction("Add to Collection...") { collectionPickerFor = channel.id to channel.name })
+            if (!cell.isPlaceholder) {
+                add(TvMenuAction("Program Info") { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
+                if (canRecord) add(TvMenuAction(if (isLive) "Record from Now" else "Record") { recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
+                if (replayable) add(TvMenuAction("Watch from Start") {
                     viewModel.playCatchup(channel, cell) { result ->
                         result.onSuccess { r ->
                             onPlayCatchup(channel.id, r.url, cell.title, cell.startMillis, cell.endMillis, r.panelTimeZoneId, r.channelUuid.orEmpty())
                         }
                     }
                 })
-            }
-            if (!cell.isPlaceholder) {
-                add(TvMenuAction(label = "Program info") {
-                    menuFor = null
-                    programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId)
-                })
-            }
-            if (!cell.isPlaceholder && notEnded && (isLive || canRecordToServer)) {
-                add(TvMenuAction(label = "Record") {
-                    menuFor = null
-                    recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId)
-                })
-            }
-            if (!cell.isPlaceholder && cell.startMillis > nowMs) {
-                if (key in reminderKeys) add(TvMenuAction(label = "Cancel reminder") { menuFor = null; remindersVm.cancelReminder(key) })
-                else add(TvMenuAction(label = "Set reminder") {
-                    menuFor = null
-                    remindersVm.setReminder(channel.name, cell.title, cell.startMillis, cell.endMillis, channel.id)
-                })
-            }
-            add(TvMenuAction(label = if (channel.id in favoriteIds) "Remove from favorites" else "Add to favorites") {
-                menuFor = null; favoritesVm.toggle(channel)
-            })
-            if (channel.url.isNotBlank()) {
-                add(TvMenuAction(label = if (inMultiview) "Remove from Multiview" else "Add to Multiview") {
-                    menuFor = null; multiviewStore.toggle(channel)
-                })
+                if (cell.startMillis > nowMs) {
+                    val set = key in reminderKeys
+                    add(TvMenuAction(if (set) "Cancel Reminder" else "Set Reminder") {
+                        if (set) remindersVm.cancelReminder(key)
+                        else remindersVm.setReminder(channel.name, cell.title, cell.startMillis, cell.endMillis, channel.id)
+                    })
+                }
             }
         }
         TvActionMenuDialog(title = cell.title, actions = actions, guard = menuGuard, onDismiss = { menuFor = null })
