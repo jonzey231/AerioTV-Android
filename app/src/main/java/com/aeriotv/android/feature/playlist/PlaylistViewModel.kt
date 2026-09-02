@@ -219,20 +219,6 @@ class PlaylistViewModel @Inject constructor(
      *  half of the group-switch ANR. */
     private val epgWriteMutex = kotlinx.coroutines.sync.Mutex()
 
-    /** I-5: wholesale map swaps reuse the PRIOR per-channel List reference
-     *  when the contents are equal, so rows whose data did not change keep
-     *  their identity and skippable guide rows actually skip. Structural
-     *  equality is O(rows) - call off Main only. */
-    private fun preserveEpgListIdentity(
-        old: Map<String, List<EPGProgramme>>,
-        new: Map<String, List<EPGProgramme>>,
-    ): Map<String, List<EPGProgramme>> =
-        if (old.isEmpty()) new
-        else new.mapValues { (k, rows) ->
-            val prior = old[k]
-            if (prior != null && prior == rows) prior else rows
-        }
-
     /** One-shot signal that a source was successfully configured (added). The
      *  add flow navigates forward on THIS event, not on `phase == ChannelsReady`:
      *  when adding a second playlist `phase` is already ChannelsReady, so a
@@ -996,109 +982,6 @@ class PlaylistViewModel @Inject constructor(
         )
     }
 
-    /** Group + time-sort + dedup programmes into the per-channel map the UI consumes. */
-    // Grouping hundreds of thousands of programmes by channel + sorting each
-    // bucket is O(n log n); run it off the Main dispatcher so a large EPG
-    // doesn't stall the UI between fetch and paint.
-    //
-    // iOS GuideStore parity (EPGGuideView.swift `mergeProgramInto`): collapse
-    // duplicate programmes within each channel bucket. Two programmes merge
-    // when EITHER (a) they share the same non-blank title and start within 60s
-    // of each other -- the Dispatcharr bulk-vs-detail enrichment case where
-    // the same airing is fetched twice with slightly different times, OR (b)
-    // they overlap by more than 80% of their combined span -- the
-    // XMLTV-layered-on-Dispatcharr case where two providers describe the same
-    // airing with different boundaries. Merge keeps the LONGER description,
-    // the existing non-blank category, the existing-else-new dispatcharrProgramId,
-    // and widens the time window to the union so the cell still covers both.
-    private suspend fun groupByChannel(programmes: List<EPGProgramme>): Map<String, List<EPGProgramme>> =
-        withContext(Dispatchers.Default) {
-            programmes.groupBy { it.channelId }
-                .mapValues { (_, list) -> dedupSameAiring(list.sortedBy { it.startMillis }) }
-        }
-
-    /**
-     * Dispatcharr (and tvOS) never show a blank guide row: a channel with no
-     * EPG still renders its name as the current programme (Dispatcharr's "dummy
-     * EPG"). Mirror that by injecting one channel-name placeholder, keyed by the
-     * channel's guideMatchKey, for every channel left with no programmes after
-     * matching. Real programmes always win; only empty buckets are filled.
-     */
-    private fun withChannelNamePlaceholders(
-        grouped: Map<String, List<EPGProgramme>>,
-        channels: List<M3UChannel>,
-    ): Map<String, List<EPGProgramme>> {
-        if (channels.isEmpty()) return grouped
-        val now = System.currentTimeMillis()
-        val start = now - 12 * 3_600_000L
-        val end = now + 48 * 3_600_000L
-        val out = HashMap(grouped)
-        for (ch in channels) {
-            val key = ch.guideMatchKey
-            if (out[key].isNullOrEmpty()) {
-                out[key] = listOf(
-                    EPGProgramme(
-                        channelId = key,
-                        title = ch.name,
-                        description = "",
-                        startMillis = start,
-                        endMillis = end,
-                        category = "",
-                        isPlaceholder = true,
-                    ),
-                )
-            } else {
-                // Gap filler (Streamer 2026-09-01): a channel WITH programmes but
-                // a hole in its schedule (ESPN HD blank 4:00-6:00, NFL Network
-                // 4:00-5:00) rendered nothing for the hole, so the D-pad could
-                // not land on it - the user had to move to a neighbour row and
-                // scroll across. Every hole of 5+ minutes inside the guide
-                // window now gets a focusable "No info" placeholder cell, the
-                // same shape the empty-channel placeholder above uses.
-                // Strip previous gap cells first so re-running on an already
-                // filled map (history/layering merges) never stacks them.
-                val real = out.getValue(key).filterNot { it.isPlaceholder && it.title == "No info" }
-                out[key] = withGapPlaceholders(real.sortedBy { it.startMillis }, key, start, end)
-            }
-        }
-        return out
-    }
-
-    private fun withGapPlaceholders(
-        sorted: List<EPGProgramme>,
-        key: String,
-        windowStart: Long,
-        windowEnd: Long,
-    ): List<EPGProgramme> {
-        val minGapMs = 5 * 60_000L
-        val out = ArrayList<EPGProgramme>(sorted.size + 4)
-        var cursor = windowStart
-        var added = 0
-        fun gap(from: Long, to: Long) {
-            if (to - from < minGapMs) return
-            added++
-            out.add(
-                EPGProgramme(
-                    channelId = key,
-                    title = "No info",
-                    description = "",
-                    startMillis = from,
-                    endMillis = to,
-                    category = "",
-                    isPlaceholder = true,
-                ),
-            )
-        }
-        for (p in sorted) {
-            if (p.startMillis > cursor) gap(cursor, minOf(p.startMillis, windowEnd))
-            out.add(p)
-            if (p.endMillis > cursor) cursor = p.endMillis
-        }
-        if (cursor < windowEnd) gap(cursor, windowEnd)
-        // Gaps are inserted in walk order, so `out` is already start-sorted.
-        return if (added == 0) sorted else out
-    }
-
     /**
      * iOS GuideStore `mergeProgramInto` mirror. Input is a per-channel
      * start-time-sorted list; walks the list once, collapsing a programme
@@ -1108,24 +991,6 @@ class PlaylistViewModel @Inject constructor(
      */
     private fun dedupSameAiring(sorted: List<EPGProgramme>): List<EPGProgramme> =
         com.aeriotv.android.core.guide.GuideMerge.dedup(sorted)
-
-    /** Same-airing predicate: 60s start-delta with same non-blank title,
-     *  OR > 80% time overlap of the union span. */
-    private fun isSameAiring(a: EPGProgramme, b: EPGProgramme): Boolean =
-        com.aeriotv.android.core.guide.GuideMerge.isDuplicate(a, b)
-
-    /** Merge per iOS: keep the longer description, the existing non-blank
-     *  category, the existing-else-new dispatcharrProgramId, widen the
-     *  time window to the union, and keep the first non-blank title.
-     *
-     *  Badge metadata is UNIONED, not taken from `a` alone (matches iOS
-     *  GuideStore.mergeProgramInto): the two same-airing entries can come from
-     *  different sources -- e.g. a Dispatcharr grid entry (season/episode/
-     *  finale but never repeat) and a custom-XMLTV entry (repeat + sub-title) --
-     *  so coalesce the optionals and OR the flags, or one source's badges are
-     *  silently dropped. */
-    private fun mergeProgrammes(a: EPGProgramme, b: EPGProgramme): EPGProgramme =
-        com.aeriotv.android.core.guide.GuideMerge.merge(a, b)
 
     /**
      * Catch-up (task #133): resolve a past programme on a catch-up-capable
