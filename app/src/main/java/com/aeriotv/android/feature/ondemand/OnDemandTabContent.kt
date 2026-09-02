@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.ondemand
 
+import com.aeriotv.android.ui.tv.tvFormFieldInput
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -580,6 +581,23 @@ private fun MoviesSubScreen(
         val bringIntoViewSpec =
             if (isTv) com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec
             else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        // Grid D-pad fallback plumbing (see vodGridDpadFallback) and the
+        // scroll-to-top on a NEW query: results replace the list under the
+        // old scroll offset, which left the first row hidden under the
+        // header and focus on row two (Logan 2026-09-02, Streamer). Keyed on
+        // a saved copy so returning from a detail screen keeps its position.
+        val gridFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
+        val gridScope = rememberCoroutineScope()
+        val movieRequesters = remember { HashMap<Any, FocusRequester>() }
+        val seriesRequesters = remember { HashMap<Any, FocusRequester>() }
+        var lastGridQuery by rememberSaveable { mutableStateOf<String?>(null) }
+        val currentGridQuery = state.searchQuery + "\u0000" + state.seriesSearchQuery
+        LaunchedEffect(currentGridQuery) {
+            if (lastGridQuery != null && lastGridQuery != currentGridQuery) {
+                runCatching { gridState.scrollToItem(0) }
+            }
+            lastGridQuery = currentGridQuery
+        }
         CompositionLocalProvider(
             androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
         ) {
@@ -601,6 +619,7 @@ private fun MoviesSubScreen(
         ) {
             // (Continue Watching is its own On Demand sub-tab now, issue #9.)
             itemsIndexed(items = visibleFiltered, key = { _, it -> it.id }) { index, movie ->
+                val itemRequester = remember(movie.id) { movieRequesters.getOrPut(movie.id) { FocusRequester() } }
                 // Prefetch the next page as the user nears the end of what's
                 // loaded. Browse only -- search results aren't paginated here,
                 // and the cursor guard stops once the library is fully walked.
@@ -616,11 +635,12 @@ private fun MoviesSubScreen(
                     focusRequester = returnFocus.requesterFor("movie:${movie.uuid}"),
                     // Index 0 additionally carries the BACK-to-top requester;
                     // a separate hook so it never disturbs VodReturnFocusState.
-                    modifier = if (isTv && index == 0) {
-                        Modifier.focusRequester(firstPosterFocus)
-                    } else {
-                        Modifier
-                    },
+                    modifier = (if (isTv && index == 0) Modifier.focusRequester(firstPosterFocus) else Modifier)
+                        .then(if (isTv) Modifier.focusRequester(itemRequester).onPreviewKeyEvent { ev ->
+                            vodGridDpadFallback(ev, index, visibleFiltered.size, gridState, gridFocusManager, gridScope) { i ->
+                                movieRequesters.getOrPut(visibleFiltered[i].id) { FocusRequester() }
+                            }
+                        } else Modifier),
                     onClick = {
                         returnFocus.arm("movie:${movie.uuid}")
                         onMovieClick(movie)
@@ -778,6 +798,23 @@ private fun SeriesSubScreen(
         val bringIntoViewSpec =
             if (isTv) com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec
             else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        // Grid D-pad fallback plumbing (see vodGridDpadFallback) and the
+        // scroll-to-top on a NEW query: results replace the list under the
+        // old scroll offset, which left the first row hidden under the
+        // header and focus on row two (Logan 2026-09-02, Streamer). Keyed on
+        // a saved copy so returning from a detail screen keeps its position.
+        val gridFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
+        val gridScope = rememberCoroutineScope()
+        val movieRequesters = remember { HashMap<Any, FocusRequester>() }
+        val seriesRequesters = remember { HashMap<Any, FocusRequester>() }
+        var lastGridQuery by rememberSaveable { mutableStateOf<String?>(null) }
+        val currentGridQuery = state.searchQuery + "\u0000" + state.seriesSearchQuery
+        LaunchedEffect(currentGridQuery) {
+            if (lastGridQuery != null && lastGridQuery != currentGridQuery) {
+                runCatching { gridState.scrollToItem(0) }
+            }
+            lastGridQuery = currentGridQuery
+        }
         CompositionLocalProvider(
             androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
         ) {
@@ -797,6 +834,7 @@ private fun SeriesSubScreen(
         ) {
             // (Continue Watching episodes are on the Continue Watching sub-tab, #9.)
             itemsIndexed(items = visibleSeriesFiltered, key = { _, it -> it.id }) { index, series ->
+                val itemRequester = remember(series.id) { seriesRequesters.getOrPut(series.id) { FocusRequester() } }
                 if (state.seriesNextCursor != null &&
                     state.seriesSearchQuery.isBlank() &&
                     index >= visibleSeriesFiltered.size - 8
@@ -809,11 +847,12 @@ private fun SeriesSubScreen(
                     focusRequester = returnFocus.requesterFor("series:${series.id}"),
                     // Index 0 additionally carries the BACK-to-top requester;
                     // a separate hook so it never disturbs VodReturnFocusState.
-                    modifier = if (isTv && index == 0) {
-                        Modifier.focusRequester(firstPosterFocus)
-                    } else {
-                        Modifier
-                    },
+                    modifier = (if (isTv && index == 0) Modifier.focusRequester(firstPosterFocus) else Modifier)
+                        .then(if (isTv) Modifier.focusRequester(itemRequester).onPreviewKeyEvent { ev ->
+                            vodGridDpadFallback(ev, index, visibleSeriesFiltered.size, gridState, gridFocusManager, gridScope) { i ->
+                                seriesRequesters.getOrPut(visibleSeriesFiltered[i].id) { FocusRequester() }
+                            }
+                        } else Modifier),
                     onClick = {
                         returnFocus.arm("series:${series.id}")
                         onSeriesClick(series)
@@ -991,6 +1030,51 @@ private const val UNCATEGORIZED = "Uncategorized"
  * otherwise the window's initial-focus assignment parks focus on the top nav
  * pills (user report).
  */
+/**
+ * TV poster grids: Compose's own focus search cannot see a row that is not
+ * composed yet, so Down at the last visible row either did nothing or
+ * hopped sideways (Logan 2026-09-02, Streamer). Scroll the target row in
+ * and focus it directly; consume a Down with no row below so the sideways
+ * hop never happens. Up at the top row falls through to the header.
+ */
+private fun vodGridDpadFallback(
+    event: androidx.compose.ui.input.key.KeyEvent,
+    index: Int,
+    count: Int,
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+    scope: kotlinx.coroutines.CoroutineScope,
+    requesterAt: (Int) -> FocusRequester,
+): Boolean {
+    if (event.type != KeyEventType.KeyDown) return false
+    val dir = when (event.key) {
+        Key.DirectionDown -> 1
+        Key.DirectionUp -> -1
+        else -> return false
+    }
+    val cols = (gridState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.column } ?: -1) + 1
+    if (cols <= 0) return false
+    val lastRow = (count - 1) / cols
+    val row = index / cols
+    val targetRow = row + dir
+    if (targetRow < 0) return false
+    if (targetRow > lastRow) return true
+    val target = minOf(index + dir * cols, count - 1)
+    if (focusManager.moveFocus(
+            if (dir > 0) androidx.compose.ui.focus.FocusDirection.Down
+            else androidx.compose.ui.focus.FocusDirection.Up,
+        )
+    ) return true
+    scope.launch {
+        runCatching { gridState.scrollToItem(target) }
+        repeat(6) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (runCatching { requesterAt(target).requestFocus() }.isSuccess) return@launch
+        }
+    }
+    return true
+}
+
 private class VodReturnFocusState(
     private val isTv: Boolean,
     private val pendingKeyState: MutableState<String?>,
@@ -1697,8 +1781,14 @@ private fun VodSearchField(
     var expanded by rememberSaveable { mutableStateOf(false) }
     if (query.isNotEmpty()) expanded = true
     val focusRequester = remember { FocusRequester() }
+    // Focus the field only when the USER expanded it. Returning from a detail
+    // screen recomposes this field expanded (non-empty query) and the old
+    // unconditional request stole focus from the poster BACK should land on,
+    // and popped the keyboard (Logan 2026-09-02, Streamer).
+    var focusOnExpand by remember { mutableStateOf(false) }
     LaunchedEffect(expanded) {
-        if (expanded) {
+        if (expanded && focusOnExpand) {
+            focusOnExpand = false
             runCatching { focusRequester.requestFocus() }
         }
     }
@@ -1713,7 +1803,7 @@ private fun VodSearchField(
                 icon = Icons.Outlined.Search,
                 contentDescription = "Search",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                onClick = { expanded = true },
+                onClick = { focusOnExpand = true; expanded = true },
             )
         }
         return
@@ -1722,7 +1812,10 @@ private fun VodSearchField(
     // (no-ops) even after the IME closes, which strands focus in the field:
     // the user can type but never reach the results below or the pills
     // above. Route verticals to focus traversal before the editor sees them.
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    // Keyboard opens on OK only (TvKeyboardOnOkHost + tvFormFieldInput), the
+    // same gate every settings form uses; Up/Down walk focus out of the
+    // field without popping the IME.
+    com.aeriotv.android.ui.tv.TvKeyboardOnOkHost {
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -1730,22 +1823,7 @@ private fun VodSearchField(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .focusRequester(focusRequester)
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) {
-                    return@onPreviewKeyEvent false
-                }
-                when (event.key) {
-                    Key.DirectionDown -> {
-                        focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
-                        true
-                    }
-                    Key.DirectionUp -> {
-                        focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
-                        true
-                    }
-                    else -> false
-                }
-            },
+            .tvFormFieldInput(),
         singleLine = true,
         placeholder = { Text(placeholder) },
         leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
@@ -1772,4 +1850,5 @@ private fun VodSearchField(
             imeAction = androidx.compose.ui.text.input.ImeAction.Search,
         ),
     )
+    }
 }

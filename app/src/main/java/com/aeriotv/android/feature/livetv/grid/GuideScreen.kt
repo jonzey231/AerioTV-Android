@@ -249,6 +249,7 @@ fun GuideScreen(
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var menuFor by remember { mutableStateOf<Pair<M3UChannel, EPGProgramme>?>(null) }
     val menuGuard = rememberTvMenuGuard()
+    val guideFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     // Land focus on the grid on entry (TV).
     // Launch focus belongs to the grid. The tab host places its own initial
@@ -256,10 +257,14 @@ fun GuideScreen(
     // only because the old guide composed first), so keep asking for about a
     // second until the grid actually holds focus.
     var gridHasFocus by remember { mutableStateOf(false) }
+    val topNavHasFocus = com.aeriotv.android.feature.main.LocalTvTopNavHasFocus.current
     LaunchedEffect(isTv, rows.isEmpty) {
         if (isTv && !rows.isEmpty) {
             repeat(12) {
                 if (gridHasFocus) return@LaunchedEffect
+                // The user is walking the tab bar (selection follows focus
+                // there): leave focus in the bar; Down brings them in.
+                if (topNavHasFocus.value) return@LaunchedEffect
                 // GH #90: a held Left that minimized the player also opened
                 // the group sidebar as the guide composed; the sidebar owns
                 // focus then, and this loop must not pull it back to the grid.
@@ -450,7 +455,18 @@ fun GuideScreen(
                     else onChannelClick(channel)
                 },
                 onOpenMenu = { channel, cell -> menuFor = channel to cell; menuGuard.arm() },
-                onLeaveTop = { if (sidebarGroupMode || favoritesOnly) false else runCatching { pillsFocus.requestFocus() }.isSuccess },
+                // Favorites (TV): no pills above the grid, so UP must leave
+                // through the content group's exit redirect (which lands on
+                // the SELECTED tab's pill); a direct request on the bar's
+                // requester landed on the leftmost pill and, with
+                // selection-follows-focus, switched to Live TV.
+                onLeaveTop = {
+                    when {
+                        favoritesOnly -> guideFocusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
+                        sidebarGroupMode -> false
+                        else -> runCatching { pillsFocus.requestFocus() }.isSuccess
+                    }
+                },
                 remoteAction = { slot -> remoteMap.guideAction(slot) },
                 holdLeftOpensGroups = sidebarGroupMode,
                 onHostAction = hostAction,

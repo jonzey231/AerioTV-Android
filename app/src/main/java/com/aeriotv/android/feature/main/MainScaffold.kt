@@ -134,6 +134,15 @@ import com.aeriotv.android.ui.tv.tvFocusScale
  */
 val LocalTvTopNavFocusRequester = staticCompositionLocalOf<FocusRequester?> { null }
 
+/** True while any pill in the Android TV top tab bar holds focus. Tab
+ *  content reads it so a launch-focus grab never yanks focus out of the bar
+ *  while the user is still walking it (Logan 2026-09-02: Live TV -> Favorites
+ *  -> the Favorites guide stole focus mid-walk, every further Right went
+ *  into the grid). */
+val LocalTvTopNavHasFocus = staticCompositionLocalOf<androidx.compose.runtime.State<Boolean>> {
+    androidx.compose.runtime.mutableStateOf(false)
+}
+
 /**
  * TV chrome-collapse channel. Content screens write `true` while the user is
  * scrolled down a long surface (the On Demand poster grids first) and the top
@@ -472,8 +481,10 @@ fun MainScaffold(
         // set this true while scrolled down so the tab bar shrinks away. See
         // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
         val chromeCollapsed = remember { mutableStateOf(false) }
+        val topNavHasFocusState: androidx.compose.runtime.MutableState<Boolean> = remember { mutableStateOf(false) }
         CompositionLocalProvider(
             LocalTvTopNavFocusRequester provides topNavRequester,
+            LocalTvTopNavHasFocus provides topNavHasFocusState,
             LocalTvChromeCollapsed provides chromeCollapsed,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -505,7 +516,7 @@ fun MainScaffold(
                 )
                 Box(
                     modifier = Modifier
-                        .onFocusChanged { barHasFocus = it.hasFocus }
+                        .onFocusChanged { barHasFocus = it.hasFocus; topNavHasFocusState.value = it.hasFocus }
                         .collapsibleChrome(barFraction),
                 ) {
                     TvTopTabBar(

@@ -1,5 +1,13 @@
 package com.aeriotv.android.core.network
 
+import io.ktor.client.plugins.timeout
+import kotlinx.serialization.json.decodeToSequence
+import kotlinx.serialization.json.decodeFromStream
+import kotlinx.serialization.json.DecodeSequenceMode
+import kotlinx.serialization.ExperimentalSerializationApi
+import io.ktor.utils.io.jvm.javaio.toInputStream
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.client.request.prepareGet
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.feature.ondemand.vodMeasuredDescriptors
 import io.ktor.client.HttpClient
@@ -1241,14 +1249,23 @@ class DispatcharrClient @Inject constructor() {
      * latency note. Mirrors iOS DispatcharrAPI.getSeriesProviderInfo
      * (StreamingAPIs.swift line 1718).
      */
+    @OptIn(ExperimentalSerializationApi::class)
     suspend fun getSeriesProviderInfo(baseUrl: String, apiKey: String, seriesId: Int): DispatcharrVODProviderInfo {
         val url = "${baseUrl.trimEnd('/')}/api/vod/series/$seriesId/provider-info/"
-        val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
-        unauthorizedCheck(response, url)
-        if (!response.status.isSuccess()) {
-            throw DispatcharrError.Transport("Series provider-info failed: HTTP ${response.status.value}")
+        // GH #87: the series blob carries the upstream get_series_info payload
+        // under custom_properties, including an `episodes` dict for EVERY
+        // season (20+ seasons of American Dad = several MB). Decode it from
+        // the stream into the slim models so the parser SKIPS that subtree
+        // instead of building a JsonObject of it on a 512 MB heap.
+        return withContext(Dispatchers.IO) {
+            client.prepareGet(url) { applyAuth(apiKey) }.execute { response ->
+                unauthorizedCheck(response, url)
+                if (!response.status.isSuccess()) {
+                    throw DispatcharrError.Transport("Series provider-info failed: HTTP ${response.status.value}")
+                }
+                json.decodeFromStream<DispatcharrVODProviderInfo>(response.bodyAsChannel().toInputStream())
+            }
         }
-        return response.body()
     }
 
     /**
@@ -1317,34 +1334,72 @@ class DispatcharrClient @Inject constructor() {
      * 10c-2 fetches page 1 only; long-running shows (One Piece etc.) will
      * paginate properly in a later cut.
      */
+    /**
+     * Every episode of a series. GH #87: pages are decoded from the response
+     * STREAM into the slim [DispatcharrVODEpisode] (never a JsonElement DOM),
+     * and `next` is walked so long-running shows (20+ seasons) load past the
+     * first 100 rows. Pages are capped so a runaway `next` cannot loop.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
     suspend fun getSeriesEpisodesFirstPage(
         baseUrl: String,
         apiKey: String,
         seriesId: Int,
-    ): VODEpisodesPage {
-        val url = "${baseUrl.trimEnd('/')}/api/vod/series/$seriesId/episodes/?page=1&page_size=100"
-        val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
-        unauthorizedCheck(response, url)
-        if (!response.status.isSuccess()) {
-            throw DispatcharrError.Transport("Series episodes fetch failed: HTTP ${response.status.value}")
-        }
-        val raw: JsonElement = response.body()
-        return when {
-            raw is JsonArray -> VODEpisodesPage(
-                count = raw.size,
-                next = null,
-                results = raw.map { json.decodeFromJsonElement(serializer<DispatcharrVODEpisode>(), it) },
-            )
-            raw is JsonObject -> {
-                val results = (raw["results"] as? JsonArray)?.map {
-                    json.decodeFromJsonElement(serializer<DispatcharrVODEpisode>(), it)
-                } ?: emptyList()
-                val count = (raw["count"]?.toString()?.toIntOrNull()) ?: results.size
-                val next = raw["next"]?.toString()?.trim('"')?.takeIf { it.isNotBlank() && it != "null" }
-                VODEpisodesPage(count = count, next = next, results = results)
+        /** Called after every page with everything received so far, so the
+         *  screen fills progressively while later pages load. */
+        onPage: (suspend (List<DispatcharrVODEpisode>) -> Unit)? = null,
+    ): VODEpisodesPage = withContext(Dispatchers.IO) {
+        val base = baseUrl.trimEnd('/')
+        // NOT /api/vod/series/<id>/episodes/: that action ignores paging,
+        // walks every episode with a provider query each and embeds the
+        // whole series record (custom_properties included) in every row.
+        // Law & Order (1990) never produced a byte inside 60s on the
+        // Streamer (2026-09-02). The episode list endpoint filters by
+        // series, paginates, and orders by season/episode.
+        var url: String? = "$base/api/vod/episodes/?series=$seriesId&page_size=100" +
+            "&ordering=season_number,episode_number"
+        val all = ArrayList<DispatcharrVODEpisode>()
+        var count = 0
+        var pages = 0
+        while (url != null && pages < 100) {
+            pages++
+            val pageUrl = url
+            val page: VODEpisodesPage = client.prepareGet(pageUrl) {
+                applyAuth(apiKey)
+                timeout { requestTimeoutMillis = 150_000; socketTimeoutMillis = 150_000 }
+            }.execute { response ->
+                unauthorizedCheck(response, pageUrl)
+                if (!response.status.isSuccess()) {
+                    throw DispatcharrError.Transport("Series episodes fetch failed: HTTP ${response.status.value}")
+                }
+                val raw = response.bodyAsChannel().toInputStream()
+                // Peek past leading whitespace: a bare array (older builds)
+                // streams as a sequence; the paginated object streams as a DTO.
+                val pushback = java.io.PushbackInputStream(raw, 1)
+                var first: Int
+                do { first = pushback.read() } while (first == ' '.code || first == '\n'.code || first == '\r'.code || first == '\t'.code)
+                if (first < 0) return@execute VODEpisodesPage(0, null, emptyList())
+                pushback.unread(first)
+                if (first == '['.code) {
+                    val rows = json.decodeToSequence<DispatcharrVODEpisode>(pushback, DecodeSequenceMode.ARRAY_WRAPPED).toList()
+                    VODEpisodesPage(count = rows.size, next = null, results = rows)
+                } else {
+                    val dto = json.decodeFromStream<VODEpisodesPageDto>(pushback)
+                    VODEpisodesPage(count = dto.count ?: dto.results.size, next = dto.next?.takeIf { it.isNotBlank() }, results = dto.results)
+                }
             }
-            else -> throw IllegalStateException("Unexpected episodes response shape: ${raw::class.simpleName}")
+            all += page.results
+            count = maxOf(count, page.count)
+            onPage?.invoke(all.toList())
+            android.util.Log.i("DispatcharrClient", "series $seriesId episodes page $pages: +${page.results.size} (count=${page.count}, next=${page.next != null})")
+            // `next` is absolute from the server; keep our base so a LAN/WAN
+            // or scheme mismatch in the server's own hostname cannot break it.
+            url = page.next?.let { n ->
+                val idx = n.indexOf("/api/")
+                if (idx >= 0) base + n.substring(idx) else n
+            }
         }
+        VODEpisodesPage(count = maxOf(count, all.size), next = null, results = all)
     }
 
     /**
@@ -1990,6 +2045,57 @@ data class VODEpisodesPage(
     val results: List<DispatcharrVODEpisode>,
 )
 
+/** Paginated `/episodes/` shape, decoded from the stream (GH #87). */
+@Serializable
+internal data class VODEpisodesPageDto(
+    val count: Int? = null,
+    val next: String? = null,
+    val results: List<DispatcharrVODEpisode> = emptyList(),
+)
+
+/**
+ * GH #87: the slim replacement for `custom_properties: JsonObject` on VOD
+ * models. Only the keys the app reads are declared; `ignoreUnknownKeys`
+ * makes the parser skip everything else (the nested `episodes` dict, TMDB
+ * blobs) without allocating it. Getters keep the JsonObject-era call shape.
+ */
+@Serializable
+data class VODCustomProps(
+    val plot: JsonElement? = null,
+    val description: JsonElement? = null,
+    val cast: JsonElement? = null,
+    val actors: JsonElement? = null,
+    val director: JsonElement? = null,
+    val crew: JsonElement? = null,
+    val country: JsonElement? = null,
+    val genre: JsonElement? = null,
+    @SerialName("youtube_trailer") val youtubeTrailer: JsonElement? = null,
+    @SerialName("backdrop_path") val backdropPath: JsonElement? = null,
+    @SerialName("movie_image") val movieImage: JsonElement? = null,
+    val cover: JsonElement? = null,
+    val image: JsonElement? = null,
+) {
+    operator fun get(name: String): JsonElement? = when (name) {
+        "plot" -> plot
+        "description" -> description
+        "cast" -> cast
+        "actors" -> actors
+        "director" -> director
+        "crew" -> crew
+        "country" -> country
+        "genre" -> genre
+        "youtube_trailer" -> youtubeTrailer
+        "backdrop_path" -> backdropPath
+        "movie_image" -> movieImage
+        "cover" -> cover
+        "image" -> image
+        else -> null
+    }
+
+    fun stringField(name: String): String? =
+        (get(name) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+}
+
 @Serializable
 data class DispatcharrVODEpisode(
     val id: Int,
@@ -2013,7 +2119,7 @@ data class DispatcharrVODEpisode(
     @SerialName("imdb_id")
     val imdbId: String? = null,
     @SerialName("custom_properties")
-    val customProperties: JsonObject? = null,
+    val customProperties: VODCustomProps? = null,
     val streams: List<DispatcharrVODStreamOption> = emptyList(),
 ) {
     val displayName: String get() = title.ifBlank { name.orEmpty() }
@@ -2088,7 +2194,7 @@ data class DispatcharrVODProviderInfo(
     @SerialName("movie_image")
     val movieImage: String? = null,
     @SerialName("custom_properties")
-    val customProperties: JsonObject? = null,
+    val customProperties: VODCustomProps? = null,
 ) {
     /** Plot copy. Movies set `plot` at root, series nest it as `description`.
      *  Episodes occasionally use `overview`. */

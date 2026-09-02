@@ -238,6 +238,35 @@ class OnDemandViewModel @Inject constructor(
      * filter (their whole library is already loaded). Debounced so a fast burst
      * of typing only fires the final query.
      */
+    /**
+     * Dispatcharr's `?search=` matches descriptions too ("law and order"
+     * returns every synopsis containing "and"), and DRF returns the hits in
+     * table order, which also changes between calls. Rank so title hits come
+     * first (whole phrase, then every word), each tier alphabetical, so the
+     * grid is stable across visits.
+     */
+    private fun <T> rankSearch(items: List<T>, q: String, title: (T) -> String): List<T> {
+        // "&" and "and" are the same word to a person typing ("law and
+        // order" must rank "Law & Order" first); articles carry no signal.
+        fun norm(t: String) = t.lowercase()
+            .replace("&", " and ")
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+        val query = norm(q)
+        val stop = setOf("and", "the", "of", "a", "an")
+        val tokens = query.split(' ').filter { it.isNotBlank() && it !in stop }
+        data class Score(val tier: Int, val matched: Int)
+        fun score(t: String): Score {
+            val n = norm(t)
+            if (query.isNotEmpty() && n.contains(query)) return Score(0, tokens.size)
+            val matched = tokens.count { n.contains(it) }
+            return if (tokens.isNotEmpty() && matched == tokens.size) Score(1, matched) else Score(2, matched)
+        }
+        return items.sortedWith(
+            compareBy<T>({ score(title(it)).tier }, { -score(title(it)).matched }, { title(it).lowercase() }),
+        )
+    }
+
     fun setSearchQuery(value: String) {
         _state.update { it.copy(searchQuery = value) }
         searchMoviesJob?.cancel()
@@ -255,7 +284,7 @@ class OnDemandViewModel @Inject constructor(
             if (playlist == null || !isDispatcharr || playlist.apiKey.isNullOrBlank()) {
                 _state.update { st ->
                     st.copy(
-                        searchResults = st.movies.filter { it.displayName.contains(q, ignoreCase = true) },
+                        searchResults = rankSearch(st.movies.filter { it.displayName.contains(q, ignoreCase = true) }, q) { it.displayName },
                         isSearching = false,
                     )
                 }
@@ -275,7 +304,7 @@ class OnDemandViewModel @Inject constructor(
             }.getOrNull()
             // Discard a stale response if the user kept typing past this query.
             if (_state.value.searchQuery.trim() != q) return@launch
-            _state.update { it.copy(searchResults = page?.results?.map(::stampMovieGroup) ?: emptyList(), isSearching = false) }
+            _state.update { it.copy(searchResults = rankSearch(page?.results?.map(::stampMovieGroup) ?: emptyList(), q) { m -> m.displayName }, isSearching = false) }
         }
     }
 
@@ -297,7 +326,7 @@ class OnDemandViewModel @Inject constructor(
             if (playlist == null || !isDispatcharr || playlist.apiKey.isNullOrBlank()) {
                 _state.update { st ->
                     st.copy(
-                        seriesSearchResults = st.series.filter { it.displayName.contains(q, ignoreCase = true) },
+                        seriesSearchResults = rankSearch(st.series.filter { it.displayName.contains(q, ignoreCase = true) }, q) { it.displayName },
                         isSearchingSeries = false,
                     )
                 }
@@ -315,7 +344,12 @@ class OnDemandViewModel @Inject constructor(
                 }
             }.getOrNull()
             if (_state.value.seriesSearchQuery.trim() != q) return@launch
-            _state.update { it.copy(seriesSearchResults = page?.results?.map(::stampSeriesGroup) ?: emptyList(), isSearchingSeries = false) }
+            _state.update {
+                it.copy(
+                    seriesSearchResults = rankSearch(page?.results?.map(::stampSeriesGroup) ?: emptyList(), q) { s -> s.displayName },
+                    isSearchingSeries = false,
+                )
+            }
         }
     }
 
@@ -1472,7 +1506,13 @@ class OnDemandViewModel @Inject constructor(
             _state.update { it.copy(seriesProviderInfoLoading = it.seriesProviderInfoLoading - seriesId) }
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.getSeriesEpisodesFirstPage(base, key, seriesId)
+                    dispatcharrClient.getSeriesEpisodesFirstPage(base, key, seriesId) { partial ->
+                        // Progressive fill: the first page is on screen while
+                        // the rest of a long-running show still loads.
+                        _state.update { st ->
+                            st.copy(episodesBySeries = st.episodesBySeries + (seriesId to partial))
+                        }
+                    }
                 }
             }.fold(
                 onSuccess = { page ->
@@ -1486,11 +1526,15 @@ class OnDemandViewModel @Inject constructor(
                 },
                 onFailure = { t ->
                     warnUnlessCancelled("getSeriesEpisodes($seriesId) failed", t)
+                    // GH #87: an ART allocation dump is not a user message.
+                    val oom = generateSequence(t as Throwable?) { it.cause }.any { it is OutOfMemoryError } ||
+                        t.message?.contains("Failed to allocate", ignoreCase = true) == true
+                    val message = if (oom) "This series is too large to load on this device."
+                    else (t.message ?: t::class.simpleName.orEmpty())
                     _state.update { st ->
                         st.copy(
                             episodesLoadingFor = st.episodesLoadingFor - seriesId,
-                            episodesErrorFor = st.episodesErrorFor +
-                                    (seriesId to (t.message ?: t::class.simpleName.orEmpty())),
+                            episodesErrorFor = st.episodesErrorFor + (seriesId to message),
                         )
                     }
                 },
@@ -1820,7 +1864,7 @@ class OnDemandViewModel @Inject constructor(
                         // Episode still: the screen reads stillImageUrl from
                         // custom_properties.movie_image, so stash the XC image there.
                         customProperties = e.imageUrl?.let { img ->
-                            JsonObject(mapOf("movie_image" to JsonPrimitive(img)))
+                            com.aeriotv.android.core.network.VODCustomProps(movieImage = JsonPrimitive(img))
                         },
                     )
                 }
