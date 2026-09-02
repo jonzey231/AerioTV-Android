@@ -684,7 +684,7 @@ class PlaylistViewModel @Inject constructor(
      * so every path produces the same guide for the same cache. Unchanged
      * channels keep their previous list instance (no recomposition).
      */
-    private suspend fun rebuildGuideCatalog(playlist: PlaylistEntity, reason: String) {
+    private suspend fun rebuildGuideCatalog(playlist: PlaylistEntity, reason: String, quick: Boolean = false) {
         val channels = _state.value.channels
         if (channels.isEmpty()) return
         val retentionDays = playlist.epgRetentionDays.coerceIn(1, 30)
@@ -692,8 +692,10 @@ class PlaylistViewModel @Inject constructor(
             .getOrDefault(24)
             .let { if (it <= 0) 7 * 24 else it.coerceAtLeast(24) }
         val now = System.currentTimeMillis()
-        val fromMillis = now - retentionDays * 24L * 60L * 60L * 1000L
-        val toMillis = now + windowHours * 60L * 60L * 1000L
+        // Quick pass: only what the guide paints at launch (a couple of hours
+        // back, the evening ahead); the full retention window follows.
+        val fromMillis = if (quick) now - 2L * 60L * 60L * 1000L else now - retentionDays * 24L * 60L * 60L * 1000L
+        val toMillis = if (quick) now + 8L * 60L * 60L * 1000L else now + windowHours * 60L * 60L * 1000L
         val t0 = android.os.SystemClock.elapsedRealtime()
         val rows = runCatching { repository.loadCachedEpg(playlist.id, fromMillis, toMillis) }
             .onFailure { Log.w(TAG, "rebuildGuideCatalog($reason): cache read failed", it) }
@@ -808,8 +810,9 @@ class PlaylistViewModel @Inject constructor(
         }
         if (hasCache) {
             Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
-            rebuildGuideCatalog(playlist, "cache")
+            rebuildGuideCatalog(playlist, "cache-quick", quick = true)
             _state.update { it.copy(isEpgLoading = false) }
+            rebuildGuideCatalog(playlist, "cache")
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
