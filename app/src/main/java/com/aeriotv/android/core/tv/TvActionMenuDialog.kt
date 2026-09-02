@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.tv
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -73,8 +74,8 @@ fun TvActionMenuDialog(
     onDismiss: () -> Unit,
 ) {
     // Apple TV look (Logan 2026-09-02): a centred translucent card, the
-    // title on top, one capsule per action, the focused capsule white with
-    // accent text, and a Cancel capsule closing the list.
+    // title on top, one capsule per action with accent text, the focused
+    // capsule ringed like the rest of the app, and a Cancel capsule last.
     val accent = MaterialTheme.colorScheme.primary
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -155,9 +156,14 @@ private fun TvMenuCapsule(
                     else -> false
                 }
             }
+            // Logan 2026-09-02: no bright white fill on focus; the app's ring
+            // (2dp white border) marks the focused capsule like everywhere else.
             .background(
-                color = if (focused) Color.White else Color.White.copy(alpha = 0.08f),
+                color = Color.White.copy(alpha = if (focused) 0.14f else 0.08f),
                 shape = RoundedCornerShape(24.dp),
+            )
+            .then(
+                if (focused) Modifier.border(2.dp, Color.White, RoundedCornerShape(24.dp)) else Modifier,
             )
             .clickable(enabled = enabled, onClick = onActivate),
         verticalAlignment = Alignment.CenterVertically,
@@ -166,7 +172,7 @@ private fun TvMenuCapsule(
         Text(
             text = label,
             style = MaterialTheme.typography.titleMedium,
-            color = if (focused && enabled) accent else textColor,
+            color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 16.dp),
