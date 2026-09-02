@@ -1658,8 +1658,12 @@ private fun ExoTile(
                 } else {
                     httpFactory
                 }
+            // Tiles decode audio to PCM (no passthrough): PCM AudioTracks are
+            // mixed by the platform in any number, so every tile can keep its
+            // audio track selected and focus changes are a volume flip. The
+            // passthrough setting still governs the fullscreen player.
             val renderersFactory =
-                com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough)
+                com.aeriotv.android.core.playback.aerioRenderersFactory(ctx, audioPassthrough = false)
             // Route raw .ts / /proxy/ts via TsExtractor like the Live
             // TV holder; HLS via HlsMediaSource; everything else via
             // the default factory. Same routing logic as
@@ -1677,25 +1681,18 @@ private fun ExoTile(
                 .experimentalSetDynamicSchedulingEnabled(true)
                 .build()
                 .apply {
-                    // CRITICAL multiview audio-budget gate. Each tile is a
-                    // separate ExoPlayer; if every tile decodes audio, the
-                    // device's audio HAL runs out of AudioTrack sinks and
-                    // throws "Audio sink error" -> ExoPlaybackException,
-                    // which is FATAL to that tile's player (it stops and the
-                    // surface goes black). On the Streamer, 4 concurrent
-                    // AC-3 5.1 decoders is already over the limit.
-                    //
-                    // Setting volume=0 is NOT enough -- it mutes output but
-                    // still allocates the decoder + sink. We must disable the
-                    // audio TRACK entirely so the renderer never selects it
-                    // and no sink is created. This is the Media3 equivalent
-                    // of the libmpv `aid=no` knob the original multiview used
-                    // (the migration wrongly collapsed aid+mute to volume).
-                    trackSelectionParameters = trackSelectionParameters
-                        .buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !isAudioFocused)
-                        .build()
-                    volume = 1f
+                    // Audio focus is a VOLUME flip, never a track toggle
+                    // (Logan 2026-09-02: switching the focused tile froze the
+                    // stream for a moment). Disabling/enabling the audio track
+                    // makes ExoPlayer rebuild the audio renderer and hand the
+                    // playback clock to the new audio sink, which stalls video
+                    // until audio catches up. With PCM tiles (see the renderers
+                    // factory above) every tile keeps its audio track selected
+                    // and only the focused one is audible. The old sink-limit
+                    // failure ("Audio sink error" with 4 passthrough AC-3 sinks)
+                    // is handled by the listener below: a tile whose audio sink
+                    // fails falls back to a disabled audio track.
+                    volume = if (isAudioFocused) 1f else 0f
                     playWhenReady = !paused
                 }
             playerRef.value = player
@@ -1732,6 +1729,23 @@ private fun ExoTile(
                 override fun onPlayerError(error: PlaybackException) {
                     val retryUrl = currentUrlRef.value
                     if (retryUrl.isBlank()) return
+                    // Audio sink could not be created or written (the device's
+                    // audio HAL is out of tracks): keep the tile's video by
+                    // dropping its audio track, then re-prepare. The focused
+                    // tile re-enables audio on the next focus flip.
+                    if (error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+                    ) {
+                        Log.w(TAG, "Tile audio sink failed, continuing without audio: $channelName (${error.errorCodeName})")
+                        player.trackSelectionParameters = player.trackSelectionParameters
+                            .buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                            .build()
+                        player.setMediaSource(buildTileMediaSource(retryUrl, dataSourceFactory))
+                        player.prepare()
+                        player.playWhenReady = !paused
+                        return
+                    }
                     // A format this device's decoders can NEVER play (wrong
                     // codec/profile, or beyond the SoC's capabilities) fails
                     // identically on every re-prepare, so skip the bounded retry
@@ -1829,15 +1843,17 @@ private fun ExoTile(
                 player.prepare()
                 currentUrlRef.value = url
             }
-            // Flip audio on focus change. Disabling the track releases the
-            // AC-3 decoder + AudioTrack sink for non-focused tiles; enabling
-            // it on the newly-focused tile re-selects audio. Single-knob
-            // (track enable/disable) keeps exactly one audio sink alive
-            // across the whole grid, which is what the audio HAL can sustain.
-            player.trackSelectionParameters = player.trackSelectionParameters
-                .buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !isAudioFocused)
-                .build()
+            // Flip audio on focus change: volume only, no track change, so the
+            // video never stalls on the switch. A tile that had to fall back to
+            // a disabled audio track (sink failure) is re-enabled when it gains
+            // focus so the focused tile is always audible.
+            player.volume = if (isAudioFocused) 1f else 0f
+            if (isAudioFocused && player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO)) {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                    .build()
+            }
             player.playWhenReady = !paused
         },
         onRelease = { _ ->
