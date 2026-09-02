@@ -249,6 +249,10 @@ fun GuideScreen(
         if (isTv && !rows.isEmpty) {
             repeat(12) {
                 if (gridHasFocus) return@LaunchedEffect
+                // GH #90: a held Left that minimized the player also opened
+                // the group sidebar as the guide composed; the sidebar owns
+                // focus then, and this loop must not pull it back to the grid.
+                if (groupSidebarOpen) return@LaunchedEffect
                 runCatching { gridFocus.requestFocus() }
                 delay(100L)
             }

@@ -182,6 +182,13 @@ class AerioExoPlayerHolder @Inject constructor(
     // reloads in 18s -> player wedged -> terminal NO-DATA give-up).
     private var lastKnownBufferedPositionMs = 0L
     private var lastBufferAdvanceAtMs = 0L
+
+    /** Milliseconds since the live buffer last grew (ingest freshness).
+     *  GH #82: the Dispatcharr status follower must not declare a session
+     *  dead while bytes are still arriving. */
+    fun ingestAgeMs(): Long =
+        if (lastBufferAdvanceAtMs == 0L) Long.MAX_VALUE
+        else SystemClock.elapsedRealtime() - lastBufferAdvanceAtMs
     // When the watchdog tick itself arrives late, the MAIN THREAD was blocked
     // (the scope is Main.immediate) -- staleness accrued during that hang is
     // evidence of UI jank, not of a dead stream.

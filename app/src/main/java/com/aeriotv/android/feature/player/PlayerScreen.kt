@@ -853,6 +853,21 @@ fun PlayerScreen(
                     val stillPlaying = withContext(Dispatchers.Main.immediate) {
                         exoHolder.player?.playWhenReady == true
                     }
+                    // GH #82 (Streamer, HDHomeRun OTA through Dispatcharr): the
+                    // status endpoint answers 404 for some stream kinds even
+                    // while the proxy is feeding us fine. Three of those made
+                    // the follower reconnect every ~25s (a 3s freeze on every
+                    // channel). A 404 only counts as a dead session when the
+                    // live buffer has also stopped growing.
+                    val ingestAgeMs = withContext(Dispatchers.Main.immediate) { exoHolder.ingestAgeMs() }
+                    if (ingestAgeMs < 8_000L) {
+                        if (deadStatusCount == 0) android.util.Log.i(
+                            "DispatcharrSwitch",
+                            "[FOLLOW] status 404 but ingest healthy (${ingestAgeMs}ms) ch=${ch.id}; not a dead session",
+                        )
+                        deadStatusCount = 0
+                        continue
+                    }
                     if (stillPlaying && ++deadStatusCount >= 3 && currentChannel?.id == ch.id &&
                         switchStream == null && !exoHolder.isReprimeInFlight &&
                         !exoHolder.isTimeshifting
