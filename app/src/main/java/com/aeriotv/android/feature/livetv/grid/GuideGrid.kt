@@ -73,6 +73,9 @@ import coil3.request.ImageRequest
 import coil3.toBitmap
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.ui.epgFlags
+import com.aeriotv.android.core.ui.seasonEpisodeLabel
+import androidx.compose.material.icons.outlined.History
 import com.aeriotv.android.core.remote.GuideRemoteAction
 import com.aeriotv.android.core.remote.RemoteSlot
 import java.text.SimpleDateFormat
@@ -294,8 +297,9 @@ private fun TimeHeader(
     pxPerMs: Float,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
 ) {
+    // Apple TV: time labels in the accent colour.
     val labelStyle = TextStyle(
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+        color = MaterialTheme.colorScheme.primary,
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
     )
@@ -355,10 +359,21 @@ private fun GridRow(
     val focusedCellStart by remember(state, row) {
         derivedStateOf { if (state.focusRow == row) state.focusCellStartMs else Long.MIN_VALUE }
     }
-    val titleStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    val titleStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     val titleDimStyle = titleStyle.copy(color = Color.White.copy(alpha = 0.55f), fontWeight = FontWeight.Normal)
-    val timeStyle = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-    val descStyle = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+    // Apple TV cell: bold title, italic accent subtitle, accent-tinted
+    // description, then a dim time line with the S/E pill and flag badges.
+    val accent = MaterialTheme.colorScheme.primary
+    val timeStyle = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 10.5.sp)
+    val descStyle = TextStyle(color = accent.copy(alpha = 0.85f), fontSize = 10.5.sp)
+    val subStyle = TextStyle(color = accent, fontSize = 10.5.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+    val pillStyle = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.5.sp, fontWeight = FontWeight.Medium)
+    val badgeStyle = TextStyle(color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
+    val outline = MaterialTheme.colorScheme.outline
+    val showBadges = com.aeriotv.android.core.ui.LocalShowEpgBadges.current
+    val hiddenBadges = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
+    val shortFmt = remember { SimpleDateFormat("h:mm", Locale.getDefault()) }
+    val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
     val fmt = remember { SimpleDateFormat("h:mma", Locale.getDefault()) }
     val seam = 2f
     val padH = 8f
@@ -372,7 +387,7 @@ private fun GridRow(
     val tertiary = colors.tertiary
     val surface = colors.surface
     val railNumberStyle = TextStyle(color = tertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-    val railNameStyle = TextStyle(color = onSurface, fontSize = 11.sp)
+    val railNameStyle = TextStyle(color = onSurface, fontSize = 10.sp)
     // TalkBack: one node per row (channel + what is on now). Read in
     // composition on the 30 s tick only, never per press.
     val rowDescription = remember(channel.id, nowMs / 60_000L) {
@@ -439,6 +454,12 @@ private fun GridRow(
         } else {
             drawText(name.title, topLeft = Offset(nameX, (size.height - name.title.size.height) / 2f))
         }
+        if (channel.hasCatchup) {
+            val iconPx = 12.dp.toPx()
+            translate(left = railWidthPx - iconPx - 4.dp.toPx(), top = 4.dp.toPx()) {
+                with(catchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tertiary.copy(alpha = 0.8f))) }
+            }
+        }
         drawLine(colors.primary.copy(alpha = 0.2f), Offset(railWidthPx - 0.5f, 0f), Offset(railWidthPx - 0.5f, size.height), strokeWidth = 1.dp.toPx())
 
         // Programme strip.
@@ -483,40 +504,60 @@ private fun GridRow(
                 }
                 if (w >= 40.dp.toPx()) {
                     val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
-                    val wantRange = !cell.isPlaceholder && size.height >= 40.dp.toPx()
-                    val wantDesc = wantRange && cell.description.isNotBlank() && size.height >= 50.dp.toPx()
+                    val tall = size.height >= 44.dp.toPx()
                     val key = cell.startMillis * 31 + textW
                     val text = textCache.getOrPut(key) {
-                        val title = textMeasurer.measure(
-                            text = cell.title,
-                            style = if (cell.isPlaceholder) titleDimStyle else titleStyle,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            constraints = Constraints(maxWidth = textW, maxHeight = 20.sp.roundToPx()),
+                        fun measure(t: String, st: TextStyle, maxH: Float, ellipsis: Boolean = true) = textMeasurer.measure(
+                            text = t, style = st, maxLines = 1,
+                            overflow = if (ellipsis) TextOverflow.Ellipsis else TextOverflow.Clip,
+                            constraints = Constraints(maxWidth = textW, maxHeight = maxH.toInt().coerceAtLeast(1)),
                         )
-                        val desc = if (wantDesc) textMeasurer.measure(
-                            text = cell.description, style = descStyle, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            constraints = Constraints(maxWidth = textW, maxHeight = 16.sp.roundToPx()),
-                        ) else null
-                        val range = if (wantRange) {
-                            val str = rangeCache.getOrPut(cell.startMillis) {
-                                fmt.format(Date(cell.startMillis)).lowercase(Locale.getDefault()) +
-                                    " - " + fmt.format(Date(cell.endMillis)).lowercase(Locale.getDefault())
+                        val title = measure(cell.title, if (cell.isPlaceholder) titleDimStyle else titleStyle, 20.sp.toPx())
+                        if (cell.isPlaceholder || !tall) CellText(title, null) else {
+                            val sub = cell.subTitle?.takeIf { it.isNotBlank() }?.let { measure(it, subStyle, 15.sp.toPx()) }
+                            val desc = cell.description.takeIf { it.isNotBlank() }?.let { measure(it, descStyle, 15.sp.toPx()) }
+                            val range = rangeCache.getOrPut(cell.startMillis) {
+                                shortFmt.format(Date(cell.startMillis)) + " - " + shortFmt.format(Date(cell.endMillis))
                             }
-                            textMeasurer.measure(
-                                text = str, style = timeStyle, maxLines = 1, overflow = TextOverflow.Clip,
-                                constraints = Constraints(maxWidth = textW, maxHeight = 16.sp.roundToPx()),
-                            )
-                        } else null
-                        CellText(title, range, desc)
+                            val time = measure(range, timeStyle, 15.sp.toPx(), ellipsis = false)
+                            val pill = if (showBadges) cell.seasonEpisodeLabel()?.let { measure(it, pillStyle, 12.sp.toPx(), ellipsis = false) } else null
+                            val badges = if (showBadges) cell.epgFlags().filter { it.label !in hiddenBadges }
+                                .map { measure(it.label, badgeStyle, 12.sp.toPx(), ellipsis = false) to it.color } else emptyList()
+                            CellText(title, time, desc, sub, pill, badges)
+                        }
                     }
                     val recording = !cell.isPlaceholder && recordingWindows.any { win ->
                         cell.startMillis < win.last && cell.endMillis > win.first
                     }
                     clipRect(x0, 0f, x0 + w, size.height) {
-                        val titleTop = if (text.desc != null) 3.dp.toPx() else 6.dp.toPx()
-                        drawText(text.title, topLeft = Offset(x0 + padH, titleTop))
-                        text.desc?.let { drawText(it, topLeft = Offset(x0 + padH, titleTop + text.title.size.height - 1.dp.toPx())) }
-                        text.range?.let { drawText(it, topLeft = Offset(x0 + padH, size.height - 4.dp.toPx() - it.size.height)) }
+                        val x = x0 + padH
+                        var y = 3.dp.toPx()
+                        drawText(text.title, topLeft = Offset(x, y)); y += text.title.size.height - 1.dp.toPx()
+                        text.sub?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
+                        text.desc?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
+                        text.range?.let { time ->
+                            // Bottom line sits on the row floor; the lines above stack from the top.
+                            val ty = maxOf(y, size.height - 3.dp.toPx() - time.size.height)
+                            var bx = x
+                            drawText(time, topLeft = Offset(bx, ty)); bx += time.size.width + 5.dp.toPx()
+                            val chipH = time.size.height - 1.dp.toPx()
+                            val chipY = ty + (time.size.height - chipH) / 2f
+                            text.pill?.let { pill ->
+                                val cw = pill.size.width + 6.dp.toPx()
+                                if (bx + cw <= x0 + w) {
+                                    drawRoundRect(outline, topLeft = Offset(bx, chipY), size = Size(cw, chipH), cornerRadius = CornerRadius(3.dp.toPx()), style = Stroke(width = 1.dp.toPx()))
+                                    drawText(pill, topLeft = Offset(bx + 3.dp.toPx(), chipY + (chipH - pill.size.height) / 2f))
+                                }
+                                bx += cw + 4.dp.toPx()
+                            }
+                            for ((badge, color) in text.badges) {
+                                val cw = badge.size.width + 6.dp.toPx()
+                                if (bx + cw > x0 + w) break
+                                drawRoundRect(color, topLeft = Offset(bx, chipY), size = Size(cw, chipH), cornerRadius = CornerRadius(3.dp.toPx()))
+                                drawText(badge, topLeft = Offset(bx + 3.dp.toPx(), chipY + (chipH - badge.size.height) / 2f))
+                                bx += cw + 3.dp.toPx()
+                            }
+                        }
                         if (recording) {
                             drawCircle(NOW_RED, radius = 4.dp.toPx(), center = Offset(x0 + w - 10.dp.toPx(), 10.dp.toPx()))
                         }
@@ -570,4 +611,11 @@ private const val RAIL_NUMBER_KEY = Long.MIN_VALUE + 1
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
 private val NOW_RED = Color(0xFFFF4757)
 
-private class CellText(val title: TextLayoutResult, val range: TextLayoutResult?, val desc: TextLayoutResult? = null)
+private class CellText(
+    val title: TextLayoutResult,
+    val range: TextLayoutResult?,
+    val desc: TextLayoutResult? = null,
+    val sub: TextLayoutResult? = null,
+    val pill: TextLayoutResult? = null,
+    val badges: List<Pair<TextLayoutResult, Color>> = emptyList(),
+)
