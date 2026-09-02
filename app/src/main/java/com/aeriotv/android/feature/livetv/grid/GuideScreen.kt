@@ -254,6 +254,15 @@ fun GuideScreen(
             }
         }
     }
+    // Logan 2026-09-02: backing out of a full-screen channel lands the guide
+    // on the channel that is still playing (now in the mini player), not
+    // wherever the grid was before. Keyed on the mini's channel so it fires
+    // on the fullscreen -> mini hand-off and stays quiet otherwise.
+    LaunchedEffect(miniChannelId, rows.isEmpty) {
+        val id = miniChannelId ?: return@LaunchedEffect
+        if (!isTv || rows.isEmpty) return@LaunchedEffect
+        if (grid.focusChannel(id)) runCatching { gridFocus.requestFocus() }
+    }
 
     val collectionPillItem: @Composable (ChannelCollection) -> Unit = { c ->
         val token = ChannelCollection.token(c.id)

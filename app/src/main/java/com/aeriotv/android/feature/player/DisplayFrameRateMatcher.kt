@@ -48,6 +48,15 @@ import kotlin.math.abs
 object DisplayFrameRateMatcher {
     private const val TAG = "AerioFpsMatch"
 
+    /** Latest requested rate class (50 / 59.94 / 60), 0 until measured. */
+    @Volatile var lastRequestedRate: Float = 0f
+        private set
+
+    /** Fired (on the metadata thread) whenever the requested rate class
+     *  changes. MainActivity uses it to pick a display MODE at that rate when
+     *  the seamless request cannot be honoured (2160p50 on a 60 Hz mode). */
+    @Volatile var onRateRequested: ((Float) -> Unit)? = null
+
     /**
      * Start measuring [player]'s frame rate and request a refresh-rate match on
      * [surfaceView]'s Surface (framework arbitrates via the user's OS Match
@@ -97,6 +106,8 @@ object DisplayFrameRateMatcher {
                 }
                 if (target > 0f && abs(target - lastAppliedFps) > 1.0f) {
                     lastAppliedFps = target
+                    lastRequestedRate = target
+                    onRateRequested?.invoke(target)
                     val surface = surfaceView.holder.surface
                     if (surface != null && surface.isValid) {
                         runCatching {

@@ -632,6 +632,10 @@ fun PlayerScreen(
     // shape as the OK split. One latch serves both keys - the D-pad can
     // only repeat one direction at a time.
     var horizLongFired by remember { mutableStateOf(false) }
+    // Logan 2026-09-02: a Right whose DOWN closed the channel list overlay
+    // (the overlay consumes it) must not zap on its UP. Only a release whose
+    // press this block saw may fire the short action.
+    var horizDownSeen by remember { mutableStateOf(false) }
     // Remote Control (Logan spec 2026-07-20): hold-Up "Recently Watched"
     // overlay. While open, Back dismisses it (guard below) and channel-flip
     // keys are blocked so Up/Down walk the overlay list instead.
@@ -1373,6 +1377,7 @@ fun PlayerScreen(
                             android.view.KeyEvent.ACTION_DOWN -> {
                                 if (native.repeatCount == 0) {
                                     horizLongFired = false
+                                    horizDownSeen = true
                                 } else if (!horizLongFired &&
                                     (native.isLongPress || native.repeatCount >= 4)
                                 ) {
@@ -1384,12 +1389,13 @@ fun PlayerScreen(
                                 return@onPreviewKeyEvent true
                             }
                             android.view.KeyEvent.ACTION_UP -> {
-                                if (!horizLongFired &&
+                                if (horizDownSeen && !horizLongFired &&
                                     shortAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE
                                 ) {
                                     exoWindowState.onPlayerRemoteAction?.invoke(shortAction)
                                 }
                                 horizLongFired = false
+                                horizDownSeen = false
                                 return@onPreviewKeyEvent true
                             }
                         }
@@ -1744,6 +1750,14 @@ fun PlayerScreen(
                     true
                 }
                 com.aeriotv.android.core.remote.PlayerRemoteAction.LAST_CHANNEL -> {
+                    // Logan 2026-09-02: Right while an in-player overlay is up
+                    // steps OUT one layer (sidebar -> list -> player); it only
+                    // zaps to the last channel when nothing is overlaid. The
+                    // remote map dispatches here before the overlay's own key
+                    // handler sees the press, so gate it here.
+                    if (channelListSidebarOpen) { channelListSidebarOpen = false; return@act true }
+                    if (channelListVisible) { channelListVisible = false; return@act true }
+                    if (recentsOverlayVisible) { recentsOverlayVisible = false; return@act true }
                     val zapId = exoWindowState.lastChannelId ?: return@act true
                     val list = flipChannels
                     val idx = list.indexOfFirst { it.id == zapId }

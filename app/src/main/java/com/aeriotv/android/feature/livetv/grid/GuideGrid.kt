@@ -139,15 +139,23 @@ fun GuideGrid(
     // recompose the whole grid (and every visible row) on each D-pad press.
     val rowHeightPx = with(density) { rowHeight.toPx() }
     LaunchedEffect(state, listState, rowHeightPx) {
-        snapshotFlow { state.focusRow to state.rows }.collect { (row, _) ->
+        snapshotFlow {
+            Triple(state.focusRow, state.rows, listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset)
+        }.collect { (row, _, viewportPx) ->
             if (row < 0) return@collect
             // Apple TV lane (Logan 2026-09-02): focus walks DOWN through the
             // visible rows until it sits on the seventh row, then the list
             // scrolls under it; going UP it walks to the top row first.
+            // The lane shrinks with the viewport (Logan 2026-09-02: with the
+            // mini player active the header is taller, fewer rows fit, and a
+            // fixed seventh row sat below the fold), and the viewport size
+            // is part of the flow so a mini appearing re-lanes the focus.
+            val visibleRows = if (rowHeightPx > 0f) (viewportPx / rowHeightPx).toInt() else LANE_ROWS + 1
+            val lane = minOf(LANE_ROWS, (visibleRows - 1).coerceAtLeast(1))
             val current = listState.firstVisibleItemIndex
             val offset = listState.firstVisibleItemScrollOffset
             val target = when {
-                row > current + LANE_ROWS -> row - LANE_ROWS
+                row > current + lane -> row - lane
                 row < current || (row == current && offset != 0) -> row
                 else -> current
             }.coerceAtLeast(0)

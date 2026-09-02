@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -125,7 +126,106 @@ fun BoxScope.PersistentExoWindow(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Box(modifier = containerModifier) {
+    // Shield freeze after a display mode change (Frankie B., 2026-09-02):
+    // "the first channel after a UHD <-> HD change freezes; the next channel
+    // is fine". His logs show every resolution switch rendering frames (the
+    // wedge watchdog never fires) yet the picture stays on the last frame:
+    // the HDMI re-handshake reallocates the SurfaceView's buffers under the
+    // running decoder ("freeAllBuffers: 1 buffers were freed while being
+    // dequeued!") and the decoder keeps rendering into a queue nobody
+    // composites any more. A channel change fixes it only because it
+    // re-attaches the surface, so do that directly: recreate the PlayerView
+    // after the display's RESOLUTION changes.
+    //
+    // Timing matters (Streamer, 2026-09-02): a surface created while the
+    // HDMI transition is still in progress lands on a layer the compositor
+    // cannot present, and the decoder renders nothing into it (black screen
+    // with audio until the next surface change). So the recreate waits
+    // until 1.5s after the LAST display event, and the player's own
+    // onRenderedFirstFrame verifies it: no frame within 4s means the surface
+    // was still too early, and it is recreated once more.
+    //
+    // Refresh-rate-only mode changes (the seamless frame-rate matcher's own
+    // switches, which can also arrive with an unchanged mode id) are logged
+    // and ignored; only a size change acts.
+    val displayContext = LocalContext.current
+    val recreateGate = remember { SurfaceRecreateGate() }
+    // Streamer (MediaTek) at 2160p: a recreated SurfaceView was never
+    // presented by the compositor (no frames reached the screen) until the
+    // layer's GEOMETRY changed - Back to the mini player did that by
+    // accident. So each recreate is followed by a one-frame 1px nudge of
+    // the container, which makes SurfaceFlinger re-validate the layer.
+    var geometryNudge by remember { mutableStateOf(false) }
+    DisposableEffect(boundPlayer) {
+        val p = boundPlayer
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onRenderedFirstFrame() { recreateGate.frameSinceRecreate = true }
+        }
+        p?.addListener(listener)
+        onDispose { p?.removeListener(listener) }
+    }
+    DisposableEffect(displayContext) {
+        val dmgr = displayContext.getSystemService(android.content.Context.DISPLAY_SERVICE)
+            as android.hardware.display.DisplayManager
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        val startMode = dmgr.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.mode
+        var lastW = startMode?.physicalWidth ?: 0
+        var lastH = startMode?.physicalHeight ?: 0
+        var pending: Runnable? = null
+        var verify: Runnable? = null
+        fun playing(): Boolean {
+            if (state.mode.value == ExoWindowState.Mode.Hidden) return false
+            val p = boundPlayer ?: return false
+            return p.playbackState != androidx.media3.common.Player.STATE_IDLE &&
+                p.playbackState != androidx.media3.common.Player.STATE_ENDED
+        }
+        fun recreate(reason: String, retriesLeft: Int) {
+            if (!playing()) return
+            Log.i(TAG, "recreating PlayerView surface ($reason)")
+            recreateGate.frameSinceRecreate = false
+            surfaceEpoch++
+            mainHandler.postDelayed({
+                geometryNudge = true
+                mainHandler.postDelayed({ geometryNudge = false }, 120L)
+            }, 400L)
+            verify?.let { mainHandler.removeCallbacks(it) }
+            verify = Runnable {
+                if (!recreateGate.frameSinceRecreate && playing() && retriesLeft > 0) {
+                    recreate("no frame rendered 4s after the previous recreate", retriesLeft - 1)
+                } else if (!recreateGate.frameSinceRecreate && playing()) {
+                    Log.w(TAG, "surface recreate: still no rendered frame after retry; leaving it to the watchdog")
+                }
+            }.also { mainHandler.postDelayed(it, 4000L) }
+        }
+        val listener = object : android.hardware.display.DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != android.view.Display.DEFAULT_DISPLAY) return
+                val mode = dmgr.getDisplay(displayId)?.mode ?: return
+                val sizeChanged = mode.physicalWidth != lastW || mode.physicalHeight != lastH
+                val desc = "${mode.physicalWidth}x${mode.physicalHeight}@${mode.refreshRate} (mode ${mode.modeId})"
+                lastW = mode.physicalWidth; lastH = mode.physicalHeight
+                val appSwitch = DisplayModeSwitchSignal.pending
+                if (!sizeChanged && !appSwitch) {
+                    Log.i(TAG, "display changed, same size: $desc; no surface action")
+                    return
+                }
+                if (!playing()) return
+                Log.i(TAG, "display mode changed during playback: $desc (sizeChanged=$sizeChanged appSwitch=$appSwitch); surface recreate armed")
+                pending?.let { mainHandler.removeCallbacks(it) }
+                pending = Runnable { recreate("display settled at $desc", retriesLeft = 1) }
+                    .also { mainHandler.postDelayed(it, 1500L) }
+            }
+        }
+        dmgr.registerDisplayListener(listener, mainHandler)
+        onDispose {
+            dmgr.unregisterDisplayListener(listener)
+            mainHandler.removeCallbacksAndMessages(null)
+        }
+    }
+
+    Box(modifier = containerModifier.padding(end = if (geometryNudge) 1.dp else 0.dp)) {
         key(surfaceEpoch) {
         // Survives recompositions within this epoch; disposed (and detached via
         // onRelease) when surfaceEpoch flips and the SurfaceView is recreated.
@@ -254,6 +354,11 @@ fun BoxScope.PersistentExoWindow(
 }
 
 private const val TAG = "PersistentExoWindow"
+
+/** Whether the player has rendered a frame since the last surface recreate. */
+private class SurfaceRecreateGate {
+    @Volatile var frameSinceRecreate = true
+}
 
 /**
  * Retains the [DisplayFrameRateMatcher] attachment so it can be re-attached

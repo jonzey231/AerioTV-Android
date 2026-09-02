@@ -505,6 +505,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onRateRequested = null
         // Explicit app exit (Back -> Exit dialog -> finish) must stop playback.
         // The ExoPlayer holder + media session are process-scoped singletons, so
         // without this they keep decoding audio after the activity is gone (the
@@ -653,6 +654,43 @@ class MainActivity : ComponentActivity() {
      *  (his log shows healthy recoveries at 5-7s). */
     private val resModeWedgeCheckMs = 8000L
 
+    /** Content rate class the frame-rate matcher last requested (0 = unknown). */
+    private var lastContentRate = 0f
+    private var lastModeSwitchAt = 0L
+
+    /** The matcher measured a new content rate class. When the resolution
+     *  matcher is on and the current mode's refresh does not match, pick the
+     *  same-size mode that does (2160p50 for 50 fps content on a 60 Hz mode:
+     *  the seamless path cannot do that switch, and 50-on-60 plays with a
+     *  3:2 cadence that reads as slow motion - Logan, Streamer 2026-09-02). */
+    private fun onContentRateRequested(rate: Float) {
+        lastContentRate = rate
+        if (!matchContentResolutionEnabled || !isTelevisionDevice()) return
+        val player = resMatchPlayer ?: return
+        if (!player.playWhenReady) return
+        val disp = currentDisplay() ?: return
+        val current = disp.mode ?: return
+        if (kotlin.math.abs(current.refreshRate - rate) <= 0.5f) return
+        // Too soon after the resolution switch: defer, never drop (the
+        // Streamer measured 50 fps 2.93s after the 2160p switch and the
+        // request was lost to a 3s guard).
+        val sinceSwitch = android.os.SystemClock.elapsedRealtime() - lastModeSwitchAt
+        if (sinceSwitch < 3000L) {
+            window.decorView.postDelayed({ if (lastContentRate == rate) onContentRateRequested(rate) }, 3000L - sinceSwitch + 100L)
+            return
+        }
+        val best = disp.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .filter { kotlin.math.abs(it.refreshRate - rate) <= 0.5f }
+            .minByOrNull { kotlin.math.abs(it.refreshRate - rate) } ?: return
+        if (best.modeId == current.modeId) return
+        Log.i(TAG, "GH#40 content rate match: ${"%.2f".format(rate)}fps -> mode ${best.physicalWidth}x${best.physicalHeight}@${best.refreshRate}")
+        lastModeSwitchAt = android.os.SystemClock.elapsedRealtime()
+        com.aeriotv.android.feature.player.DisplayModeSwitchSignal.raise()
+        window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
+        resolutionModeApplied = true
+    }
+
     /** GH #40: switch the display to the content's resolution class. */
     private fun applyContentResolutionMode(videoW: Int, videoH: Int) {
         if (!matchContentResolutionEnabled || !isTelevisionDevice()) return
@@ -667,18 +705,22 @@ class MainActivity : ComponentActivity() {
             else -> 720
         }
         if (current.physicalHeight == targetH) return
+        // Refresh class: keep the CURRENT class here (the matcher's last
+        // rate belongs to the previous channel); onContentRateRequested
+        // moves to the content's rate once it has been measured.
+        val wantRate = current.refreshRate
         val best = disp.supportedModes
             .filter { it.physicalHeight == targetH }
-            // Keep the CURRENT refresh class so this never doubles as a rate
-            // switch; fall back to the highest rate at that resolution.
             .sortedWith(
                 compareBy(
-                    { kotlin.math.abs(it.refreshRate - current.refreshRate) > 0.5f },
+                    { kotlin.math.abs(it.refreshRate - wantRate) > 0.5f },
                     { -it.refreshRate },
                 ),
             )
             .firstOrNull() ?: return
-        Log.i(TAG, "GH#40 content res match: ${videoW}x$videoH -> mode ${best.physicalWidth}x${best.physicalHeight}@${best.refreshRate}")
+        Log.i(TAG, "GH#40 content res match: ${videoW}x$videoH -> mode ${best.physicalWidth}x${best.physicalHeight}@${best.refreshRate} (want ${"%.2f".format(wantRate)}Hz)")
+        lastModeSwitchAt = android.os.SystemClock.elapsedRealtime()
+        com.aeriotv.android.feature.player.DisplayModeSwitchSignal.raise()
         window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
         resolutionModeApplied = true
         // Frankie B.'s Chromecast logs (2026-08-04): onVideoSizeChanged fires
@@ -733,6 +775,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // GH#40 rate match: the seamless matcher reports the content rate
+        // class; pick a same-size display mode at that rate when needed.
+        com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onRateRequested = { rate ->
+            runOnUiThread { onContentRateRequested(rate) }
+        }
         enableEdgeToEdge()
         // Remote Control initiative: keep the button map hot for
         // dispatchKeyEvent (which cannot suspend).
