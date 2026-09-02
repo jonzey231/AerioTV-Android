@@ -47,6 +47,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
@@ -143,6 +144,7 @@ fun GuideGrid(
     }
 
     val runAction: (GuideRemoteAction) -> Boolean = { action ->
+        android.util.Log.d("GuideGrid", "remote action $action")
         when (action) {
             GuideRemoteAction.JUMP_TO_NOW -> { state.anchorToNow(nowMs); true }
             GuideRemoteAction.JUMP_TO_TOP -> { state.anchorToNow(nowMs); state.focusRowAt(0); true }
@@ -155,7 +157,10 @@ fun GuideGrid(
         }
     }
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
-        val repeat = (event.nativeKeyEvent as? AndroidKeyEvent)?.repeatCount ?: 0
+        val native = event.nativeKeyEvent as? AndroidKeyEvent
+        val repeat = native?.repeatCount ?: 0
+        // Some remotes (and adb --longpress) flag a hold instead of repeating.
+        val held = repeat >= HOLD_LEFT_REPEATS || (native?.isLongPress == true)
         val down = event.type == KeyEventType.KeyDown
         val up = event.type == KeyEventType.KeyUp
         Trace.beginSection("GuideGrid.key")
@@ -170,7 +175,7 @@ fun GuideGrid(
                 Key.DirectionRight -> {
                     if (down) {
                         if (repeat == 0) rightHoldLatched = false
-                        if (!rightHoldLatched && repeat >= HOLD_LEFT_REPEATS) {
+                        if (!rightHoldLatched && held) {
                             rightHoldLatched = true
                             runAction(remoteAction(RemoteSlot.RIGHT_LONG))
                         } else if (repeat == 0) {
@@ -182,7 +187,7 @@ fun GuideGrid(
                 Key.DirectionLeft -> {
                     if (down) {
                         if (repeat == 0) leftHoldLatched = false
-                        if (!leftHoldLatched && repeat >= HOLD_LEFT_REPEATS) {
+                        if (!leftHoldLatched && held) {
                             leftHoldLatched = true
                             // Held Left is the group menu unless the user mapped it away.
                             val mapped = if (holdLeftOpensGroups) GuideRemoteAction.FOCUS_GROUP_PILLS else remoteAction(RemoteSlot.LEFT_LONG)
@@ -234,7 +239,16 @@ fun GuideGrid(
             .onPreviewKeyEvent(keyHandler),
     ) {
         TimeHeader(state, nowMs, railWidth, headerHeight, pxPerMs, textMeasurer)
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+        val railPx = with(density) { railWidth.toPx() }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { size ->
+                    val stripPx = (size.width - railPx).coerceAtLeast(1f)
+                    state.viewportDurationMs = (stripPx / pxPerMs).toLong()
+                },
+        ) {
             val rows = state.rows
             items(count = rows.size, key = { rows.channel(it).id }) { row ->
                 GridRow(
