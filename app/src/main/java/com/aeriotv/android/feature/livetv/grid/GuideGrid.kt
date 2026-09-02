@@ -367,9 +367,9 @@ private fun GridRow(
     val timeStyle = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 10.5.sp)
     val descStyle = TextStyle(color = accent.copy(alpha = 0.85f), fontSize = 10.5.sp)
     val subStyle = TextStyle(color = accent, fontSize = 10.5.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
-    val pillStyle = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.5.sp, fontWeight = FontWeight.Medium)
-    val badgeStyle = TextStyle(color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
-    val outline = MaterialTheme.colorScheme.outline
+    val pillStyle = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f), fontSize = 7.5.sp, fontWeight = FontWeight.Medium)
+    val badgeStyle = TextStyle(color = Color.White, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
+    val outline = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     val showBadges = com.aeriotv.android.core.ui.LocalShowEpgBadges.current
     val hiddenBadges = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
     val shortFmt = remember { SimpleDateFormat("h:mm", Locale.getDefault()) }
@@ -431,8 +431,8 @@ private fun GridRow(
         }
         // Narrow (phone) rail: number tucked top-left, logo and name centred across the full rail.
         val narrowRail = railWidthPx < 100.dp.toPx()
-        val nameLeft = if (narrowRail) 4.dp.toPx() else 36.dp.toPx()
-        val nameW = (railWidthPx - nameLeft - 4.dp.toPx()).toInt().coerceAtLeast(1)
+        val nameLeft = 4.dp.toPx()
+        val nameW = (railWidthPx - 8.dp.toPx()).toInt().coerceAtLeast(1)
         if (narrowRail) drawText(number.title, topLeft = Offset(3.dp.toPx(), 2.dp.toPx()))
         else drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
         val name = textCache.getOrPut(RAIL_NAME_KEY) {
@@ -483,7 +483,7 @@ private fun GridRow(
                 val focused = focusedHere && cell.startMillis == focusStart
                 val airing = nowMs in cell.startMillis until cell.endMillis
                 val fill = when {
-                    focused -> Color.White.copy(alpha = 0.25f)
+                    focused -> Color.White.copy(alpha = 0.3f)
                     cell.isPlaceholder -> Color.White.copy(alpha = 0.03f)
                     airing -> Color.White.copy(alpha = 0.12f)
                     else -> Color.White.copy(alpha = 0.05f)
@@ -540,21 +540,21 @@ private fun GridRow(
                             val ty = maxOf(y, size.height - 3.dp.toPx() - time.size.height)
                             var bx = x
                             drawText(time, topLeft = Offset(bx, ty)); bx += time.size.width + 5.dp.toPx()
-                            val chipH = time.size.height - 1.dp.toPx()
+                            val chipH = time.size.height - 4.dp.toPx()
                             val chipY = ty + (time.size.height - chipH) / 2f
                             text.pill?.let { pill ->
-                                val cw = pill.size.width + 6.dp.toPx()
+                                val cw = pill.size.width + 5.dp.toPx()
                                 if (bx + cw <= x0 + w) {
                                     drawRoundRect(outline, topLeft = Offset(bx, chipY), size = Size(cw, chipH), cornerRadius = CornerRadius(3.dp.toPx()), style = Stroke(width = 1.dp.toPx()))
-                                    drawText(pill, topLeft = Offset(bx + 3.dp.toPx(), chipY + (chipH - pill.size.height) / 2f))
+                                    drawText(pill, topLeft = Offset(bx + 2.5.dp.toPx(), chipY + (chipH - pill.size.height) / 2f))
                                 }
                                 bx += cw + 4.dp.toPx()
                             }
                             for ((badge, color) in text.badges) {
-                                val cw = badge.size.width + 6.dp.toPx()
+                                val cw = badge.size.width + 5.dp.toPx()
                                 if (bx + cw > x0 + w) break
                                 drawRoundRect(color, topLeft = Offset(bx, chipY), size = Size(cw, chipH), cornerRadius = CornerRadius(3.dp.toPx()))
-                                drawText(badge, topLeft = Offset(bx + 3.dp.toPx(), chipY + (chipH - badge.size.height) / 2f))
+                                drawText(badge, topLeft = Offset(bx + 2.5.dp.toPx(), chipY + (chipH - badge.size.height) / 2f))
                                 bx += cw + 3.dp.toPx()
                             }
                         }
