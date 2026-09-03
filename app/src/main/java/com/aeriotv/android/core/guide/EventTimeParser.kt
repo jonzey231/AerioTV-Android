@@ -20,7 +20,7 @@ object EventTimeParser {
 
     // "Sep 02 03:30AM ET", "Sep 2, 2026 8:00 PM", "September 02 20:00"
     private val monthFirst = Pattern.compile(
-        "\\b($MONTHS)[a-z]*\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?(?:\\s+(\\d{4}))?\\s*[,@-]?\\s*(?:at\\s+)?$TIME$TZ\\b",
+        "\\b($MONTHS)[a-z]*\\.?\\s+(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?,?(?:\\s+(\\d{4}))?\\s*[,@-]?\\s*(?:at\\s+)?$TIME$TZ\\b",
         Pattern.CASE_INSENSITIVE,
     )
     // "3 Sep 01:30 AM ET", "03 Sep 2026 20:00"
@@ -30,7 +30,7 @@ object EventTimeParser {
     )
     // "09/02 8:00PM ET", "9/2/2026 20:00"
     private val numeric = Pattern.compile(
-        "\\b(\\d{1,2})/(\\d{1,2})(?:/(\\d{2,4}))?\\s*[,@-]?\\s*(?:at\\s+)?$TIME$TZ\\b",
+        "\\b(\\d{1,2})/(\\d{1,2})(?!\\d)(?:/(\\d{2,4}))?\\s*[,@-]?\\s*(?:at\\s+)?$TIME$TZ\\b",
         Pattern.CASE_INSENSITIVE,
     )
 
@@ -45,14 +45,19 @@ object EventTimeParser {
 
     /** Epoch millis of the event start, or null. [nowMs] resolves the year. */
     fun parse(name: String, nowMs: Long = System.currentTimeMillis(), zone: TimeZone = TimeZone.getDefault()): Long? {
-        monthFirst.matcher(name).let { m ->
-            if (m.find()) return build(month(m.group(1)), m.group(2)!!.toInt(), m.group(3), m.group(4), m.group(5), m.group(6), m.group(7), nowMs, zone)
+        // Each pattern may match but fail validation (month-first can grab
+        // "Sep 0" out of "Sep 01:30"); keep scanning, then fall through.
+        val m1 = monthFirst.matcher(name)
+        while (m1.find()) {
+            build(month(m1.group(1)), m1.group(2)!!.toInt(), m1.group(3), m1.group(4), m1.group(5), m1.group(6), m1.group(7), nowMs, zone)?.let { return it }
         }
-        dayFirst.matcher(name).let { m ->
-            if (m.find()) return build(month(m.group(2)), m.group(1)!!.toInt(), m.group(3), m.group(4), m.group(5), m.group(6), m.group(7), nowMs, zone)
+        val m2 = dayFirst.matcher(name)
+        while (m2.find()) {
+            build(month(m2.group(2)), m2.group(1)!!.toInt(), m2.group(3), m2.group(4), m2.group(5), m2.group(6), m2.group(7), nowMs, zone)?.let { return it }
         }
-        numeric.matcher(name).let { m ->
-            if (m.find()) return build(m.group(1)!!.toInt() - 1, m.group(2)!!.toInt(), m.group(3), m.group(4), m.group(5), m.group(6), m.group(7), nowMs, zone)
+        val m3 = numeric.matcher(name)
+        while (m3.find()) {
+            build(m3.group(1)!!.toInt() - 1, m3.group(2)!!.toInt(), m3.group(3), m3.group(4), m3.group(5), m3.group(6), m3.group(7), nowMs, zone)?.let { return it }
         }
         return null
     }
