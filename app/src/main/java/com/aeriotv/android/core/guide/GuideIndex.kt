@@ -75,6 +75,34 @@ class GuideIndex private constructor(
     }
 
     companion object {
+        /**
+         * Cells for a channel with NO guide data: the channel name stands in
+         * for the programme. When the name carries an event time (Xtream event
+         * feeds, see [EventTimeParser]) the row splits into a lead-in that says
+         * when it starts, the event block itself, and the tail after it.
+         */
+        fun nameCells(
+            channelId: GuideChannelId,
+            name: String,
+            windowStartMs: Long,
+            windowEndMs: Long,
+            nowMs: Long = System.currentTimeMillis(),
+        ): List<EPGProgramme> {
+            val start = EventTimeParser.parse(name, nowMs)
+            if (start == null || start >= windowEndMs || start + EVENT_BLOCK_MS <= windowStartMs) {
+                return listOf(placeholder(channelId, name, windowStartMs, windowEndMs))
+            }
+            val end = start + EVENT_BLOCK_MS
+            val out = ArrayList<EPGProgramme>(3)
+            val when_ = java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault()).format(java.util.Date(start))
+            if (start > windowStartMs) out += placeholder(channelId, name, windowStartMs, start).copy(description = "Starts $when_")
+            out += placeholder(channelId, name, maxOf(start, windowStartMs), minOf(end, windowEndMs)).copy(description = "Event listing from the channel name; the provider has no guide data for it.")
+            if (end < windowEndMs) out += placeholder(channelId, name, end, windowEndMs).copy(description = "Started $when_")
+            return out
+        }
+
+        private const val EVENT_BLOCK_MS = 3 * 3_600_000L
+
         fun placeholder(channelId: GuideChannelId, title: String, startMs: Long, endMs: Long) = EPGProgramme(
             channelId = channelId.value,
             title = title,

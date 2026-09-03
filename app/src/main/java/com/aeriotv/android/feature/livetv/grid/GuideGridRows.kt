@@ -36,7 +36,7 @@ class GuideGridRows(
         val id = GuideChannelId(ch.guideMatchKey)
         val index = catalog?.index(id)
         val cells = if (index == null || index.cells.isEmpty()) {
-            listOf(GuideIndex.placeholder(id, ch.name, windowStartMs, windowEndMs))
+            GuideIndex.nameCells(id, ch.name, windowStartMs, windowEndMs)
         } else {
             index.withHoles(windowStartMs, windowEndMs, minGapMs)
         }

@@ -75,9 +75,7 @@ class GuideCatalog private constructor(
                 val index: GuideIndex
                 if (raw.isNullOrEmpty()) {
                     index = GuideIndex.empty(id)
-                    cells = listOf(
-                        GuideIndex.placeholder(id, ch.name, windowStartMs, windowEndMs),
-                    )
+                    cells = GuideIndex.nameCells(id, ch.name, windowStartMs, windowEndMs)
                 } else {
                     val deduped = GuideMerge.dedup(raw.sortedWith(compareBy({ it.startMillis }, { it.endMillis })))
                     index = GuideIndex.build(id, deduped)
