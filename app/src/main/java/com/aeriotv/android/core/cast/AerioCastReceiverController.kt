@@ -122,7 +122,9 @@ class AerioCastReceiverController @Inject constructor(
      * channel doesn't resolve to something playable (unknown id / hidden).
      */
     suspend fun requestOpenChannel(mediaId: String): Boolean {
-        val playable = runCatching { browseTree.resolveForPlayback(mediaId) }.getOrNull() != null
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val playable = runCatching { browseTree.isPlayableChannel(mediaId) }.getOrDefault(false)
+        android.util.Log.i("CastReceiver", "requestOpenChannel($mediaId) playable=$playable in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
         if (playable) _loadRequests.trySend(CastLoadRequest(mediaId, Kind.LIVE))
         return playable
     }

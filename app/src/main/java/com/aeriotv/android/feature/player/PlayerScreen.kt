@@ -184,8 +184,22 @@ fun PlayerScreen(
     val companionRemote = remember { playerEntry.companionRemote() }
     val companionDiscovery = remember { playerEntry.companionDiscovery() }
     val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
-    val isCompanion = !isCasting &&
-        companionConn is com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
+    // GH #88: once this screen is in remote mode it STAYS remote through a
+    // reconnect (Connecting after a drop). Only a settled Idle/Failed/pairing
+    // state ends it; the old Connected-only gate re-primed local playback
+    // the moment the socket blinked while the phone was backgrounded.
+    var companionSticky by remember { mutableStateOf(false) }
+    LaunchedEffect(companionConn) {
+        when (companionConn) {
+            is com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected -> companionSticky = true
+            is com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connecting -> Unit
+            else -> companionSticky = false
+        }
+    }
+    val isCompanion = !isCasting && (
+        companionConn is com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected ||
+            (companionSticky && companionConn is com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connecting)
+        )
     // "Some remote screen is playing this, not the phone" -- the shared gate for
     // every local-playback suppression below.
     val isRemote = isCasting || isCompanion

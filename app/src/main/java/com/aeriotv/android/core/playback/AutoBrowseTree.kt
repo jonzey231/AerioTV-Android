@@ -136,6 +136,19 @@ class AutoBrowseTree @Inject constructor(
      * next/previous flips channels, positioned at the selected channel, plus
      * the auth headers for the active source.
      */
+    /**
+     * Cheap existence check for a channel id in the active playlist: the
+     * cached list only. The companion remote's setChannel used
+     * [resolveForPlayback] for this, which also parses the whole cached EPG
+     * and builds playable items for the channel's entire group; on a Google
+     * TV Streamer that put 11-14s between the phone tap and the tune
+     * (Logan 2026-09-02).
+     */
+    suspend fun isPlayableChannel(mediaId: String): Boolean {
+        val playlist = repository.activePlaylist() ?: return false
+        return loadChannels(playlist).any { it.id == mediaId && it.url.isNotBlank() }
+    }
+
     suspend fun resolveForPlayback(mediaId: String): PlaybackInfo? {
         val playlist = repository.activePlaylist() ?: return null
         val channels = loadChannels(playlist)

@@ -98,8 +98,19 @@ class CompanionRemoteController @Inject constructor(
 
     // ---- connection lifecycle ----
 
+    /** Set by [disconnect]; an unexpected socket drop leaves it false and
+     *  triggers the reconnect loop below (GH #88). */
+    @Volatile private var intentionalDisconnect = false
+    private var reconnectAttempts = 0
+
     fun connect(tv: CompanionDiscovery.Tv) {
         disconnect()
+        intentionalDisconnect = false
+        reconnectAttempts = 0
+        connectInternal(tv)
+    }
+
+    private fun connectInternal(tv: CompanionDiscovery.Tv) {
         current = tv
         val gen = generation.incrementAndGet()
         _connection.value = Conn.Connecting(tv.name)
@@ -124,6 +135,21 @@ class CompanionRemoteController @Inject constructor(
             }
             if (gen == generation.get()) {
                 session = null
+                // GH #88: the socket died under us (phone backgrounded, Wi-Fi
+                // blip, TV restarted) while the user still intends to control
+                // the TV. Stay in Connecting and retry instead of dropping to
+                // Idle/Failed, which flipped the player out of remote mode and
+                // started LOCAL playback next to the TV's.
+                val wasLive = _connection.value is Conn.Connected || _connection.value is Conn.Connecting ||
+                    _connection.value is Conn.Failed
+                if (!intentionalDisconnect && wasLive && reconnectAttempts < 10) {
+                    reconnectAttempts++
+                    _connection.value = Conn.Connecting(deviceName ?: tv.name)
+                    Log.i(TAG, "companion socket dropped; reconnect attempt $reconnectAttempts")
+                    kotlinx.coroutines.delay(if (reconnectAttempts == 1) 1_000L else 3_000L)
+                    if (gen == generation.get() && !intentionalDisconnect) connectInternal(tv)
+                    return@launch
+                }
                 if (_connection.value is Conn.Connected || _connection.value is Conn.Connecting) {
                     _connection.value = Conn.Idle
                 }
@@ -139,6 +165,7 @@ class CompanionRemoteController @Inject constructor(
     }
 
     fun disconnect() {
+        intentionalDisconnect = true
         generation.incrementAndGet() // invalidate the in-flight attempt's tail
         job?.cancel()
         job = null
@@ -164,6 +191,7 @@ class CompanionRemoteController @Inject constructor(
                 json.optString(CompanionProtocol.KEY_TOKEN).takeIf { it.isNotBlank() }
                     ?.let { storeToken(tv.deviceId, it) }
                 _connection.value = Conn.Connected(deviceName ?: tv.name)
+                reconnectAttempts = 0
                 Log.i(TAG, "companion authOk -> controlling ${deviceName ?: tv.name}")
                 requestRemoteState()
             }

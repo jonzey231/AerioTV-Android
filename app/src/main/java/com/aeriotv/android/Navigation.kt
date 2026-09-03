@@ -804,6 +804,14 @@ fun AerioTVNavHost(
                                 )
                             } else emptyMap()
                         }
+                        // GH #85: the same stay-on-list rule for the companion
+                        // remote (phone controlling an AerioTV TV): a channel
+                        // tap re-tunes the TV in place, no controls screen.
+                        if (castTapStaysOnList && companionTvName != null) {
+                            companionRemoteNav.setRemoteChannel(channel.id, channel.name)
+                            toastPlayingOnTv()
+                            return@MainScaffold
+                        }
                         if (castTapStaysOnList && castDevice != null &&
                             castSenderNav.tuneLiveChannel(
                                 channelId = channel.id,

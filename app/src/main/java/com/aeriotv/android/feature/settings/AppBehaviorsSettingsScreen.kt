@@ -359,12 +359,12 @@ fun AppBehaviorsSettingsScreen(
             // GH #47: casting flow is phone/tablet-only (the TV IS the receiver).
             if (!isTv) {
                 SettingsSection(
-                    header = "Casting",
-                    footer = "While casting, tapping a channel changes it on the TV and keeps you on the channel list. Turn off to open the playback controls screen on every tap instead; the Now Casting bar always opens the controls either way.",
+                    header = "Casting & Remote Control",
+                    footer = "While casting or controlling a TV, tapping a channel changes it on the TV and keeps you on the channel list. Turn off to open the playback controls screen on every tap instead; the Now Casting and Controlling cards always open the controls either way.",
                 ) {
                     SettingsToggleRow(
                         title = "Stay on channel list",
-                        subtitle = "Channel taps switch the TV without opening the controls screen.",
+                        subtitle = "Channel taps switch the TV (cast or remote control) without opening the controls screen.",
                         checked = castTapStaysOnList,
                         onCheckedChange = viewModel::setCastTapStaysOnList,
                     )

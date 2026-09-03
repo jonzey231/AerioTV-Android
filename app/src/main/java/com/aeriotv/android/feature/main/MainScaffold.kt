@@ -862,9 +862,20 @@ fun MainScaffold(
                                 // bridged MediaSession drops our id/customData) --
                                 // GH #33, so the tap still re-enters the right
                                 // channel instead of dead-ending.
-                                val ch = state.channels.firstOrNull { it.id == activeCastContent.mediaId }
-                                    ?: state.channels.firstOrNull { it.name == activeCastContent.mediaId }
+                                val mediaId = activeCastContent.mediaId
+                                val bare = mediaId.substringAfter(':', mediaId)
+                                val ch = state.channels.firstOrNull { it.id == mediaId }
+                                    ?: state.channels.firstOrNull { it.id.substringAfter(':', it.id) == bare }
+                                    ?: state.channels.firstOrNull { it.name == mediaId }
+                                    ?: state.channels.firstOrNull { it.name.equals(activeCastContent.title, ignoreCase = true) }
                                 if (ch != null) onChannelClick(ch)
+                                else android.widget.Toast.makeText(
+                                    context,
+                                    // GH #86: the tap used to do nothing when the
+                                    // cast channel is not in the active playlist.
+                                    "That channel isn't in the current playlist",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
                             },
                             onTogglePlayPause = { castSender.togglePlayPause() },
                             onStop = { castSender.stopCasting() },
