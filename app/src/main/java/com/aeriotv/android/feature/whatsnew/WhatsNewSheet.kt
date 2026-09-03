@@ -208,36 +208,42 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Time Format",
-            body = "Settings > Appearance > Time Format switches every clock " +
-                "in the app between System, 12-hour and 24-hour: the guide " +
-                "header and cell times, program info, search, and recordings.",
+            title = "Remote control from the notification shade",
+            body = "While your phone controls an AerioTV TV, a media " +
+                "notification shows the current program with play, pause, " +
+                "rewind and forward. Tap it to get back to the remote.",
         ),
         WhatsNewItem(
-            title = "Show Program Subtitles",
-            body = "A new Appearance > Channel List toggle hides the episode " +
-                "or match name under each program title, for EPG feeds that " +
-                "repeat the description there.",
+            title = "Remote control stays connected",
+            body = "Switching apps no longer drops the TV connection or " +
+                "starts the channel on the phone, channels launch on the TV " +
+                "much faster, and tapping the Controlling card always opens " +
+                "the controls.",
         ),
         WhatsNewItem(
-            title = "Match Content Resolution: no more frozen picture",
-            body = "After the display switches resolution, the video surface " +
-                "is re-attached once the TV settles, so the first channel " +
-                "after a UHD or HD change no longer freezes on some devices. " +
-                "The output refresh rate now follows the content too, so " +
-                "50 fps channels play at 50 Hz instead of a 3:2 cadence.",
+            title = "Hide the All Channels group",
+            body = "Manage Groups now has an All Channels row. Uncheck it and " +
+                "the guide, channel list and player list start on your first " +
+                "group, which keeps very large playlists quick to open.",
         ),
         WhatsNewItem(
-            title = "Channel list opens on the channel you are watching",
-            body = "Pressing Left while watching now lands focus on the " +
-                "current channel instead of the top of the list, Right closes " +
-                "it without changing channel, and backing out to the guide " +
-                "lands on the channel still playing.",
+            title = "Favorites on TV is a guide",
+            body = "The Favorites tab on Android TV shows the guide filtered " +
+                "to your favorites instead of a plain list.",
         ),
         WhatsNewItem(
-            title = "TV guide group pills",
-            body = "One press switches groups, and the focus highlight " +
-                "follows the pill's rounded shape.",
+            title = "On Demand on TV",
+            body = "Long-running series load every season again, search " +
+                "results are ranked by match, the keyboard only opens on OK, " +
+                "and the D-pad walks the grid and tab pills predictably.",
+        ),
+        WhatsNewItem(
+            title = "Fixes",
+            body = "No more reconnect stutter about 30 seconds after a " +
+                "channel change; playlist edits save immediately; the default " +
+                "tab is respected after Settings; holding Left in full screen " +
+                "keeps the right group; the floating player and cast card " +
+                "respond to taps.",
         ),
     )
 }
