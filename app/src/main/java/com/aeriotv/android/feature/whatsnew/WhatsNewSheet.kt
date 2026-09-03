@@ -208,27 +208,32 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Smoother on slower TV boxes",
-            body = "The On Demand library no longer loads on the main thread " +
-                "right at launch, so the guide answers the remote right away " +
-                "and Up from the guide reaches the tabs on every box.",
+            title = "Tabs stay ready",
+            body = "Switching between Live TV, Favorites, DVR, On Demand and " +
+                "Settings no longer rebuilds the tab: each one stays loaded " +
+                "once you have visited it, so switching back is instant.",
         ),
         WhatsNewItem(
-            title = "Channel numbers on the remote",
-            body = "Remotes with digit keys can type a channel number: in the " +
-                "guide it jumps to that row, while watching it changes the " +
-                "channel. Press OK to enter the number.",
+            title = "Much lighter on TV boxes",
+            body = "The app was loading the guide twice and fetching the On " +
+                "Demand library at full speed right after launch. Both are " +
+                "fixed, so the guide answers the remote right away and stays " +
+                "smooth while the library loads in the background.",
         ),
         WhatsNewItem(
-            title = "Recordings resume where you left off",
-            body = "Playback position for DVR recordings is saved and synced " +
-                "with your other devices, so a recording picks up where you " +
-                "stopped on any of them.",
+            title = "No more flashes when switching tabs",
+            body = "Tabs no longer flicker through an empty state on entry, " +
+                "and a tab can no longer vanish under your focus and bounce " +
+                "you back to Live TV.",
         ),
         WhatsNewItem(
-            title = "Favorites first, every time",
-            body = "Backing out of a channel on the phone returns to the " +
-                "Favorites tab when that is your default tab.",
+            title = "Settings on TV",
+            body = "Highlighting the Settings pill no longer opens Playlists on " +
+                "its own. Press Down to enter the list and pick a section.",
+        ),
+        WhatsNewItem(
+            title = "Matching splash screen",
+            body = "The Android TV start screen now matches Apple TV.",
         ),
     )
 }
