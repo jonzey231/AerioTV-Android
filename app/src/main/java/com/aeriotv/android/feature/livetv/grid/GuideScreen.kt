@@ -197,8 +197,20 @@ fun GuideScreen(
         orderGroups(sourceOrder, groupSortMode, groupOrder)
     }
     val groups = remember(allGroupNames, hiddenGroups) {
-        listOf(PlaylistViewModel.ALL_GROUPS) + allGroupNames.filter {
-            it !in hiddenGroups && !it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
+        com.aeriotv.android.feature.livetv.groupTokens(
+            allGroupNames.filter {
+                it !in hiddenGroups && !it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
+            },
+            hiddenGroups,
+        )
+    }
+    val fallbackGroup = com.aeriotv.android.feature.livetv.fallbackGroupToken(groups)
+    // GH #80: a selection that just got hidden (including All) lands on the
+    // first pill still shown.
+    LaunchedEffect(groups, state.selectedGroup) {
+        val sel = state.selectedGroup
+        if (sel !in groups && !sel.startsWith(ChannelCollection.TOKEN_PREFIX) && allGroupNames.isNotEmpty()) {
+            viewModel.onGroupSelected(fallbackGroup)
         }
     }
     // Pills: collections placed at the beginning, then the groups, then the rest.
@@ -293,7 +305,7 @@ fun GuideScreen(
             onSelect = { viewModel.onGroupSelected(token) },
             onSetPlacement = { p -> collectionsVm.setPlacement(c.id, p) },
             onDelete = {
-                if (state.selectedGroup == token) viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
+                if (state.selectedGroup == token) viewModel.onGroupSelected(fallbackGroup)
                 collectionsVm.delete(c.id)
             },
         )
@@ -339,7 +351,7 @@ fun GuideScreen(
                 // Logan 2026-09-01: Back at the top of the guide must never close
                 // the app. Last rung resets a filtered group to All; at All it
                 // is a no-op (consumed) so the app stays up.
-                if (state.selectedGroup != PlaylistViewModel.ALL_GROUPS) viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
+                if (state.selectedGroup != fallbackGroup) viewModel.onGroupSelected(fallbackGroup)
             }
         }
     }
@@ -433,7 +445,7 @@ fun GuideScreen(
         if (rows.isEmpty) {
             EmptyGroupNotice(
                 isSearching = state.searchQuery.isNotBlank(),
-                onShowAllChannels = { viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS) },
+                onShowAllChannels = { viewModel.onGroupSelected(fallbackGroup) },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -500,7 +512,9 @@ fun GuideScreen(
         if (isTv) {
             TvGroupPicker(
                 allGroups = allGroupNames, hiddenGroups = hiddenGroups,
-                onDismiss = { showManageGroups = false; runCatching { gridFocus.requestFocus() } },
+                // Close the sidebar too: leaving it open with focus in the grid
+                // made a later held Left a no-op (already "open"). Logan 2026-09-02.
+                onDismiss = { showManageGroups = false; groupSidebarOpen = false; runCatching { gridFocus.requestFocus() } },
                 reorderEnabled = true, sortMode = groupSortMode,
                 onSortModeChange = { settingsVm.setGroupSortMode(it.name) },
                 onCommit = { hidden, order ->

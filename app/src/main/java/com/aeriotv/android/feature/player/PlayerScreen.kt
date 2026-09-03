@@ -682,11 +682,13 @@ fun PlayerScreen(
             com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw),
             groupOrderPref,
         )
-        listOf(com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS) +
+        com.aeriotv.android.feature.livetv.groupTokens(
             ordered.filter {
                 it !in hiddenGroups &&
                     !it.equals(com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
-            }
+            },
+            hiddenGroups,
+        )
     }
     androidx.activity.compose.BackHandler {
         if (channelListSidebarOpen || channelListVisible) {
@@ -2068,7 +2070,7 @@ private fun ChannelListOverlaySection(
     var currentIndex by currentIndexState
     val active = channelListGroup
         ?: initialGroup.takeIf { it in overlayGroups }
-        ?: com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS
+        ?: com.aeriotv.android.feature.livetv.fallbackGroupToken(overlayGroups)
     ChannelListOverlay(
         groups = overlayGroups,
         activeGroup = active,

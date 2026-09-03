@@ -50,6 +50,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
+import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import sh.calvin.reorderable.ReorderableItem
@@ -225,6 +226,40 @@ fun ManageGroupsSheet(
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            if (allGroups.isNotEmpty()) {
+                // GH #80: the All Channels pill is hideable too (large playlists
+                // pay for it on every open). Pinned above the list, never reordered.
+                val allVisible = PlaylistViewModel.ALL_GROUPS !in working
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            working = working.toMutableSet().apply {
+                                if (allVisible) add(PlaylistViewModel.ALL_GROUPS) else remove(PlaylistViewModel.ALL_GROUPS)
+                            }
+                        }
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = allVisible,
+                        onCheckedChange = { checked ->
+                            working = working.toMutableSet().apply {
+                                if (checked) remove(PlaylistViewModel.ALL_GROUPS) else add(PlaylistViewModel.ALL_GROUPS)
+                            }
+                        },
+                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "All Channels",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            }
             if (allGroups.isEmpty()) {
                 // Mirrors iOS ManageGroupsSheet.swift line 50-53 empty
                 // state. Hit when the active playlist has no #EXTINF
@@ -477,6 +512,51 @@ fun TvGroupPicker(
                     if (movingGroup != null) runCatching { moveFocus.requestFocus() }
                 }
                 val displayGroups = if (manualReorder) workingOrder else allGroups
+                // GH #80: pinned All Channels toggle (TV picker).
+                run {
+                    val allVisible = PlaylistViewModel.ALL_GROUPS !in workingHidden
+                    var focused by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                else Color.Transparent,
+                            )
+                            .border(
+                                width = if (focused) 2.dp else 0.dp,
+                                color = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                            .onFocusChanged { focused = it.isFocused }
+                            .clickable {
+                                workingHidden = workingHidden.toMutableSet().apply {
+                                    if (allVisible) add(PlaylistViewModel.ALL_GROUPS) else remove(PlaylistViewModel.ALL_GROUPS)
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = allVisible,
+                            onCheckedChange = null,
+                            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = "All Channels",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),

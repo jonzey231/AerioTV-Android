@@ -73,6 +73,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -245,7 +246,14 @@ fun ChannelListScreen(
             val visible = allGroupsRaw.filterNot {
                 it in hiddenGroups || it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
             }
-            listOf(PlaylistViewModel.ALL_GROUPS) + visible
+            com.aeriotv.android.feature.livetv.groupTokens(visible, hiddenGroups)
+        }
+    }
+    // GH #80: All can be hidden; a stranded selection lands on the first pill.
+    LaunchedEffect(groups, state.selectedGroup) {
+        val sel = state.selectedGroup
+        if (sel !in groups && !sel.startsWith(ChannelCollection.TOKEN_PREFIX) && allGroupsRaw.isNotEmpty()) {
+            viewModel.onGroupSelected(com.aeriotv.android.feature.livetv.fallbackGroupToken(groups))
         }
     }
 
