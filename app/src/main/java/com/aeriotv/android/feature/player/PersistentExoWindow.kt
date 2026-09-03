@@ -172,6 +172,7 @@ fun BoxScope.PersistentExoWindow(
         var lastW = startMode?.physicalWidth ?: 0
         var lastH = startMode?.physicalHeight ?: 0
         var pending: Runnable? = null
+        var audioReinit: Runnable? = null
         var verify: Runnable? = null
         fun playing(): Boolean {
             if (state.mode.value == ExoWindowState.Mode.Hidden) return false
@@ -216,6 +217,22 @@ fun BoxScope.PersistentExoWindow(
                 pending?.let { mainHandler.removeCallbacks(it) }
                 pending = Runnable { recreate("display settled at $desc", retriesLeft = 1) }
                     .also { mainHandler.postDelayed(it, 1500L) }
+                // NVIDIA Shield (Frankie B. log, 2026-09-03): the HDMI mode
+                // switch kills the AudioTrack; about a second later the audio
+                // renderer hits "AudioTrack write failed: -6" and Media3 tears
+                // the sink down and re-buffers, which the user sees as a hang.
+                // Hand the player a fresh audio session id shortly after the
+                // switch: Media3 flushes the sink and opens a new track on
+                // the re-negotiated output before the dead one is written to.
+                audioReinit?.let { mainHandler.removeCallbacks(it) }
+                audioReinit = Runnable {
+                    val p = holder.player ?: return@Runnable
+                    val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+                    val id = am?.generateAudioSessionId() ?: return@Runnable
+                    runCatching { p.audioSessionId = id }
+                        .onSuccess { Log.i(TAG, "audio sink re-init after display mode change (session $id)") }
+                        .onFailure { Log.w(TAG, "audio sink re-init failed", it) }
+                }.also { mainHandler.postDelayed(it, 400L) }
             }
         }
         dmgr.registerDisplayListener(listener, mainHandler)
