@@ -208,42 +208,27 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Remote control from the notification shade",
-            body = "While your phone controls an AerioTV TV, a media " +
-                "notification shows the current program with play, pause, " +
-                "rewind and forward. Tap it to get back to the remote.",
+            title = "Smoother on slower TV boxes",
+            body = "The On Demand library no longer loads on the main thread " +
+                "right at launch, so the guide answers the remote right away " +
+                "and Up from the guide reaches the tabs on every box.",
         ),
         WhatsNewItem(
-            title = "Remote control stays connected",
-            body = "Switching apps no longer drops the TV connection or " +
-                "starts the channel on the phone, channels launch on the TV " +
-                "much faster, and tapping the Controlling card always opens " +
-                "the controls.",
+            title = "Channel numbers on the remote",
+            body = "Remotes with digit keys can type a channel number: in the " +
+                "guide it jumps to that row, while watching it changes the " +
+                "channel. Press OK to enter the number.",
         ),
         WhatsNewItem(
-            title = "Hide the All Channels group",
-            body = "Manage Groups now has an All Channels row. Uncheck it and " +
-                "the guide, channel list and player list start on your first " +
-                "group, which keeps very large playlists quick to open.",
+            title = "Recordings resume where you left off",
+            body = "Playback position for DVR recordings is saved and synced " +
+                "with your other devices, so a recording picks up where you " +
+                "stopped on any of them.",
         ),
         WhatsNewItem(
-            title = "Favorites on TV is a guide",
-            body = "The Favorites tab on Android TV shows the guide filtered " +
-                "to your favorites instead of a plain list.",
-        ),
-        WhatsNewItem(
-            title = "On Demand on TV",
-            body = "Long-running series load every season again, search " +
-                "results are ranked by match, the keyboard only opens on OK, " +
-                "and the D-pad walks the grid and tab pills predictably.",
-        ),
-        WhatsNewItem(
-            title = "Fixes",
-            body = "No more reconnect stutter about 30 seconds after a " +
-                "channel change; playlist edits save immediately; the default " +
-                "tab is respected after Settings; holding Left in full screen " +
-                "keeps the right group; the floating player and cast card " +
-                "respond to taps.",
+            title = "Favorites first, every time",
+            body = "Backing out of a channel on the phone returns to the " +
+                "Favorites tab when that is your default tab.",
         ),
     )
 }
