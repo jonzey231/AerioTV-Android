@@ -666,6 +666,20 @@ fun PlayerScreen(
     val channelListSidebarOpenState = remember { mutableStateOf(false) }
     var channelListSidebarOpen by channelListSidebarOpenState
     val channelListGroupState = remember { mutableStateOf<String?>(null) }
+    // GH #71: digit keys on a TV remote tune by channel number. Resolves
+    // against the same list the flip / channel-list paths use and tunes
+    // through the same currentIndex write a channel-list pick makes.
+    val channelNumberEntry = com.aeriotv.android.feature.livetv.rememberChannelNumberEntry { entry ->
+        val target = com.aeriotv.android.feature.livetv.resolveChannelNumber(entry, channels)
+        val idx = target?.let { t -> channels.indexOfFirst { it.id == t.id } } ?: -1
+        if (idx >= 0) {
+            channelListVisible = false
+            channelListSidebarOpen = false
+            recentsOverlayVisible = false
+            if (idx != currentIndex) currentIndex = idx
+            true
+        } else false
+    }
     // Same visible-group derivation as the guide pills (source order ->
     // Manage Groups sort -> hidden filter), so both surfaces always agree.
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
@@ -1307,6 +1321,13 @@ fun PlayerScreen(
                 if (chromeVisible) {
                     lastInteractionAt = android.os.SystemClock.uptimeMillis()
                 }
+                // GH #71: digit keys (and OK / Back while digits are
+                // pending) belong to channel-number entry on TV. Checked
+                // first so no mapping below can steal a digit; every other
+                // key falls through untouched.
+                if (isTvForm && !isCatchupMode && channelNumberEntry.onKeyEvent(event)) {
+                    return@onPreviewKeyEvent true
+                }
                 // Chrome hidden + rewind buffering: LEFT/RIGHT scrubs the
                 // timeline directly (band-only HUD renders; the single
                 // seek commits after the presses stop). Consume both
@@ -1617,6 +1638,14 @@ fun PlayerScreen(
                 epgByChannel = epgByChannel,
                 recentsOverlayVisibleState = recentsOverlayVisibleState,
                 currentIndexState = currentIndexState,
+            )
+        }
+        // GH #71: channel-number readout (TV only; the state never fills
+        // on touch devices because digits are only fed on the TV form).
+        if (isTvForm) {
+            com.aeriotv.android.feature.livetv.ChannelNumberEntryOverlay(
+                state = channelNumberEntry,
+                modifier = Modifier.align(Alignment.TopEnd),
             )
         }
     }

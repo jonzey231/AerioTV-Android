@@ -189,7 +189,15 @@ fun GuideGrid(
     // 2026-09-02), never on whichever pill is geometrically nearest: the nav
     // switches tabs on focus, so a geometric search opened On Demand.
     val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
+    // GH #71: digit keys jump focus to a channel number (no tune); the
+    // number resolves against the rows on screen, so it respects the
+    // active group / filter.
+    val channelNumberEntry = com.aeriotv.android.feature.livetv.rememberChannelNumberEntry { entry ->
+        val target = com.aeriotv.android.feature.livetv.resolveChannelNumber(entry, state.rows.channels)
+        target != null && state.focusChannel(target.id)
+    }
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
+        if (isTv && channelNumberEntry.onKeyEvent(event)) return@handler true
         val native = event.nativeKeyEvent as? AndroidKeyEvent
         val repeat = native?.repeatCount ?: 0
         // Some remotes (and adb --longpress) flag a hold instead of repeating.
@@ -272,8 +280,10 @@ fun GuideGrid(
     }
 
     androidx.compose.runtime.CompositionLocalProvider(LocalLogoCache provides logoCache) {
+    Box(modifier = modifier) {
     Column(
-        modifier = modifier
+        modifier = Modifier
+            .fillMaxSize()
             .focusRequester(focusRequester)
             .focusProperties {
                 if (topNav != null) up = topNav
@@ -317,6 +327,13 @@ fun GuideGrid(
                 )
             }
         }
+    }
+    if (isTv) {
+        com.aeriotv.android.feature.livetv.ChannelNumberEntryOverlay(
+            state = channelNumberEntry,
+            modifier = Modifier.align(Alignment.TopEnd),
+        )
+    }
     }
     }
 }
