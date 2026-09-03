@@ -97,7 +97,7 @@ object Routes {
     // landing on the tabs. Plain navigate(SEARCH) keeps the default false.
     const val SEARCH = "search?fromPlayer={fromPlayer}"
     fun search(fromPlayer: Boolean) = "search?fromPlayer=$fromPlayer"
-    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&autoResume={autoResume}&recEnd={recEnd}&recChannelId={recChannelId}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
+    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&autoResume={autoResume}&recEnd={recEnd}&recChannelId={recChannelId}&recId={recId}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
     // mini=true (Remote Control, Logan spec): the player mounts, primes
@@ -135,6 +135,10 @@ object Routes {
         // prompt and its Continue on Live TV hand-off. 0/-1 = unknown.
         recEnd: Long = 0L,
         recChannelId: Int = -1,
+        // GH #75 (Apple repo): the Dispatcharr recording id gives the
+        // progress row a stable, host-independent identity (dvr-<id>) so
+        // resume syncs across devices. -1 = unknown (local file, catch-up).
+        recId: Int = -1,
         // Catch-up (task #136): programme window + panel timezone enable the
         // player's re-tune scrubbing. csEnd <= csStart (defaults) = not catch-up.
         csStart: Long = 0L,
@@ -147,7 +151,20 @@ object Routes {
     ) =
         "recording_player/${Uri.encode(playbackUrl)}/${Uri.encode(title)}" +
             "?isDvr=$isDvr&fromStart=$fromStart&autoResume=$autoResume&recEnd=$recEnd&recChannelId=$recChannelId" +
-            "&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
+            "&recId=$recId&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
+}
+
+/**
+ * Stable watch-progress identity for a recording (GH #75, iOS parity):
+ * "dvr-<Dispatcharr recording id>" when the id is known from the recording
+ * model or can be read off a /recordings/<id>/ URL; otherwise the URL itself
+ * (local file:// / content:// captures, which never leave the device: the
+ * Drive sync builder filters URL-shaped keys).
+ */
+internal fun recordingProgressId(playbackUrl: String, recId: Int): String {
+    if (recId > 0) return "dvr-$recId"
+    val fromUrl = Regex("/recordings/(\\d+)/").find(playbackUrl)?.groupValues?.get(1)
+    return if (fromUrl != null) "dvr-$fromUrl" else playbackUrl
 }
 
 /**
@@ -933,7 +950,7 @@ fun AerioTVNavHost(
                     onResumeMovie = { videoId ->
                         navController.navigate(Routes.movieDetail(videoId))
                     },
-                    onPlayRecording = { playbackUrl, title ->
+                    onPlayRecording = { playbackUrl, title, recId ->
                         // Only http(s) recordings can play on the TV; a LOCAL
                         // recording (file://, content://) lives on THIS phone and
                         // the TV can't resolve it -- play those locally even when
@@ -942,7 +959,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playRecording(playbackUrl, title)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.recordingPlayer(playbackUrl, title))
+                            navController.navigate(
+                                Routes.recordingPlayer(playbackUrl, title, recId = recId),
+                            )
                         }
                     },
                     onPlayCatchup = { catchupChannelId, playbackUrl, title, progStart, progEnd, panelTz, channelUuid ->
@@ -1545,6 +1564,7 @@ fun AerioTVNavHost(
                     navArgument("autoResume") { type = NavType.BoolType; defaultValue = false },
                     navArgument("recEnd") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("recChannelId") { type = NavType.IntType; defaultValue = -1 },
+                    navArgument("recId") { type = NavType.IntType; defaultValue = -1 },
                     navArgument("csStart") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csEnd") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csTz") { type = NavType.StringType; defaultValue = "" },
@@ -1558,6 +1578,7 @@ fun AerioTVNavHost(
                 val autoResume = entry.arguments?.getBoolean("autoResume") ?: false
                 val recEnd = entry.arguments?.getLong("recEnd") ?: 0L
                 val recChannelId = entry.arguments?.getInt("recChannelId") ?: -1
+                val recId = entry.arguments?.getInt("recId") ?: -1
                 // A recording / catch-up playback must silence any LIVE session
                 // first: entering from the guide's Watch action (or DVR tab)
                 // skips PlayerScreen's launch teardown, so the persistent live
@@ -1653,9 +1674,12 @@ fun AerioTVNavHost(
                     // uses), so resume survives LAN/WAN base swaps AND syncs
                     // across devices. URLs (local files, catch-up sessions)
                     // stay as-is; the sync builder filters URL-shaped keys.
-                    videoId = Regex("/api/channels/recordings/(\\d+)/")
-                        .find(playbackUrl)?.groupValues?.get(1)
-                        ?.let { "dvr-" + it } ?: playbackUrl,
+                    // GH #75: the DVR tab passes the id explicitly (a
+                    // server-reported file_url need not contain it); the
+                    // URL match covers the in-progress /hls/ and legacy
+                    // /file/ shapes, with or without the /api/channels
+                    // prefix.
+                    videoId = recordingProgressId(playbackUrl, recId),
                     progressVodType = "recording",
                     posterUrl = null,
                     isDvr = isDvr,

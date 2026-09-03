@@ -736,7 +736,13 @@ fun VODPlayerScreen(
     LaunchedEffect(videoId) {
         if (videoId.isNullOrBlank()) return@LaunchedEffect
         val existing = watchVm.get(videoId)
-        savedPositionMs = existing?.positionMs ?: -1L
+        // GH #75: a recording watched to (near) the end starts over on the
+        // next open instead of resuming into its last minutes. Movies get
+        // the same rule from the detail screen's Play / Resume split; a
+        // recording has no detail screen, so the player applies it.
+        val finishedRecording = progressVodType == "recording" &&
+            existing != null && existing.isFinished
+        savedPositionMs = if (finishedRecording) -1L else existing?.positionMs ?: -1L
     }
 
     // Black player background -- not the navy app-background -- so the
@@ -1215,6 +1221,23 @@ fun VODPlayerScreen(
             if (player.contentDuration > 0L && player.playerError == null) {
                 player.seekTo(pos)
                 Log.i(TAG, "Resumed from ${pos}ms")
+                // GH #75: recordings have no Resume / Play choice up front,
+                // so say where playback picked up (possibly a position saved
+                // on another device via sync).
+                if (progressVodType == "recording") {
+                    val totalSecs = pos / 1000L
+                    val label = if (totalSecs >= 3600L) {
+                        String.format(
+                            java.util.Locale.US, "%d:%02d:%02d",
+                            totalSecs / 3600L, (totalSecs % 3600L) / 60L, totalSecs % 60L,
+                        )
+                    } else {
+                        String.format(java.util.Locale.US, "%d:%02d", totalSecs / 60L, totalSecs % 60L)
+                    }
+                    android.widget.Toast.makeText(
+                        context, "Resuming from $label", android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
 

@@ -92,7 +92,8 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 @Composable
 fun DvrTabContent(
     modifier: Modifier = Modifier,
-    onPlayRecording: (String, String) -> Unit = { _, _ -> },
+    /** (playbackUrl, title, dispatcharrRecordingId or -1 for local captures). */
+    onPlayRecording: (String, String, Int) -> Unit = { _, _, _ -> },
     /** (url, title, isDvr, scheduledEndMillis, dispatcharrChannelId). */
     onWatchLive: (String, String, Boolean, Long, Int?) -> Unit = { _, _, _, _, _ -> },
     /** Last param = autoResume: true on row tap (resume saved position,
@@ -354,7 +355,12 @@ fun DvrTabContent(
                         // a URL, so a null means the file isn't ready yet.
                         val url = rec.playbackUrl
                         if (!url.isNullOrBlank()) {
-                            onPlayRecording(url, rec.title)
+                            // GH #75: server rows are "server-<id>"; the numeric
+                            // id keys the synced progress row (dvr-<id>).
+                            val serverId = if (rec.source == DvrViewModel.Source.Server) {
+                                rec.id.removePrefix("server-").toIntOrNull() ?: -1
+                            } else -1
+                            onPlayRecording(url, rec.title, serverId)
                         } else {
                             Toast.makeText(
                                 context,
