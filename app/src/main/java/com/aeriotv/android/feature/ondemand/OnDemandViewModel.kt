@@ -173,9 +173,30 @@ class OnDemandViewModel @Inject constructor(
     // copy's measurements land. Main-thread confined (viewModelScope).
     private val movieProviderRelations = mutableMapOf<Int, List<DispatcharrVODProviderRelation>>()
 
-    init {
+    // Onn boxes 2026-09-02 (GH #84/#91): the full catalog walk used to start
+    // within a second of launch and competed with the guide's first
+    // composition and EPG load for the main thread and CPU on weak boxes.
+    // Defer it a few seconds unless the On Demand tab is opened first.
+    private var initialLoadsStarted = false
+    private var deferredStart: kotlinx.coroutines.Job? = null
+
+    private fun startInitialLoads() {
+        if (initialLoadsStarted) return
+        initialLoadsStarted = true
+        deferredStart?.cancel()
+        deferredStart = null
         refresh()
         refreshSeries()
+    }
+
+    /** On Demand tab shown: load now instead of waiting out the startup deferral. */
+    fun ensureLoaded() = startInitialLoads()
+
+    init {
+        deferredStart = viewModelScope.launch {
+            kotlinx.coroutines.delay(STARTUP_DEFER_MS)
+            startInitialLoads()
+        }
         // React to the active playlist changing (switch) or being deleted.
         // iOS Issue #25: when a playlist is removed, On Demand must drop the
         // old source's movies/series instead of leaving stale, unplayable
@@ -186,6 +207,7 @@ class OnDemandViewModel @Inject constructor(
                 .drop(1)
                 .collect {
                     resetVodState()
+                    initialLoadsStarted = true
                     refresh()
                     refreshSeries()
                 }
@@ -196,6 +218,7 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
             vodResetBus.resets.collect {
                 resetVodState()
+                initialLoadsStarted = true
                 refresh()
                 refreshSeries()
             }
@@ -1909,6 +1932,7 @@ class OnDemandViewModel @Inject constructor(
     }
 
     private companion object {
+        private const val STARTUP_DEFER_MS = 6_000L
         const val TAG = "OnDemandViewModel"
         const val XC_MOVIE_PREFIX = "xc-movie-"
         const val XC_EP_PREFIX = "xc-ep-"

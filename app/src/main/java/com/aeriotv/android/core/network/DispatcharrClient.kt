@@ -377,11 +377,21 @@ class DispatcharrClient @Inject constructor() {
      * Per iOS comment (line 1303): omitting the `page` query param disables
      * pagination on Dispatcharr's ChannelViewSet, returning a flat JSON array.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun listChannels(baseUrl: String, apiKey: String): List<DispatcharrChannel> =
+        withContext(Dispatchers.IO) { listChannelsImpl(baseUrl, apiKey) }
+
+    private suspend fun listChannelsImpl(baseUrl: String, apiKey: String): List<DispatcharrChannel> =
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/channels/", apiKey)
 
     /** GET /api/channels/groups/ - channel group names and IDs. */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun listGroups(baseUrl: String, apiKey: String): List<DispatcharrGroup> =
+        withContext(Dispatchers.IO) { listGroupsImpl(baseUrl, apiKey) }
+
+    private suspend fun listGroupsImpl(baseUrl: String, apiKey: String): List<DispatcharrGroup> =
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/groups/", apiKey)
 
     /**
@@ -437,7 +447,12 @@ class DispatcharrClient @Inject constructor() {
      * every channel that Dispatcharr auto-mapped on the server. Resolving this
      * FK is how Dispatcharr's own guide attaches EPG.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun listEpgData(baseUrl: String, apiKey: String): List<DispatcharrEpgData> =
+        withContext(Dispatchers.IO) { listEpgDataImpl(baseUrl, apiKey) }
+
+    private suspend fun listEpgDataImpl(baseUrl: String, apiKey: String): List<DispatcharrEpgData> =
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/epg/epgdata/", apiKey)
 
     /**
@@ -447,7 +462,12 @@ class DispatcharrClient @Inject constructor() {
      * days of history, but the upstream XMLTV feeds it ingests usually carry
      * a much deeper past window, so the app fetches those URLs directly.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun listEpgSources(baseUrl: String, apiKey: String): List<DispatcharrEpgSource> =
+        withContext(Dispatchers.IO) { listEpgSourcesImpl(baseUrl, apiKey) }
+
+    private suspend fun listEpgSourcesImpl(baseUrl: String, apiKey: String): List<DispatcharrEpgSource> =
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/epg/sources/", apiKey)
 
     /**
@@ -505,7 +525,18 @@ class DispatcharrClient @Inject constructor() {
      * on these rows; the caller resolves the genre via the per-id detail
      * endpoint (`getProgramDetail`) using each row's `programIdInt`.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getProgramsByTvgId(
+        baseUrl: String,
+        apiKey: String,
+        tvgId: String,
+        pageSize: Int = 200,
+        maxPages: Int = 8,
+    ): List<DispatcharrEpgEntry> =
+        withContext(Dispatchers.IO) { getProgramsByTvgIdImpl(baseUrl, apiKey, tvgId, pageSize, maxPages) }
+
+    private suspend fun getProgramsByTvgIdImpl(
         baseUrl: String,
         apiKey: String,
         tvgId: String,
@@ -545,7 +576,12 @@ class DispatcharrClient @Inject constructor() {
         return all
     }
 
-    suspend fun getEpgGrid(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> {
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
+    suspend fun getEpgGrid(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> =
+        withContext(Dispatchers.IO) { getEpgGridImpl(baseUrl, apiKey) }
+
+    private suspend fun getEpgGridImpl(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> {
         val url = "${baseUrl.trimEnd('/')}/api/epg/grid/"
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
         unauthorizedCheck(response, url)
@@ -569,7 +605,12 @@ class DispatcharrClient @Inject constructor() {
      * to filter by UUID. We always send empty since the caller wants every
      * channel for the rail / guide paint.
      */
-    suspend fun getCurrentPrograms(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> {
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
+    suspend fun getCurrentPrograms(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> =
+        withContext(Dispatchers.IO) { getCurrentProgramsImpl(baseUrl, apiKey) }
+
+    private suspend fun getCurrentProgramsImpl(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> {
         val url = "${baseUrl.trimEnd('/')}/api/epg/current-programs/"
         val response: HttpResponse = client.post(url) {
             applyAuth(apiKey)
@@ -599,7 +640,16 @@ class DispatcharrClient @Inject constructor() {
      * launch. A non-DRF flat-array response short-circuits the pagination
      * (older Dispatcharr) and returns the first batch as-is.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getBulkUpcomingPrograms(
+        baseUrl: String,
+        apiKey: String,
+        maxPages: Int = 10,
+    ): List<DispatcharrEpgEntry> =
+        withContext(Dispatchers.IO) { getBulkUpcomingProgramsImpl(baseUrl, apiKey, maxPages) }
+
+    private suspend fun getBulkUpcomingProgramsImpl(
         baseUrl: String,
         apiKey: String,
         maxPages: Int = 10,
@@ -1039,7 +1089,12 @@ class DispatcharrClient @Inject constructor() {
      * can see. Client filters by status (scheduled / recording / completed /
      * failed / stopped) for the DVR tab filter chips.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun listRecordings(baseUrl: String, apiKey: String): List<DispatcharrRecording> =
+        withContext(Dispatchers.IO) { listRecordingsImpl(baseUrl, apiKey) }
+
+    private suspend fun listRecordingsImpl(baseUrl: String, apiKey: String): List<DispatcharrRecording> =
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/channels/recordings/", apiKey)
 
     /**
@@ -1100,7 +1155,12 @@ class DispatcharrClient @Inject constructor() {
      * envelope shape, same auth headers. OnDemandViewModel loops on this
      * after the first-page paint to backfill the full library.
      */
-    suspend fun getVODMoviesPage(url: String, apiKey: String): VODMoviesPage {
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
+    suspend fun getVODMoviesPage(url: String, apiKey: String): VODMoviesPage =
+        withContext(Dispatchers.IO) { getVODMoviesPageImpl(url, apiKey) }
+
+    private suspend fun getVODMoviesPageImpl(url: String, apiKey: String): VODMoviesPage {
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
         unauthorizedCheck(response, url)
         if (!response.status.isSuccess()) {
@@ -1142,7 +1202,12 @@ class DispatcharrClient @Inject constructor() {
         getVODSeriesPage("${baseUrl.trimEnd('/')}/api/vod/series/?page_size=100", apiKey)
 
     /** Audit task #42: fetch an arbitrary VOD series page by absolute URL. */
-    suspend fun getVODSeriesPage(url: String, apiKey: String): VODSeriesPage {
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
+    suspend fun getVODSeriesPage(url: String, apiKey: String): VODSeriesPage =
+        withContext(Dispatchers.IO) { getVODSeriesPageImpl(url, apiKey) }
+
+    private suspend fun getVODSeriesPageImpl(url: String, apiKey: String): VODSeriesPage {
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
         unauthorizedCheck(response, url)
         if (!response.status.isSuccess()) {
@@ -1183,7 +1248,17 @@ class DispatcharrClient @Inject constructor() {
      * category namespaces, so we pin |movie. Mirrors iOS StreamingAPIs.swift
      * moviesPath(category:) (line 2046). Caller walks .next via getVODMoviesPage.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getVODMoviesByCategory(
+        baseUrl: String,
+        apiKey: String,
+        category: String,
+        pageSize: Int = 100,
+    ): VODMoviesPage =
+        withContext(Dispatchers.IO) { getVODMoviesByCategoryImpl(baseUrl, apiKey, category, pageSize) }
+
+    private suspend fun getVODMoviesByCategoryImpl(
         baseUrl: String,
         apiKey: String,
         category: String,
@@ -1197,7 +1272,17 @@ class DispatcharrClient @Inject constructor() {
 
     /** Series counterpart of [getVODMoviesByCategory]; pins |series. Mirrors iOS
      *  StreamingAPIs.swift seriesPath(category:) (line 2061). */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getVODSeriesByCategory(
+        baseUrl: String,
+        apiKey: String,
+        category: String,
+        pageSize: Int = 100,
+    ): VODSeriesPage =
+        withContext(Dispatchers.IO) { getVODSeriesByCategoryImpl(baseUrl, apiKey, category, pageSize) }
+
+    private suspend fun getVODSeriesByCategoryImpl(
         baseUrl: String,
         apiKey: String,
         category: String,
@@ -1217,7 +1302,12 @@ class DispatcharrClient @Inject constructor() {
      * join table for the On Demand group filter. A `category_type` query
      * param exists server-side but one unfiltered fetch covers both tabs.
      */
+    /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
+     *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getVODCategories(baseUrl: String, apiKey: String): List<DispatcharrVODCategory> =
+        withContext(Dispatchers.IO) { getVODCategoriesImpl(baseUrl, apiKey) }
+
+    private suspend fun getVODCategoriesImpl(baseUrl: String, apiKey: String): List<DispatcharrVODCategory> =
         fetchListOrResults("${baseUrl.trimEnd('/')}/api/vod/categories/", apiKey)
 
     /**

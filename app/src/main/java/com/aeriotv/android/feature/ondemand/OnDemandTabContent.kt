@@ -140,6 +140,8 @@ fun OnDemandTabContent(
     viewModel: OnDemandViewModel = hiltViewModel(),
     watchVm: WatchProgressViewModel = hiltViewModel(),
 ) {
+    // Startup deferral (Onn boxes 2026-09-02): the tab being shown loads now.
+    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.ensureLoaded() }
     var section by rememberSaveable { mutableStateOf(OnDemandSection.Movies) }
 
     // Issue #9: Continue Watching is its own On Demand sub-tab now (movies +
