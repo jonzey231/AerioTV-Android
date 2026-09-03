@@ -625,6 +625,21 @@ private fun GroupPills(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.fillMaxWidth().height(44.dp).focusProperties { if (topNav != null) up = topNav },
     ) {
+        // Logan 2026-09-03: the same round Manage Groups button the sidebar
+        // header uses, placed BEFORE the first group pill. Focus from the
+        // grid still lands on the first group (firstPillFocus), and Left
+        // reaches the circle.
+        item(key = "__manage__") {
+            com.aeriotv.android.feature.livetv.TvManageGroupsCircle(
+                hiddenGroupsCount = hiddenGroupCount,
+                onClick = onManageGroups,
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
+                    },
+            )
+        }
         items(items, key = { it.first }) { (group, label) ->
             // One focus target only: clickable() already contributes it, and a
             // separate focusable() nested a second one (first OK moved focus
@@ -655,29 +670,6 @@ private fun GroupPills(
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            }
-        }
-        item(key = "__manage__") {
-            val interaction = remember { MutableInteractionSource() }
-            val focused by interaction.collectIsFocusedAsState()
-            val colors = MaterialTheme.colorScheme
-            Box(
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
-                    }
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(colors.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(15.dp))
-                    .border(if (focused) 2.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(15.dp))
-                    .clickable(interactionSource = interaction, indication = null) { onManageGroups() }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    if (hiddenGroupCount > 0) "Manage ($hiddenGroupCount hidden)" else "Manage",
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                )
             }
         }
     }
