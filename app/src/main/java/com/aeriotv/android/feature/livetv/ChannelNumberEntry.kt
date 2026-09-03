@@ -33,9 +33,11 @@ import kotlinx.coroutines.launch
  * GH #71: direct channel-number entry from a TV remote's digit keys, shared
  * by the live player (tunes) and the guide (moves focus).
  *
- * Digits accumulate (up to [MAX_DIGITS]); every press restarts a
- * [COMMIT_DELAY_MS] timer, and the number commits when the timer fires or
- * on OK / Enter. Back / Escape cancels a pending entry. The host's
+ * Digits accumulate (up to [MAX_DIGITS]) and the number commits on OK /
+ * Enter only (Logan 2026-09-02: no auto-commit; OK while digits are
+ * pending enters the number and never clicks the focused cell, release
+ * included). An entry left alone for [IDLE_CLEAR_MS] clears itself.
+ * Back / Escape cancels a pending entry. The host's
  * `onCommit` resolves the number (see [resolveChannelNumber]) and returns
  * false when nothing matched, which shows "No channel <n>" for
  * [MESSAGE_MS]. TV only: the hosts gate [onKeyEvent] on their TV form check.
@@ -55,6 +57,9 @@ class ChannelNumberEntryState(
     // A Back press that cancelled an entry must also eat its release: the
     // activity routes Back through the OnBackPressedDispatcher on KeyUp.
     private var swallowBackUp = false
+    // OK commits on the press and clears the digits; its release must not
+    // reach the focused cell's clickable (that tuned the highlighted row).
+    private var swallowOkUp = false
 
     val isVisible: Boolean get() = digits.isNotEmpty() || message != null
     val hasPendingDigits: Boolean get() = digits.isNotEmpty()
@@ -79,13 +84,20 @@ class ChannelNumberEntryState(
             swallowBackUp = false
             return true
         }
+        val isOk = native.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+            native.keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
+            native.keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+        if (isOk && !down && swallowOkUp) {
+            swallowOkUp = false
+            return true
+        }
         if (digits.isEmpty()) return false
         return when (native.keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_CENTER,
             AndroidKeyEvent.KEYCODE_ENTER,
             AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
             -> {
-                if (down && native.repeatCount == 0) commit()
+                if (down && native.repeatCount == 0) { commit(); swallowOkUp = true }
                 true
             }
             AndroidKeyEvent.KEYCODE_BACK,
@@ -105,8 +117,8 @@ class ChannelNumberEntryState(
         digits += digit
         commitJob?.cancel()
         commitJob = scope.launch {
-            delay(COMMIT_DELAY_MS)
-            commit()
+            delay(IDLE_CLEAR_MS)
+            cancel()
         }
     }
 
@@ -136,7 +148,7 @@ class ChannelNumberEntryState(
 
     companion object {
         const val MAX_DIGITS = 4
-        const val COMMIT_DELAY_MS = 2_000L
+        const val IDLE_CLEAR_MS = 6_000L
         const val MESSAGE_MS = 1_500L
 
         private fun digitFor(keyCode: Int): Char? = when (keyCode) {

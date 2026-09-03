@@ -211,7 +211,13 @@ fun MainScaffold(
         )
     }
     val favoritesVm: FavoritesViewModel = hiltViewModel()
-    val favorites by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
+    // null until the DB emits: on the phone, backing out of the player
+    // recomposes this scaffold from scratch and an empty INITIAL list read as
+    // "no favorites" for a frame, the Favorites tab vanished, and the tabs
+    // fallback below bounced a Favorites-first user to Live TV (GH #81
+    // follow-up, PsykoRider 2026-09-02).
+    val favoritesOrNull by favoritesVm.all.collectAsStateWithLifecycle(initialValue = null)
+    val favorites = favoritesOrNull ?: emptyList()
     // Show the Favorites tab only when the user has at least one favorite
     // that ALSO exists in the active playlist. The raw DB count would keep
     // the tab pinned to the bottom bar after a playlist switch left stale
@@ -224,8 +230,9 @@ fun MainScaffold(
     // fallback below bounced the user to Live TV every time. Keep the last
     // verdict until channels are back; an empty favorites list is a real
     // DB emission and still retires the tab.
-    var lastRenderableFavorites by remember { mutableStateOf(false) }
-    val hasRenderableFavorites = remember(favorites, state.channels) {
+    var lastRenderableFavorites by rememberSaveable { mutableStateOf(false) }
+    val hasRenderableFavorites = remember(favoritesOrNull, state.channels) {
+        if (favoritesOrNull == null) return@remember lastRenderableFavorites
         if (favorites.isEmpty()) return@remember false
         if (state.channels.isEmpty()) return@remember lastRenderableFavorites
         val visibleIds = state.channels.asSequence().map { it.id }.toHashSet()
