@@ -244,8 +244,13 @@ fun AerioTVNavHost(
                             ?.route?.startsWith("player/") == true
                         val onCatchup = navController.currentBackStackEntry
                             ?.arguments?.getString("csUrl").orEmpty().isNotBlank()
+                        val controllingTv = companionRemoteNav.connection.value is
+                            com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
                         if (onPlayer && !onCatchup) {
-                            dlCastReceiver.requestCastChannel(target.channelId)
+                            // While controlling a TV the player IS the remote
+                            // screen; a notification tap just brings it forward.
+                            // requestCastChannel would start LOCAL playback.
+                            if (!controllingTv) dlCastReceiver.requestCastChannel(target.channelId)
                         } else {
                             navController.navigate(Routes.player(target.channelId))
                         }
@@ -779,6 +784,12 @@ fun AerioTVNavHost(
                     LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: false),
                 ) {
                 MainScaffold(
+                    // Companion card: always the controls screen, never the
+                    // stay-on-list re-tune (Logan 2026-09-02: could not get back
+                    // to the remote while controlling).
+                    onOpenCompanionRemote = { channel ->
+                        navController.navigate(Routes.player(channel.id))
+                    },
                     onChannelClick = { channel ->
                         // GH #47: while casting with stay-on-list enabled, flip
                         // the TV in place (same dedup + control-channel path as

@@ -176,6 +176,10 @@ val LocalTvChromeCollapsed =
 @Composable
 fun MainScaffold(
     onChannelClick: (M3UChannel) -> Unit,
+    /** Companion "Controlling <TV>" card tap: open the remote-controls screen
+     *  for this channel even when "tap stays on list" (GH #85) would otherwise
+     *  re-tune in place; the card is the way BACK to the controls. */
+    onOpenCompanionRemote: (M3UChannel) -> Unit = onChannelClick,
     onMovieClick: (String) -> Unit = {},
     onSeriesClick: (Int) -> Unit = {},
     onEpisodeResume: (String) -> Unit = {},
@@ -963,7 +967,7 @@ fun MainScaffold(
                                 // companion mode. Falls back to the tracked title.
                                 val ch = state.channels.firstOrNull { it.id == companionChannelId }
                                     ?: state.channels.firstOrNull { it.name == companionNowPlaying }
-                                if (ch != null) onChannelClick(ch)
+                                if (ch != null) onOpenCompanionRemote(ch)
                             },
                             onTogglePlayPause = { companionRemote.togglePlayPause() },
                             onStop = { companionRemote.disconnect() },
