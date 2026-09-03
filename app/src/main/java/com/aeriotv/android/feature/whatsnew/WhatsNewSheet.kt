@@ -208,32 +208,22 @@ private object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Tabs stay ready",
-            body = "Switching between Live TV, Favorites, DVR, On Demand and " +
-                "Settings no longer rebuilds the tab: each one stays loaded " +
-                "once you have visited it, so switching back is instant.",
+            title = "Smoother resolution switching on NVIDIA Shield",
+            body = "With Match Content Resolution on, the audio no longer " +
+                "drops out and re-buffers right after the picture mode " +
+                "changes.",
         ),
         WhatsNewItem(
-            title = "Much lighter on TV boxes",
-            body = "The app was loading the guide twice and fetching the On " +
-                "Demand library at full speed right after launch. Both are " +
-                "fixed, so the guide answers the remote right away and stays " +
-                "smooth while the library loads in the background.",
+            title = "Event channels in the guide",
+            body = "Channels with no guide data show the channel name as the " +
+                "programme, and when the name carries a date and time the " +
+                "guide marks when the event starts.",
         ),
         WhatsNewItem(
-            title = "No more flashes when switching tabs",
-            body = "Tabs no longer flicker through an empty state on entry, " +
-                "and a tab can no longer vanish under your focus and bounce " +
-                "you back to Live TV.",
-        ),
-        WhatsNewItem(
-            title = "Settings on TV",
-            body = "Highlighting the Settings pill no longer opens Playlists on " +
-                "its own. Press Down to enter the list and pick a section.",
-        ),
-        WhatsNewItem(
-            title = "Matching splash screen",
-            body = "The Android TV start screen now matches Apple TV.",
+            title = "Manage groups from the pill row",
+            body = "When groups are shown as pills at the top of the guide, " +
+                "the round Manage Groups button now sits before the first " +
+                "pill, the same as in the sidebar.",
         ),
     )
 }
