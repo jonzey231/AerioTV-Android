@@ -76,6 +76,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.runtime.mutableStateListOf
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import com.aeriotv.android.core.data.M3UChannel
@@ -641,6 +645,7 @@ fun MainScaffold(
                 }
                 MainTabContent(
                     selectedTab = selectedTab,
+                    tabs = tabs,
                     onChannelClick = onChannelClick,
                     onMovieClick = onMovieClick,
                     onSeriesClick = onSeriesClick,
@@ -855,6 +860,7 @@ fun MainScaffold(
         ) {
             MainTabContent(
                 selectedTab = selectedTab,
+                tabs = tabs,
                 onChannelClick = onChannelClick,
                 onMovieClick = onMovieClick,
                 onSeriesClick = onSeriesClick,
@@ -1298,6 +1304,8 @@ private fun TvGuideHintChip(text: String, maxWidth: Dp) {
 @Composable
 private fun MainTabContent(
     selectedTab: AppTab,
+    /** Tabs currently present; only these are kept alive. */
+    tabs: List<AppTab>,
     onChannelClick: (M3UChannel) -> Unit,
     onMovieClick: (String) -> Unit,
     onSeriesClick: (Int) -> Unit,
@@ -1323,50 +1331,92 @@ private fun MainTabContent(
     viewModel: PlaylistViewModel,
     modifier: Modifier = Modifier,
 ) {
+    // Keep visited tabs alive (Logan 2026-09-03: "why does every tab have to
+    // reload?"): every tab present in [tabs] that has been shown once stays
+    // composed; the inactive ones are measured at zero size and never placed,
+    // so they neither draw nor take focus, and their Back handlers and focus
+    // pulls are gated on [LocalTabIsActive]. A tab absent from [tabs] (no
+    // favorites, VOD or recordings) is not composed at all. Search is the
+    // floating screen and is never kept.
+    val visited = rememberSaveable(saver = androidx.compose.runtime.saveable.listSaver(
+        save = { it.map { t -> t.name } },
+        restore = { names -> names.mapNotNull { n -> AppTab.entries.firstOrNull { it.name == n } }.toMutableStateList() },
+    )) { mutableStateListOf<AppTab>() }
+    if (selectedTab != AppTab.Search && selectedTab !in visited) visited.add(selectedTab)
+    val keepAliveTabs = tabs.filter { it in visited }
     Box(modifier = modifier) {
-        when (selectedTab) {
-            AppTab.LiveTV -> LiveTVTabContent(
-                onChannelClick = onChannelClick,
-                onLaunchMultiview = onLaunchMultiview,
-                onOpenSearch = onOpenSearch,
-                // Catch-up (task #133/#136): a resolved timeshift URL plays
-                // through the recording-player route with programme window +
-                // panel tz for the scrubbable timeline.
-                onPlayCatchup = onPlayCatchup,
-                viewModel = viewModel,
-            )
-            AppTab.Favorites -> FavoritesTabContent(onChannelClick = onChannelClick)
-            AppTab.DVR -> DvrTabContent(
-                onPlayRecording = onPlayRecording,
-                onWatchLive = onWatchLive,
-                onWatchFromBeginning = onWatchFromBeginning,
-            )
-            AppTab.OnDemand -> OnDemandTabContent(
-                onMovieClick = { movie -> onMovieClick(movie.uuid) },
-                onSeriesClick = { series -> onSeriesClick(series.id) },
-                onEpisodeResume = onEpisodeResume,
-                onResumeMovie = onResumeMovie,
-                onOpenSearch = onOpenSearch,
-            )
-            AppTab.Settings -> SettingsTabContent(playlistViewModel = viewModel)
-            // TV-only tab (Logan 2026-08-06): the same global Search screen the
-            // phone reaches via the app-bar globe, hosted in place. EPG results
-            // go through requestGuideJump, whose scaffold collector already
-            // switches to Live TV and jumps the guide; movie/series results use
-            // the same detail routes as On Demand. No back arrow (the pushed
-            // route keeps its own) and no field auto-focus - with
-            // selection-follows-focus on the nav bar, a focus grab here would
-            // yank the user out of the bar the moment the pill highlights.
-            AppTab.Search -> com.aeriotv.android.feature.search.SearchScreen(
-                onBack = { onSelectTab(AppTab.LiveTV) },
-                onEpgResult = { channelKey, startMillis ->
-                    viewModel.requestGuideJump(channelKey, startMillis)
-                },
-                onMovieClick = onMovieClick,
-                onSeriesClick = onSeriesClick,
-                showBackButton = false,
-                autoFocusField = false,
-            )
+        val render: @Composable (AppTab) -> Unit = { tab -> when (tab) {
+            AppTab.LiveTV -> {
+    LiveTVTabContent(
+                    onChannelClick = onChannelClick,
+                    onLaunchMultiview = onLaunchMultiview,
+                    onOpenSearch = onOpenSearch,
+                    // Catch-up (task #133/#136): a resolved timeshift URL plays
+                    // through the recording-player route with programme window +
+                    // panel tz for the scrubbable timeline.
+                    onPlayCatchup = onPlayCatchup,
+                    viewModel = viewModel,
+                )
+            }
+            AppTab.Favorites -> {
+    FavoritesTabContent(onChannelClick = onChannelClick)
+            }
+            AppTab.DVR -> {
+    DvrTabContent(
+                    onPlayRecording = onPlayRecording,
+                    onWatchLive = onWatchLive,
+                    onWatchFromBeginning = onWatchFromBeginning,
+                )
+            }
+            AppTab.OnDemand -> {
+    OnDemandTabContent(
+                    onMovieClick = { movie -> onMovieClick(movie.uuid) },
+                    onSeriesClick = { series -> onSeriesClick(series.id) },
+                    onEpisodeResume = onEpisodeResume,
+                    onResumeMovie = onResumeMovie,
+                    onOpenSearch = onOpenSearch,
+                )
+            }
+            AppTab.Settings -> {
+    SettingsTabContent(playlistViewModel = viewModel)
+                // TV-only tab (Logan 2026-08-06): the same global Search screen the
+                // phone reaches via the app-bar globe, hosted in place. EPG results
+                // go through requestGuideJump, whose scaffold collector already
+                // switches to Live TV and jumps the guide; movie/series results use
+                // the same detail routes as On Demand. No back arrow (the pushed
+                // route keeps its own) and no field auto-focus - with
+                // selection-follows-focus on the nav bar, a focus grab here would
+                // yank the user out of the bar the moment the pill highlights.
+            }
+            AppTab.Search -> {
+    com.aeriotv.android.feature.search.SearchScreen(
+                    onBack = { onSelectTab(AppTab.LiveTV) },
+                    onEpgResult = { channelKey, startMillis ->
+                        viewModel.requestGuideJump(channelKey, startMillis)
+                    },
+                    onMovieClick = onMovieClick,
+                    onSeriesClick = onSeriesClick,
+                    showBackButton = false,
+                    autoFocusField = false,
+                )
+            }
+            else -> Unit
+        } }
+        if (selectedTab == AppTab.Search) {
+            render(AppTab.Search)
+        }
+        // Each kept tab lives in ONE slot (keyed by tab, fixed order) and only
+        // its modifier flips between hidden and shown: moving a tab between
+        // two different parents would dispose and rebuild it, which is the
+        // reload this exists to avoid. BackHandlers inside are gated on
+        // LocalTabIsActive, so composition order does not matter for Back.
+        keepAliveTabs.forEach { tab ->
+            val active = tab == selectedTab
+            androidx.compose.runtime.key(tab) {
+                CompositionLocalProvider(LocalTabIsActive provides active) {
+                    Box(if (active) Modifier.fillMaxSize() else Modifier.keepAliveHidden()) { render(tab) }
+                }
+            }
         }
     }
 }
@@ -2139,3 +2189,18 @@ private data class VodPresence(
         )
     }
 }
+
+/** True inside the tab the user is on; false inside a tab kept alive but
+ *  hidden. Tab content gates focus pulls and BackHandlers on it. */
+val LocalTabIsActive = androidx.compose.runtime.compositionLocalOf { true }
+
+/** Measured at zero size and never placed: no draw, no focus geometry, no
+ *  semantics, but the composition (and its state, scroll positions, loaded
+ *  data) survives. */
+private fun Modifier.keepAliveHidden(): Modifier = this
+    .layout { measurable, _ ->
+        val placeable = measurable.measure(androidx.compose.ui.unit.Constraints(maxWidth = 0, maxHeight = 0))
+        layout(0, 0) { /* deliberately not placed */ }
+    }
+    .focusProperties { canFocus = false }
+    .semantics { invisibleToUser() }

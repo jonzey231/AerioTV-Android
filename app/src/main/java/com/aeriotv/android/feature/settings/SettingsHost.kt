@@ -381,7 +381,7 @@ fun SettingsTvRailHost(
     // Back in the pane returns focus to the rail instead of leaving Settings.
     // Disabled while something is pushed so the nav stack's own handler pops
     // first, and while the rail already holds focus so Back reaches the tabs.
-    androidx.activity.compose.BackHandler(enabled = pushed == null && !railHasFocus) {
+    androidx.activity.compose.BackHandler(enabled = com.aeriotv.android.feature.main.LocalTabIsActive.current && pushed == null && !railHasFocus) {
         runCatching { railFocus.requestFocus() }
     }
 

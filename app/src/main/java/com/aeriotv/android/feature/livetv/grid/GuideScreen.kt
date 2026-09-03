@@ -176,6 +176,7 @@ fun GuideScreen(
     val groupSelector by settingsVm.guideGroupSelector.collectAsStateWithLifecycle()
     val sidebarGroupMode = isTv && groupSelector == "sidebar" && !favoritesOnly
     val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle()
+    val tabActive = com.aeriotv.android.feature.main.LocalTabIsActive.current
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(false) }
     var collectionPickerFor by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -289,7 +290,8 @@ fun GuideScreen(
     // second until the grid actually holds focus.
     var gridHasFocus by remember { mutableStateOf(false) }
     val topNavHasFocus = com.aeriotv.android.feature.main.LocalTvTopNavHasFocus.current
-    LaunchedEffect(isTv, rows.isEmpty) {
+    LaunchedEffect(isTv, rows.isEmpty, tabActive) {
+        if (!tabActive) return@LaunchedEffect
         if (isTv && !rows.isEmpty) {
             repeat(12) {
                 if (gridHasFocus) return@LaunchedEffect
@@ -309,7 +311,8 @@ fun GuideScreen(
     // on the channel that is still playing (now in the mini player), not
     // wherever the grid was before. Keyed on the mini's channel so it fires
     // on the fullscreen -> mini hand-off and stays quiet otherwise.
-    LaunchedEffect(miniChannelId, rows.isEmpty) {
+    LaunchedEffect(miniChannelId, rows.isEmpty, tabActive) {
+        if (!tabActive) return@LaunchedEffect
         val id = miniChannelId ?: return@LaunchedEffect
         if (!isTv || rows.isEmpty) return@LaunchedEffect
         if (grid.focusChannel(id)) runCatching { gridFocus.requestFocus() }
@@ -354,7 +357,7 @@ fun GuideScreen(
             else -> false
         }
     }
-    BackHandler(enabled = groupSidebarOpen) {
+    BackHandler(enabled = tabActive && groupSidebarOpen) {
         sidebarOriginalGroup?.takeIf { it != state.selectedGroup }?.let { viewModel.onGroupSelected(it) }
         groupSidebarOpen = false
         runCatching { gridFocus.requestFocus() }
@@ -363,7 +366,7 @@ fun GuideScreen(
     // With a mini player up, Back belongs to the player host (expand / close),
     // exactly as the old guide: the ladder must never finish the Activity
     // while a stream is playing.
-    BackHandler(enabled = !miniActive && !groupSidebarOpen && menuFor == null && programInfoTarget == null && recordTarget == null) {
+    BackHandler(enabled = tabActive && !miniActive && !groupSidebarOpen && menuFor == null && programInfoTarget == null && recordTarget == null) {
         when (grid.back(nowMs)) {
             GuideGridState.BackStep.RESTORED_NOW_AND_TOP, GuideGridState.BackStep.TOP -> Unit
             GuideGridState.BackStep.NONE -> {

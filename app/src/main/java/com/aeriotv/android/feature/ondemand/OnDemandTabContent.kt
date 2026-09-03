@@ -504,7 +504,7 @@ private fun MoviesSubScreen(
     }
     val backScope = rememberCoroutineScope()
     val firstPosterFocus = remember { FocusRequester() }
-    androidx.activity.compose.BackHandler(enabled = isTv && !miniActive && !atTop) {
+    androidx.activity.compose.BackHandler(enabled = com.aeriotv.android.feature.main.LocalTabIsActive.current && isTv && !miniActive && !atTop) {
         backScope.launch {
             gridState.animateScrollToItem(0)
             // The index-0 poster can compose a frame or two after the scroll
@@ -731,7 +731,7 @@ private fun SeriesSubScreen(
     }
     val backScope = rememberCoroutineScope()
     val firstPosterFocus = remember { FocusRequester() }
-    androidx.activity.compose.BackHandler(enabled = isTv && !miniActive && !atTop) {
+    androidx.activity.compose.BackHandler(enabled = com.aeriotv.android.feature.main.LocalTabIsActive.current && isTv && !miniActive && !atTop) {
         backScope.launch {
             gridState.animateScrollToItem(0)
             repeat(10) {
