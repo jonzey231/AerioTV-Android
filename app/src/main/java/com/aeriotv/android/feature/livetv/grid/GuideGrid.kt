@@ -331,7 +331,7 @@ fun GuideGrid(
     if (isTv) {
         com.aeriotv.android.feature.livetv.ChannelNumberEntryOverlay(
             state = channelNumberEntry,
-            modifier = Modifier.align(Alignment.TopEnd),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
         )
     }
     }
