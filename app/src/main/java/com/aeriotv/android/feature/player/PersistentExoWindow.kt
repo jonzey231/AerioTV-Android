@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.player
 
+import kotlinx.coroutines.launch
 import android.util.Log
 import android.view.ViewGroup
 import androidx.annotation.OptIn
@@ -164,6 +165,7 @@ fun BoxScope.PersistentExoWindow(
         p?.addListener(listener)
         onDispose { p?.removeListener(listener) }
     }
+    val reprimeScope = androidx.compose.runtime.rememberCoroutineScope()
     DisposableEffect(displayContext) {
         val dmgr = displayContext.getSystemService(android.content.Context.DISPLAY_SERVICE)
             as android.hardware.display.DisplayManager
@@ -173,6 +175,7 @@ fun BoxScope.PersistentExoWindow(
         var lastH = startMode?.physicalHeight ?: 0
         var pending: Runnable? = null
         var audioReinit: Runnable? = null
+        val isNvidia = android.os.Build.MANUFACTURER.equals("NVIDIA", ignoreCase = true)
         var verify: Runnable? = null
         fun playing(): Boolean {
             if (state.mode.value == ExoWindowState.Mode.Hidden) return false
@@ -189,6 +192,25 @@ fun BoxScope.PersistentExoWindow(
                 geometryNudge = true
                 mainHandler.postDelayed({ geometryNudge = false }, 120L)
             }, 400L)
+            // NVIDIA Shield (Frankie B., 2026-09-03, still frozen on 0.4.26):
+            // a recreated SurfaceView is not enough there; the decoder keeps
+            // reporting rendered frames while the panel shows the last one.
+            // Re-prime the stream in place ~700 ms after the recreate so the
+            // decoder is rebuilt against the new surface (the same reload the
+            // stall watchdog uses). Shield only: everywhere else the recreate
+            // alone is verified (Streamer 4K/50 Hz).
+            if (isNvidia) {
+                mainHandler.postDelayed({
+                    val url = holder.player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                    if (url != null && playing()) {
+                        Log.i(TAG, "Shield: re-priming stream after display mode change")
+                        reprimeScope.launch {
+                            runCatching { holder.reprimeWithKeepalive(url = url, bypassCooldown = true) }
+                                .onFailure { Log.w(TAG, "Shield re-prime failed", it) }
+                        }
+                    }
+                }, 700L)
+            }
             verify?.let { mainHandler.removeCallbacks(it) }
             verify = Runnable {
                 if (!recreateGate.frameSinceRecreate && playing() && retriesLeft > 0) {
