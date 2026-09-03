@@ -458,6 +458,8 @@ fun GuideScreen(
             }
         }
         if (isTv && !sidebarGroupMode && !favoritesOnly) GroupPills(
+            onManageGroups = { showManageGroups = true },
+            hiddenGroupCount = hiddenGroups.size,
             items = pillItems,
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
@@ -611,6 +613,10 @@ private fun GroupPills(
     onSelect: (String) -> Unit,
     firstPillFocus: FocusRequester,
     onDown: () -> Boolean,
+    /** Logan 2026-09-03: pills mode had no way to show/hide groups (the
+     *  sidebar has its Manage button, the pill row had none). Trailing pill. */
+    onManageGroups: () -> Unit = {},
+    hiddenGroupCount: Int = 0,
 ) {
     val listState = rememberLazyListState()
     val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
@@ -649,6 +655,29 @@ private fun GroupPills(
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            }
+        }
+        item(key = "__manage__") {
+            val interaction = remember { MutableInteractionSource() }
+            val focused by interaction.collectIsFocusedAsState()
+            val colors = MaterialTheme.colorScheme
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
+                    }
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(colors.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(15.dp))
+                    .border(if (focused) 2.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(15.dp))
+                    .clickable(interactionSource = interaction, indication = null) { onManageGroups() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    if (hiddenGroupCount > 0) "Manage ($hiddenGroupCount hidden)" else "Manage",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                )
             }
         }
     }
