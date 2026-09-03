@@ -159,7 +159,7 @@ fun ChannelListScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val favoritesVm: FavoritesViewModel = hiltViewModel()
-    val favoritesList by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
+    val favoritesList = favoritesVm.all.collectAsStateWithLifecycle().value ?: emptyList()
     val favoriteIds = remember(favoritesList) { favoritesList.map { it.channelId }.toSet() }
     val settingsVm: SettingsViewModel = hiltViewModel()
     val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
@@ -206,7 +206,7 @@ fun ChannelListScreen(
     // the "collection:<id>" selectedGroup sentinel, so a collection picked in
     // one view stays active in the other.
     val collectionsVm: CollectionsViewModel = hiltViewModel()
-    val collections by collectionsVm.collections.collectAsStateWithLifecycle(initialValue = emptyList())
+    val collections by collectionsVm.collections.collectAsStateWithLifecycle()
     var collectionPickerFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     val collectionsMenu = remember(collections, state.selectedGroup) {
         CollectionsMenuContext(

@@ -47,6 +47,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -60,7 +63,8 @@ class CollectionsViewModel @Inject constructor(
     private val prefs: AppPreferences,
 ) : ViewModel() {
 
-    val collections: Flow<List<ChannelCollection>> = prefs.channelCollections
+    val collections: StateFlow<List<ChannelCollection>> = prefs.channelCollections
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
      * iOS create(name:memberIDs:placement:): blank names fall back to

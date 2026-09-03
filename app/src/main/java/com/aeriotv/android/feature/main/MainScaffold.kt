@@ -76,6 +76,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.playback.AerioExoPlayerHolder
@@ -216,7 +218,7 @@ fun MainScaffold(
     // "no favorites" for a frame, the Favorites tab vanished, and the tabs
     // fallback below bounced a Favorites-first user to Live TV (GH #81
     // follow-up, PsykoRider 2026-09-02).
-    val favoritesOrNull by favoritesVm.all.collectAsStateWithLifecycle(initialValue = null)
+    val favoritesOrNull by favoritesVm.all.collectAsStateWithLifecycle()
     val favorites = favoritesOrNull ?: emptyList()
     // Show the Favorites tab only when the user has at least one favorite
     // that ALSO exists in the active playlist. The raw DB count would keep
@@ -244,7 +246,16 @@ fun MainScaffold(
     // to the SAME instance the tab body uses (shared ViewModelStoreOwner), so this
     // adds no duplicate fetch; it just makes the eager load drive tab visibility.
     val onDemandVm: OnDemandViewModel = hiltViewModel()
-    val onDemandState by onDemandVm.state.collectAsStateWithLifecycle()
+    // Collect only the bits the scaffold needs, de-duplicated: the catalog
+    // walk emits a new state per page (~100 pages after launch) and collecting
+    // the whole state here recomposed the entire scaffold, every tab included,
+    // on each one (Streamer 2026-09-03: "every tab redraws" for the first
+    // 30-45 s).
+    val onDemandState by remember(onDemandVm) {
+        onDemandVm.state
+            .map { VodPresence.from(it) }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = VodPresence.from(onDemandVm.state.value))
     // Per-playlist VOD opt-in gate (iOS HomeView.swift:317 servers.filter
     // { $0.supportsVOD && $0.vodEnabled }). Read directly off the active
     // playlist so the tab hides immediately when the user toggles "Fetch On
@@ -258,8 +269,8 @@ fun MainScaffold(
     // bridge keeps the tab from flickering "absent -> present" on cold launch /
     // source switch; a source that finishes with zero VOD hides the tab entirely.
     val hasVodContent = activePlaylistVodEnabled && !onDemandState.unsupportedSource && (
-        onDemandState.movies.isNotEmpty() ||
-            onDemandState.series.isNotEmpty() ||
+        onDemandState.hasMovies ||
+            onDemandState.hasSeries ||
             onDemandState.isLoading ||
             onDemandState.isLoadingSeries ||
             // XC: the cheap probe found categories but deferred the heavy walk
@@ -277,11 +288,31 @@ fun MainScaffold(
     val hasRecordings = dvrState.recordings.isNotEmpty() ||
         dvrState.hasRecordingsHint ||
         dvrState.isLocalRecordingActive
-    val tabs = visibleTabs(
-        hasFavorites = hasRenderableFavorites,
-        hasVod = hasVodContent,
-        hasRecordings = hasRecordings,
-    )
+    // Sticky tabs (Streamer 2026-09-03, "every tab flashes"): the loaders
+    // behind DVR and On Demand briefly report "nothing" while they transition
+    // (On Demand dropped out for 0.8 s between its movie and series passes;
+    // DVR flickers on its list refresh). When that happens while the user is
+    // on that pill, the focused pill is removed, Compose drops focus to the
+    // leftmost control, selection follows to Live TV and the tab flashes. A
+    // tab that has been shown stays for the rest of the playlist session;
+    // only a real user action retires it (favorites emptied, On Demand
+    // switched off for the playlist, or an unsupported source).
+    val stickyTabs = remember(state.playlist?.id) { mutableSetOf<AppTab>() }
+    val tabs = run {
+        val live = visibleTabs(
+            hasFavorites = hasRenderableFavorites,
+            hasVod = hasVodContent,
+            hasRecordings = hasRecordings,
+        )
+        stickyTabs += live
+        if (favoritesOrNull?.isEmpty() == true) stickyTabs -= AppTab.Favorites
+        if (!activePlaylistVodEnabled || onDemandState.unsupportedSource) stickyTabs -= AppTab.OnDemand
+        visibleTabs(
+            hasFavorites = AppTab.Favorites in stickyTabs,
+            hasVod = AppTab.OnDemand in stickyTabs,
+            hasRecordings = AppTab.DVR in stickyTabs,
+        )
+    }
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
     val miniPlayerState by miniPlayerVm.state.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -2085,4 +2116,26 @@ private sealed interface AddPlaylistStep {
     data object None : AddPlaylistStep
     data object ChooseType : AddPlaylistStep
     data class Configure(val sourceType: com.aeriotv.android.core.data.SourceType) : AddPlaylistStep
+}
+
+/** Scaffold-level view of On Demand state: presence flags only, so page
+ *  emissions from the catalog walk do not recompose the scaffold. */
+private data class VodPresence(
+    val unsupportedSource: Boolean,
+    val hasMovies: Boolean,
+    val hasSeries: Boolean,
+    val isLoading: Boolean,
+    val isLoadingSeries: Boolean,
+    val hasDeferredXtreamContent: Boolean,
+) {
+    companion object {
+        fun from(s: com.aeriotv.android.feature.ondemand.OnDemandViewModel.UiState) = VodPresence(
+            unsupportedSource = s.unsupportedSource,
+            hasMovies = s.movies.isNotEmpty(),
+            hasSeries = s.series.isNotEmpty(),
+            isLoading = s.isLoading,
+            isLoadingSeries = s.isLoadingSeries,
+            hasDeferredXtreamContent = s.hasDeferredXtreamContent,
+        )
+    }
 }

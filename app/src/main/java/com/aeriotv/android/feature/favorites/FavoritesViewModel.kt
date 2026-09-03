@@ -8,6 +8,9 @@ import com.aeriotv.android.core.data.db.entity.FavoriteChannelEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -21,7 +24,11 @@ class FavoritesViewModel @Inject constructor(
     private val dao: FavoriteChannelDao,
 ) : ViewModel() {
 
-    val all: Flow<List<FavoriteChannelEntity>> = dao.observeAll()
+    /** null until the first DB emission, so a tab entering with the value can
+     *  tell "not loaded yet" from "no favorites" (no empty-state flash). Hot:
+     *  re-entering a tab gets the current list synchronously. */
+    val all: StateFlow<List<FavoriteChannelEntity>?> = dao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val count: Flow<Int> = dao.observeCount()
 
     fun observe(channelId: String): Flow<Boolean> = dao.observeIsFavorite(channelId)

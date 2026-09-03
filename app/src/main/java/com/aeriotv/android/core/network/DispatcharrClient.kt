@@ -87,6 +87,12 @@ private const val MAX_LIST_PAGES = 200
 @Singleton
 class DispatcharrClient @Inject constructor() {
 
+    /** One VOD page decode at a time: the catalog walk otherwise decodes movie
+     *  and series pages in parallel on IO threads and starves rendering on
+     *  4-core TV boxes (Streamer 2026-09-03). */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val vodDecodeDispatcher = Dispatchers.IO.limitedParallelism(1)
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -1158,7 +1164,7 @@ class DispatcharrClient @Inject constructor() {
     /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
      *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getVODMoviesPage(url: String, apiKey: String): VODMoviesPage =
-        withContext(Dispatchers.IO) { getVODMoviesPageImpl(url, apiKey) }
+        withContext(vodDecodeDispatcher) { getVODMoviesPageImpl(url, apiKey) }
 
     private suspend fun getVODMoviesPageImpl(url: String, apiKey: String): VODMoviesPage {
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
@@ -1205,7 +1211,7 @@ class DispatcharrClient @Inject constructor() {
     /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
      *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
     suspend fun getVODSeriesPage(url: String, apiKey: String): VODSeriesPage =
-        withContext(Dispatchers.IO) { getVODSeriesPageImpl(url, apiKey) }
+        withContext(vodDecodeDispatcher) { getVODSeriesPageImpl(url, apiKey) }
 
     private suspend fun getVODSeriesPageImpl(url: String, apiKey: String): VODSeriesPage {
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
@@ -1256,7 +1262,7 @@ class DispatcharrClient @Inject constructor() {
         category: String,
         pageSize: Int = 100,
     ): VODMoviesPage =
-        withContext(Dispatchers.IO) { getVODMoviesByCategoryImpl(baseUrl, apiKey, category, pageSize) }
+        withContext(vodDecodeDispatcher) { getVODMoviesByCategoryImpl(baseUrl, apiKey, category, pageSize) }
 
     private suspend fun getVODMoviesByCategoryImpl(
         baseUrl: String,
@@ -1280,7 +1286,7 @@ class DispatcharrClient @Inject constructor() {
         category: String,
         pageSize: Int = 100,
     ): VODSeriesPage =
-        withContext(Dispatchers.IO) { getVODSeriesByCategoryImpl(baseUrl, apiKey, category, pageSize) }
+        withContext(vodDecodeDispatcher) { getVODSeriesByCategoryImpl(baseUrl, apiKey, category, pageSize) }
 
     private suspend fun getVODSeriesByCategoryImpl(
         baseUrl: String,

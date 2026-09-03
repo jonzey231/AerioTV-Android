@@ -527,6 +527,7 @@ class OnDemandViewModel @Inject constructor(
             val groupsWithContent = LinkedHashSet<String>()
             var firstPainted = false
             for (catName in cats) {
+                kotlinx.coroutines.delay(WALK_PACE_MS)
                 val capped = merged.size >= totalCap
                 var nextUrl: String? = null
                 var fetchedForCat = 0
@@ -561,6 +562,7 @@ class OnDemandViewModel @Inject constructor(
                 // Walk this category's cursor up to its fair share (skipped once
                 // capped: nextUrl stays null above).
                 while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
+                    kotlinx.coroutines.delay(WALK_PACE_MS)
                     val captured = nextUrl
                     val p = runCatching {
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -713,6 +715,7 @@ class OnDemandViewModel @Inject constructor(
             val groupsWithContent = LinkedHashSet<String>()
             var firstPainted = false
             for (catName in cats) {
+                kotlinx.coroutines.delay(WALK_PACE_MS)
                 val capped = merged.size >= totalCap
                 var nextUrl: String? = null
                 var fetchedForCat = 0
@@ -737,6 +740,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 }
                 while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
+                    kotlinx.coroutines.delay(WALK_PACE_MS)
                     val captured = nextUrl
                     val p = runCatching {
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -1933,6 +1937,10 @@ class OnDemandViewModel @Inject constructor(
 
     private companion object {
         private const val STARTUP_DEFER_MS = 6_000L
+        /** Pause between catalog pages (Streamer 2026-09-03): the unpaced walk
+         *  ran at ~7 pages/s across both passes and held the box at 30%+ CPU
+         *  for minutes, which starved the tabs' rendering. */
+        private const val WALK_PACE_MS = 250L
         const val TAG = "OnDemandViewModel"
         const val XC_MOVIE_PREFIX = "xc-movie-"
         const val XC_EP_PREFIX = "xc-ep-"

@@ -23,7 +23,33 @@ import com.aeriotv.android.feature.playlist.SortMode
  * - Sort keys are precomputed per channel (E-1 stage 1): the comparators
  *   read cached fields only.
  */
+/** Memoized front (see [GuideMemo]): re-entering a tab with the same inputs
+ *  returns the last result instead of re-filtering and re-sorting the whole
+ *  playlist. Large inputs key by reference, small ones by value. */
 internal fun computeDisplayChannels(
+    channels: List<M3UChannel>,
+    selectedGroup: String,
+    searchQuery: String,
+    sortMode: SortMode,
+    allGroupNames: List<String>,
+    groupSortMode: GroupSortMode,
+    hiddenGroups: Set<String>,
+    favoriteIds: Set<String>,
+    collections: List<ChannelCollection>,
+): List<M3UChannel> = GuideMemo.get(
+    "displayChannels",
+    listOf(
+        GuideMemo.Ref(channels), selectedGroup, searchQuery, sortMode,
+        GuideMemo.Ref(allGroupNames), groupSortMode, hiddenGroups, favoriteIds, GuideMemo.Ref(collections),
+    ),
+) {
+    computeDisplayChannelsUncached(
+        channels, selectedGroup, searchQuery, sortMode,
+        allGroupNames, groupSortMode, hiddenGroups, favoriteIds, collections,
+    )
+}
+
+private fun computeDisplayChannelsUncached(
     channels: List<M3UChannel>,
     selectedGroup: String,
     searchQuery: String,

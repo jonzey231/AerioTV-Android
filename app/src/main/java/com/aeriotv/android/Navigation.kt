@@ -799,6 +799,13 @@ fun AerioTVNavHost(
                 val isTvDevice = com.aeriotv.android.ui.settings.rememberIsTvDevice()
                 CompositionLocalProvider(
                     LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: false),
+                    // One ViewModel set for the whole main destination (Streamer
+                    // 2026-09-03): the tabs' default hiltViewModel() resolved
+                    // against THIS entry while the scaffold and the player use the
+                    // graph entry, so the app ran TWO PlaylistViewModels, each
+                    // parsing the EPG and rebuilding the guide catalog (two
+                    // "bootstrap" lines per launch, minutes of EpgWork CPU).
+                    androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner provides parent,
                 ) {
                 MainScaffold(
                     // Companion card: always the controls screen, never the

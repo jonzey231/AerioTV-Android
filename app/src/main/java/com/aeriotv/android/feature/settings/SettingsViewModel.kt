@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -51,18 +53,23 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setUseCustomAccent(value) }
     }
 
-    val showChannelLogos: Flow<Boolean> = prefs.showChannelLogos
+    val showChannelLogos: StateFlow<Boolean> = prefs.showChannelLogos
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     fun setShowChannelLogos(value: Boolean) {
         viewModelScope.launch { prefs.setShowChannelLogos(value) }
     }
 
-    val showChannelNumbers: Flow<Boolean> = prefs.showChannelNumbers
-    val showChannelNames: Flow<Boolean> = prefs.showChannelNames
+    val showChannelNumbers: StateFlow<Boolean> = prefs.showChannelNumbers
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val showChannelNames: StateFlow<Boolean> = prefs.showChannelNames
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     fun setShowChannelNames(value: Boolean) {
         viewModelScope.launch { prefs.setShowChannelNames(value) }
     }
-    val showProgramSubtitles: Flow<Boolean> = prefs.showProgramSubtitles
-    val timeFormat: Flow<String> = prefs.timeFormat
+    val showProgramSubtitles: StateFlow<Boolean> = prefs.showProgramSubtitles
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val timeFormat: StateFlow<String> = prefs.timeFormat
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
     fun setTimeFormat(value: String) {
         viewModelScope.launch { prefs.setTimeFormat(value) }
     }
@@ -76,7 +83,8 @@ class SettingsViewModel @Inject constructor(
     // EPG program badges. Per-device-type: the Settings screen passes the
     // current device's isTv so the right value is read/written and synced.
     fun showEpgBadges(isTv: Boolean): Flow<Boolean> = prefs.showEpgBadges(isTv)
-    val hiddenEpgBadges: Flow<Set<String>> = prefs.hiddenEpgBadges
+    val hiddenEpgBadges: StateFlow<Set<String>> = prefs.hiddenEpgBadges
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
     fun setBadgeHidden(label: String, hidden: Boolean) {
         viewModelScope.launch { prefs.setBadgeHidden(label, hidden) }
     }
@@ -104,29 +112,34 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setCustomAccentHex(value) }
     }
 
-    val displayScaleLiveTV: Flow<Float> = prefs.displayScaleLiveTV
+    val displayScaleLiveTV: StateFlow<Float> = prefs.displayScaleLiveTV
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 1f)
     fun setDisplayScaleLiveTV(value: Float) {
         viewModelScope.launch { prefs.setDisplayScaleLiveTV(value) }
     }
 
     /** EPG guide timeline zoom (iOS guideScale). Written by pinch + the discrete selector. */
-    val guideScale: Flow<Float> = prefs.guideScale
+    val guideScale: StateFlow<Float> = prefs.guideScale
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 1f)
     fun setGuideScale(value: Float) {
         viewModelScope.launch { prefs.setGuideScale(value) }
     }
 
-    val hiddenGroups: Flow<Set<String>> = prefs.hiddenGroups
+    val hiddenGroups: StateFlow<Set<String>> = prefs.hiddenGroups
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
     fun setHiddenGroups(groups: Set<String>) {
         viewModelScope.launch { prefs.setHiddenGroups(groups) }
     }
 
     // Live TV group ordering (Manage Groups reorder). groupSortMode is one of
     // Default / Alphabetical / Manual; groupOrder is the manual order list.
-    val groupOrder: Flow<List<String>> = prefs.groupOrder
+    val groupOrder: StateFlow<List<String>> = prefs.groupOrder
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     fun setGroupOrder(order: List<String>) {
         viewModelScope.launch { prefs.setGroupOrder(order) }
     }
-    val groupSortMode: Flow<String> = prefs.groupSortMode
+    val groupSortMode: StateFlow<String> = prefs.groupSortMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "Default")
     fun setGroupSortMode(mode: String) {
         viewModelScope.launch { prefs.setGroupSortMode(mode) }
     }
@@ -175,7 +188,8 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setLiveRewindBudgetGB(value) }
     }
 
-    val skipLoadingScreen: Flow<Boolean> = prefs.skipLoadingScreen
+    val skipLoadingScreen: StateFlow<Boolean> = prefs.skipLoadingScreen
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     fun setSkipLoadingScreen(value: Boolean) {
         viewModelScope.launch { prefs.setSkipLoadingScreen(value) }
     }
@@ -190,23 +204,27 @@ class SettingsViewModel @Inject constructor(
 
     /** Remote Control initiative: decoded button map (tolerant of unknown
      *  slots/actions; defaults when unset). */
-    val remoteControlMap: Flow<com.aeriotv.android.core.remote.RemoteControlMap> =
+    val remoteControlMap: StateFlow<com.aeriotv.android.core.remote.RemoteControlMap> =
         prefs.effectiveRemoteControlMap
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
     /** TV guide group-selector style: "pills" (top row) or "sidebar". */
-    val guideGroupSelector: Flow<String> = prefs.guideGroupSelector
+    val guideGroupSelector: StateFlow<String> = prefs.guideGroupSelector
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "pills")
     fun setGuideGroupSelector(mode: String) {
         viewModelScope.launch { prefs.setGuideGroupSelector(mode) }
     }
 
     /** Live TV tune target: false = fullscreen (default), true = corner mini. */
-    val guideTuneInMini: Flow<Boolean> = prefs.guideTuneInMini
+    val guideTuneInMini: StateFlow<Boolean> = prefs.guideTuneInMini
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     fun setGuideTuneInMini(value: Boolean) {
         viewModelScope.launch { prefs.setGuideTuneInMini(value) }
     }
 
     /** GH #47: while casting, a channel tap re-tunes the TV and stays on the
      *  list (true, default) instead of opening the cast-controls screen. */
-    val castTapStaysOnList: Flow<Boolean> = prefs.castTapStaysOnList
+    val castTapStaysOnList: StateFlow<Boolean> = prefs.castTapStaysOnList
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     fun setCastTapStaysOnList(value: Boolean) {
         viewModelScope.launch { prefs.setCastTapStaysOnList(value) }
     }
@@ -300,14 +318,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.recordRecentChannel(channelId) }
     }
 
-    val defaultTab: Flow<String> = prefs.defaultTab
+    val defaultTab: StateFlow<String> = prefs.defaultTab
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
     fun setDefaultTab(value: String) {
         viewModelScope.launch { prefs.setDefaultTab(value) }
     }
 
     // Live TV view-mode persistence (Phase 5 hand-off — migrated from
     // rememberSaveable in LiveTVViewMode.kt to DataStore in Phase 8b).
-    val defaultLiveTVView: Flow<String> = prefs.defaultLiveTVView
+    val defaultLiveTVView: StateFlow<String> = prefs.defaultLiveTVView
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
     fun setDefaultLiveTVView(value: String) {
         viewModelScope.launch {
             // Per-device preference (NOT Drive-synced): the correct default is
@@ -334,7 +354,8 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setStreamBufferSize(value) }
     }
 
-    val epgWindowHours: Flow<Int> = prefs.epgWindowHours
+    val epgWindowHours: StateFlow<Int> = prefs.epgWindowHours
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 24)
     fun setEpgWindowHours(value: Int) {
         viewModelScope.launch { prefs.setEpgWindowHours(value) }
     }

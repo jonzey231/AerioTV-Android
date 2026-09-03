@@ -15,6 +15,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -42,7 +45,8 @@ class RemindersViewModel @Inject constructor(
     private val playlistDao: com.aeriotv.android.core.data.db.dao.PlaylistDao,
 ) : ViewModel() {
 
-    val all: Flow<List<ReminderEntity>> = dao.observeAll()
+    val all: StateFlow<List<ReminderEntity>> = dao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun observeIsSet(reminderKey: String): Flow<Boolean> = dao.observeIsSet(reminderKey)
 

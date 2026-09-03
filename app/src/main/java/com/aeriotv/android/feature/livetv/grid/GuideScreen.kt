@@ -159,22 +159,23 @@ fun GuideScreen(
     val context = LocalContext.current
     val canRecordToServer = LocalCanRecordToServer.current
 
-    val windowHours by settingsVm.epgWindowHours.collectAsStateWithLifecycle(initialValue = 24)
-    val guideScale by settingsVm.guideScale.collectAsStateWithLifecycle(initialValue = 1f)
-    val displayScaleLiveTv by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1f)
-    val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle(initialValue = emptySet())
-    val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle(initialValue = "Default")
-    val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle(initialValue = emptyList())
+    val windowHours by settingsVm.epgWindowHours.collectAsStateWithLifecycle()
+    val guideScale by settingsVm.guideScale.collectAsStateWithLifecycle()
+    val displayScaleLiveTv by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle()
+    val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle()
+    val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle()
+    val groupOrder by settingsVm.groupOrder.collectAsStateWithLifecycle()
     val groupSortMode = GroupSortMode.from(groupSortModeRaw)
-    val favoritesList by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
+    val favoritesOrNull by favoritesVm.all.collectAsStateWithLifecycle()
+    val favoritesList = favoritesOrNull ?: emptyList()
     val favoriteIds = remember(favoritesList) { favoritesList.mapTo(HashSet()) { it.channelId } }
-    val reminders by remindersVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
+    val reminders by remindersVm.all.collectAsStateWithLifecycle()
     val reminderKeys = remember(reminders) { reminders.mapTo(HashSet()) { it.reminderKey } }
-    val collections by collectionsVm.collections.collectAsStateWithLifecycle(initialValue = emptyList())
+    val collections by collectionsVm.collections.collectAsStateWithLifecycle()
     val stagedMultiview by multiviewStore.selected.collectAsStateWithLifecycle(initialValue = emptyList())
-    val groupSelector by settingsVm.guideGroupSelector.collectAsStateWithLifecycle(initialValue = "pills")
+    val groupSelector by settingsVm.guideGroupSelector.collectAsStateWithLifecycle()
     val sidebarGroupMode = isTv && groupSelector == "sidebar" && !favoritesOnly
-    val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
+    val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle()
     var groupSidebarOpen by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(false) }
     var collectionPickerFor by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -193,8 +194,13 @@ fun GuideScreen(
     LaunchedEffect(Unit) { while (true) { delay(30_000L); nowMs = System.currentTimeMillis() } }
 
     val allGroupNames = remember(state.channels, groupSortMode, groupOrder) {
-        val sourceOrder = state.channels.asSequence().map { it.groupTitle }.filter { it.isNotBlank() }.distinct().toList()
-        orderGroups(sourceOrder, groupSortMode, groupOrder)
+        com.aeriotv.android.feature.livetv.GuideMemo.get(
+            "groupNames",
+            listOf(com.aeriotv.android.feature.livetv.GuideMemo.Ref(state.channels), groupSortMode, groupOrder),
+        ) {
+            val sourceOrder = state.channels.asSequence().map { it.groupTitle }.filter { it.isNotBlank() }.distinct().toList()
+            orderGroups(sourceOrder, groupSortMode, groupOrder)
+        }
     }
     val groups = remember(allGroupNames, hiddenGroups) {
         com.aeriotv.android.feature.livetv.groupTokens(
@@ -247,11 +253,24 @@ fun GuideScreen(
     // Grid window: history back to the retention edge, forward to the EPG window.
     val historyHours = state.epgHistoryHours.coerceAtLeast(1)
     val forwardHours = if (windowHours <= 0) 48 else windowHours.coerceAtLeast(3)
-    val windowStartMs = remember(historyHours) { System.currentTimeMillis() - historyHours * 3_600_000L }
-    val windowEndMs = remember(forwardHours) { System.currentTimeMillis() + forwardHours * 3_600_000L }
+    // Quantized to 15 min so re-entering the tab within that window reuses
+    // the memoized rows instead of rebuilding them for a new "now".
+    val windowStartMs = remember(historyHours) {
+        (System.currentTimeMillis() - historyHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS
+    }
+    val windowEndMs = remember(forwardHours) {
+        (System.currentTimeMillis() + forwardHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS
+    }
     val grid = remember { GuideGridState(initialViewportStartMs = System.currentTimeMillis() - 15 * 60_000L) }
     val rows = remember(displayChannels, state.epgByChannel, windowStartMs, windowEndMs) {
-        GuideGridRows(displayChannels, state.epgByChannel as? GuideCatalog, windowStartMs, windowEndMs)
+        com.aeriotv.android.feature.livetv.GuideMemo.get(
+            "rows",
+            listOf(
+                com.aeriotv.android.feature.livetv.GuideMemo.Ref(displayChannels),
+                com.aeriotv.android.feature.livetv.GuideMemo.Ref(state.epgByChannel),
+                windowStartMs, windowEndMs,
+            ),
+        ) { GuideGridRows(displayChannels, state.epgByChannel as? GuideCatalog, windowStartMs, windowEndMs) }
     }
     LaunchedEffect(rows) { grid.installRows(rows) }
 
@@ -442,7 +461,10 @@ fun GuideScreen(
             firstPillFocus = pillsFocus,
             onDown = { runCatching { gridFocus.requestFocus() }.isSuccess },
         )
-        if (rows.isEmpty) {
+        if (rows.isEmpty && favoritesOnly && favoritesOrNull == null) {
+            // Favorites not loaded yet: draw nothing rather than flash the
+            // empty-group notice for a frame (Streamer 2026-09-03).
+        } else if (rows.isEmpty) {
             EmptyGroupNotice(
                 isSearching = state.searchQuery.isNotBlank(),
                 onShowAllChannels = { viewModel.onGroupSelected(fallbackGroup) },
@@ -628,3 +650,5 @@ private fun GroupPills(
         }
     }
 }
+
+private const val QUANTUM_MS = 15 * 60_000L

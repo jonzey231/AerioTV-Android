@@ -69,7 +69,7 @@ fun FavoritesTabContent(
     playlistVm: PlaylistViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
-    val favorites by favoritesVm.all.collectAsStateWithLifecycle(initialValue = emptyList())
+    val favorites = favoritesVm.all.collectAsStateWithLifecycle().value ?: emptyList()
     val playlistState by playlistVm.state.collectAsStateWithLifecycle()
     val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(
         initialValue = CategoryPaletteState.Default,
@@ -98,7 +98,7 @@ fun FavoritesTabContent(
     // a collection VIEW (iOS clears activeFilterCollectionID on appear), so
     // activeCollectionId is null -> the row only ever offers the "all" remove.
     val collectionsVm: CollectionsViewModel = hiltViewModel()
-    val collections by collectionsVm.collections.collectAsStateWithLifecycle(initialValue = emptyList())
+    val collections by collectionsVm.collections.collectAsStateWithLifecycle()
     var collectionPickerFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     val collectionsMenu = remember(collections) {
         CollectionsMenuContext(
