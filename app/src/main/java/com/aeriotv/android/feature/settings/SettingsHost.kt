@@ -98,9 +98,12 @@ val DefaultSettingsPaneSelection: SettingsRoute = SettingsRoute.Playlists
 fun rememberSettingsPaneSelection(
     nav: SettingsNavState,
     twoPane: Boolean,
+    /** TV rail starts with NOTHING selected (Logan 2026-09-03: landing on the
+     *  Settings pill must not open Playlists); tablets keep the canon default. */
+    initial: SettingsRoute = DefaultSettingsPaneSelection,
 ): MutableState<SettingsRoute> {
     val selection = rememberSaveable(stateSaver = SettingsRouteSaver) {
-        mutableStateOf(DefaultSettingsPaneSelection)
+        mutableStateOf(initial)
     }
     // Tracks the posture the mapping last ran for. Saveable so a process death
     // in one posture does not replay the mapping on restore. Starts null and is
@@ -117,7 +120,7 @@ fun rememberSettingsPaneSelection(
                 nav.removeBaseline()
                 selection.value = baseline
             }
-        } else if (selection.value !is SettingsRoute.Playlists) {
+        } else if (selection.value !is SettingsRoute.Playlists && selection.value !is SettingsRoute.Root) {
             nav.insertAtBaseline(selection.value)
         }
         // Playlists is the exception: as a PANE it renders the root's playlist
@@ -424,6 +427,10 @@ fun SettingsTvRailHost(
         ) {
             if (pushed != null) {
                 detail(pushed)
+            } else if (selection is SettingsRoute.Root) {
+                // Nothing picked yet (fresh TV host): a quiet placeholder until
+                // the user moves into the rail. Focusing a row selects it.
+                SettingsPanePlaceholder()
             } else {
                 // Plan B5: a short crossfade on pane swaps, so walking the rail
                 // does not hard-cut the whole right half of the screen. Content
@@ -472,9 +479,16 @@ private fun SettingsTvRail(
     val selectedIndex = rows.indexOfFirst { it.first == selection }.coerceAtLeast(0)
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     androidx.compose.runtime.LaunchedEffect(Unit) {
-        // Land with the selected row visible and focused, like GroupSidebarPanel.
+        // Keep the selected row in view. Focus is NOT pulled here any more
+        // (Logan 2026-09-03): landing on the Settings pill used to yank focus
+        // into the rail, which selected Playlists. Down from the pill lands
+        // on the rail through the tab-entry contract below.
         runCatching { listState.scrollToItem(selectedIndex) }
-        runCatching { railFocus.requestFocus() }
+    }
+    val tabEntry = com.aeriotv.android.feature.main.LocalTvTabEntryFocus.current
+    androidx.compose.runtime.DisposableEffect(railFocus) {
+        tabEntry.value = railFocus
+        onDispose { if (tabEntry.value === railFocus) tabEntry.value = null }
     }
     LazyColumn(
         state = listState,
@@ -522,4 +536,16 @@ private fun settingsRouteIcon(route: SettingsRoute) = when (route) {
     is SettingsRoute.Section -> route.section.icon
     is SettingsRoute.About -> Icons.Outlined.Info
     else -> Icons.AutoMirrored.Filled.List
+}
+
+/** Right pane before any rail row is picked. */
+@Composable
+private fun SettingsPanePlaceholder() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+        androidx.compose.material3.Text(
+            text = "Select a setting",
+            style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }

@@ -109,6 +109,7 @@ import com.aeriotv.android.feature.settings.DvrSettingsScreen
 import com.aeriotv.android.feature.settings.MultiviewSettingsScreen
 import com.aeriotv.android.feature.settings.NetworkSettingsScreen
 import com.aeriotv.android.feature.settings.SettingsRootContent
+import com.aeriotv.android.feature.settings.DefaultSettingsPaneSelection
 import com.aeriotv.android.feature.settings.SettingsRoute
 import com.aeriotv.android.feature.settings.SettingsScreen
 import com.aeriotv.android.feature.settings.SettingsSection
@@ -1873,7 +1874,7 @@ private fun SettingsTabContent(
     val tabletTwoPane = paneEligible && !isTvDevice
     val tvRail = paneEligible && isTvDevice
     val twoPane = tabletTwoPane || tvRail
-    var selection by rememberSettingsPaneSelection(nav = nav, twoPane = twoPane)
+    var selection by rememberSettingsPaneSelection(nav = nav, twoPane = twoPane, initial = if (tvRail) SettingsRoute.Root else DefaultSettingsPaneSelection)
     // True for the route the pane is BASELINED on; pushes above it render as
     // ordinary screens and keep their own back affordance.
     val inPane = twoPane && route == null
