@@ -20,6 +20,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
@@ -84,12 +88,19 @@ private fun SplashContent(modifier: Modifier = Modifier) {
     // tvOS 160/72/28; iPhone (compact) 100/50/18; iPad (regular) 130/64/24.
     val isTv = rememberIsTvDevice()
     val compact = LocalConfiguration.current.smallestScreenWidthDp < 600
-    val logoSize = if (isTv) 160.dp else if (compact) 100.dp else 130.dp
-    val titleSize = if (isTv) 72.sp else if (compact) 50.sp else 64.sp
-    val subtitleSize = if (isTv) 28.sp else if (compact) 18.sp else 24.sp
-    val logoBottomPad = if (isTv) 40.dp else if (compact) 24.dp else 32.dp
-    val subtitleTopPad = if (isTv) 12.dp else 10.dp
+    // TV metrics are scaled to Apple TV's PROPORTIONS, not its point values:
+    // tvOS lays out on a 1920pt canvas while a 1080p Android TV is ~960dp
+    // wide, so the same numbers drew everything twice as large (Logan
+    // 2026-09-03, emulator vs Apple TV side by side). Logo 8.3% of width,
+    // title 3.75%, subtitle 1.5%.
+    val logoSize = if (isTv) 80.dp else if (compact) 100.dp else 130.dp
+    val titleSize = if (isTv) 36.sp else if (compact) 50.sp else 64.sp
+    val subtitleSize = if (isTv) 14.sp else if (compact) 18.sp else 24.sp
+    val logoBottomPad = if (isTv) 32.dp else if (compact) 24.dp else 32.dp
+    val subtitleTopPad = if (isTv) 6.dp else 10.dp
+    val glowRadius = if (isTv) 20.dp else if (compact) 20.dp else 30.dp
 
+    val accent = Color(0xFF1AC4D8)
     // iOS fade envelope: easeIn 0.4s -> hold -> easeOut 0.4s starting at 2.3s.
     var visible by remember { mutableStateOf(false) }
     val alpha by animateFloatAsState(
@@ -103,7 +114,6 @@ private fun SplashContent(modifier: Modifier = Modifier) {
         visible = false
     }
 
-    val accent = Color(0xFF1AC4D8)
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -114,10 +124,27 @@ private fun SplashContent(modifier: Modifier = Modifier) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             // The iOS rounded-square treatment is baked into the PNG.
+            // Apple's `.shadow(color: 1AC4D8 @ 0.55, radius, y: 7.5% of size)`:
+            // a soft cyan glow behind the tile, offset slightly downward.
+            val glowPx = with(LocalDensity.current) { glowRadius.toPx() }
+            val logoPx = with(LocalDensity.current) { logoSize.toPx() }
             Image(
                 painter = painterResource(id = R.drawable.aerio_logo),
                 contentDescription = null,
-                modifier = Modifier.size(logoSize),
+                modifier = Modifier
+                    .size(logoSize)
+                    .drawBehind {
+                        val c = Offset(size.width / 2f, size.height / 2f + logoPx * 0.075f)
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(accent.copy(alpha = 0.55f), accent.copy(alpha = 0f)),
+                                center = c,
+                                radius = logoPx / 2f + glowPx * 2f,
+                            ),
+                            radius = logoPx / 2f + glowPx * 2f,
+                            center = c,
+                        )
+                    },
             )
             Spacer(Modifier.height(logoBottomPad))
             Text(
