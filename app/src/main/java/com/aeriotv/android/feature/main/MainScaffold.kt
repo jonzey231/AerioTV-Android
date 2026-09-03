@@ -143,6 +143,14 @@ val LocalTvTopNavHasFocus = staticCompositionLocalOf<androidx.compose.runtime.St
     androidx.compose.runtime.mutableStateOf(false)
 }
 
+/** Where D-pad DOWN from the tab bar should land inside the current tab.
+ *  A tab sets it (On Demand: its current sub-tab pill) and clears it on
+ *  dispose; null keeps Compose's geometric search. Consulted by the bar's
+ *  Down exit, which is honoured where a group's onEnter was not. */
+val LocalTvTabEntryFocus = staticCompositionLocalOf<androidx.compose.runtime.MutableState<FocusRequester?>> {
+    androidx.compose.runtime.mutableStateOf(null)
+}
+
 /**
  * TV chrome-collapse channel. Content screens write `true` while the user is
  * scrolled down a long surface (the On Demand poster grids first) and the top
@@ -482,9 +490,11 @@ fun MainScaffold(
         // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
         val chromeCollapsed = remember { mutableStateOf(false) }
         val topNavHasFocusState: androidx.compose.runtime.MutableState<Boolean> = remember { mutableStateOf(false) }
+        val tabEntryFocus: androidx.compose.runtime.MutableState<FocusRequester?> = remember { mutableStateOf(null) }
         CompositionLocalProvider(
             LocalTvTopNavFocusRequester provides topNavRequester,
             LocalTvTopNavHasFocus provides topNavHasFocusState,
+            LocalTvTabEntryFocus provides tabEntryFocus,
             LocalTvChromeCollapsed provides chromeCollapsed,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -528,6 +538,7 @@ fun MainScaffold(
                         selected = selectedTab,
                         onSelect = { selectedTab = it; initialTabApplied = true },
                         focusRequester = topNavRequester,
+                        tabEntryFocus = tabEntryFocus,
                         lastUpKeyMs = lastUpKeyMs,
                         pillRequesters = pillRequesters,
                         onLeftEdgeChanged = { navLeftEdgePx = it },
@@ -1297,6 +1308,7 @@ private fun TvTopTabBar(
     selected: AppTab,
     onSelect: (AppTab) -> Unit,
     focusRequester: FocusRequester,
+    tabEntryFocus: androidx.compose.runtime.State<FocusRequester?>? = null,
     lastUpKeyMs: LongArray = longArrayOf(0L),
     pillRequesters: Map<AppTab, FocusRequester> = emptyMap(),
     /** Refresh circle (Logan 2026-08-06): TV's stand-in for pull-to-refresh.
@@ -1417,12 +1429,27 @@ private fun TvTopTabBar(
             Row(
                 modifier = Modifier
                     .focusRequester(focusRequester)
-                    .focusGroup()
+                    // focusProperties describes the focus target BELOW it in
+                    // the chain, so it must precede focusGroup() to apply to
+                    // the group (after it, the enter/exit callbacks never ran).
                     .focusProperties {
                         onEnter = {
                             pillRequesters[selected]?.requestFocus()
                         }
+                        // Down into the tab: land where the tab asked to
+                        // (On Demand's current sub-tab pill), else default.
+                        onExit = {
+                            if (requestedFocusDirection == androidx.compose.ui.focus.FocusDirection.Down) {
+                                val target = tabEntryFocus?.value
+                                if (target != null && runCatching { target.requestFocus() }.isSuccess) {
+                                    // The default geometric move would run
+                                    // after this and land elsewhere.
+                                    cancelFocusChange()
+                                }
+                            }
+                        }
                     }
+                    .focusGroup()
                     // Row-level hasFocus stays true while focus moves between pills
                     // and only flips false when focus leaves the bar entirely, so it
                     // is the reliable "is the user in the bar" signal for [armed].

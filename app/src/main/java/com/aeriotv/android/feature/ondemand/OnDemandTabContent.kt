@@ -1,5 +1,7 @@
 package com.aeriotv.android.feature.ondemand
 
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import com.aeriotv.android.ui.tv.tvFormFieldInput
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -205,6 +207,15 @@ fun OnDemandTabContent(
             onDispose { chromeCollapsed.value = false }
         }
     }
+    // TV focus paths (Logan 2026-09-02): Down from the tab bar lands on the
+    // CURRENT sub-tab pill (geometric search picked the search icon), and
+    // Up from the search / filter header returns to that pill.
+    val sectionPillsFocus = remember { FocusRequester() }
+    val tabEntry = com.aeriotv.android.feature.main.LocalTvTabEntryFocus.current
+    DisposableEffect(tabIsTv) {
+        if (tabIsTv) tabEntry.value = sectionPillsFocus
+        onDispose { if (tabEntry.value === sectionPillsFocus) tabEntry.value = null }
+    }
     WithDisplayScale(scale = scale) {
     Column(modifier = modifier.fillMaxSize()) {
         // Phone: centered title bar matching the other tabs. TV: no title --
@@ -249,6 +260,7 @@ fun OnDemandTabContent(
                 sections = availableSections,
                 current = section,
                 onSelect = { section = it },
+                currentFocus = sectionPillsFocus,
             )
         }
 
@@ -263,12 +275,14 @@ fun OnDemandTabContent(
                 onRemove = { watchVm.delete(it) },
             )
             OnDemandSection.Movies -> MoviesSubScreen(
+                sectionPillsFocus = sectionPillsFocus,
                 viewModel = viewModel,
                 onMovieClick = onMovieClick,
                 gridState = moviesGridState,
                 onOpenSearch = onOpenSearch,
             )
             OnDemandSection.Series -> SeriesSubScreen(
+                sectionPillsFocus = sectionPillsFocus,
                 viewModel = viewModel,
                 onSeriesClick = onSeriesClick,
                 onEpisodeResume = onEpisodeResume,
@@ -285,6 +299,8 @@ private fun SegmentPills(
     sections: List<OnDemandSection>,
     current: OnDemandSection,
     onSelect: (OnDemandSection) -> Unit,
+    /** Bound to the CURRENT pill so the tab content can land focus on it. */
+    currentFocus: FocusRequester? = null,
 ) {
     // tvOS parity: the Movies / TV Shows segmented control sits in the
     // CENTER of the header, not stretched edge-to-edge. Each pill claims
@@ -310,13 +326,16 @@ private fun SegmentPills(
                 icon = entry.icon,
                 selected = entry == current,
                 onClick = { onSelect(entry) },
-                modifier = if (isTv) {
+                modifier = (if (isTv) {
                     // Just enough room for the longest label + icon + a bit
                     // of breathing room for the focus border.
                     Modifier.widthIn(min = 160.dp)
                 } else {
                     Modifier.weight(1f)
-                },
+                }).then(
+                    if (entry == current && currentFocus != null) Modifier.focusRequester(currentFocus)
+                    else Modifier,
+                ),
             )
         }
     }
@@ -430,6 +449,7 @@ private fun ContinueWatchingSubScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MoviesSubScreen(
+    sectionPillsFocus: FocusRequester? = null,
     viewModel: OnDemandViewModel,
     onMovieClick: (DispatcharrVODMovie) -> Unit,
     gridState: LazyGridState,
@@ -514,6 +534,7 @@ private fun MoviesSubScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         VodHeaderRow(
+            upTarget = sectionPillsFocus,
             searchField = {
                 VodSearchField(
                     query = state.searchQuery,
@@ -664,6 +685,7 @@ private fun MoviesSubScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SeriesSubScreen(
+    sectionPillsFocus: FocusRequester? = null,
     viewModel: OnDemandViewModel,
     onSeriesClick: (DispatcharrVODSeries) -> Unit,
     onEpisodeResume: (String) -> Unit = {},
@@ -732,6 +754,7 @@ private fun SeriesSubScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         VodHeaderRow(
+            upTarget = sectionPillsFocus,
             searchField = {
                 VodSearchField(
                     query = state.seriesSearchQuery,
@@ -886,10 +909,16 @@ private fun VodHeaderRow(
     onOpenSearch: (() -> Unit)? = null,
     isTv: Boolean = false,
     countLabel: String? = null,
+    /** TV: Up from anything in this row lands here (the current sub-tab pill). */
+    upTarget: FocusRequester? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (upTarget != null) Modifier.focusGroup().focusProperties { up = upTarget }
+                else Modifier,
+            )
             // TV: 48dp = the 5% overscan-safe margin the poster grid already
             // uses, and the library count joins this row instead of spending
             // its own line of vertical space.
