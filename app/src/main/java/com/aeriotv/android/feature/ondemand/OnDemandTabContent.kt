@@ -537,6 +537,7 @@ private fun MoviesSubScreen(
             upTarget = sectionPillsFocus,
             searchField = {
                 VodSearchField(
+                    upTarget = sectionPillsFocus,
                     query = state.searchQuery,
                     onQueryChange = viewModel::setSearchQuery,
                     placeholder = "Search movies",
@@ -757,6 +758,7 @@ private fun SeriesSubScreen(
             upTarget = sectionPillsFocus,
             searchField = {
                 VodSearchField(
+                    upTarget = sectionPillsFocus,
                     query = state.seriesSearchQuery,
                     onQueryChange = viewModel::setSeriesSearchQuery,
                     placeholder = "Search series",
@@ -915,10 +917,6 @@ private fun VodHeaderRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (upTarget != null) Modifier.focusGroup().focusProperties { up = upTarget }
-                else Modifier,
-            )
             // TV: 48dp = the 5% overscan-safe margin the poster grid already
             // uses, and the library count joins this row instead of spending
             // its own line of vertical space.
@@ -942,6 +940,7 @@ private fun VodHeaderRow(
         if (onOpenSearch != null) {
             if (isTv) {
                 TvHeaderIconButton(
+                    upTarget = upTarget,
                     icon = Icons.Filled.TravelExplore,
                     contentDescription = "Search",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -964,6 +963,7 @@ private fun VodHeaderRow(
         }
         if (isTv) {
             TvHeaderIconButton(
+                upTarget = upTarget,
                 icon = Icons.Filled.FilterList,
                 contentDescription = "Filter groups",
                 tint = if (hiddenCount == 0) MaterialTheme.colorScheme.onSurfaceVariant
@@ -999,6 +999,9 @@ private fun TvHeaderIconButton(
     contentDescription: String,
     tint: Color,
     onClick: () -> Unit,
+    /** TV: where Up lands (the current sub-tab pill). Set on the leaf, ahead
+     *  of its focus target, which is where Compose reads it. */
+    upTarget: FocusRequester? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -1006,6 +1009,7 @@ private fun TvHeaderIconButton(
         onClick = onClick,
         interactionSource = interaction,
         modifier = Modifier
+            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
             .size(30.dp)
             .then(
                 if (focused) Modifier.border(2.dp, Color.White, CircleShape)
@@ -1775,6 +1779,7 @@ private fun VodSearchField(
     onQueryChange: (String) -> Unit,
     placeholder: String,
     isTv: Boolean,
+    upTarget: FocusRequester? = null,
 ) {
     if (!isTv) {
         OutlinedTextField(
@@ -1829,6 +1834,7 @@ private fun VodSearchField(
             horizontalArrangement = Arrangement.End,
         ) {
             TvHeaderIconButton(
+                upTarget = upTarget,
                 icon = Icons.Outlined.Search,
                 contentDescription = "Search",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1851,6 +1857,7 @@ private fun VodSearchField(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
+            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
             .focusRequester(focusRequester)
             .tvFormFieldInput(),
         singleLine = true,
