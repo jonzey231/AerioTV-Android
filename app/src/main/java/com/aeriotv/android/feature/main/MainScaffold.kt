@@ -302,6 +302,30 @@ fun MainScaffold(
     val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
     val companionNowPlaying by companionRemote.nowPlaying.collectAsStateWithLifecycle()
     val companionChannelId by companionRemote.currentChannelId.collectAsStateWithLifecycle()
+    // Enrich the companion's channel anchor with name/logo/current programme
+    // for the media notification and the card; re-evaluated each minute so
+    // the programme rolls over on the hour.
+    LaunchedEffect(companionChannelId, state.channels, state.epgByChannel) {
+        val id = companionChannelId
+        if (id == null) { companionRemote.setNowPlayingDetails(null); return@LaunchedEffect }
+        val ch = state.channels.firstOrNull { it.id == id }
+        if (ch == null) { companionRemote.setNowPlayingDetails(null); return@LaunchedEffect }
+        while (true) {
+            val now = state.epgByChannel[ch.guideMatchKey]?.nowPlaying()
+            companionRemote.setNowPlayingDetails(
+                com.aeriotv.android.core.cast.companion.CompanionRemoteController.NowPlayingDetails(
+                    channelId = id,
+                    channelName = ch.name,
+                    logoUrl = ch.tvgLogo.takeIf { it.isNotBlank() },
+                    programmeTitle = now?.title,
+                    programmeStartMs = now?.startMillis ?: 0L,
+                    programmeEndMs = now?.endMillis ?: 0L,
+                ),
+            )
+            kotlinx.coroutines.delay(60_000L)
+        }
+    }
+    val companionDetails by companionRemote.details.collectAsStateWithLifecycle()
     // GH #33: browse for controllable AerioTV TVs at the SCAFFOLD level (phone
     // only; the TV is a host, not a client) so the floating "Control TV" pill
     // can appear without opening a channel first. Refcounted with the in-player
@@ -926,9 +950,11 @@ fun MainScaffold(
                             ),
                     ) {
                         com.aeriotv.android.feature.miniplayer.CastMiniController(
-                            title = companionNowPlaying.ifBlank { companionTv.name ?: "AerioTV" },
+                            title = companionDetails?.programmeTitle?.takeIf { it.isNotBlank() }
+                                ?: companionDetails?.channelName
+                                ?: companionNowPlaying.ifBlank { companionTv.name ?: "AerioTV" },
                             deviceName = companionTv.name,
-                            artUri = null,
+                            artUri = companionDetails?.logoUrl,
                             isPlaying = companionIsPlaying,
                             onTap = {
                                 // Same re-entry as the cast card: open the player

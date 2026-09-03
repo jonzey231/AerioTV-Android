@@ -158,6 +158,17 @@
             </intent-filter>
         </service>
 
+        <!-- Companion remote: media notification while this phone controls a
+             TV (transport controls forward over the companion socket). -->
+        <service
+            android:name=".core.cast.companion.CompanionRemoteService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
         <!-- Declares AerioTV as an Android Auto media app (form factor). -->
         <meta-data
             android:name="com.google.android.gms.car.application"

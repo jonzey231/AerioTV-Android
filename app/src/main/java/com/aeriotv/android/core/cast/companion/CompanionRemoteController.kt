@@ -96,6 +96,25 @@ class CompanionRemoteController @Inject constructor(
     private val _currentChannelId = MutableStateFlow<String?>(null)
     val currentChannelId: StateFlow<String?> = _currentChannelId.asStateFlow()
 
+    /** Phone-side enrichment of [currentChannelId] (channel name, logo, current
+     *  programme) for the media notification and mini card; published by the
+     *  scaffold, which owns the channel list and EPG. */
+    data class NowPlayingDetails(
+        val channelId: String,
+        val channelName: String,
+        val logoUrl: String?,
+        val programmeTitle: String?,
+        val programmeStartMs: Long = 0L,
+        val programmeEndMs: Long = 0L,
+    )
+    private val _details = MutableStateFlow<NowPlayingDetails?>(null)
+    val details: StateFlow<NowPlayingDetails?> = _details.asStateFlow()
+
+    fun setNowPlayingDetails(d: NowPlayingDetails?) {
+        if (d != null && d.channelId != _currentChannelId.value) return
+        _details.value = d
+    }
+
     // ---- connection lifecycle ----
 
     /** Set by [disconnect]; an unexpected socket drop leaves it false and
@@ -166,6 +185,7 @@ class CompanionRemoteController @Inject constructor(
 
     fun disconnect() {
         intentionalDisconnect = true
+        CompanionRemoteService.stop(context)
         generation.incrementAndGet() // invalidate the in-flight attempt's tail
         job?.cancel()
         job = null
@@ -177,6 +197,7 @@ class CompanionRemoteController @Inject constructor(
         _isPlaying.value = true
         _nowPlaying.value = ""
         _currentChannelId.value = null
+        _details.value = null
         if (_connection.value !is Conn.Failed) _connection.value = Conn.Idle
     }
 
@@ -192,6 +213,8 @@ class CompanionRemoteController @Inject constructor(
                     ?.let { storeToken(tv.deviceId, it) }
                 _connection.value = Conn.Connected(deviceName ?: tv.name)
                 reconnectAttempts = 0
+                // Media notification with transport controls while controlling.
+                CompanionRemoteService.start(context)
                 Log.i(TAG, "companion authOk -> controlling ${deviceName ?: tv.name}")
                 requestRemoteState()
             }
