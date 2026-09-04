@@ -466,7 +466,7 @@ class OnDemandViewModel @Inject constructor(
             // hasVodContent ALSO gates on vodEnabled so the tab disappears,
             // but we still belt-and-suspenders here in case something opens
             // the tab through another path (e.g. a deep link).
-            if (playlist != null && !playlist.vodEnabled) {
+            if (playlist != null && (!playlist.vodEnabled || !playlist.dispatcharrVodMoviesEnabled)) {
                 _state.update {
                     it.copy(
                         unsupportedSource = true,
@@ -669,7 +669,7 @@ class OnDemandViewModel @Inject constructor(
             // Same opt-out gate as refresh() above for the series side; see
             // the longer comment there. Belt-and-suspenders with MainScaffold's
             // hasVodContent.
-            if (playlist != null && !playlist.vodEnabled) {
+            if (playlist != null && (!playlist.vodEnabled || !playlist.dispatcharrVodSeriesEnabled)) {
                 _state.update {
                     it.copy(
                         unsupportedSource = true,

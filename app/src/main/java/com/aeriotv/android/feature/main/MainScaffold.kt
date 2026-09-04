@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.main
 
+import com.aeriotv.android.core.data.db.entity.dispatcharrCanViewDvr
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -290,8 +291,10 @@ fun MainScaffold(
     // hasRecordingsHint: persisted last-session verdict so the tab shows from
     // the first frame after launch / playlist switch instead of popping in when
     // the server list arrives; retires as soon as the real list loads.
-    val hasRecordings = dvrState.recordings.isNotEmpty() ||
-        dvrState.hasRecordingsHint ||
+    // Dispatcharr 0.30 dvr_access "none": server recordings are not
+    // listable; only a local recording in progress shows the tab.
+    val dvrListable = state.playlist?.dispatcharrCanViewDvr() != false
+    val hasRecordings = (dvrListable && (dvrState.recordings.isNotEmpty() || dvrState.hasRecordingsHint)) ||
         dvrState.isLocalRecordingActive
     // Sticky tabs (Streamer 2026-09-03, "every tab flashes"): the loaders
     // behind DVR and On Demand briefly report "nothing" while they transition

@@ -83,6 +83,27 @@ data class PlaylistEntity(
     val dispatcharrUserLevel: Int = 10,
 
     /**
+     * Dispatcharr 0.30 granular permissions (custom_properties on
+     * /api/accounts/users/me/), captured at add and re-read on every
+     * refresh. Defaults are the server's permissive defaults so existing
+     * rows and non-Dispatcharr sources behave as before. dvr_access is ""
+     * until learned; then the level decides (admin = manage, standard =
+     * view, streamer = none), exactly as apps/channels/dvr_access.py does.
+     * Added in DB v26 (preserving migration). Mirrors iOS 5d7763e.
+     */
+    @ColumnInfo(defaultValue = "")
+    val dispatcharrDvrAccess: String = "",
+    @ColumnInfo(defaultValue = "1")
+    val dispatcharrCatchupEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "1")
+    val dispatcharrVodMoviesEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "1")
+    val dispatcharrVodSeriesEnabled: Boolean = true,
+    /** /api/core/version/ ("" = unknown). Gates the multi-day EPG grid window. */
+    @ColumnInfo(defaultValue = "")
+    val dispatcharrServerVersion: String = "",
+
+    /**
      * Per-playlist On Demand opt-in (iOS `ServerConnection.vodEnabled`, set at
      * onboarding via "Fetch On Demand from this playlist" in AddServerView /
      * EditServerView). When false the OnDemandViewModel skips the unfiltered
@@ -162,9 +183,40 @@ data class PlaylistEntity(
  * player More menu). Mirrors iOS ServerConnection.dispatcharrCanRecordToServer.
  */
 fun PlaylistEntity.canRecordToServer(): Boolean =
-    (sourceType == SourceType.DispatcharrApiKey.name ||
-        sourceType == SourceType.DispatcharrUserPass.name) &&
-        dispatcharrUserLevel >= 10
+    isDispatcharrDirectConnect() && dispatcharrCanManageDvr()
+
+/**
+ * Effective DVR access (Dispatcharr 0.30, mirrors apps/channels/dvr_access.py):
+ * "none" / "view" / "manage". Non-Dispatcharr sources are "manage" (their
+ * recordings are local and never gated).
+ */
+fun PlaylistEntity.dispatcharrEffectiveDvrAccess(): String {
+    if (!isDispatcharrDirectConnect()) return "manage"
+    if (dispatcharrUserLevel >= 10) return "manage"
+    if (dispatcharrUserLevel < 1) return "none"
+    return when (dispatcharrDvrAccess) {
+        "none" -> "none"
+        "manage" -> "manage"
+        else -> "view"
+    }
+}
+
+fun PlaylistEntity.dispatcharrCanViewDvr(): Boolean = dispatcharrEffectiveDvrAccess() != "none"
+fun PlaylistEntity.dispatcharrCanManageDvr(): Boolean = dispatcharrEffectiveDvrAccess() == "manage"
+fun PlaylistEntity.dispatcharrCanUseCatchup(): Boolean =
+    !isDispatcharrDirectConnect() || dispatcharrCatchupEnabled
+
+/** Whether the server is at least [minimum] ("0.30.0"); false when unknown. */
+fun PlaylistEntity.dispatcharrVersionAtLeast(minimum: String): Boolean {
+    if (!isDispatcharrDirectConnect() || dispatcharrServerVersion.isBlank()) return false
+    fun parts(v: String) = v.split('.').take(3).map { p -> p.takeWhile { it.isDigit() }.toIntOrNull() ?: 0 }
+    val a = parts(dispatcharrServerVersion); val b = parts(minimum)
+    for (i in 0 until 3) {
+        val x = a.getOrElse(i) { 0 }; val y = b.getOrElse(i) { 0 }
+        if (x != y) return x > y
+    }
+    return true
+}
 
 /**
  * True when this playlist is a Dispatcharr Direct Connect source (API key or

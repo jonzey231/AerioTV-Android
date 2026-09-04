@@ -10,6 +10,7 @@ import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.data.db.entity.ChannelSnapshotEntity
 import com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.db.entity.dispatcharrVersionAtLeast
 import com.aeriotv.android.core.data.db.entity.dispatcharrAccountProfileIdList
 import android.content.Context
 import android.util.Log
@@ -35,6 +36,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -327,6 +329,19 @@ class PlaylistRepository @Inject constructor(
             )
         }
 
+        // Dispatcharr 0.30 granular permissions + server version, same
+        // best-effort shape as the level capture above.
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+            sourceType == SourceType.DispatcharrUserPass
+        val perms = if (isDispatcharr) {
+            resolvedApiKey?.takeIf { it.isNotBlank() }
+                ?.let { dispatcharrClient.fetchAccountPermissions(normalisedBase, it) }
+        } else null
+        val serverVersion = if (isDispatcharr) {
+            resolvedApiKey?.takeIf { it.isNotBlank() }
+                ?.let { dispatcharrClient.fetchServerVersion(normalisedBase, it) }
+        } else null
+
         val channels = try {
             fetchChannelsFor(
                 sourceType = sourceType,
@@ -337,6 +352,7 @@ class PlaylistRepository @Inject constructor(
                 accountProfileIds = accountProfileIds,
                 username = request.username,
                 password = request.password,
+                catchupEnabled = perms?.catchupEnabled ?: true,
             )
         } catch (t: Throwable) {
             if (previous != null) runCatching { dao.update(previous) }
@@ -374,6 +390,11 @@ class PlaylistRepository @Inject constructor(
             dispatcharrProfileId = request.dispatcharrProfileId,
             dispatcharrUserLevel = dispatcharrUserLevel,
             dispatcharrAccountProfileIds = accountProfileIds.joinToString(","),
+            dispatcharrDvrAccess = perms?.dvrAccess ?: "",
+            dispatcharrCatchupEnabled = perms?.catchupEnabled ?: true,
+            dispatcharrVodMoviesEnabled = perms?.vodMoviesEnabled ?: true,
+            dispatcharrVodSeriesEnabled = perms?.vodSeriesEnabled ?: true,
+            dispatcharrServerVersion = serverVersion ?: "",
             vodEnabled = request.vodEnabled,
             epgRetentionDays = request.epgRetentionDays.coerceIn(1, 30),
         )
@@ -441,12 +462,24 @@ class PlaylistRepository @Inject constructor(
             } else {
                 null
             }
+        // Dispatcharr 0.30 permissions + version: re-read on every refresh so a
+        // server-side change applies without an Edit-Playlist Save. Null keeps
+        // the persisted values.
+        val livePerms = if (liveUserLevel != null) {
+            playlist.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { dispatcharrClient.fetchAccountPermissions(base, it) }
+        } else null
+        val liveVersion = if (liveUserLevel != null) {
+            playlist.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { dispatcharrClient.fetchServerVersion(base, it) }
+        } else null
         val channels = when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass ->
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     fetchChannelsFor(
                         sourceType, base, playlist.epgUrl, key,
                         playlist.dispatcharrProfileId, effectiveAccountIds,
+                        catchupEnabled = livePerms?.catchupEnabled ?: playlist.dispatcharrCatchupEnabled,
                     )
                 }
             else -> fetchChannelsFor(
@@ -466,6 +499,11 @@ class PlaylistRepository @Inject constructor(
                 else playlist.dispatcharrAccountProfileIds,
             dispatcharrUserLevel =
                 liveUserLevel ?: playlist.dispatcharrUserLevel,
+            dispatcharrDvrAccess = livePerms?.dvrAccess ?: playlist.dispatcharrDvrAccess,
+            dispatcharrCatchupEnabled = livePerms?.catchupEnabled ?: playlist.dispatcharrCatchupEnabled,
+            dispatcharrVodMoviesEnabled = livePerms?.vodMoviesEnabled ?: playlist.dispatcharrVodMoviesEnabled,
+            dispatcharrVodSeriesEnabled = livePerms?.vodSeriesEnabled ?: playlist.dispatcharrVodSeriesEnabled,
+            dispatcharrServerVersion = liveVersion ?: playlist.dispatcharrServerVersion,
         )
         dao.update(refreshed)
         // Persist the freshly-fetched channels so the next cold launch repaints
@@ -626,6 +664,63 @@ class PlaylistRepository @Inject constructor(
      * withTimeout could fire. A source that blows its ceiling keeps what it
      * parsed (partial history is still history) and yields to the next.
      */
+    /**
+     * Dispatcharr 0.30 window extension (iOS 076d041 parity): the base grid
+     * paints the default -1h..+24h fast; this fills history back to the
+     * playlist's Guide History (6 h on very large playlists) and forward to
+     * the Guide Window, one day per request via `start`/`end`, merging each
+     * chunk into the cache (non-authoritative, like an upstream layer).
+     */
+    private fun extendGridWindowInBackground(playlist: PlaylistEntity, base: String) {
+        layeringJobs.compute(playlist.id) { _, existing ->
+            if (existing?.isActive == true) return@compute existing
+            layeringScope.launch {
+                val now = System.currentTimeMillis()
+                val dayMs = 86_400_000L
+                val historyMs = if (playlist.channelCount > 5_000) 6L * 3_600_000L
+                    else playlist.epgRetentionDays.coerceIn(1, 30) * dayMs
+                val windowHours = runCatching { appPreferences.epgWindowHours.first() }.getOrDefault(24)
+                val forwardEnd = now + windowHours.coerceAtLeast(1) * 3_600_000L
+                val baseStart = now - 3_600_000L
+                val baseEnd = now + dayMs
+                val chunks = mutableListOf<Pair<Long, Long>>()
+                var hEnd = baseStart
+                val historyStart = now - historyMs
+                while (hEnd > historyStart) {
+                    val hStart = maxOf(historyStart, hEnd - dayMs)
+                    chunks += hStart to hEnd
+                    hEnd = hStart
+                }
+                var fStart = baseEnd
+                while (fStart < forwardEnd) {
+                    val fEnd = minOf(forwardEnd, fStart + dayMs)
+                    chunks += fStart to fEnd
+                    fStart = fEnd
+                }
+                if (chunks.isEmpty()) return@launch
+                Log.i("PlaylistRepo", "grid window: ${chunks.size} chunk(s), history ${historyMs / 3_600_000}h, forward +${windowHours}h")
+                var total = 0
+                for ((start, end) in chunks) {
+                    val programmes = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+                        }
+                    }.getOrElse {
+                        if (it is CancellationException) throw it
+                        Log.w("PlaylistRepo", "grid window chunk failed; stopping: $it")
+                        return@launch
+                    }
+                    if (programmes.isEmpty()) continue
+                    runCatching { saveEpgToCache(playlist.id, programmes, authoritative = false) }
+                        .onFailure { Log.w("PlaylistRepo", "grid window merge failed", it) }
+                    total += programmes.size
+                    delay(250)
+                }
+                Log.i("PlaylistRepo", "grid window: merged $total programmes over ${chunks.size} chunk(s)")
+            }
+        }
+    }
+
     private fun layerUpstreamInBackground(
         playlistId: String,
         base: String,
@@ -944,7 +1039,13 @@ class PlaylistRepository @Inject constructor(
                 // so the ViewModel folds it in when it lands. Source discovery
                 // moved in there too (GH #53), so nothing before the guide
                 // paint touches /api/epg/sources/ or /api/epg/epgdata/.
-                layerUpstreamInBackground(playlist.id, base, customXmltv, knownChannelKeys)
+                if (playlist.dispatcharrVersionAtLeast("0.30.0")) {
+                    // Dispatcharr 0.30: the grid serves history and days ahead
+                    // itself; no third-party XMLTV layering needed.
+                    extendGridWindowInBackground(playlist, base)
+                } else {
+                    layerUpstreamInBackground(playlist.id, base, customXmltv, knownChannelKeys)
+                }
                 layered
             }
             SourceType.XtreamCodes -> {
@@ -1744,6 +1845,8 @@ class PlaylistRepository @Inject constructor(
         accountProfileIds: List<Int> = emptyList(),
         username: String? = null,
         password: String? = null,
+        /** Dispatcharr 0.30 catchup_enabled for the account; false strips every catch-up affordance. */
+        catchupEnabled: Boolean = true,
         // Dispatchers.IO for the same main-thread reason as fetchViaTempFile:
         // the Dispatcharr branch decodes multi-MB JSON bodies and sorts/maps
         // the full channel list, and callers arrive on Main.
@@ -1930,8 +2033,8 @@ class PlaylistRepository @Inject constructor(
                         // XC layer exposes it as stream_id). Gate on BOTH
                         // flags so a stale/partial payload can't produce a
                         // dead Watch affordance.
-                        catchupDays = if (ch.isCatchup) ch.catchupDays else 0,
-                        catchupStreamId = if (ch.isCatchup && ch.catchupDays > 0) {
+                        catchupDays = if (catchupEnabled && ch.isCatchup) ch.catchupDays else 0,
+                        catchupStreamId = if (catchupEnabled && ch.isCatchup && ch.catchupDays > 0) {
                             ch.id.toString()
                         } else {
                             null

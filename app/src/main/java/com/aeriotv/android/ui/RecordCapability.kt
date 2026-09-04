@@ -27,3 +27,10 @@ val LocalCanRecordToServer = compositionLocalOf { true }
  * the real admin value.
  */
 val LocalIsDispatcharrAdmin = compositionLocalOf { true }
+
+/**
+ * Dispatcharr 0.30 DVR access of the active playlist's account: "none" /
+ * "view" / "manage". "manage" for non-Dispatcharr sources. Gates stop,
+ * cancel and delete on server recordings ("view" lists and plays only).
+ */
+val LocalDvrAccess = compositionLocalOf { "manage" }

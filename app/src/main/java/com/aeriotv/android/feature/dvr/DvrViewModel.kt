@@ -8,6 +8,7 @@ import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
 import com.aeriotv.android.core.data.db.entity.LocalRecordingEntity
 import com.aeriotv.android.core.data.db.entity.canRecordToServer
+import com.aeriotv.android.core.data.db.entity.dispatcharrCanViewDvr
 import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
@@ -374,7 +375,9 @@ class DvrViewModel @Inject constructor(
                 .getOrDefault(emptyMap())
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                    dispatcharrClient.listRecordings(base, key)
+                    // Dispatcharr 0.30 dvr_access "none": the endpoint 403s.
+                    if (playlist.dispatcharrCanViewDvr()) dispatcharrClient.listRecordings(base, key)
+                    else emptyList()
                 }
             }.fold(
                 onSuccess = { remote ->

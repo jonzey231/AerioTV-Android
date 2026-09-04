@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.dvr
 
+import com.aeriotv.android.ui.LocalDvrAccess
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -888,6 +889,7 @@ private fun RecordingActionMenu(
     onStopRecording: () -> Unit,
 ) {
     val isServer = rec.source == DvrViewModel.Source.Server
+    val canManage = LocalDvrAccess.current == "manage"
     val isCompleted = rec.status == DvrViewModel.Recording.Status.Completed ||
         rec.status == DvrViewModel.Recording.Status.Stopped
     val isInProgress = rec.status == DvrViewModel.Recording.Status.Recording
@@ -914,9 +916,10 @@ private fun RecordingActionMenu(
                 add(TvMenuAction("Start at Live", Icons.Outlined.PlayArrow) { onWatchLive() })
                 add(TvMenuAction("Watch from Beginning", Icons.Outlined.SkipPrevious) { onWatchFromBeginning() })
             }
-            add(TvMenuAction("Stop Recording", Icons.Outlined.Stop) { onStopRecording() })
+            // Dispatcharr 0.30 dvr_access "view": list and play only.
+            if (canManage) add(TvMenuAction("Stop Recording", Icons.Outlined.Stop) { onStopRecording() })
         }
-        if (isScheduled && isServer) {
+        if (isScheduled && isServer && canManage) {
             add(TvMenuAction("Edit", Icons.Outlined.Edit) { onEdit() })
         }
         val deleteLabel = when {
@@ -924,7 +927,9 @@ private fun RecordingActionMenu(
             isServer -> "Delete from Server"
             else -> "Delete"
         }
-        add(TvMenuAction(deleteLabel, Icons.Outlined.Delete, destructive = true) { onDelete() })
+        if (!isServer || canManage) {
+            add(TvMenuAction(deleteLabel, Icons.Outlined.Delete, destructive = true) { onDelete() })
+        }
     }
 
     if (rememberIsTvDevice()) {

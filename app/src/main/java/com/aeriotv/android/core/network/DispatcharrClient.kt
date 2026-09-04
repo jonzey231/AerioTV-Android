@@ -340,6 +340,41 @@ class DispatcharrClient @Inject constructor() {
      * the fail-closed policy). An EMPTY list is a real result (account has no
      * profile = admin = show all). Mirrors iOS 1cc51fc59 self-heal.
      */
+    /**
+     * Dispatcharr 0.30 granular permissions from /api/accounts/users/me/
+     * custom_properties: dvr_access (none / view / manage), vod_movies_enabled,
+     * vod_series_enabled, catchup_enabled. Absent keys keep the server defaults
+     * (only an explicit false disables; dvr_access absent = null so the caller
+     * derives it from the level). Null on ANY failure so a transient error
+     * never clobbers a persisted value. Mirrors iOS DispatcharrUser 5d7763e.
+     */
+    data class AccountPermissions(
+        val dvrAccess: String?,
+        val vodMoviesEnabled: Boolean,
+        val vodSeriesEnabled: Boolean,
+        val catchupEnabled: Boolean,
+    )
+
+    suspend fun fetchAccountPermissions(baseUrl: String, apiKey: String): AccountPermissions? = runCatching {
+        val url = "${baseUrl.trimEnd('/')}/api/accounts/users/me/"
+        val response = client.get(url) { applyAuth(apiKey) }
+        if (!response.status.isSuccess()) return@runCatching null
+        val me: MeResponse = response.body()
+        val props = me.customProperties
+        fun flag(key: String): Boolean =
+            (props?.get(key) as? JsonPrimitive)?.booleanOrNull != false
+        AccountPermissions(
+            dvrAccess = (props?.get("dvr_access") as? JsonPrimitive)?.contentOrNull?.lowercase(),
+            vodMoviesEnabled = flag("vod_movies_enabled"),
+            vodSeriesEnabled = flag("vod_series_enabled"),
+            catchupEnabled = flag("catchup_enabled"),
+        )
+    }.getOrNull()
+
+    /** Server version from /api/core/version/, or null when unreachable. */
+    suspend fun fetchServerVersion(baseUrl: String, apiKey: String): String? =
+        runCatching { verifyConnection(baseUrl, apiKey).version }.getOrNull()
+
     suspend fun fetchCurrentUserProfileIds(baseUrl: String, apiKey: String): List<Int>? = runCatching {
         val url = "${baseUrl.trimEnd('/')}/api/accounts/users/me/"
         val response = client.get(url) { applyAuth(apiKey) }
@@ -584,11 +619,27 @@ class DispatcharrClient @Inject constructor() {
 
     /** Off-main hop (Onn boxes 2026-09-02): the JSON decode of this response ran on the caller's
      *  dispatcher, i.e. the main thread when called from a ViewModel scope, and starved input on slow boxes. */
-    suspend fun getEpgGrid(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> =
-        withContext(Dispatchers.IO) { getEpgGridImpl(baseUrl, apiKey) }
+    suspend fun getEpgGrid(
+        baseUrl: String,
+        apiKey: String,
+        startMillis: Long? = null,
+        endMillis: Long? = null,
+    ): List<DispatcharrEpgEntry> =
+        withContext(Dispatchers.IO) { getEpgGridImpl(baseUrl, apiKey, startMillis, endMillis) }
 
-    private suspend fun getEpgGridImpl(baseUrl: String, apiKey: String): List<DispatcharrEpgEntry> {
-        val url = "${baseUrl.trimEnd('/')}/api/epg/grid/"
+    private suspend fun getEpgGridImpl(
+        baseUrl: String,
+        apiKey: String,
+        startMillis: Long?,
+        endMillis: Long?,
+    ): List<DispatcharrEpgEntry> {
+        // Dispatcharr 0.30 (PR #1643): `start` / `end` select an absolute ISO
+        // 8601 window; older servers ignore them and answer -1h..+24h.
+        val query = buildList {
+            startMillis?.let { add("start=" + java.time.Instant.ofEpochMilli(it).toString()) }
+            endMillis?.let { add("end=" + java.time.Instant.ofEpochMilli(it).toString()) }
+        }.joinToString("&")
+        val url = "${baseUrl.trimEnd('/')}/api/epg/grid/" + if (query.isEmpty()) "" else "?$query"
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
         unauthorizedCheck(response, url)
         if (!response.status.isSuccess()) {

@@ -31,6 +31,8 @@ import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.data.db.entity.canRecordToServer
+import com.aeriotv.android.core.data.db.entity.dispatcharrEffectiveDvrAccess
+import com.aeriotv.android.ui.LocalDvrAccess
 import com.aeriotv.android.core.data.db.entity.isDispatcharrAdmin
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.pip.findActivity
@@ -799,6 +801,7 @@ fun AerioTVNavHost(
                 val isTvDevice = com.aeriotv.android.ui.settings.rememberIsTvDevice()
                 CompositionLocalProvider(
                     LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: false),
+                    LocalDvrAccess provides (state.playlist?.dispatcharrEffectiveDvrAccess() ?: "manage"),
                     // One ViewModel set for the whole main destination (Streamer
                     // 2026-09-03): the tabs' default hiltViewModel() resolved
                     // against THIS entry while the scaffold and the player use the
