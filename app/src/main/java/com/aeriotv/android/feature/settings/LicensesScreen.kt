@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.R
+import com.aeriotv.android.ui.TmdbAttribution
 import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
@@ -160,6 +161,13 @@ private fun LicenseIndex(
         contentPadding = PaddingValues(horizontal = sideInset, vertical = 12.dp),
     ) {
         // MARK: AerioTV itself
+        item("tmdb-attribution") {
+            TmdbAttribution(
+                modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 16.dp),
+                long = true,
+                isTv = rememberIsTvDevice(),
+            )
+        }
         item("aerio-header") { SettingsSectionHeader("AerioTV") }
         item("aerio-body") {
             LicenseBlurb(

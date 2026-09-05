@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.feature.main.AppTab
+import com.aeriotv.android.ui.TmdbAttribution
 import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsSection
@@ -399,6 +400,11 @@ fun AppBehaviorsSettingsScreen(
                 header = "Program Posters",
                 footer = "Show posters in the Program Info panel and fill in missing artwork on On Demand detail screens, looked up on TMDB with your own free API key (themoviedb.org). Off by default. The key syncs across your devices via Google Drive (kept in your private app data).",
             ) {
+                TmdbAttribution(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                    long = false,
+                    isTv = isTv,
+                )
                 SettingsToggleRow(
                     title = "TMDB poster fallback",
                     subtitle = "When a poster is missing, look it up on TMDB. Needs the free API key below.",

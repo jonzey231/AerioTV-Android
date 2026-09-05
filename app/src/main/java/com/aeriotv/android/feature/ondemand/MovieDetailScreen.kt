@@ -51,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.aeriotv.android.ui.TmdbAttribution
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -746,6 +747,7 @@ private fun InfoSection(
         if (!cast.isNullOrBlank() && !castPhotosVisible) MetaRow("Cast", cast)
         if (!director.isNullOrBlank() && !castPhotosVisible) MetaRow("Director", director)
         if (!country.isNullOrBlank()) MetaRow("Country", country)
+        TmdbAttribution(modifier = Modifier.padding(top = 12.dp), long = true, isTv = isTv)
     }
 }
 
