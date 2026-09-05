@@ -24,15 +24,22 @@ fun TmdbAttribution(modifier: Modifier = Modifier, long: Boolean = true, isTv: B
         isTv -> 44.dp
         else -> 28.dp
     }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Image(
             painter = painterResource(id = if (long) R.drawable.ic_tmdb_long else R.drawable.ic_tmdb_short),
             contentDescription = "The Movie Database",
             modifier = Modifier.height(logoHeight),
         )
+        val style = if (isTv) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall
+        // Their required line first, ours second.
         Text(
-            text = "TMDB data is used only after you add your own TMDB API key. This product uses the TMDB API but is not endorsed or certified by TMDB.",
-            style = if (isTv) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
+            text = "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+            style = style,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "TMDB data is used only after you add your own TMDB API key.",
+            style = style,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
