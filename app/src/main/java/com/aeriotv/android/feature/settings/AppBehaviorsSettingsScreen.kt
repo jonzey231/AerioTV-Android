@@ -400,11 +400,6 @@ fun AppBehaviorsSettingsScreen(
                 header = "Program Posters",
                 footer = "Show posters in the Program Info panel and fill in missing artwork on On Demand detail screens, looked up on TMDB with your own free API key (themoviedb.org). Off by default. The key syncs across your devices via Google Drive (kept in your private app data).",
             ) {
-                TmdbAttribution(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
-                    long = false,
-                    isTv = isTv,
-                )
                 SettingsToggleRow(
                     title = "TMDB poster fallback",
                     subtitle = "When a poster is missing, look it up on TMDB. Needs the free API key below.",
@@ -414,6 +409,11 @@ fun AppBehaviorsSettingsScreen(
                 if (programPostersTmdb) {
                     var keyDraft by remember(savedTmdbKey) { mutableStateOf(savedTmdbKey) }
                     var keyVisible by remember { mutableStateOf(false) }
+                    TmdbAttribution(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                        long = false,
+                        isTv = isTv,
+                    )
                     OutlinedTextField(
                         value = keyDraft,
                         onValueChange = {
