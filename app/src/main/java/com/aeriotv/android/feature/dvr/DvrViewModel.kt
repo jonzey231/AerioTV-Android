@@ -13,6 +13,7 @@ import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
 import com.aeriotv.android.core.network.DispatcharrClient
+import com.aeriotv.android.core.network.DispatcharrProgramDetail
 import com.aeriotv.android.core.network.DispatcharrRecording
 import com.aeriotv.android.core.preferences.AppPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -114,6 +115,27 @@ class DvrViewModel @Inject constructor(
          * id (those stay best-effort blank, no pill).
          */
         val programId: Int? = null,
+        /**
+         * Fully-resolved artwork URL for the row's thumbnail -- the SAME image
+         * Dispatcharr shows for the recording in its own web UI.
+         *
+         * Resolution order (see DispatcharrRecording.toRecording):
+         *  1. `custom_properties.poster_logo_id` -> the user's own server at
+         *     `/api/channels/logos/<id>/cache/`. Preferred: LAN-local, cached
+         *     by Dispatcharr, and already inside SafeUrlInterceptor's trust
+         *     boundary.
+         *  2. `custom_properties.poster_url` -- the upstream art URL, anchored
+         *     to the server base when it arrives relative.
+         *  3. For rows that carry neither, [resolveCompletedDetailsAsync]
+         *     patches in the programme's own artwork off the critical path,
+         *     reusing the /api/epg/programs/<id>/ fetch that already runs for
+         *     categories.
+         *
+         * Null on local (on-device) recordings, which have no Dispatcharr
+         * programme behind them, and on server rows with no resolvable art --
+         * the row then falls back to the LiveTv glyph it has always drawn.
+         */
+        val posterUrl: String? = null,
     ) {
         enum class Status { Scheduled, Recording, Completed, Failed, Stopped, Unknown }
 
@@ -227,6 +249,18 @@ class DvrViewModel @Inject constructor(
      * not necessarily the main thread; a plain MutableMap would be a data race.
      */
     private val categoryCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * Resolved poster URLs keyed by recording id, with the same discipline as
+     * [categoryCache]: a definitive answer is memoised (a URL, or the empty
+     * string for "the programme genuinely has no artwork") so the row costs at
+     * most one lookup across the 30s refresh loop, while a FETCH FAILURE is
+     * left un-cached so the next pass retries. Only rows whose Dispatcharr
+     * JSON carried neither poster_logo_id nor poster_url ever reach here --
+     * everything Dispatcharr stamped is already resolved inline by
+     * [DispatcharrRecording.toRecording] with no request at all.
+     */
+    private val posterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /** Set once the first refresh() has produced an authoritative verdict
      *  (success or unsupported source). Gates the launch hint seed below so a
@@ -393,10 +427,21 @@ class DvrViewModel @Inject constructor(
                     // separate coroutine.
                     val hydrated = hydrateRecordingsFromEpg(playlist.id, server)
                     val fromCache = hydrated.map { r ->
-                        if (r.category.isNotBlank()) return@map r
-                        val seed = persistedCategories[r.id]?.takeIf { it.isNotBlank() }
-                            ?: categoryCache[r.id]?.takeIf { it.isNotBlank() }
-                        if (seed != null) r.copy(category = seed) else r
+                        // Re-apply this session's network-resolved poster. The
+                        // row Dispatcharr just handed back carries no artwork
+                        // (that is why it was resolved in the first place), so
+                        // without this seed the thumbnail would blink out on
+                        // every 30s refresh and never come back -- posterCache
+                        // already holds a definitive answer, so the async pass
+                        // would not look it up again.
+                        val withArt = if (r.posterUrl != null) r else {
+                            posterCache[r.id]?.takeIf { it.isNotBlank() }
+                                ?.let { r.copy(posterUrl = it) } ?: r
+                        }
+                        if (withArt.category.isNotBlank()) return@map withArt
+                        val seed = persistedCategories[withArt.id]?.takeIf { it.isNotBlank() }
+                            ?: categoryCache[withArt.id]?.takeIf { it.isNotBlank() }
+                        if (seed != null) withArt.copy(category = seed) else withArt
                     }
                     // Persist every row that NOW carries a non-blank category
                     // (cache-hydrated airing/recent rows, the currently-recording
@@ -432,7 +477,7 @@ class DvrViewModel @Inject constructor(
                     // over the network OFF the critical path so the recordings
                     // already painted above. Each resolved category is patched back
                     // into _state as it lands (pills appear a moment later).
-                    resolveCompletedCategoriesAsync(
+                    resolveCompletedDetailsAsync(
                         playlistId = playlist.id,
                         baseUrl = base,
                         recordings = fromCache,
@@ -747,11 +792,15 @@ class DvrViewModel @Inject constructor(
     }
 
     /**
-     * Resolve a genre/category for COMPLETED recordings that arrived with a
-     * blank category (their programme has already rolled out of the on-disk
-     * EPG window, so the local cache pass [hydrateRecordingsFromEpg] couldn't
-     * reach it). Fixes Streamer feedback #6 where only the currently-airing
-     * recording showed pills.
+     * Resolve the two pieces of programme detail a server recording can arrive
+     * without -- its genre/category and its poster artwork -- for rows the
+     * local cache pass [hydrateRecordingsFromEpg] couldn't reach (a COMPLETED
+     * recording's programme has already rolled out of the on-disk EPG window).
+     * Fixes Streamer feedback #6 where only the currently-airing recording
+     * showed pills; the poster half covers rows Dispatcharr scheduled before it
+     * started stamping poster_logo_id / poster_url onto the recording itself.
+     * Both come out of ONE /api/epg/programs/<id>/ response, so adding artwork
+     * costs no extra request.
      *
      * CRITICAL: this is fire-and-forget. The caller has ALREADY pushed the
      * recordings to _state (so the DVR tab + list painted instantly); this
@@ -781,60 +830,86 @@ class DvrViewModel @Inject constructor(
      * Best-effort and offline-safe: a row with no resolvable programme id, or
      * one whose detail fetch fails, just stays blank (no pill) for now.
      */
-    private fun resolveCompletedCategoriesAsync(
+    private fun resolveCompletedDetailsAsync(
         playlistId: String,
         baseUrl: String,
         recordings: List<Recording>,
     ) {
-        // Only blank-category, server rows that carry a programme id and that we
-        // haven't already resolved definitively are worth a lookup.
+        // A server row is worth a lookup when it carries a programme id and at
+        // least one of the two things this pass can fill in is still missing
+        // AND unresolved: its category, or its poster. Rows whose Dispatcharr
+        // JSON already carried poster_logo_id / poster_url never appear here.
+        fun needsCategory(r: Recording) = r.category.isBlank() && !categoryCache.containsKey(r.id)
+        fun needsPoster(r: Recording) = r.posterUrl == null && !posterCache.containsKey(r.id)
         val needy = recordings.filter {
             it.source == Source.Server &&
-                it.category.isBlank() &&
                 it.programId != null &&
-                !categoryCache.containsKey(it.id)
+                (needsCategory(it) || needsPoster(it))
         }
         if (needy.isEmpty()) return
         viewModelScope.launch {
             // De-dup detail fetches by programme id within this pass; two
-            // recordings of the same programme share one round-trip.
-            val byProgramId = HashMap<Int, String?>()
-            suspend fun categoriesForProgram(programId: Int): String? {
+            // recordings of the same programme share one round-trip, and that
+            // ONE response now yields both the category and the artwork.
+            val byProgramId = HashMap<Int, DispatcharrProgramDetail?>()
+            suspend fun detailFor(programId: Int): DispatcharrProgramDetail? {
                 if (byProgramId.containsKey(programId)) return byProgramId[programId]
                 val detail = runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlistId) { k ->
                         dispatcharrClient.getProgramDetail(baseUrl, k, programId)
                     }
                 }.getOrNull()
-                // null result (fetch failed) is NOT memoised, so a transient
-                // failure retries next pass; a definitive empty/non-empty IS.
-                val joined = detail?.categories
-                    ?.map { it.trim() }
-                    ?.filter { it.isNotEmpty() }
-                    ?.joinToString(", ")
-                if (joined != null) byProgramId[programId] = joined
-                return joined
+                // Only memoise a SUCCESSFUL fetch, so a transient failure
+                // retries on the next pass instead of sticking for the session.
+                if (detail != null) byProgramId[programId] = detail
+                return detail
             }
             for (rec in needy) {
                 val programId = rec.programId ?: continue
-                // null = fetch failed (leave uncached, retry next pass);
-                // "" = programme genuinely has no category (definitive);
-                // non-blank = resolved genre.
-                val resolved = categoriesForProgram(programId) ?: continue
-                categoryCache[rec.id] = resolved
-                if (resolved.isBlank()) continue
-                // Persist this network-resolved category too, so a completed row
-                // whose programme later leaves the cache still seeds its pill on
-                // the next load. Fire-and-forget on the DataStore IO path.
-                runCatching { appPreferences.setRecordingCategory(rec.id, resolved) }
-                // Patch just this row into _state as its category lands, so the
-                // pill appears without re-rendering or re-sorting the whole list.
-                _state.update { st ->
-                    val idx = st.recordings.indexOfFirst { it.id == rec.id }
-                    if (idx < 0 || st.recordings[idx].category.isNotBlank()) return@update st
-                    val patched = st.recordings.toMutableList()
-                    patched[idx] = patched[idx].copy(category = resolved)
-                    st.copy(recordings = patched)
+                // null = fetch failed: leave both caches untouched so the next
+                // 30s pass retries rather than permanently hiding pill + art.
+                val detail = detailFor(programId) ?: continue
+
+                if (needsCategory(rec)) {
+                    // "" = programme genuinely has no category (definitive);
+                    // non-blank = resolved genre.
+                    val resolved = detail.categories
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .joinToString(", ")
+                    categoryCache[rec.id] = resolved
+                    if (resolved.isNotBlank()) {
+                        // Persist this network-resolved category too, so a completed row
+                        // whose programme later leaves the cache still seeds its pill on
+                        // the next load. Fire-and-forget on the DataStore IO path.
+                        runCatching { appPreferences.setRecordingCategory(rec.id, resolved) }
+                        // Patch just this row into _state as its category lands, so the
+                        // pill appears without re-rendering or re-sorting the whole list.
+                        _state.update { st ->
+                            val idx = st.recordings.indexOfFirst { it.id == rec.id }
+                            if (idx < 0 || st.recordings[idx].category.isNotBlank()) return@update st
+                            val patched = st.recordings.toMutableList()
+                            patched[idx] = patched[idx].copy(category = resolved)
+                            st.copy(recordings = patched)
+                        }
+                    }
+                }
+
+                if (needsPoster(rec)) {
+                    // Same artwork precedence the guide's ProgramInfoSheet uses
+                    // (poster_url > images[].url > icon), anchored to the server
+                    // base when the server hands back a relative path.
+                    val art = resolvePosterUrl(detail.bestPosterString, baseUrl)
+                    posterCache[rec.id] = art.orEmpty()
+                    if (art != null) {
+                        _state.update { st ->
+                            val idx = st.recordings.indexOfFirst { it.id == rec.id }
+                            if (idx < 0 || st.recordings[idx].posterUrl != null) return@update st
+                            val patched = st.recordings.toMutableList()
+                            patched[idx] = patched[idx].copy(posterUrl = art)
+                            st.copy(recordings = patched)
+                        }
+                    }
                 }
             }
         }
@@ -933,7 +1008,41 @@ private fun DispatcharrRecording.toRecording(
         inProgressUrl = inProgress,
         isDvr = dvr,
         programId = programId,
+        // Artwork Dispatcharr already stamped on the row. Prefer the logo id
+        // (served from the user's own server, so it stays on the LAN and
+        // inside SafeUrlInterceptor's trusted-host rule) over the raw upstream
+        // poster URL.
+        posterUrl = posterLogoId?.let { client.logoUrl(baseUrl, it) }
+            ?: resolvePosterUrl(posterArtUrl, baseUrl),
     )
+}
+
+/**
+ * Resolve a Dispatcharr-reported poster URL against the active server's base.
+ * A server-relative path (`/media/...`) is anchored to the base; an absolute
+ * URL is passed through unchanged.
+ *
+ * Deliberately NOT [resolveRecordingUrl]: that one rejects cross-origin
+ * absolute URLs because a recording's file_url is fetched WITH the API key,
+ * so a hostile value could leak the credential. Poster art carries no auth
+ * header (Coil fetches it anonymously, exactly as it does channel logos), and
+ * the upstream art genuinely lives on a third-party CDN -- Dispatcharr stamps
+ * e.g. static.tvmaze.com here. Same-origin-only would therefore reject every
+ * legitimate value. SafeUrlInterceptor still gates the fetch: non-image
+ * schemes are blocked outright, and a private/loopback/link-local host that
+ * is not the user's own server is rejected as SSRF.
+ */
+private fun resolvePosterUrl(raw: String?, baseUrl: String): String? {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.startsWith("http://", ignoreCase = true) ||
+        trimmed.startsWith("https://", ignoreCase = true)
+    ) {
+        return trimmed
+    }
+    val base = baseUrl.trimEnd('/')
+    if (base.isEmpty()) return null
+    return base + if (trimmed.startsWith("/")) trimmed else "/$trimmed"
 }
 
 /**

@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,10 +20,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.Delete
@@ -60,10 +63,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.category.CategoryPaletteState
@@ -650,6 +655,52 @@ private fun EmptyState(title: String, body: String) {
     }
 }
 
+/**
+ * Leading artwork for a recording row: the SAME poster Dispatcharr shows for
+ * the recording in its own web UI, resolved in DvrViewModel (server logo-cache
+ * proxy first, upstream poster URL second).
+ *
+ * The frame is a FIXED 2:3 portrait box rather than one sized to the real image
+ * ratio, because these are list rows: a per-row width would ragged-edge every
+ * title down the list. 2:3 is the shape the art actually arrives in (measured
+ * against a v0.27.0 server: 680x1000), so the common case fills the frame with
+ * no crop at all; a stray landscape XMLTV `<icon>` centre-crops instead of
+ * letterboxing into dead space.
+ *
+ * The LiveTv glyph the row has always drawn sits UNDERNEATH the image, so it
+ * shows through unchanged for rows with no artwork (every on-device recording,
+ * plus any server row whose programme carries none) and while a fetch is in
+ * flight, and it reappears on its own if the fetch fails -- no explicit
+ * loading/error branch. Decoration only: not focusable, so it stays out of the
+ * D-pad order.
+ */
+@Composable
+private fun RecordingArtwork(posterUrl: String?, isTv: Boolean) {
+    val width = if (isTv) 56.dp else 44.dp
+    Box(
+        modifier = Modifier
+            .width(width)
+            .aspectRatio(2f / 3f)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.LiveTv,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+        )
+        if (!posterUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = posterUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecordingRow(
@@ -731,12 +782,8 @@ private fun RecordingRow(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Outlined.LiveTv,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-            )
-            Spacer(Modifier.size(10.dp))
+            RecordingArtwork(posterUrl = rec.posterUrl, isTv = isTv)
+            Spacer(Modifier.size(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = rec.title,

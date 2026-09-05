@@ -2676,6 +2676,39 @@ data class DispatcharrRecording(
     val fileSize: Long?
         get() = customProperties?.longField("file_size")
             ?: customProperties?.longField("file_size_bytes")
+
+    /**
+     * Dispatcharr logo-record id for this recording's poster artwork
+     * (`custom_properties.poster_logo_id`). Dispatcharr stamps both this and
+     * [posterArtUrl] onto the recording when it schedules it, so the row
+     * carries its artwork inline -- no extra request to render the list.
+     *
+     * PREFERRED over [posterArtUrl]: the id resolves to
+     * `/api/channels/logos/<id>/cache/` on the user's OWN server, which
+     * serves the byte-identical image out of Dispatcharr's local cache
+     * (verified against a v0.27.0 server: the proxy and the upstream
+     * static.tvmaze.com original returned the same 174,360 bytes). That keeps
+     * the fetch on the LAN, inside the trust boundary SafeUrlInterceptor
+     * already allows for channel logos, and working when the upstream art
+     * host is slow, blocked, or offline.
+     *
+     * Server-scheduled rows nest their programme metadata under
+     * `custom_properties.program`, so check there too.
+     */
+    val posterLogoId: Int?
+        get() = customProperties?.intField("poster_logo_id")
+            ?: customProperties?.objectField("program")?.intField("poster_logo_id")
+
+    /**
+     * Absolute (or server-relative) poster URL Dispatcharr recorded for this
+     * row (`custom_properties.poster_url`) -- typically the upstream artwork
+     * the EPG source supplied. Fallback for rows that carry no
+     * [posterLogoId]. Named `posterArtUrl` rather than `posterUrl` to avoid
+     * colliding with the VOD models' poster accessors.
+     */
+    val posterArtUrl: String?
+        get() = customProperties?.stringField("poster_url")
+            ?: customProperties?.objectField("program")?.stringField("poster_url")
 }
 
 private fun JsonObject.stringField(name: String): String? =
