@@ -38,7 +38,7 @@ fun TmdbAttribution(modifier: Modifier = Modifier, long: Boolean = true, isTv: B
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "TMDB data is used only after you add your own TMDB API key.",
+            text = "TMDB data is used only after configuring a TMDB API key in Settings > App Behaviors.",
             style = style,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
