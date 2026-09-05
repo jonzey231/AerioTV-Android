@@ -31,7 +31,7 @@ fun TmdbAttribution(modifier: Modifier = Modifier, long: Boolean = true, isTv: B
             modifier = Modifier.height(logoHeight),
         )
         Text(
-            text = "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+            text = "TMDB data is used only after you add your own TMDB API key. This product uses the TMDB API but is not endorsed or certified by TMDB.",
             style = if (isTv) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
