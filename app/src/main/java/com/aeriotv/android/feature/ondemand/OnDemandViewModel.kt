@@ -90,6 +90,22 @@ class OnDemandViewModel @Inject constructor(
         // not searching.
         val searchResults: List<DispatcharrVODMovie> = emptyList(),
         val isSearching: Boolean = false,
+        // Cast & crew search (iOS MoviesView.searchPeople): the TMDB person
+        // the query resolved to and their films found in the loaded library.
+        // The grid merges these after the server results; the name feeds the
+        // "Includes titles with <name>" line under the field.
+        val personMatchName: String? = null,
+        val personMatches: List<DispatcharrVODMovie> = emptyList(),
+        val seriesPersonMatchName: String? = null,
+        val seriesPersonMatches: List<DispatcharrVODSeries> = emptyList(),
+        // Provider filter on search results (iOS providerNames /
+        // selectedProviderID): Dispatcharr Direct Connect M3U account id ->
+        // name, minus the locked "custom" account and disabled ones. Empty for
+        // other sources. A pick re-runs the server search with
+        // `&m3u_account=<id>` (DRF's m3u_relations__m3u_account__id filter).
+        val providerNames: Map<Int, String> = emptyMap(),
+        val selectedProviderId: Int? = null,
+        val seriesSelectedProviderId: Int? = null,
         // Lazy-pagination cursor: the `next` URL after the last page appended to
         // `movies`. loadMoreMovies() consumes it as the grid nears its end. Null
         // once the library is fully walked.
@@ -178,6 +194,12 @@ class OnDemandViewModel @Inject constructor(
     // only the final query in a fast burst of typing hits the network.
     private var searchMoviesJob: kotlinx.coroutines.Job? = null
     private var searchSeriesJob: kotlinx.coroutines.Job? = null
+    // TMDB person lookups behind the search fields, one per tab; cancelled
+    // and restarted with the server search so a stale name never lands.
+    private var personMoviesJob: kotlinx.coroutines.Job? = null
+    private var personSeriesJob: kotlinx.coroutines.Job? = null
+    // Provider names are fetched once per playlist, on the first search.
+    private var providerNamesJob: kotlinx.coroutines.Job? = null
 
     // The raw relation rows behind state.movieProviders, keyed by movie id.
     // Kept out of UiState because the UI only ever consumes the derived
@@ -350,6 +372,12 @@ class OnDemandViewModel @Inject constructor(
         dispatcharrEnabledMovieCats = emptyList()
         dispatcharrEnabledSeriesCats = emptyList()
         movieProviderRelations.clear()
+        personMoviesJob?.cancel()
+        personSeriesJob?.cancel()
+        personMoviesJob = null
+        personSeriesJob = null
+        providerNamesJob?.cancel()
+        providerNamesJob = null
         _state.value = UiState()
     }
 
@@ -392,11 +420,20 @@ class OnDemandViewModel @Inject constructor(
     fun setSearchQuery(value: String) {
         _state.update { it.copy(searchQuery = value) }
         searchMoviesJob?.cancel()
+        personMoviesJob?.cancel()
         val q = value.trim()
         if (q.isEmpty()) {
-            _state.update { it.copy(searchResults = emptyList(), isSearching = false) }
+            // Clearing the field also drops the provider pick and the person
+            // match (iOS clearSearch / onChange(searchText) with an empty query).
+            _state.update {
+                it.copy(
+                    searchResults = emptyList(), isSearching = false,
+                    selectedProviderId = null, personMatchName = null, personMatches = emptyList(),
+                )
+            }
             return
         }
+        personMoviesJob = searchPeople(q, isMovie = true)
         searchMoviesJob = viewModelScope.launch {
             kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MS)
             val playlist = playlistRepository.activePlaylist()
@@ -413,12 +450,16 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isSearching = true) }
+            ensureProviderNames(playlist)
             // Search results need the same group stamp as the browse list so
             // the Manage Groups filter applies identically to both.
             ensureDispatcharrCategories(playlist)
             val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
+            // Provider filter (iOS searchVODMoviesStream m3uAccountID): DRF's
+            // `m3u_account` filter narrows the hits to one account's copies.
+            val account = _state.value.selectedProviderId?.let { "&m3u_account=$it" } ?: ""
             val url = "$base/api/vod/movies/?search=" +
-                    java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
+                    java.net.URLEncoder.encode(q, "UTF-8") + account + "&page_size=100"
             val page = runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getVODMoviesPage(url, key)
@@ -434,11 +475,18 @@ class OnDemandViewModel @Inject constructor(
     fun setSeriesSearchQuery(value: String) {
         _state.update { it.copy(seriesSearchQuery = value) }
         searchSeriesJob?.cancel()
+        personSeriesJob?.cancel()
         val q = value.trim()
         if (q.isEmpty()) {
-            _state.update { it.copy(seriesSearchResults = emptyList(), isSearchingSeries = false) }
+            _state.update {
+                it.copy(
+                    seriesSearchResults = emptyList(), isSearchingSeries = false,
+                    seriesSelectedProviderId = null, seriesPersonMatchName = null, seriesPersonMatches = emptyList(),
+                )
+            }
             return
         }
+        personSeriesJob = searchPeople(q, isMovie = false)
         searchSeriesJob = viewModelScope.launch {
             kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MS)
             val playlist = playlistRepository.activePlaylist()
@@ -455,11 +503,13 @@ class OnDemandViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isSearchingSeries = true) }
+            ensureProviderNames(playlist)
             // Same group stamp as the browse list; see setSearchQuery.
             ensureDispatcharrCategories(playlist)
             val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
+            val account = _state.value.seriesSelectedProviderId?.let { "&m3u_account=$it" } ?: ""
             val url = "$base/api/vod/series/?search=" +
-                    java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
+                    java.net.URLEncoder.encode(q, "UTF-8") + account + "&page_size=100"
             val page = runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                     dispatcharrClient.getVODSeriesPage(url, key)
@@ -472,6 +522,131 @@ class OnDemandViewModel @Inject constructor(
                     isSearchingSeries = false,
                 )
             }
+        }
+    }
+
+    /**
+     * Provider pill pick (iOS MoviesView.selectProvider): remember the account
+     * and re-run the server search for the current query with the filter.
+     * `null` = "All Providers". No-op when nothing changed.
+     */
+    fun selectProvider(providerId: Int?, isMovie: Boolean) {
+        if (isMovie) {
+            if (_state.value.selectedProviderId == providerId) return
+            _state.update { it.copy(selectedProviderId = providerId) }
+            setSearchQuery(_state.value.searchQuery)
+        } else {
+            if (_state.value.seriesSelectedProviderId == providerId) return
+            _state.update { it.copy(seriesSelectedProviderId = providerId) }
+            setSeriesSearchQuery(_state.value.seriesSearchQuery)
+        }
+    }
+
+    /**
+     * Dispatcharr M3U account id -> name for the provider pills (iOS
+     * MoviesView.loadProviderNames), fetched once per playlist on the first
+     * server search. Skips the locked built-in "custom" account and disabled
+     * ones (Logan 2026-09-04: "custom" showed up as a provider). Only called
+     * on the Dispatcharr path, so other sources keep an empty map.
+     */
+    private fun ensureProviderNames(playlist: PlaylistEntity) {
+        if (providerNamesJob != null) return
+        providerNamesJob = viewModelScope.launch {
+            val base = playlistRepository.effectiveBaseUrl(playlist)
+            val accounts = runCatching {
+                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                    dispatcharrClient.listM3uAccounts(base, key)
+                }
+            }.getOrElse {
+                warnUnlessCancelled("provider names (m3u accounts) failed", it)
+                // Leave the job null so the next search retries.
+                providerNamesJob = null
+                return@launch
+            }
+            Log.w(TAG, "[VOD] provider names: ${accounts.size} accounts")
+            val map = LinkedHashMap<Int, String>()
+            for (a in accounts.sortedBy { it.id }) {
+                if (a.locked == true || a.isActive == false) continue
+                if (a.name?.trim()?.lowercase() == "custom") continue
+                map[a.id] = a.name?.takeIf { it.isNotBlank() } ?: "Provider ${a.id}"
+            }
+            _state.update { it.copy(providerNames = map) }
+        }
+    }
+
+    /**
+     * Cast & crew search (iOS MoviesView.searchPeople): resolve the query to
+     * a TMDB person after the same debounce as the server search, pull their
+     * film (or show) credits, keep the ones in the loaded library. The server
+     * search only covers title/description/genre and list rows carry no
+     * cast. The top few people are tried and the one with the most library
+     * hits wins. Same matcher as [relatedTitles]: tmdbId when the entity has
+     * one, else the normalized title, over the loaded lists plus the resolved
+     * maps. Requires a configured TMDB key and at least 3 characters; the
+     * result clears otherwise.
+     */
+    private fun searchPeople(query: String, isMovie: Boolean): kotlinx.coroutines.Job = viewModelScope.launch {
+        fun clear() = _state.update {
+            if (isMovie) it.copy(personMatchName = null, personMatches = emptyList())
+            else it.copy(seriesPersonMatchName = null, seriesPersonMatches = emptyList())
+        }
+        if (query.length < 3 || !isTmdbConfigured()) { clear(); return@launch }
+        kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MS)
+        val key = appPreferences.tmdbApiKey.first()
+        val people = tmdbService.searchPeople(query, key)
+        if (people.isEmpty()) { clear(); return@launch }
+        val snapshot = _state.value
+        var bestName: String? = null
+        var bestMovies: List<DispatcharrVODMovie> = emptyList()
+        var bestSeries: List<DispatcharrVODSeries> = emptyList()
+        withContext(Dispatchers.Default) {
+            if (isMovie) {
+                val library = snapshot.movies + snapshot.searchResults + snapshot.resolvedMovies.values
+                val byTmdb = HashMap<String, DispatcharrVODMovie>()
+                val byTitle = HashMap<String, DispatcharrVODMovie>()
+                for (m in library) {
+                    val t = m.tmdbId
+                    if (!t.isNullOrBlank()) byTmdb.putIfAbsent(t, m)
+                    else byTitle.putIfAbsent(normalizeVodTitle(m.displayName), m)
+                }
+                for (person in people) {
+                    val credits = tmdbService.personCredits(person.id, isMovie = true, rawKey = key)
+                    val seen = HashSet<String>()
+                    val hits = ArrayList<DispatcharrVODMovie>()
+                    for (c in credits) {
+                        val hit = byTmdb[c.id] ?: byTitle[normalizeVodTitle(c.title)] ?: continue
+                        if (seen.add(hit.uuid)) hits += hit
+                    }
+                    if (hits.size > bestMovies.size) { bestName = person.name; bestMovies = hits }
+                }
+            } else {
+                val library = snapshot.series + snapshot.seriesSearchResults + snapshot.resolvedSeries.values
+                val byTmdb = HashMap<String, DispatcharrVODSeries>()
+                val byTitle = HashMap<String, DispatcharrVODSeries>()
+                for (sr in library) {
+                    val t = sr.tmdbId
+                    if (!t.isNullOrBlank()) byTmdb.putIfAbsent(t, sr)
+                    else byTitle.putIfAbsent(normalizeVodTitle(sr.displayName), sr)
+                }
+                for (person in people) {
+                    val credits = tmdbService.personCredits(person.id, isMovie = false, rawKey = key)
+                    val seen = HashSet<Int>()
+                    val hits = ArrayList<DispatcharrVODSeries>()
+                    for (c in credits) {
+                        val hit = byTmdb[c.id] ?: byTitle[normalizeVodTitle(c.title)] ?: continue
+                        if (seen.add(hit.id)) hits += hit
+                    }
+                    if (hits.size > bestSeries.size) { bestName = person.name; bestSeries = hits }
+                }
+            }
+        }
+        // Discard a stale answer if the user kept typing past this query.
+        val current = if (isMovie) _state.value.searchQuery else _state.value.seriesSearchQuery
+        if (current.trim() != query) return@launch
+        Log.d(TAG, "People: '$query' -> ${bestName ?: "no match"} (${if (isMovie) bestMovies.size else bestSeries.size} in library)")
+        _state.update {
+            if (isMovie) it.copy(personMatchName = bestName, personMatches = bestMovies)
+            else it.copy(seriesPersonMatchName = bestName, seriesPersonMatches = bestSeries)
         }
     }
 

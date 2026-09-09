@@ -82,6 +82,17 @@ data class TmdbKnownForItem(
 )
 
 /**
+ * One `/search/person` hit for cast & crew search (iOS
+ * TMDBService.PersonHit): the person id, display name and TMDB popularity
+ * (most popular first; the caller keeps the one with the most library hits).
+ */
+data class TmdbPersonHit(
+    val id: String,
+    val name: String,
+    val popularity: Float,
+)
+
+/**
  * `/person/{id}` profile payload for the bio sheet. [name] is the only
  * field TMDB guarantees; the rest arrive blank-stripped to null. [knownFor]
  * is the person's most popular credits, parsed from the `combined_credits`
@@ -375,6 +386,68 @@ class TMDBService @Inject constructor() {
         if (bio != null) personBioCache[cacheKey] = bio
         Log.d(TAG, "person $id -> ${if (bio != null) "ok" else "no match"}")
         return bio
+    }
+
+    /**
+     * People matching a typed name (iOS TMDBService.searchPeople): TMDB's
+     * first `/search/person` page, most popular first, requiring the query to
+     * appear in the name (a two-letter query would otherwise hit random
+     * people). The caller tries the top few and keeps the one with the most
+     * films in the library: "boyle" alone resolved to Peter Boyle (0 in
+     * library) over Danny Boyle (28 Years Later is there), Logan 2026-09-04.
+     * Queries shorter than 3 characters return nothing.
+     */
+    suspend fun searchPeople(query: String, rawKey: String, limit: Int = 5): List<TmdbPersonHit> {
+        val key = rawKey.trim()
+        val q = query.trim()
+        if (key.isEmpty() || q.length < 3) return emptyList()
+        val body = getJsonOrNull(
+            "/search/person",
+            "query=${q.encodeURLParameter()}&include_adult=false",
+            key,
+        ) ?: return emptyList()
+        val needle = q.lowercase()
+        return runCatching {
+            json.parseToJsonElement(body).jsonObject["results"]?.jsonArray.orEmpty().mapNotNull { element ->
+                val o = element.jsonObject
+                val id = o["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val name = o["name"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: return@mapNotNull null
+                if (!name.lowercase().contains(needle)) return@mapNotNull null
+                val popularity = o["popularity"]?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                TmdbPersonHit(id, name, popularity)
+            }.sortedByDescending { it.popularity }.take(limit)
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Every film (or show) a person acted in or crewed on, deduped by id
+     * (iOS TMDBService.personCredits): `/person/{id}/movie_credits` |
+     * `/person/{id}/tv_credits`, cast + crew. Poster-less rows are kept: the
+     * caller matches against the library, which supplies its own artwork.
+     * The media type is fixed by the endpoint, so every row inherits
+     * [isMovie].
+     */
+    suspend fun personCredits(personId: String, isMovie: Boolean, rawKey: String): List<TmdbKnownForItem> {
+        val key = rawKey.trim()
+        val id = personId.trim()
+        if (key.isEmpty() || id.isEmpty()) return emptyList()
+        val path = if (isMovie) "/person/$id/movie_credits" else "/person/$id/tv_credits"
+        val body = getJsonOrNull(path, "", key) ?: return emptyList()
+        return runCatching {
+            val root = json.parseToJsonElement(body).jsonObject
+            val rows = root["cast"]?.jsonArray.orEmpty() + root["crew"]?.jsonArray.orEmpty()
+            rows.mapNotNull { element ->
+                val o = element.jsonObject
+                val creditId = o["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val title = (o["title"] ?: o["name"])?.jsonPrimitive?.contentOrNull?.trim()
+                    ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val poster = o["poster_path"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                TmdbKnownForItem(creditId, title, poster, isMovie)
+            }.distinctBy { it.id }
+        }.getOrDefault(emptyList())
     }
 
     /**

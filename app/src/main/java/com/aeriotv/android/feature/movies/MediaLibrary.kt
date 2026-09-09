@@ -41,6 +41,16 @@ data class MediaItem(
 }
 
 /**
+ * Rating for a badge or meta line, one decimal like iOS ("5.851" -> "5.9").
+ * Empty when the raw string is not a number or is zero (nothing to show).
+ */
+fun formatRating(raw: String?): String {
+    val v = raw?.trim()?.toDoubleOrNull() ?: return ""
+    if (v <= 0.0) return ""
+    return String.format(java.util.Locale.US, "%.1f", v)
+}
+
+/**
  * Provider titles carry markers the poster grid should not: a leading
  * language prefix ("EN - ", "FR: "), trailing quality tags ("[1080p]",
  * "[4K]") and a trailing "(2015)" that duplicates the year line. Also the

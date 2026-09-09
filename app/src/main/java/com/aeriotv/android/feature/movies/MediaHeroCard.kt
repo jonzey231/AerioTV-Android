@@ -127,8 +127,8 @@ fun MediaHeroCard(
                     meta.joinToString(" · "), fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                val r = page.rating?.trim().orEmpty()
-                if (r.isNotEmpty() && r != "0" && r != "0.0") {
+                val r = formatRating(page.rating)
+                if (r.isNotEmpty()) {
                     Text(
                         (if (meta.isEmpty()) "" else " · ") + "★ $r", fontSize = 13.sp, fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.primary, maxLines = 1,

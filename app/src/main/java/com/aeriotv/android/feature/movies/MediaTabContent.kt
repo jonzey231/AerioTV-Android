@@ -26,7 +26,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
@@ -37,7 +37,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -199,10 +198,30 @@ fun MediaTabContent(
         libraryPending = false
     }
     val library: List<MediaItem> = libraryBuilt.first
-    val results: List<MediaItem> = remember(state.searchResults, state.seriesSearchResults, kind, sortOrder) {
-        (if (kind == MediaKind.Movies) state.searchResults.map { it.toMediaItem() } else state.seriesSearchResults.map { it.toMediaItem() })
-            .sortedBy(sortOrder)
+    // Search hits (iOS searchHits / filteredMovies): the server results plus
+    // the TMDB person's titles found in the library, deduped by key and
+    // sorted by the tab's sort order. A provider pick re-runs the server
+    // search with the account filter; person hits carry no provider, so only
+    // the server's answer counts then.
+    val personMatchName = if (kind == MediaKind.Movies) state.personMatchName else state.seriesPersonMatchName
+    val selectedProviderId = if (kind == MediaKind.Movies) state.selectedProviderId else state.seriesSelectedProviderId
+    val results: List<MediaItem> = remember(
+        state.searchResults, state.seriesSearchResults, state.personMatches, state.seriesPersonMatches,
+        selectedProviderId, kind, sortOrder,
+    ) {
+        val server = if (kind == MediaKind.Movies) state.searchResults.map { it.toMediaItem() } else state.seriesSearchResults.map { it.toMediaItem() }
+        val people = when {
+            selectedProviderId != null -> emptyList()
+            kind == MediaKind.Movies -> state.personMatches.map { it.toMediaItem() }
+            else -> state.seriesPersonMatches.map { it.toMediaItem() }
+        }
+        val seen = HashSet<String>()
+        (server + people).filter { seen.add(it.key) }.sortedBy(sortOrder)
     }
+    // Provider pills (iOS providerPills): Dispatcharr Direct Connect only,
+    // shown while searching when the account list has two or more providers.
+    val providerIds = remember(state.providerNames) { state.providerNames.keys.sorted() }
+    val showProviderPills = isSearching && providerIds.size >= 2
     val gridItems = if (isSearching) results else library
     val available: Set<Char> = libraryBuilt.second
 
@@ -218,9 +237,11 @@ fun MediaTabContent(
     }
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
-    // Full-span leading items: room, header, (search), (pills).
+    // Full-span leading items: room, header, (search), (person line),
+    // (provider pills), (genre pills).
     val leadingCount = 2 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0) +
-        (if (searchActive) 1 else 0) + (if (!isSearching && genrePills.isNotEmpty()) 1 else 0)
+        (if (searchActive) 1 else 0) + (if (isSearching && personMatchName != null) 1 else 0) +
+        (if (showProviderPills) 1 else 0) + (if (!isSearching && genrePills.isNotEmpty()) 1 else 0)
     // Index of the library header in the grid: room, (hero), (watchlist), header.
     val headerIndex = 1 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0)
     val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -405,31 +426,84 @@ fun MediaTabContent(
                 }
                 if (searchActive) {
                     item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
-                        // Pill field, like every other control in the app.
-                        OutlinedTextField(
+                        // Pill field like the iPhone search bar: filled
+                        // surfaceVariant, no outline in either state, search
+                        // glyph leading, filled-circle X trailing, 44 dp tall.
+                        // BasicTextField because OutlinedTextField enforces a
+                        // 56 dp minimum height.
+                        val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        androidx.compose.foundation.text.BasicTextField(
                             value = query,
                             onValueChange = { submitQuery(it) },
-                            placeholder = { Text(if (kind == MediaKind.Movies) "Search movies" else "Search TV shows") },
-                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                            // Clears the query and closes the field (Logan 2026-09-09).
-                            trailingIcon = {
-                                androidx.compose.material3.IconButton(onClick = { submitQuery(""); searchActive = false }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Clear and close search")
-                                }
-                            },
                             singleLine = true,
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-                            ),
+                            interactionSource = interaction,
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 4.dp)
+                                .height(44.dp)
+                                .padding(bottom = 0.dp)
                                 .focusRequester(searchFocus),
+                            decorationBox = { inner ->
+                                androidx.compose.material3.OutlinedTextFieldDefaults.DecorationBox(
+                                    value = query,
+                                    innerTextField = inner,
+                                    enabled = true,
+                                    singleLine = true,
+                                    visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
+                                    interactionSource = interaction,
+                                    placeholder = { Text(if (kind == MediaKind.Movies) "Search movies" else "Search TV shows", maxLines = 1) },
+                                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                    // Clears the query and closes the field (Logan 2026-09-09).
+                                    trailingIcon = {
+                                        androidx.compose.material3.IconButton(onClick = { submitQuery(""); searchActive = false }) {
+                                            Icon(Icons.Filled.Cancel, contentDescription = "Clear and close search", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    },
+                                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        focusedBorderColor = Color.Transparent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                    ),
+                                    contentPadding = androidx.compose.material3.OutlinedTextFieldDefaults.contentPadding(top = 0.dp, bottom = 0.dp),
+                                    container = {
+                                        Box(
+                                            Modifier
+                                                .fillMaxSize()
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        )
+                                    },
+                                )
+                            },
                         )
+                    }
+                }
+                if (isSearching && personMatchName != null) {
+                    item(key = "person", span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            "Includes titles with $personMatchName",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                if (showProviderPills) {
+                    item(key = "providers", span = { GridItemSpan(maxLineSpan) }) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            item(key = "all") {
+                                GenrePill("All Providers", selectedProviderId == null) { viewModel.selectProvider(null, kind == MediaKind.Movies) }
+                            }
+                            items(providerIds.size, key = { providerIds[it] }) { i ->
+                                val pid = providerIds[i]
+                                GenrePill(state.providerNames[pid] ?: "Provider $pid", selectedProviderId == pid) {
+                                    viewModel.selectProvider(if (selectedProviderId == pid) null else pid, kind == MediaKind.Movies)
+                                }
+                            }
+                        }
                     }
                 }
                 if (!isSearching && genrePills.isNotEmpty()) {
@@ -596,8 +670,9 @@ fun MediaPosterCard(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            val rating = item.rating?.trim().orEmpty()
-            if (rating.isNotEmpty() && rating != "0" && rating != "0.0") {
+            // One decimal like iOS ("5.851" -> "5.9"); blank when not a number.
+            val rating = formatRating(item.rating)
+            if (rating.isNotEmpty()) {
                 Text(
                     rating, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White,
                     modifier = Modifier

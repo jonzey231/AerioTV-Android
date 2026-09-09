@@ -2091,6 +2091,11 @@ data class DispatcharrChannel(
 data class DispatcharrM3uAccount(
     val id: Int,
     val name: String? = null,
+    /** Dispatcharr's built-in "custom" account (hand-added streams) is
+     *  `locked`; it never carries VOD and is left out of provider filters. */
+    val locked: Boolean? = null,
+    @SerialName("is_active")
+    val isActive: Boolean? = null,
 )
 
 /**
