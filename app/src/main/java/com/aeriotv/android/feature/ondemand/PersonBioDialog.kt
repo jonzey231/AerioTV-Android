@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,8 +59,11 @@ import com.aeriotv.android.core.network.TmdbKnownForItem
 import com.aeriotv.android.core.network.TmdbPerson
 import com.aeriotv.android.core.network.TmdbPersonBio
 import com.aeriotv.android.core.tv.qrCodeBitmap
+import com.aeriotv.android.ui.theme.StatusWarning
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.tv.tvFocusScale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -79,8 +83,12 @@ import java.util.TimeZone
  *
  * [onTileClick] (when non-null) makes the Known For tiles actionable: OK on
  * a tile hands its [TmdbKnownForItem] to the caller, which resolves it
- * against the library and pushes the matching detail route. Null keeps the
- * strip read-only (tiles stay plain focus stops for D-pad scrolling).
+ * against the library and pushes the matching detail route, returning
+ * false when the title is not in the library. The dialog owns the
+ * double-press latch and the miss feedback: an inline "Not in your
+ * library." footer note that clears after 2 s on phone/tablet (iOS
+ * PersonBioSheet missText), a Toast on TV. Null keeps the strip read-only
+ * (tiles stay plain focus stops for D-pad scrolling).
  */
 @Composable
 fun PersonBioDialog(
@@ -89,13 +97,44 @@ fun PersonBioDialog(
     profileUrl: (String?, String) -> String?,
     onDismiss: () -> Unit,
     isTv: Boolean,
-    onTileClick: ((TmdbKnownForItem) -> Unit)? = null,
+    onTileClick: (suspend (TmdbKnownForItem) -> Boolean)? = null,
 ) {
     var bio by remember(person.id) { mutableStateOf<TmdbPersonBio?>(null) }
     var loaded by remember(person.id) { mutableStateOf(false) }
     LaunchedEffect(person.id) {
         bio = fetchBio(person.id)
         loaded = true
+    }
+    // Latch for the Known For tiles: the library resolve is a suspend call
+    // (it can hit the Dispatcharr search endpoint), so a double press would
+    // otherwise stack two detail pushes.
+    var resolving by remember { mutableStateOf(false) }
+    var missText by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val tapKnownFor: ((TmdbKnownForItem) -> Unit)? = onTileClick?.let { resolve ->
+        { item ->
+            if (!resolving) {
+                resolving = true
+                scope.launch {
+                    val found = resolve(item)
+                    if (!found) {
+                        if (isTv) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Not in your library.",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            missText = "Not in your library."
+                            delay(2_000L)
+                            missText = null
+                        }
+                    }
+                    resolving = false
+                }
+            }
+        }
     }
 
     Dialog(
@@ -204,7 +243,7 @@ fun PersonBioDialog(
                                 KnownForCard(
                                     title = item.title,
                                     posterUrl = profileUrl(item.posterPath, "w185"),
-                                    onClick = onTileClick?.let { handler -> { handler(item) } },
+                                    onClick = tapKnownFor?.let { handler -> { handler(item) } },
                                 )
                             }
                         }
@@ -217,10 +256,21 @@ fun PersonBioDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // Phone/tablet: inline miss feedback for a Known For tile
+                    // that is not in the library (iOS PersonBioSheet footer).
+                    if (!isTv) {
+                        missText?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = StatusWarning,
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                    }
                     // Phone/tablet: the QR is replaced by a direct link that
                     // opens the person's TMDB page in the browser.
                     if (!isTv) {
-                        val context = LocalContext.current
                         SettingsDialogTextButton(
                             label = "View on TMDB",
                             onClick = {

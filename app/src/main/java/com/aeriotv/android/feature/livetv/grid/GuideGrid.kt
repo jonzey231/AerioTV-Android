@@ -602,10 +602,14 @@ private fun GridRow(
                 if (w >= 40.dp.toPx()) {
                     val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
                     val tall = size.height >= 44.dp.toPx()
-                    val key = cell.startMillis * 31 + textW
+                    // Phone rows (98dp, Logan 2026-09-05 / EPGGuideView.swift)
+                    // have room for TWO description lines under the title and
+                    // subtitle; the 72dp / TV rows keep one.
+                    val descLines = if (size.height >= 90.dp.toPx()) 2 else 1
+                    val key = (cell.startMillis * 31 + textW) * 4 + descLines
                     val text = textCache.getOrPut(key) {
-                        fun measure(t: String, st: TextStyle, maxH: Float, ellipsis: Boolean = true) = textMeasurer.measure(
-                            text = t, style = st, maxLines = 1,
+                        fun measure(t: String, st: TextStyle, maxH: Float, ellipsis: Boolean = true, lines: Int = 1) = textMeasurer.measure(
+                            text = t, style = st, maxLines = lines,
                             overflow = if (ellipsis) TextOverflow.Ellipsis else TextOverflow.Clip,
                             constraints = Constraints(maxWidth = textW, maxHeight = maxH.toInt().coerceAtLeast(1)),
                         )
@@ -617,7 +621,8 @@ private fun GridRow(
                             // toggle drops the line entirely.
                             val sub = cell.subTitle?.takeIf { showSubtitles && !subtitleIsRedundant(it, cell.title, cell.description) }
                                 ?.let { measure(it, subStyle, 15.sp.toPx()) }
-                            val desc = cell.description.takeIf { it.isNotBlank() }?.let { measure(it, descStyle, 15.sp.toPx()) }
+                            val desc = cell.description.takeIf { it.isNotBlank() }
+                                ?.let { measure(it, descStyle, 15.sp.toPx() * descLines, lines = descLines) }
                             val range = rangeCache.getOrPut(cell.startMillis) {
                                 shortFmt.format(Date(cell.startMillis)) + " - " + shortFmt.format(Date(cell.endMillis))
                             }

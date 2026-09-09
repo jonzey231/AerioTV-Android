@@ -11,18 +11,25 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FiberSmartRecord
+import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.ViewSidebar
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -34,13 +41,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aeriotv.android.core.data.ChannelCollection
 
 /**
@@ -286,6 +296,225 @@ fun LiveTvPillsRow(
         }
         // #45: collection pills join the group row -- placement "beginning"
         // renders before All, "end" after the last group.
+        items(
+            collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING },
+            key = { "coll_${it.id}" },
+        ) { c -> collectionPillItem(c) }
+        items(groups, key = { "grp_$it" }) { group ->
+            FilterChip(
+                selected = selectedGroup == group,
+                onClick = { onSelectGroup(group) },
+                label = { Text(groupSidebarLabel(group), style = MaterialTheme.typography.labelLarge) },
+                shape = CircleShape,
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color.Transparent,
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedGroup == group,
+                ),
+            )
+        }
+        items(
+            collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING },
+            key = { "coll_${it.id}" },
+        ) { c -> collectionPillItem(c) }
+    }
+}
+
+/**
+ * Phone header button (Apple `phoneCircle`, ChannelListView.swift:822-829):
+ * a 38dp circle filled with onBackground at 8% and an 18dp glyph (the 17pt
+ * semibold SF symbol). [badgeCount] draws the hidden-groups count pill at the
+ * top-trailing corner the way the Manage Groups control does on iOS.
+ */
+@Composable
+fun LiveTvPhoneCircle(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    active: Boolean = false,
+    badgeCount: Int = 0,
+) {
+    Box(
+        modifier = modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(
+                if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.size(18.dp),
+        )
+        if (badgeCount > 0) {
+            Text(
+                text = badgeCount.toString(),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 4.dp, y = (-4).dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFFA502))
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Phone header row (Apple `phoneHeaderRow`, ChannelListView.swift:755-820,
+ * Logan 2026-09-05 mockup "Phone - Live TV"). No title bar above it: the tab
+ * bar already says where we are. Left to right: the groups control (drawer
+ * button in sidebar mode, Manage Groups in pills mode), then either the pill
+ * strip or the active group name + channel count, then Search, Sort and the
+ * List / Guide toggle. 16dp horizontal / 6dp vertical padding, 8dp gaps.
+ * The pill strip is CLIPPED so it never runs under the trailing buttons.
+ * Shared by the List and the Guide so the two views match exactly.
+ */
+@Composable
+fun LiveTvPhoneHeaderRow(
+    sidebarMode: Boolean,
+    activeGroupLabel: String,
+    channelCount: Int,
+    onOpenGroups: () -> Unit,
+    hiddenGroupsCount: Int,
+    onManageGroups: () -> Unit,
+    showPills: Boolean,
+    groups: List<String>,
+    selectedGroup: String,
+    onSelectGroup: (String) -> Unit,
+    collections: List<ChannelCollection>,
+    collectionPillItem: @Composable (ChannelCollection) -> Unit,
+    searchActive: Boolean,
+    onToggleSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Extra circles between the group area and Search (global Search, the
+     *  kept-live indicator). */
+    extraActions: @Composable () -> Unit = {},
+    /** The Sort menu, built by the caller so it keeps its own dropdown. */
+    sortMenu: @Composable () -> Unit,
+    canToggleViewMode: Boolean,
+    showingGuide: Boolean,
+    onToggleViewMode: () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (sidebarMode) {
+            LiveTvPhoneCircle(
+                icon = Icons.Outlined.ViewSidebar,
+                contentDescription = "Channel Groups",
+                onClick = onOpenGroups,
+            )
+            // Name takes all the leftover width (a sibling spacer used to
+            // split it in half and ellipsised "All Channels" at "All Cha").
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = activeGroupLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    text = channelCount.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                )
+            }
+        } else {
+            LiveTvPhoneCircle(
+                icon = Icons.Outlined.Tune,
+                contentDescription = if (hiddenGroupsCount == 0) "Manage groups"
+                else "Manage groups ($hiddenGroupsCount hidden)",
+                onClick = onManageGroups,
+                badgeCount = hiddenGroupsCount,
+            )
+            if (showPills) {
+                LiveTvHeaderPillStrip(
+                    groups = groups,
+                    selectedGroup = selectedGroup,
+                    onSelectGroup = onSelectGroup,
+                    collections = collections,
+                    collectionPillItem = collectionPillItem,
+                    modifier = Modifier.weight(1f).clipToBounds(),
+                )
+            } else {
+                Spacer(Modifier.weight(1f).widthIn(min = 4.dp))
+            }
+        }
+        extraActions()
+        LiveTvPhoneCircle(
+            icon = Icons.Outlined.Search,
+            contentDescription = if (searchActive) "Close search" else "Search channels",
+            onClick = onToggleSearch,
+            active = searchActive,
+        )
+        sortMenu()
+        if (canToggleViewMode) {
+            LiveTvPhoneCircle(
+                icon = if (showingGuide) Icons.Filled.ViewList else Icons.Filled.CalendarMonth,
+                contentDescription = if (showingGuide) "Show List" else "Show Guide",
+                onClick = onToggleViewMode,
+            )
+        }
+    }
+}
+
+/**
+ * The group pills inside the phone header (Apple `groupFilterBar` clipped
+ * into `phoneHeaderRow`). Same capsules as [LiveTvPillsRow] minus the Manage
+ * Groups circle (that is the header's own leading button) and minus the
+ * 56dp band: the strip is exactly as tall as the header buttons.
+ */
+@Composable
+private fun LiveTvHeaderPillStrip(
+    groups: List<String>,
+    selectedGroup: String,
+    onSelectGroup: (String) -> Unit,
+    collections: List<ChannelCollection>,
+    collectionPillItem: @Composable (ChannelCollection) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pillListState = rememberLazyListState()
+    LaunchedEffect(selectedGroup, groups, collections) {
+        val idx = groups.indexOf(selectedGroup)
+        if (idx >= 0) {
+            val item = collections.count { it.placement == ChannelCollection.PLACEMENT_BEGINNING } + idx
+            val viewport = pillListState.layoutInfo.viewportEndOffset
+            pillListState.animateScrollToItem(item, scrollOffset = -(viewport / 3))
+        }
+    }
+    LazyRow(
+        state = pillListState,
+        modifier = modifier.height(38.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         items(
             collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING },
             key = { "coll_${it.id}" },

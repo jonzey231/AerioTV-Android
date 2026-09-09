@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.TravelExplore
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FiberManualRecord
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
@@ -126,6 +128,7 @@ import com.aeriotv.android.feature.livetv.LiveTVViewMode
 import com.aeriotv.android.feature.livetv.ManageGroupsSheet
 import com.aeriotv.android.feature.livetv.ProgramInfoSheet
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
+import com.aeriotv.android.feature.multiview.rememberMultiviewStoreHandle
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.feature.playlist.SortMode
 import com.aeriotv.android.feature.playlist.nowPlaying
@@ -200,6 +203,16 @@ fun ChannelListScreen(
     // opts into searching. Closing it clears the query.
     var searchActive by remember { mutableStateOf(false) }
     val isTv = rememberIsTvDevice()
+    // Phone group selector (Logan 2026-09-05, Apple parity): the slide-in
+    // drawer by default, the pill strip when the user picks "pills". TV keeps
+    // its own guideGroupSelector; this never reads it.
+    val phoneGroupSelector by settingsVm.phoneGroupSelector.collectAsStateWithLifecycle(initialValue = "sidebar")
+    val phoneSidebarMode = !isTv && phoneGroupSelector != "pills"
+    var phoneDrawerOpen by remember { mutableStateOf(false) }
+    // Multiview staging for the phone row menu (same store the guide's cell
+    // menu toggles).
+    val multiviewStore = rememberMultiviewStoreHandle()
+    val stagedMultiview by multiviewStore.selected.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Channel Collections (#45): user-named channel groupings as extra filter
     // pills + row-menu actions. Mirrors the guide's wiring; both screens share
@@ -288,78 +301,99 @@ fun ChannelListScreen(
         )
     }
 
-    Column(modifier = modifierWrap.fillMaxSize()) {
-        // CenterAlignedTopAppBar (not the standard TopAppBar) centers the
-        // title within the bar regardless of action button width on the
-        // trailing edge, matching iOS `.navigationBarTitleDisplayMode(.inline)`
-        // which iOS UIKit centers automatically (ChannelListView.swift:191).
-        // Android TV drops the "Live TV" title bar entirely (wasted 10-foot
-        // space): the Guide / Search / Sort controls move down onto the group-pill
-        // control row (see below). Phone / tablet keep the titled app bar.
+    // #45: collection pills join the group row -- placement "beginning"
+    // renders before All, "end" after the last group. Hoisted so the TV row,
+    // the phone header strip and the phone drawer all use it.
+    val collectionPillItem: @Composable (ChannelCollection) -> Unit = { c ->
+        val token = ChannelCollection.token(c.id)
+        CollectionPill(
+            collection = c,
+            selected = state.selectedGroup == token,
+            isTv = isTv,
+            onSelect = { viewModel.onGroupSelected(token) },
+            onSetPlacement = { p -> collectionsVm.setPlacement(c.id, p) },
+            onDelete = {
+                if (state.selectedGroup == token) {
+                    viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
+                }
+                collectionsVm.delete(c.id)
+            },
+        )
+    }
+    // Phone drawer rows: collections where their pill placement puts them,
+    // around the Favorites / All / group tokens (Apple PhoneGroupDrawer).
+    val drawerTokens = remember(groups, collections) {
+        collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING }.map { ChannelCollection.token(it.id) } +
+            groups +
+            collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING }.map { ChannelCollection.token(it.id) }
+    }
+    val groupLabelFor: (String) -> String = { token ->
+        ChannelCollection.idFromToken(token)
+            ?.let { id -> collections.firstOrNull { it.id == id }?.name }
+            ?: com.aeriotv.android.feature.livetv.groupSidebarLabel(token)
+    }
+
+    Box(modifier = modifierWrap.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Phone / tablet: NO title bar (Logan 2026-09-05, Apple parity with
+        // ChannelListView.swift:395, the tab bar already says where we are).
+        // One header row carries the groups control, the pills or the active
+        // group name, Search, Sort and the List / Guide toggle. It takes the
+        // status-bar inset itself so nothing sits under the clock. Android TV
+        // has no bar either: its controls live on the group-pill row below.
         // Keep Recent Channels Live: header indicator (shared with the Guide).
         val retainedVm: com.aeriotv.android.feature.livetv.RetainedChannelsViewModel = hiltViewModel()
-        val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
-        if (!isTv) com.aeriotv.android.feature.livetv.LiveTvTopBar(
-            actionCount = (if (canToggleViewMode) 4 else 3) +
-                (if (retainedList.isNotEmpty()) 1 else 0),
-            // The old CenterAlignedTopAppBar applied the status-bar inset
-            // itself; LiveTvTopBar is inset-neutral (the Guide's Column
-            // already statusBarsPadding()s), so THIS screen adds it here or
-            // the bar rides up under the camera cutout (user report).
+        if (!isTv) com.aeriotv.android.feature.livetv.LiveTvPhoneHeaderRow(
+            sidebarMode = phoneSidebarMode,
+            activeGroupLabel = groupLabelFor(state.selectedGroup),
+            channelCount = filtered.size,
+            onOpenGroups = { phoneDrawerOpen = true },
+            hiddenGroupsCount = hiddenGroups.size,
+            onManageGroups = { manageGroupsOpen = true },
+            // Also show the pill strip when collections exist even if there is
+            // only the "All" group, else a collection filter is inescapable on
+            // a groupless playlist (#45 review). Mirrors GuideScreen.
+            showPills = groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty(),
+            groups = groups,
+            selectedGroup = state.selectedGroup,
+            onSelectGroup = { viewModel.onGroupSelected(it) },
+            collections = collections,
+            collectionPillItem = collectionPillItem,
+            searchActive = searchActive,
+            onToggleSearch = {
+                searchActive = !searchActive
+                if (!searchActive) viewModel.onSearchQueryChange("")
+            },
             modifier = Modifier.statusBarsPadding(),
-        ) { buttonSize, iconSize ->
-            com.aeriotv.android.feature.livetv.RetainedChannelsAction(
-                viewModel = retainedVm,
-                buttonSize = buttonSize,
-                iconSize = iconSize,
-                onJumpToChannel = { id ->
-                    state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
-                },
-            )
-            if (canToggleViewMode) {
-                IconButton(onClick = onToggleViewMode, modifier = Modifier.size(buttonSize)) {
-                    Icon(
-                        imageVector = if (viewMode == LiveTVViewMode.Guide)
-                            Icons.Filled.ViewList else Icons.Filled.CalendarMonth,
-                        contentDescription = if (viewMode == LiveTVViewMode.Guide)
-                            "Switch to List" else "Switch to Guide",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(iconSize),
-                    )
-                }
-            }
-            // Global Search (parity #41): the full Search screen (movies /
-            // shows / EPG). Distinct from the channel-name filter beside it.
-            IconButton(onClick = onOpenSearch, modifier = Modifier.size(buttonSize)) {
-                Icon(
-                    imageVector = Icons.Filled.TravelExplore,
-                    contentDescription = "Search",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(iconSize),
+            extraActions = {
+                com.aeriotv.android.feature.livetv.RetainedChannelsAction(
+                    viewModel = retainedVm,
+                    buttonSize = 38.dp,
+                    iconSize = 18.dp,
+                    onJumpToChannel = { id ->
+                        state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+                    },
                 )
-            }
-            IconButton(
-                onClick = {
-                    searchActive = !searchActive
-                    if (!searchActive) viewModel.onSearchQueryChange("")
-                },
-                modifier = Modifier.size(buttonSize),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Search,
-                    contentDescription = if (searchActive) "Close search" else "Search channels",
-                    tint = if (searchActive) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(iconSize),
+                // Global Search (parity #41): the full Search screen (movies /
+                // shows / EPG). Phones reach it only from app-bar entry points,
+                // so it stays beside the channel-name filter.
+                com.aeriotv.android.feature.livetv.LiveTvPhoneCircle(
+                    icon = Icons.Filled.TravelExplore,
+                    contentDescription = "Search everything",
+                    onClick = onOpenSearch,
                 )
-            }
-            SortMenu(
-                currentMode = state.sortMode,
-                onSelect = viewModel::onSortModeChange,
-                buttonSize = buttonSize,
-                iconSize = iconSize,
-            )
-        }
+            },
+            sortMenu = {
+                SortMenu(
+                    currentMode = state.sortMode,
+                    onSelect = viewModel::onSortModeChange,
+                    phoneCircle = true,
+                )
+            },
+            canToggleViewMode = canToggleViewMode,
+            showingGuide = viewMode == LiveTVViewMode.Guide,
+            onToggleViewMode = onToggleViewMode,
+        )
 
         if (searchActive) OutlinedTextField(
             value = state.searchQuery,
@@ -401,47 +435,15 @@ fun ChannelListScreen(
         val chipsVisible by remember {
             derivedStateOf { listState.firstVisibleItemIndex == 0 }
         }
-        AnimatedVisibility(
-            // Also show the pill row when collections exist even if there's
-            // only the "All" group, else a collection filter is inescapable
-            // on a groupless playlist (#45 review). Mirrors GuideScreen.
-            visible = chipsVisible && (isTv || groups.size > 1 || collections.isNotEmpty()),
+        // Phone pills now live inside the header row above (no collapse on
+        // scroll: the header is fixed, as on iOS). TV keeps its own pill row
+        // because the Sort / Manage Groups circles live in it.
+        if (isTv) AnimatedVisibility(
+            visible = chipsVisible,
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
-            // #45: collection pills join the group row -- placement
-            // "beginning" renders before All, "end" after the last group.
-            // Hoisted so both the TV row and the shared phone row use it.
-            val collectionPillItem: @Composable (ChannelCollection) -> Unit = { c ->
-                val token = ChannelCollection.token(c.id)
-                CollectionPill(
-                    collection = c,
-                    selected = state.selectedGroup == token,
-                    isTv = isTv,
-                    onSelect = { viewModel.onGroupSelected(token) },
-                    onSetPlacement = { p -> collectionsVm.setPlacement(c.id, p) },
-                    onDelete = {
-                        if (state.selectedGroup == token) {
-                            viewModel.onGroupSelected(PlaylistViewModel.ALL_GROUPS)
-                        }
-                        collectionsVm.delete(c.id)
-                    },
-                )
-            }
-            // Phone renders the SAME shared row as the Guide so the two views
-            // match pixel-for-pixel (user report: the Tune button and pills
-            // shifted slightly between views). TV keeps its own row below
-            // because the Guide / Search / Sort circles live in it.
-            if (!isTv) com.aeriotv.android.feature.livetv.LiveTvPillsRow(
-                groups = groups,
-                selectedGroup = state.selectedGroup,
-                onSelectGroup = { viewModel.onGroupSelected(it) },
-                collections = collections,
-                hiddenGroupsCount = hiddenGroups.size,
-                onManageGroups = { manageGroupsOpen = true },
-                collectionPillItem = collectionPillItem,
-            )
-            else LazyRow(
+            LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -672,6 +674,12 @@ fun ChannelListScreen(
                         showLogo = showChannelLogos,
                         showNumber = showChannelNumbers,
                         collectionsMenu = collectionsMenu,
+                        inMultiview = stagedMultiview.any { it.id == channel.id },
+                        onToggleMultiview = if (channel.url.isNotBlank()) {
+                            { multiviewStore.toggle(channel) }
+                        } else {
+                            null
+                        },
                         onWatchPast = if (channel.hasCatchup) {
                             { prog -> onCatchupResolve(channel, prog) }
                         } else {
@@ -692,6 +700,23 @@ fun ChannelListScreen(
                 channelList()
             }
         }
+    }
+    if (!isTv) com.aeriotv.android.feature.livetv.PhoneGroupDrawerHost(
+        open = phoneDrawerOpen,
+        onDismiss = { phoneDrawerOpen = false },
+        tokens = drawerTokens,
+        selected = state.selectedGroup,
+        labelFor = groupLabelFor,
+        onSelect = { viewModel.onGroupSelected(it) },
+        // A drag in the drawer is a manual order (the saved order is only
+        // read in Manual mode), so the mode flips with the first drag.
+        onReorder = { order ->
+            settingsVm.setGroupSortMode(com.aeriotv.android.feature.livetv.GroupSortMode.Manual.name)
+            settingsVm.setGroupOrder(order)
+        },
+        onManageGroups = { phoneDrawerOpen = false; manageGroupsOpen = true },
+        hiddenGroupCount = hiddenGroups.size,
+    )
     }
 
     programInfoTarget?.let { target ->
@@ -759,10 +784,18 @@ internal fun SortMenu(
     circular: Boolean = false,
     buttonSize: androidx.compose.ui.unit.Dp? = null,
     iconSize: androidx.compose.ui.unit.Dp? = null,
+    /** Phone header (Apple phoneCircle): the 38dp onBackground-8% circle. */
+    phoneCircle: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        if (circular) {
+        if (phoneCircle) {
+            com.aeriotv.android.feature.livetv.LiveTvPhoneCircle(
+                icon = Icons.Filled.SwapVert,
+                contentDescription = "Sort channels",
+                onClick = { expanded = true },
+            )
+        } else if (circular) {
             ListControlCircle(
                 icon = Icons.Filled.SwapVert,
                 contentDescription = "Sort channels",
@@ -863,6 +896,10 @@ internal fun ChannelRow(
      *  expanded schedule panel then lists recently aired programmes with a
      *  Watch action on the replayable ones. */
     onWatchPast: ((EPGProgramme) -> Unit)? = null,
+    /** Phone row menu (Apple cardMenuItems): Add to / Remove from Multiview.
+     *  Null = not offered (Favorites tab, no stream URL). */
+    onToggleMultiview: (() -> Unit)? = null,
+    inMultiview: Boolean = false,
 ) {
     val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
@@ -1053,6 +1090,19 @@ internal fun ChannelRow(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        // Favorite star beside the name, like the guide's
+                        // channel column (Logan 2026-09-05, Apple
+                        // ChannelListView.swift:3064-3070: filled star, 10pt
+                        // semibold on compact, warning tint).
+                        if (isFavorite) {
+                            Spacer(Modifier.width(5.dp))
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = "Favorite",
+                                tint = Color(0xFFFFA502),
+                                modifier = Modifier.size(12.dp),
+                            )
+                        }
                         // Catch-up badge (Logan 2026-07-20, parity with the
                         // guide rail): a small history clock beside the name
                         // whenever this channel has a replayable archive.
@@ -1233,6 +1283,22 @@ internal fun ChannelRow(
                 onDismissRequest = { menuOpen = false },
                 containerColor = MaterialTheme.colorScheme.surface,
             ) {
+                // Apple cardMenuItems order (ChannelListView.swift:3217):
+                // Watch, Favorites, Multiview, Collection, Program Info, Record.
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    text = { Text("Watch") },
+                    onClick = menuGuard.wrap {
+                        menuOpen = false
+                        onPlay()
+                    },
+                )
                 DropdownMenuItem(
                     leadingIcon = {
                         Icon(
@@ -1250,6 +1316,23 @@ internal fun ChannelRow(
                         onToggleFavorite()
                     },
                 )
+                onToggleMultiview?.let { toggle ->
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.GridView,
+                                contentDescription = null,
+                                tint = if (inMultiview) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        text = { Text(if (inMultiview) "Remove from Multiview" else "Add to Multiview") },
+                        onClick = menuGuard.wrap {
+                            menuOpen = false
+                            toggle()
+                        },
+                    )
+                }
                 // #45: Add to Collection + the contextual remove (iOS
                 // cardMenuButtons order: right after Favorites).
                 collectionsMenu?.let { cm ->
@@ -1301,6 +1384,13 @@ internal fun ChannelRow(
                 }
                 if (nowProgramme != null) {
                     DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        },
                         text = { Text("Program Info") },
                         onClick = menuGuard.wrap {
                             menuOpen = false

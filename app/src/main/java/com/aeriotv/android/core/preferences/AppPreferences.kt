@@ -344,6 +344,19 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Phone / tablet Live TV group selector (Logan 2026-09-05, Apple parity
+     * with `phoneGroupSelectorKey`): "sidebar" (default) = a slide-in group
+     * drawer opened from the header's groups button, "pills" = the group pill
+     * strip in the header row. Separate from [guideGroupSelector] so each
+     * device type keeps its own choice and its own default.
+     */
+    val phoneGroupSelector: Flow<String> =
+        store.data.map { it[KEY_PHONE_GROUP_SELECTOR] ?: "sidebar" }
+    suspend fun setPhoneGroupSelector(mode: String) {
+        store.edit { it[KEY_PHONE_GROUP_SELECTOR] = mode }
+    }
+
+    /**
      * Remote Control (Logan spec 2026-07-20): when true, tuning a channel
      * from the Live TV tab starts it in the corner MINI player (the common
      * IPTV-client two-stage tune) instead of fullscreen. Default false =
@@ -1126,6 +1139,7 @@ class AppPreferences @Inject constructor(
             data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
         }
         data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
+        data[KEY_PHONE_GROUP_SELECTOR]?.let { out["phoneGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
         data[KEY_CAST_TAP_STAYS_ON_LIST]?.let { out["castTapStaysOnList"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
@@ -1177,6 +1191,7 @@ class AppPreferences @Inject constructor(
                 keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
             }
             keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
+            keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
             keys["castTapStaysOnList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CAST_TAP_STAYS_ON_LIST] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
@@ -1506,6 +1521,7 @@ class AppPreferences @Inject constructor(
         val KEY_REMOTE_CONTROL_MAP = stringPreferencesKey("remote_control_map")
         val KEY_SYNC_REMOTE_CONTROL_MAP = booleanPreferencesKey("sync_remote_control_map")
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
+        val KEY_PHONE_GROUP_SELECTOR = stringPreferencesKey("phone_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")

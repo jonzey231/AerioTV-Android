@@ -36,8 +36,9 @@ import androidx.compose.ui.text.input.ImeAction
 import com.aeriotv.android.feature.channels.SortMenu
 import com.aeriotv.android.feature.collections.AddToCollectionFlow
 import com.aeriotv.android.feature.collections.CollectionPill
-import com.aeriotv.android.feature.livetv.LiveTvPillsRow
-import com.aeriotv.android.feature.livetv.LiveTvTopBar
+import com.aeriotv.android.feature.livetv.LiveTvPhoneCircle
+import com.aeriotv.android.feature.livetv.LiveTvPhoneHeaderRow
+import com.aeriotv.android.feature.livetv.PhoneGroupDrawerHost
 import com.aeriotv.android.feature.livetv.ManageGroupsSheet
 import com.aeriotv.android.feature.livetv.RetainedChannelsAction
 import com.aeriotv.android.feature.livetv.RetainedChannelsViewModel
@@ -175,6 +176,11 @@ fun GuideScreen(
     val stagedMultiview by multiviewStore.selected.collectAsStateWithLifecycle(initialValue = emptyList())
     val groupSelector by settingsVm.guideGroupSelector.collectAsStateWithLifecycle()
     val sidebarGroupMode = isTv && groupSelector == "sidebar" && !favoritesOnly
+    // Phone group selector (Logan 2026-09-05, Apple parity): drawer by
+    // default, pills on request. Separate preference from the TV's.
+    val phoneGroupSelector by settingsVm.phoneGroupSelector.collectAsStateWithLifecycle()
+    val phoneSidebarMode = !isTv && phoneGroupSelector != "pills" && !favoritesOnly
+    var phoneDrawerOpen by remember { mutableStateOf(false) }
     val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle()
     val tabActive = com.aeriotv.android.feature.main.LocalTabIsActive.current
     var groupSidebarOpen by remember { mutableStateOf(false) }
@@ -187,7 +193,12 @@ fun GuideScreen(
     val fontScale = LocalConfiguration.current.fontScale
     val hourWidth = if (isTv) 300.dp * guideScale * tvComfortScale else 320.dp * guideScale
     val railWidth = if (isTv) 120.dp * tvComfortScale else 78.dp
-    val rowHeight = if (isTv) 55.dp * tvComfortScale * fontScale else 72.dp
+    // Phone cells carry the subtitle and two description lines (Logan
+    // 2026-09-05, EPGGuideView.swift:3415: 98pt on the phone idiom, 72 on
+    // the iPad), so they are taller. Phone = smallest width under 600dp,
+    // so a rotated phone keeps the tall rows like the iPhone does.
+    val isPhoneIdiom = !isTv && LocalConfiguration.current.smallestScreenWidthDp < 600
+    val rowHeight = if (isTv) 55.dp * tvComfortScale * fontScale else if (isPhoneIdiom) 98.dp else 72.dp
     val headerHeight = if (isTv) 25.dp * tvComfortScale * fontScale else 32.dp
 
     // Clock: 30 s tick for the now-line and the airing tint.
@@ -416,7 +427,16 @@ fun GuideScreen(
         }
     }
 
-    Row(modifier = modifier.fillMaxSize()) {
+    // Phone drawer rows: collections where their pill placement puts them,
+    // around the Favorites / All / group tokens (Apple PhoneGroupDrawer).
+    val groupLabelFor: (String) -> String = { token ->
+        ChannelCollection.idFromToken(token)
+            ?.let { id -> collections.firstOrNull { it.id == id }?.name }
+            ?: com.aeriotv.android.feature.livetv.groupSidebarLabel(token)
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+    Row(modifier = Modifier.fillMaxSize()) {
     if (groupSidebarOpen) {
         GuideGroupSidebarPane(
             groups = groups,
@@ -434,40 +454,44 @@ fun GuideScreen(
     }
     Column(modifier = Modifier.weight(1f).fillMaxSize().then(if (isTv) Modifier else Modifier.statusBarsPadding())) {
         if (!isTv) {
+            // Phone / tablet: NO title bar (Logan 2026-09-05, Apple parity).
+            // The header row carries the groups control, the pills or the
+            // active group name + count, Search, Sort and the List / Guide
+            // toggle; the Column above already applies the status-bar inset.
             val retainedVm: RetainedChannelsViewModel = hiltViewModel()
-            val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
-            LiveTvTopBar(
-                actionCount = (if (canToggleViewMode) 4 else 3) + (if (retainedList.isNotEmpty()) 1 else 0),
-            ) { buttonSize, iconSize ->
-                RetainedChannelsAction(
-                    viewModel = retainedVm, buttonSize = buttonSize, iconSize = iconSize,
-                    onJumpToChannel = { id -> state.channels.firstOrNull { it.id == id }?.let(onChannelClick) },
-                )
-                if (canToggleViewMode) {
-                    IconButton(onClick = onToggleViewMode, modifier = Modifier.size(buttonSize)) {
-                        Icon(
-                            imageVector = if (viewMode == LiveTVViewMode.Guide) Icons.Filled.ViewList else Icons.Filled.CalendarMonth,
-                            contentDescription = if (viewMode == LiveTVViewMode.Guide) "Switch to List" else "Switch to Guide",
-                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(iconSize),
-                        )
-                    }
-                }
-                IconButton(onClick = onOpenSearch, modifier = Modifier.size(buttonSize)) {
-                    Icon(Icons.Filled.TravelExplore, contentDescription = "Search", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(iconSize))
-                }
-                IconButton(
-                    onClick = { searchActive = !searchActive; if (!searchActive) viewModel.onSearchQueryChange("") },
-                    modifier = Modifier.size(buttonSize),
-                ) {
-                    Icon(
-                        Icons.Outlined.Search,
-                        contentDescription = if (searchActive) "Close search" else "Search channels",
-                        tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(iconSize),
+            LiveTvPhoneHeaderRow(
+                sidebarMode = phoneSidebarMode,
+                activeGroupLabel = groupLabelFor(state.selectedGroup),
+                channelCount = displayChannels.size,
+                onOpenGroups = { phoneDrawerOpen = true },
+                hiddenGroupsCount = hiddenGroups.size,
+                onManageGroups = { showManageGroups = true },
+                showPills = !favoritesOnly && (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty()),
+                groups = groups,
+                selectedGroup = state.selectedGroup,
+                onSelectGroup = { viewModel.onGroupSelected(it) },
+                collections = collections,
+                collectionPillItem = collectionPillItem,
+                searchActive = searchActive,
+                onToggleSearch = { searchActive = !searchActive; if (!searchActive) viewModel.onSearchQueryChange("") },
+                extraActions = {
+                    RetainedChannelsAction(
+                        viewModel = retainedVm, buttonSize = 38.dp, iconSize = 18.dp,
+                        onJumpToChannel = { id -> state.channels.firstOrNull { it.id == id }?.let(onChannelClick) },
                     )
-                }
-                SortMenu(currentMode = state.sortMode, onSelect = viewModel::onSortModeChange, buttonSize = buttonSize, iconSize = iconSize)
-            }
+                    // Global Search: phones reach the full Search screen only
+                    // from app-bar entry points, so it stays in the header.
+                    LiveTvPhoneCircle(
+                        icon = Icons.Filled.TravelExplore,
+                        contentDescription = "Search everything",
+                        onClick = onOpenSearch,
+                    )
+                },
+                sortMenu = { SortMenu(currentMode = state.sortMode, onSelect = viewModel::onSortModeChange, phoneCircle = true) },
+                canToggleViewMode = canToggleViewMode,
+                showingGuide = viewMode == LiveTVViewMode.Guide,
+                onToggleViewMode = onToggleViewMode,
+            )
             if (searchActive) {
                 OutlinedTextField(
                     value = state.searchQuery,
@@ -481,17 +505,6 @@ fun GuideScreen(
                     } else null,
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions(imeAction = ImeAction.Search),
-                )
-            }
-            if (groups.size > 1 || collections.isNotEmpty() || hiddenGroups.isNotEmpty()) {
-                LiveTvPillsRow(
-                    groups = groups,
-                    selectedGroup = state.selectedGroup,
-                    onSelectGroup = { viewModel.onGroupSelected(it) },
-                    collections = collections,
-                    hiddenGroupsCount = hiddenGroups.size,
-                    onManageGroups = { showManageGroups = true },
-                    collectionPillItem = collectionPillItem,
                 )
             }
         }
@@ -561,6 +574,30 @@ fun GuideScreen(
                 modifier = Modifier.fillMaxSize(),
             ) { gridContent() }
         }
+    }
+    }
+    if (!isTv) {
+        val drawerTokens = remember(groups, collections) {
+            collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING }.map { ChannelCollection.token(it.id) } +
+                groups +
+                collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING }.map { ChannelCollection.token(it.id) }
+        }
+        PhoneGroupDrawerHost(
+            open = phoneDrawerOpen,
+            onDismiss = { phoneDrawerOpen = false },
+            tokens = drawerTokens,
+            selected = state.selectedGroup,
+            labelFor = groupLabelFor,
+            onSelect = { viewModel.onGroupSelected(it) },
+            // A drag in the drawer is a manual order (the saved order is only
+            // read in Manual mode), so the mode flips with the first drag.
+            onReorder = { order ->
+                settingsVm.setGroupSortMode(GroupSortMode.Manual.name)
+                settingsVm.setGroupOrder(order)
+            },
+            onManageGroups = { phoneDrawerOpen = false; showManageGroups = true },
+            hiddenGroupCount = hiddenGroups.size,
+        )
     }
     }
 

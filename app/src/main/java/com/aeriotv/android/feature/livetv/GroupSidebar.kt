@@ -10,14 +10,28 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,15 +50,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.settings.TvSettingsMetrics
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.settings.settingsTitleStyle
 import com.aeriotv.android.ui.tv.tvFocusScale
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * Channel-group sidebar (Remote Control initiative, Logan spec 2026-07-20):
@@ -377,5 +395,197 @@ internal fun GuideGroupSidebarPane(
                 .width(1.dp)
                 .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         )
+    }
+}
+
+/**
+ * Phone group drawer (Apple `PhoneGroupDrawer`, ChannelListView.swift:4653-4723,
+ * Logan 2026-09-05): the phone's default group selector. "CHANNEL GROUPS"
+ * heading with the Manage Groups circle beside it, then Favorites, All and
+ * the visible groups (collections ride along where their pill placement puts
+ * them) as tight 34dp rows with no dividers. The default group carries a pin
+ * (Android has no default-group setting yet, so All is the pinned row). A
+ * long press lifts a row to reorder; the new order is the pill order too and
+ * is written through [onReorder] without the collection tokens.
+ */
+@Composable
+internal fun PhoneGroupDrawer(
+    tokens: List<String>,
+    selected: String,
+    labelFor: (String) -> String,
+    onSelect: (String) -> Unit,
+    onReorder: (List<String>) -> Unit,
+    onManageGroups: () -> Unit,
+    hiddenGroupCount: Int = 0,
+    modifier: Modifier = Modifier,
+) {
+    var order by remember(tokens) { mutableStateOf(tokens) }
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        order = order.toMutableList().apply { add(to.index, removeAt(from.index)) }
+    }
+    LaunchedEffect(Unit) {
+        val idx = tokens.indexOf(selected)
+        if (idx > 0) runCatching { listState.scrollToItem(idx) }
+    }
+    Column(modifier = modifier.fillMaxHeight().padding(top = 2.dp)) {
+        Row(
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 4.dp),
+        ) {
+            Text(
+                text = "CHANNEL GROUPS",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+                    .clickable(onClick = onManageGroups),
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Tune,
+                    contentDescription = if (hiddenGroupCount == 0) "Manage Groups"
+                    else "Manage Groups ($hiddenGroupCount hidden)",
+                    tint = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
+            items(order, key = { it }) { token ->
+                val isCollection = token.startsWith(ChannelCollection.TOKEN_PREFIX)
+                ReorderableItem(reorderState, key = token) { dragging ->
+                    val isSelected = token == selected
+                    Row(
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (dragging) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
+                                else Color.Transparent,
+                            )
+                            .clickable { onSelect(token) }
+                            // Collections keep their pill placement; only the
+                            // real groups (and the pinned rows) reorder.
+                            .then(
+                                if (isCollection) Modifier
+                                else Modifier.longPressDraggableHandle(
+                                    onDragStopped = {
+                                        onReorder(order.filterNot { it.startsWith(ChannelCollection.TOKEN_PREFIX) })
+                                    },
+                                ),
+                            )
+                            .heightIn(min = 34.dp)
+                            .padding(start = 18.dp, end = 14.dp),
+                    ) {
+                        if (token == PlaylistViewModel.FAVORITES_GROUP) {
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = null,
+                                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                        Text(
+                            text = labelFor(token),
+                            fontSize = 15.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (token == PlaylistViewModel.ALL_GROUPS) {
+                            Icon(
+                                imageVector = Icons.Filled.PushPin,
+                                contentDescription = "Default group",
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(11.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            item(key = "__bottom_spacer__") { Spacer(Modifier.height(90.dp)) }
+        }
+    }
+}
+
+/**
+ * Overlay host for [PhoneGroupDrawer]: a 45% black scrim (tap to dismiss)
+ * with the drawer sliding in from the leading edge, drawn over the list or
+ * the guide. Back closes it too. Place it as the LAST child of a Box that
+ * wraps the screen so it paints above everything.
+ */
+@Composable
+internal fun PhoneGroupDrawerHost(
+    open: Boolean,
+    onDismiss: () -> Unit,
+    tokens: List<String>,
+    selected: String,
+    labelFor: (String) -> String,
+    onSelect: (String) -> Unit,
+    onReorder: (List<String>) -> Unit,
+    onManageGroups: () -> Unit,
+    hiddenGroupCount: Int = 0,
+) {
+    androidx.activity.compose.BackHandler(enabled = open) { onDismiss() }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = open,
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+        )
+    }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = open,
+        enter = androidx.compose.animation.slideInHorizontally { -it },
+        exit = androidx.compose.animation.slideOutHorizontally { -it },
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(0.78f)
+                .widthIn(max = 320.dp)
+                .background(MaterialTheme.colorScheme.background)
+                // Swallow taps so they never reach the scrim below.
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                )
+                .statusBarsPadding(),
+        ) {
+            PhoneGroupDrawer(
+                tokens = tokens,
+                selected = selected,
+                labelFor = labelFor,
+                onSelect = { onSelect(it); onDismiss() },
+                onReorder = onReorder,
+                onManageGroups = onManageGroups,
+                hiddenGroupCount = hiddenGroupCount,
+            )
+        }
     }
 }

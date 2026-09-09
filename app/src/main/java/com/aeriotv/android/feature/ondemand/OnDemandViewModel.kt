@@ -1283,6 +1283,14 @@ class OnDemandViewModel @Inject constructor(
      * null (caller keeps its placeholder) when disabled, unkeyed, or no match.
      * Callers invoke this ONLY when the server provided no artwork.
      */
+    /**
+     * True when the TMDB opt-in is on AND a key is saved: the detail screens'
+     * provenance note uses it to pick between "add a key in Settings" and
+     * "no matching title" when a title has no artwork (iOS tmdbSourceNote).
+     */
+    suspend fun isTmdbConfigured(): Boolean =
+        appPreferences.programPostersTmdbEnabled.first() && appPreferences.tmdbApiKey.first().isNotBlank()
+
     suspend fun resolveTmdbPoster(tmdbId: String?, title: String, isMovie: Boolean): String? {
         if (!appPreferences.programPostersTmdbEnabled.first()) return null
         val key = appPreferences.tmdbApiKey.first()

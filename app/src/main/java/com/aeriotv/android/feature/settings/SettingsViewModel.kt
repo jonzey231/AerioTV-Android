@@ -213,6 +213,12 @@ class SettingsViewModel @Inject constructor(
     fun setGuideGroupSelector(mode: String) {
         viewModelScope.launch { prefs.setGuideGroupSelector(mode) }
     }
+    /** Phone / tablet Live TV group selector: "sidebar" (default drawer) or "pills". */
+    val phoneGroupSelector: StateFlow<String> = prefs.phoneGroupSelector
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "sidebar")
+    fun setPhoneGroupSelector(mode: String) {
+        viewModelScope.launch { prefs.setPhoneGroupSelector(mode) }
+    }
 
     /** Live TV tune target: false = fullscreen (default), true = corner mini. */
     val guideTuneInMini: StateFlow<Boolean> = prefs.guideTuneInMini

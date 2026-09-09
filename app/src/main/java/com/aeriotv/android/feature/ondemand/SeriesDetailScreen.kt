@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Info
@@ -139,10 +140,18 @@ fun SeriesDetailScreen(
 
     // TMDB poster fallback (opt-in): only when the server gave no artwork.
     var tmdbPosterUrl by remember(seriesId) { mutableStateOf<String?>(null) }
+    // Provenance note inputs (phone): whether the poster lookup has run, and
+    // whether the opt-in + key are set, so an art-less title can say "add a
+    // key" vs "no match" (iOS tmdbLookupDone / TMDBPosters.apiKey).
+    var tmdbLookupDone by remember(seriesId) { mutableStateOf(false) }
+    var tmdbConfigured by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { tmdbConfigured = viewModel.isTmdbConfigured() }
+    val hasServerArt = series != null && (
+        !series.posterUrl.isNullOrBlank() ||
+            !info?.posterUrl.isNullOrBlank() || !info?.backdropUrl.isNullOrBlank()
+        )
     LaunchedEffect(seriesId, info, state.seriesProviderInfoLoading) {
         val s = series ?: return@LaunchedEffect
-        val hasServerArt = !s.posterUrl.isNullOrBlank() ||
-            !info?.posterUrl.isNullOrBlank() || !info?.backdropUrl.isNullOrBlank()
         val infoSettled = state.seriesProviderInfo.containsKey(seriesId) ||
             !state.seriesProviderInfoLoading.contains(seriesId)
         if (!hasServerArt && tmdbPosterUrl == null && infoSettled) {
@@ -151,6 +160,7 @@ fun SeriesDetailScreen(
                 title = s.displayName,
                 isMovie = false,
             )
+            tmdbLookupDone = true
         }
     }
 
@@ -199,10 +209,6 @@ fun SeriesDetailScreen(
         tmdbCredits?.let { c -> (c.cast + c.directors).distinctBy { it.id } }.orEmpty()
     }
     var bioPerson by remember { mutableStateOf<TmdbPerson?>(null) }
-    // Latch for the bio dialog's Known For tile: the library resolve is a
-    // suspend call (it can hit the Dispatcharr search endpoint), so a double
-    // OK press would otherwise stack two detail pushes.
-    var resolvingKnownFor by remember { mutableStateOf(false) }
 
     BackHandler(enabled = true) { onBack() }
 
@@ -232,6 +238,9 @@ fun SeriesDetailScreen(
     // this series. iOS Issue #19 parity: this includes the next episode that
     // the up-next queue seeds (positionMs 0, not finished) after you finish one,
     // so the series surfaces "what's next" instead of dropping off.
+    // Per-episode watch progress for the row chrome (phone), keyed by the
+    // episode uuid, the same key the Continue Watching card uses.
+    val progressByEpisode = remember(recent) { recent.associateBy { it.videoId } }
     val continueWatchingEpisode = remember(recent, episodes) {
         val episodeIds = episodes.asSequence().map { it.uuid }.toSet()
         val pick = recent.firstOrNull { row ->
@@ -404,6 +413,13 @@ fun SeriesDetailScreen(
                             null
                         },
                         onVersionClick = { showVersionPicker = true },
+                        versionOptions = versionOptions,
+                        selectedVersion = selectedVersion,
+                        onVersionSelect = { option -> viewModel.selectSeriesVersion(seriesId, option) },
+                        tmdbPosterUsed = tmdbPosterUrl != null,
+                        hasProviderArt = hasServerArt,
+                        tmdbConfigured = tmdbConfigured,
+                        tmdbLookupDone = tmdbLookupDone,
                         // The chip row, when present, is always the topmost
                         // focusable on this screen.
                         chipRowModifier = Modifier.onFocusChanged {
@@ -473,6 +489,7 @@ fun SeriesDetailScreen(
                             selected = selectedSeason,
                             onSelect = { selectedSeason = it },
                             edgeInset = edgeInset,
+                            isTv = isTv,
                             modifier = Modifier.onFocusChanged {
                                 if (it.hasFocus && !hasInfoChips && castCrewPeople.isEmpty() &&
                                     continueWatchingEpisode == null
@@ -513,11 +530,15 @@ fun SeriesDetailScreen(
                     itemsIndexed(items = episodesInSeason, key = { _, ep -> ep.id }) { index, ep ->
                         EpisodeRow(
                             episode = ep,
+                            progress = progressByEpisode[ep.uuid],
+                            isTv = isTv,
                             onClick = { playEpisode(ep) },
                             modifier = Modifier
                                 .padding(
                                     horizontal = if (isTv) 44.dp else 12.dp,
-                                    vertical = 4.dp,
+                                    // Phone: the row's own 10dp inset carries
+                                    // the iPhone vertical spacing.
+                                    vertical = if (isTv) 4.dp else 0.dp,
                                 )
                                 .then(
                                     if (index == 0 && continueWatchingEpisode == null) {
@@ -539,6 +560,17 @@ fun SeriesDetailScreen(
                                         Modifier
                                     },
                                 ),
+                        )
+                    }
+                }
+                if (!isTv) {
+                    // iOS puts the long TMDB attribution at the very bottom of
+                    // the page, below the episodes (VODDetailView 371).
+                    item(key = "tmdb-attribution") {
+                        TmdbAttribution(
+                            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 24.dp),
+                            long = true,
+                            isTv = false,
                         )
                     }
                 }
@@ -618,20 +650,10 @@ fun SeriesDetailScreen(
                 onDismiss = { bioPerson = null },
                 isTv = isTv,
                 onTileClick = { item ->
-                    if (!resolvingKnownFor) {
-                        resolvingKnownFor = true
-                        scope.launch {
-                            when (val target = viewModel.resolveKnownForTarget(item)) {
-                                is OnDemandViewModel.KnownForTarget.Movie -> onOpenMovie(target.uuid)
-                                is OnDemandViewModel.KnownForTarget.Series -> onOpenSeries(target.id)
-                                null -> android.widget.Toast.makeText(
-                                    context,
-                                    "Not in your library.",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                            resolvingKnownFor = false
-                        }
+                    when (val target = viewModel.resolveKnownForTarget(item)) {
+                        is OnDemandViewModel.KnownForTarget.Movie -> { onOpenMovie(target.uuid); true }
+                        is OnDemandViewModel.KnownForTarget.Series -> { onOpenSeries(target.id); true }
+                        null -> false
                     }
                 },
             )
@@ -660,11 +682,15 @@ private fun SeriesHeroSection(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            // Phone: iOS keeps an inline nav bar in the app background so the
+            // hero never runs under the status bar; inset the hero the same
+            // way (the floating back circle still overlays the artwork).
+            .then(if (isTv) Modifier else Modifier.statusBarsPadding())
             // 16:11 of the 960dp TV canvas is 660dp, taller than the whole
             // 540dp screen: the title block sat below the fold and the screen
             // read as a full-screen poster. Fixed 300dp hero on TV; phones
-            // keep the aspect-ratio hero. Same fix as MovieDetailScreen.
-            .then(if (isTv) Modifier.height(300.dp) else Modifier.aspectRatio(16f / 11f)),
+            // use the iPhone's fixed 280dp hero (VODDetailView 1181).
+            .then(if (isTv) Modifier.height(300.dp) else Modifier.height(280.dp)),
     ) {
         if (!heroUrl.isNullOrBlank()) {
             AsyncImage(
@@ -676,17 +702,26 @@ private fun SeriesHeroSection(
         } else {
             Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
         }
+        // Phone: iOS heroOverlay is two stops, clear at 50% height to the
+        // app background at the bottom (Colors.swift 137-141).
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.5f),
-                            MaterialTheme.colorScheme.background,
-                        ),
-                    ),
+                    if (isTv) {
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.5f),
+                                MaterialTheme.colorScheme.background,
+                            ),
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            0.5f to Color.Transparent,
+                            1f to MaterialTheme.colorScheme.background,
+                        )
+                    },
                 ),
         )
 
@@ -716,7 +751,8 @@ private fun SeriesHeroSection(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
-                } else {
+                } else if (isTv) {
+                    // Phone matches iOS: no placeholder glyph, just the tile.
                     Icon(
                         imageVector = Icons.Outlined.Tv,
                         contentDescription = null,
@@ -784,6 +820,16 @@ private fun SeriesInfoSection(
     // (Dispatcharr Direct Connect); renders the "Version: {label}" pill.
     versionLabel: String? = null,
     onVersionClick: () -> Unit = {},
+    // Phone: the version menu picks inline (iOS versionRow Menu); TV keeps
+    // the sheet behind onVersionClick.
+    versionOptions: List<VodProviderOption> = emptyList(),
+    selectedVersion: VodProviderOption? = null,
+    onVersionSelect: (VodProviderOption?) -> Unit = {},
+    // Phone: TMDB provenance note inputs (iOS tmdbSourceNote).
+    tmdbPosterUsed: Boolean = false,
+    hasProviderArt: Boolean = true,
+    tmdbConfigured: Boolean = false,
+    tmdbLookupDone: Boolean = false,
     chipRowModifier: Modifier,
     onOpenUrl: (label: String, url: String) -> Unit,
 ) {
@@ -795,6 +841,8 @@ private fun SeriesInfoSection(
     val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
     val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
     val country = info?.effectiveCountry?.takeIf { it.isNotBlank() }
+    // DispatcharrVODSeries carries no youtube_trailer field of its own, so
+    // provider-info is the only trailer source for series.
     val trailerUrl = info?.effectiveTrailer?.let { youtubeUrl(it) }
     val tmdbUrl = (info?.tmdbId ?: series.tmdbId)?.takeIf { it.isNotBlank() }?.let {
         "https://www.themoviedb.org/tv/$it"
@@ -810,17 +858,31 @@ private fun SeriesInfoSection(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (!plot.isNullOrBlank()) {
-            // Series plots can run long with episode summaries layered into
-            // the main synopsis; iOS doesn't truncate them and Android
-            // shouldn't either. Matches MovieDetailScreen.
-            Text(
-                text = plot,
-                modifier = Modifier.widthIn(max = readableCap),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (isTv) {
+                // No cap on TV: series plots can run long with episode
+                // summaries layered in, and there is no tap to expand.
+                Text(
+                    text = plot,
+                    modifier = Modifier.widthIn(max = readableCap),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                // iPhone clamps to 4 lines (VODDetailView 1283); "More"
+                // keeps the full text reachable.
+                ExpandablePlot(plot = plot, maxWidth = readableCap)
+            }
+        }
+        // Phone: version pill on its own row ABOVE the link pills (iOS
+        // versionRow precedes externalLinks, VODDetailView 1289).
+        if (!isTv && versionLabel != null) {
+            PhoneVersionPill(
+                options = versionOptions,
+                selected = selectedVersion,
+                onSelect = onVersionSelect,
             )
         }
-        if (trailerUrl != null || tmdbUrl != null || versionLabel != null) {
+        if (trailerUrl != null || tmdbUrl != null || (isTv && versionLabel != null)) {
             Row(
                 modifier = chipRowModifier,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -835,24 +897,38 @@ private fun SeriesInfoSection(
                         onOpenUrl("View on TMDB", tmdbUrl)
                     }
                 }
-                if (versionLabel != null) {
+                if (isTv && versionLabel != null) {
                     PillButton(icon = Icons.Outlined.Tune, text = "Version: $versionLabel") {
                         onVersionClick()
                     }
                 }
             }
         }
+        val row: @Composable (String, String) -> Unit = { label, value ->
+            if (isTv) MetaRow(label, value) else PhoneMetaRow(label, value)
+        }
+        // iOS order: Genre first, then Released (VODDetailView 1305, 1313).
+        if (!genre.isNullOrBlank()) row("Genre", genre)
         // v0.26.0 release_date as its own row when it carries more than the
         // bare year already shown in the hero. Mirrors iOS VODDetailView.
-        info?.releaseDate?.takeIf { it.length > 4 }?.let { MetaRow("Released", it) }
-        if (!genre.isNullOrBlank()) MetaRow("Genre", genre)
+        info?.releaseDate?.takeIf { it.length > 4 }?.let { row("Released", it) }
         // The text rows duplicate the Cast & Crew photo strip when it
         // renders; they stay as the fallback when TMDB enrichment is off
         // or returned nothing for this title.
-        if (!cast.isNullOrBlank() && !castPhotosVisible) MetaRow("Cast", cast)
-        if (!director.isNullOrBlank() && !castPhotosVisible) MetaRow("Director", director)
-        if (!country.isNullOrBlank()) MetaRow("Country", country)
-        TmdbAttribution(modifier = Modifier.padding(top = 12.dp), long = true, isTv = isTv)
+        if (!cast.isNullOrBlank() && !castPhotosVisible) row("Cast", cast)
+        if (!director.isNullOrBlank() && !castPhotosVisible) row("Director", director)
+        if (!country.isNullOrBlank()) row("Country", country)
+        if (isTv) {
+            TmdbAttribution(modifier = Modifier.padding(top = 12.dp), long = true, isTv = true)
+        } else {
+            TmdbSourceNote(
+                tmdbPosterUsed = tmdbPosterUsed,
+                tmdbDetailsPresent = tmdbDetails != null,
+                hasProviderArt = hasProviderArt,
+                tmdbConfigured = tmdbConfigured,
+                lookupDone = tmdbLookupDone,
+            )
+        }
     }
 }
 
@@ -881,7 +957,11 @@ private fun CastCrewSection(
         )
         Spacer(Modifier.height(10.dp))
         LazyRow(
-            contentPadding = PaddingValues(horizontal = edgeInset),
+            contentPadding = PaddingValues(
+                horizontal = edgeInset,
+                // Phone: 12dp matches the iPhone cast strip (VODDetailView 2245).
+                vertical = if (isTv) 0.dp else 12.dp,
+            ),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(items = people, key = { it.id }) { person ->
@@ -1025,6 +1105,7 @@ private fun SeasonPicker(
     selected: Int,
     onSelect: (Int) -> Unit,
     edgeInset: androidx.compose.ui.unit.Dp = 16.dp,
+    isTv: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     LazyRow(
@@ -1040,8 +1121,12 @@ private fun SeasonPicker(
                     .onFocusChanged { focused = it.isFocused }
                     .clip(RoundedCornerShape(50))
                     .background(
-                        if (isSelected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                        when {
+                            isSelected -> MaterialTheme.colorScheme.primary
+                            // Phone: iOS unselected pill sits on the elevated background.
+                            !isTv -> MaterialTheme.colorScheme.surfaceVariant
+                            else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                        },
                     )
                     .border(
                         width = 2.dp,
@@ -1051,11 +1136,19 @@ private fun SeasonPicker(
                     .clickable { onSelect(season) }
                     .padding(horizontal = 14.dp, vertical = 7.dp),
             ) {
+                // Phone: always "Season N" (iOS VODDetailView 1557); selected
+                // reads in the app background over the accent fill, unselected
+                // in secondary text (1552).
                 Text(
-                    text = if (season == 0) "Specials" else "Season $season",
+                    text = if (season == 0 && isTv) "Specials" else "Season $season",
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
+                    color = when {
+                        isSelected && isTv -> MaterialTheme.colorScheme.onPrimary
+                        isSelected -> MaterialTheme.colorScheme.background
+                        isTv -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = if (isTv) FontWeight.SemiBold else FontWeight.Medium,
                 )
             }
         }
@@ -1072,6 +1165,9 @@ private fun EpisodeRow(
     episode: DispatcharrVODEpisode,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    // Phone: watch-progress chrome (iOS TVEpisodeRowButton 2467-2508).
+    progress: com.aeriotv.android.core.data.db.entity.WatchProgressEntity? = null,
+    isTv: Boolean = false,
 ) {
     // Resting look is unchanged (transparent row); the wash + white ring only
     // appear under D-pad focus, which never happens on touch devices.
@@ -1091,14 +1187,16 @@ private fun EpisodeRow(
                 shape = RoundedCornerShape(10.dp),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            // Phone: 4 + the call site's 12 = 16 horizontal, 10 vertical
+            // (iOS VODDetailView 2519).
+            .padding(horizontal = 4.dp, vertical = if (isTv) 6.dp else 10.dp),
+        verticalAlignment = if (isTv) Alignment.Top else Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (isTv) 12.dp else 14.dp),
     ) {
         Box(
             modifier = Modifier
-                .width(112.dp)
-                .aspectRatio(16f / 9f)
+                // Phone: 96x54 radius 6 (iOS VODDetailView 2411).
+                .then(if (isTv) Modifier.width(112.dp).aspectRatio(16f / 9f) else Modifier.size(96.dp, 54.dp))
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
             contentAlignment = Alignment.Center,
@@ -1161,16 +1259,30 @@ private fun EpisodeRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (!isTv && progress != null) {
+                Spacer(Modifier.height(4.dp))
+                EpisodeProgressChrome(progress)
+            }
         }
 
-        Icon(
-            imageVector = Icons.Filled.PlayArrow,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-            modifier = Modifier
-                .size(28.dp)
-                .padding(top = 8.dp),
-        )
+        if (isTv) {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                modifier = Modifier
+                    .size(28.dp)
+                    .padding(top = 8.dp),
+            )
+        } else {
+            // iOS: filled play circle, 22pt at 70% accent (VODDetailView 2515).
+            Icon(
+                imageVector = Icons.Filled.PlayCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                modifier = Modifier.size(22.dp),
+            )
+        }
     }
 }
 

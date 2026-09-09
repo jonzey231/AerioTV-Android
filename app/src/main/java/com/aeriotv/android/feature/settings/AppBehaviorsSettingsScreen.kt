@@ -92,6 +92,7 @@ fun AppBehaviorsSettingsScreen(
     val tmdbKeyState by viewModel.tmdbKeyTestState.collectAsStateWithLifecycle()
 
     val isTv = rememberIsTvDevice()
+    val phoneGroupSelector by viewModel.phoneGroupSelector.collectAsStateWithLifecycle(initialValue = "sidebar")
     val showEpgBadges by viewModel.showEpgBadges(isTv).collectAsStateWithLifecycle(initialValue = true)
     val hiddenEpgBadges by viewModel.hiddenEpgBadges.collectAsStateWithLifecycle(initialValue = emptySet())
     // GH #47: phone-only cast behavior toggle.
@@ -198,6 +199,30 @@ fun AppBehaviorsSettingsScreen(
                         label = label,
                         selected = current == value,
                         onClick = { viewModel.setDefaultLiveTVView(value) },
+                    )
+                }
+            }
+
+            // Phone / tablet Live TV group selector (Logan 2026-09-05, Apple
+            // parity): the slide-in drawer is the default because the pill
+            // strip is crowded beside the header buttons on a phone. TV keeps
+            // its own Group Selection under Remote Control.
+            if (!isTv) {
+                SettingsSection(
+                    header = "Group Selection",
+                    footer = "How Live TV picks a channel group. Drawer opens a " +
+                        "group list from the header button; Pills puts the groups " +
+                        "in a strip across the header.",
+                ) {
+                    SettingsSelectionRow(
+                        label = "Drawer",
+                        selected = phoneGroupSelector != "pills",
+                        onClick = { viewModel.setPhoneGroupSelector("sidebar") },
+                    )
+                    SettingsSelectionRow(
+                        label = "Pills",
+                        selected = phoneGroupSelector == "pills",
+                        onClick = { viewModel.setPhoneGroupSelector("pills") },
                     )
                 }
             }
