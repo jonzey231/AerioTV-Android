@@ -557,7 +557,11 @@ class OnDemandViewModel @Inject constructor(
             // StreamingAPIs.swift per-category VOD load. A failing category is
             // logged and skipped; one bad group never aborts the sweep.
             val totalCap = VOD_TOTAL_CAP
-            val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
+            // Walk every category to the end (Apple parity). The old "fair
+            // share" of the row cap rounded down to a single page per category
+            // on accounts with 150+ categories: 2,250 of 5,044 movies
+            // (Logan 2026-09-08). The total cap alone bounds memory.
+            val perCatCap = totalCap
             val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODMovie>()
             val seen = HashSet<String>()
@@ -755,7 +759,11 @@ class OnDemandViewModel @Inject constructor(
             // by id (Int) to match the rest of the codebase (loadMoreSeries,
             // seriesById). A failing category is logged and skipped.
             val totalCap = VOD_TOTAL_CAP
-            val perCatCap = maxOf((totalCap / 100 / maxOf(cats.size, 1)) * 100, 100)
+            // Walk every category to the end (Apple parity). The old "fair
+            // share" of the row cap rounded down to a single page per category
+            // on accounts with 150+ categories: 2,250 of 5,044 movies
+            // (Logan 2026-09-08). The total cap alone bounds memory.
+            val perCatCap = totalCap
             val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODSeries>()
             val seen = HashSet<Int>()
@@ -2026,7 +2034,10 @@ class OnDemandViewModel @Inject constructor(
          * share). Mirrors iOS StreamingAPIs totalCap = 5000. The legacy
          * unfiltered fallback still uses MAX_EAGER_VOD_PAGES.
          */
-        const val VOD_TOTAL_CAP = 5000
+        // Raised from 5000 (2026-09-08): a real account holds 5,044 movies and
+        // the cap cut the last of them. Rows are small; 10k fits phones and
+        // the Onn class of box (JSON decode already runs off the main thread).
+        const val VOD_TOTAL_CAP = 10_000
 
         /** Debounce before a keystroke fires a server-side VOD search. */
         const val SEARCH_DEBOUNCE_MS = 300L
