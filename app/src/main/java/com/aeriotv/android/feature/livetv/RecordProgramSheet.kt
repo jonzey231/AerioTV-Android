@@ -126,6 +126,18 @@ fun RecordProgramSheet(
     var removeCommercials by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
 
+    // Series recording rules (Dispatcharr; Apple parity, RecordProgramSheet
+    // RuleMode): Just this one schedules a single recording as before; the
+    // others create a series rule and let the server evaluate it at once.
+    val canOfferSeriesRule = isDispatcharr && canRecordToServer && target.title.isNotBlank()
+    var ruleMode by remember { mutableStateOf(RuleMode.Once) }
+    var ruleTitleMode by remember { mutableStateOf("exact") }
+    var ruleDescription by remember { mutableStateOf("") }
+    var ruleDescriptionMode by remember { mutableStateOf("contains") }
+    var ruleUntaggedIsNew by remember { mutableStateOf(false) }
+    var ruleAllChannels by remember { mutableStateOf(false) }
+    val usingRule = canOfferSeriesRule && ruleMode != RuleMode.Once
+
     com.aeriotv.android.ui.FormFactorModal(
         onDismiss = onDismiss,
         tvWidthFraction = 0.7f,
@@ -217,6 +229,33 @@ fun RecordProgramSheet(
                             onDismiss()
                             return@TextButton
                         }
+                        if (usingRule) {
+                            submitting = true
+                            val channel = playlistViewModel.state.value.channels.firstOrNull {
+                                it.dispatcharrChannelId == dispatcharrId || it.name == target.channelName
+                            }
+                            val tvgId = if (ruleAllChannels) null else channel?.tvgID?.takeIf { it.isNotBlank() }
+                            scope.launch {
+                                val result = dvrViewModel.createSeriesRule(
+                                    tvgId = tvgId,
+                                    mode = if (ruleMode == RuleMode.NewOnly) "new" else "all",
+                                    untaggedIsNew = ruleUntaggedIsNew,
+                                    title = target.title,
+                                    titleMode = if (ruleMode == RuleMode.Custom) ruleTitleMode else "exact",
+                                    description = if (ruleMode == RuleMode.Custom) ruleDescription else "",
+                                    descriptionMode = ruleDescriptionMode,
+                                    channelDispatcharrId = if (ruleAllChannels) null else dispatcharrId,
+                                )
+                                submitting = false
+                                val msg = result.fold(
+                                    onSuccess = { n -> if (n >= 0) "Rule saved: $n recording(s) scheduled" else "Rule saved: ${target.title}" },
+                                    onFailure = { t -> "Rule failed: ${t.message ?: t::class.simpleName}" },
+                                )
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                            return@TextButton
+                        }
                         submitting = true
                         val effectiveStart = target.startMillis - preRoll * 60_000L
                         val effectiveEnd = target.endMillis + postRoll * 60_000L
@@ -240,7 +279,11 @@ fun RecordProgramSheet(
                     },
                 ) {
                     Text(
-                        text = if (submitting) "Scheduling…" else "Record",
+                        text = when {
+                            submitting -> "Scheduling…"
+                            usingRule -> "Save Rule"
+                            else -> "Record"
+                        },
                         color = LIVE_RED,
                         fontWeight = FontWeight.Bold,
                     )
@@ -255,6 +298,91 @@ fun RecordProgramSheet(
                 LabeledValue("Channel", target.channelName)
                 LabeledValue("Time", formatTimeRange(target))
 
+                if (canOfferSeriesRule) {
+                    Spacer(Modifier.height(18.dp))
+                    SectionLabel("Record")
+                    Spacer(Modifier.height(6.dp))
+                    Column {
+                        RuleMode.entries.forEach { mode ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(selected = ruleMode == mode, onClick = { ruleMode = mode })
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = ruleMode == mode,
+                                    onClick = null,
+                                    colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+                                )
+                                Column {
+                                    Text(mode.label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(mode.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    if (ruleMode == RuleMode.Custom) {
+                        Spacer(Modifier.height(10.dp))
+                        SectionLabel("Rule Options")
+                        Spacer(Modifier.height(6.dp))
+                        Text("Title match", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            val modes = listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex")
+                            modes.forEachIndexed { i, (wire, label) ->
+                                SegmentedButton(
+                                    selected = ruleTitleMode == wire,
+                                    onClick = { ruleTitleMode = wire },
+                                    shape = SegmentedButtonDefaults.itemShape(index = i, count = modes.size),
+                                ) { Text(label) }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = ruleDescription,
+                            onValueChange = { ruleDescription = it },
+                            label = { Text("Description contains (optional)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (ruleDescription.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                val modes = listOf("contains" to "Contains", "search" to "Search", "regex" to "Regex")
+                                modes.forEachIndexed { i, (wire, label) ->
+                                    SegmentedButton(
+                                        selected = ruleDescriptionMode == wire,
+                                        onClick = { ruleDescriptionMode = wire },
+                                        shape = SegmentedButtonDefaults.itemShape(index = i, count = modes.size),
+                                    ) { Text(label) }
+                                }
+                            }
+                        }
+                    }
+                    if (ruleMode == RuleMode.NewOnly || ruleMode == RuleMode.Custom) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Untagged episodes count as new", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                                Text("For guides that only tag repeats.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(checked = ruleUntaggedIsNew, onCheckedChange = { ruleUntaggedIsNew = it })
+                        }
+                    }
+                    if (usingRule) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Match on every channel", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                                Text("Off records only on ${target.channelName}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(checked = ruleAllChannels, onCheckedChange = { ruleAllChannels = it })
+                        }
+                    }
+                }
+
+                if (!usingRule) {
                 Spacer(Modifier.height(18.dp))
                 SectionLabel("Start Early")
                 Spacer(Modifier.height(6.dp))
@@ -376,6 +504,8 @@ fun RecordProgramSheet(
                         )
                     }
                 }
+
+                } // !usingRule
 
                 Spacer(Modifier.height(20.dp))
             }
@@ -567,3 +697,11 @@ private fun formatTimeRange(target: ProgramInfoTarget): String {
 
 private val ROLL_OPTIONS = listOf(0, 5, 10, 15, 30, 60)
 private val LIVE_RED = Color(0xFFFF4757)
+
+/** Series recording rule choices (Apple parity: RecordProgramSheet.RuleMode). */
+private enum class RuleMode(val label: String, val detail: String) {
+    Once("Just this one", "Record this airing only."),
+    All("Every episode", "A series rule on the server records every airing of this title."),
+    NewOnly("New episodes only", "Skips airings the guide marks as repeats."),
+    Custom("Customize rule", "Choose how the title and description are matched."),
+}

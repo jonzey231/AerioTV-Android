@@ -515,6 +515,45 @@ class DvrViewModel @Inject constructor(
      * Caller passes pre-rolled times (start - preRollMin, end + postRollMin
      * already applied). Returns a Result that the caller can surface via toast.
      */
+    /**
+     * Series recording rule (Record sheet: Every episode / New episodes only
+     * / Customize rule). Creates the rule, asks the server to evaluate it so
+     * the matching episodes appear at once, then refreshes the recordings.
+     * Returns the number of recordings the server reports (-1 = unknown).
+     */
+    suspend fun createSeriesRule(
+        tvgId: String?,
+        mode: String,
+        untaggedIsNew: Boolean,
+        title: String,
+        titleMode: String,
+        description: String,
+        descriptionMode: String,
+        channelDispatcharrId: Int?,
+    ): Result<Int> {
+        val playlist = playlistRepository.activePlaylist()
+            ?: return Result.failure(IllegalStateException("No playlist loaded."))
+        if (playlist.apiKey.isNullOrBlank()) {
+            return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
+        }
+        val base = playlistRepository.effectiveBaseUrl(playlist)
+        return runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.createSeriesRule(
+                    baseUrl = base, apiKey = key, tvgId = tvgId, mode = mode,
+                    untaggedIsNew = untaggedIsNew, title = title, titleMode = titleMode,
+                    description = description, descriptionMode = descriptionMode,
+                    channelId = channelDispatcharrId,
+                )
+            }
+            val count = dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.evaluateSeriesRules(base, key, tvgId)
+            }
+            refresh()
+            count
+        }
+    }
+
     suspend fun scheduleServerRecording(
         channelDispatcharrId: Int,
         startMillis: Long,

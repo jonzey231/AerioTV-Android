@@ -1142,6 +1142,80 @@ class DispatcharrClient @Inject constructor() {
     }
 
     /**
+     * POST /api/channels/series-rules/ — a Dispatcharr series recording rule
+     * (Every episode / New episodes only / custom match). Apple parity:
+     * DispatcharrAPI.createSeriesRule. Fields per Dispatcharr's
+     * SeriesRuleRequest: tvg_id (blank = every channel), mode all|new,
+     * untagged_is_new, title + title_mode (exact|contains|search|regex),
+     * description + description_mode (contains|search|regex), channel_id.
+     */
+    suspend fun createSeriesRule(
+        baseUrl: String,
+        apiKey: String,
+        tvgId: String?,
+        mode: String,
+        untaggedIsNew: Boolean,
+        title: String,
+        titleMode: String,
+        description: String,
+        descriptionMode: String,
+        channelId: Int?,
+    ) {
+        val body = buildJsonObject {
+            put("tvg_id", JsonPrimitive(tvgId.orEmpty()))
+            put("mode", JsonPrimitive(mode))
+            if (mode == "new" && untaggedIsNew) put("untagged_is_new", JsonPrimitive(true))
+            put("title", JsonPrimitive(title))
+            put("title_mode", JsonPrimitive(titleMode))
+            if (description.isNotBlank()) {
+                put("description", JsonPrimitive(description))
+                put("description_mode", JsonPrimitive(descriptionMode))
+            }
+            if (channelId != null) put("channel_id", JsonPrimitive(channelId))
+        }
+        val url = "${baseUrl.trimEnd('/')}/api/channels/series-rules/"
+        val response: HttpResponse = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        unauthorizedCheck(response, url)
+        if (!response.status.isSuccess()) {
+            throw DispatcharrError.Transport(
+                "Series rule create failed: HTTP ${response.status.value} ${response.status.description}",
+            )
+        }
+    }
+
+    /**
+     * POST /api/channels/series-rules/evaluate/ — schedule the recordings a
+     * rule matches right now (synchronous on the server). Returns the count
+     * of recordings the server reports as created, or -1 when it does not say.
+     */
+    suspend fun evaluateSeriesRules(baseUrl: String, apiKey: String, tvgId: String?): Int {
+        val body = buildJsonObject { if (!tvgId.isNullOrBlank()) put("tvg_id", JsonPrimitive(tvgId)) }
+        val url = "${baseUrl.trimEnd('/')}/api/channels/series-rules/evaluate/"
+        val response: HttpResponse = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        unauthorizedCheck(response, url)
+        if (!response.status.isSuccess()) {
+            throw DispatcharrError.Transport(
+                "Series rule evaluate failed: HTTP ${response.status.value} ${response.status.description}",
+            )
+        }
+        val obj = runCatching { response.body<JsonObject>() }.getOrNull() ?: return -1
+        for (key in listOf("created", "scheduled", "count", "recordings_created")) {
+            val v = obj[key]
+            val n = (v as? JsonPrimitive)?.content?.toIntOrNull()
+            if (n != null) return n
+        }
+        return -1
+    }
+
+    /**
      * GET /api/channels/recordings/ — returns every recording the active user
      * can see. Client filters by status (scheduled / recording / completed /
      * failed / stopped) for the DVR tab filter chips.
