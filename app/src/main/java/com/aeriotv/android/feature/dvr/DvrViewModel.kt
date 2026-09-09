@@ -46,6 +46,7 @@ class DvrViewModel @Inject constructor(
     private val dispatcharrAuth: DispatcharrAuthBroker,
     private val localRecordingDao: LocalRecordingDao,
     private val appPreferences: AppPreferences,
+    private val tmdbService: com.aeriotv.android.core.network.TMDBService,
 ) : ViewModel() {
 
     enum class Filter { Scheduled, Recording, Completed }
@@ -114,6 +115,18 @@ class DvrViewModel @Inject constructor(
          * id (those stay best-effort blank, no pill).
          */
         val programId: Int? = null,
+        // Media-center DVR (Apple parity): art and facts.
+        val posterUrl: String? = null,
+        val subTitle: String? = null,
+        val season: Int? = null,
+        val episode: Int? = null,
+        val fileName: String? = null,
+        val videoCodec: String? = null,
+        val resolution: String? = null,
+        val frameRate: Double? = null,
+        val videoBitrateKbps: Double? = null,
+        val audioCodec: String? = null,
+        val audioChannels: String? = null,
     ) {
         enum class Status { Scheduled, Recording, Completed, Failed, Stopped, Unknown }
 
@@ -227,6 +240,53 @@ class DvrViewModel @Inject constructor(
      * not necessarily the main thread; a plain MutableMap would be a data race.
      */
     private val categoryCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * Media-center DVR art (Apple parity, DVRArtResolver, reduced): for a
+     * server recording without a poster, try TMDB by cleaned title when the
+     * user has a key, then the Dispatcharr programme detail icon. Results are
+     * cached per recording id for the session and published into the rows;
+     * the cards fall back to the channel logo at render time.
+     */
+    private val artCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val artMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private var artJob: kotlinx.coroutines.Job? = null
+
+    private fun resolveArtAsync(playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity, rows: List<Recording>) {
+        if (artJob?.isActive == true) return
+        artJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val tmdbOn = runCatching { appPreferences.programPostersTmdbEnabled.first() }.getOrDefault(false)
+            val key = runCatching { appPreferences.tmdbApiKey.first() }.getOrDefault("")
+            val base = playlistRepository.effectiveBaseUrl(playlist)
+            var changed = false
+            for (rec in rows) {
+                if (!rec.posterUrl.isNullOrBlank() || rec.id in artMisses || artCache.containsKey(rec.id)) continue
+                var url: String? = null
+                if (tmdbOn && key.isNotBlank()) {
+                    val clean = rec.title.replace(Regex("""\s*\((\d{4})\)\s*$"""), "").trim()
+                    url = runCatching { tmdbService.posterUrlForTitle(clean, key) }.getOrNull()
+                }
+                val pid = rec.programId
+                if (url.isNullOrBlank() && pid != null && !playlist.apiKey.isNullOrBlank()) {
+                    url = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { k ->
+                            val d = dispatcharrClient.getProgramDetail(base, k, pid)
+                            (d.posterUrl ?: d.icon)?.let { resolveRecordingUrl(it, base) ?: it }
+                        }
+                    }.getOrNull()
+                }
+                if (url.isNullOrBlank()) { artMisses += rec.id; continue }
+                artCache[rec.id] = url
+                changed = true
+                kotlinx.coroutines.delay(120)
+            }
+            if (changed) {
+                _state.update { st ->
+                    st.copy(recordings = st.recordings.map { r -> artCache[r.id]?.let { u -> if (r.posterUrl.isNullOrBlank()) r.copy(posterUrl = u) else r } ?: r })
+                }
+            }
+        }
+    }
 
     /** Set once the first refresh() has produced an authoritative verdict
      *  (success or unsupported source). Gates the launch hint seed below so a
@@ -421,6 +481,7 @@ class DvrViewModel @Inject constructor(
                             hasRecordingsHint = false,
                         )
                     }
+                    resolveArtAsync(playlist, fromCache)
                     // Persist this session's verdict so the next launch (or a
                     // switch back to this source) shows the DVR tab from the
                     // first frame instead of popping it in after this fetch.
@@ -958,6 +1019,15 @@ private fun DispatcharrRecording.toRecording(
         resolveRecordingUrl(fileUrl, baseUrl) ?: client.recordingPlaybackUrl(baseUrl, id)
     } else null
     val dvr = inProgress?.contains(".m3u8", ignoreCase = true) == true
+    val cp = customProperties
+    val program = cp?.get("program") as? kotlinx.serialization.json.JsonObject
+    fun str(o: kotlinx.serialization.json.JsonObject?, k: String): String? =
+        (o?.get(k) as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotBlank() && it != "null" }
+    fun num(o: kotlinx.serialization.json.JsonObject?, k: String): Double? =
+        (o?.get(k) as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull()
+    val info = cp?.get("stream_info") as? kotlinx.serialization.json.JsonObject
+    val poster = str(cp, "poster_url")?.let { resolveRecordingUrl(it, baseUrl) ?: it }
+    val bytesWritten = num(cp, "bytes_written")?.toLong()?.takeIf { it > 0 }
     return DvrViewModel.Recording(
         id = "server-$id",
         source = DvrViewModel.Source.Server,
@@ -966,12 +1036,26 @@ private fun DispatcharrRecording.toRecording(
         startMillis = start,
         endMillis = end,
         status = status,
-        fileSizeBytes = fileSize ?: 0L,
+        fileSizeBytes = bytesWritten ?: fileSize ?: 0L,
         playbackUrl = playback,
         dispatcharrChannelId = channel,
         inProgressUrl = inProgress,
         isDvr = dvr,
         programId = programId,
+        posterUrl = poster,
+        subTitle = str(program, "sub_title") ?: str(cp, "sub_title"),
+        season = num(cp, "season")?.toInt() ?: num(program, "season")?.toInt(),
+        episode = num(cp, "episode")?.toInt() ?: num(program, "episode")?.toInt(),
+        fileName = fileName,
+        videoCodec = str(info, "video_codec"),
+        resolution = str(info, "resolution") ?: run {
+            val w = num(info, "width"); val h = num(info, "height")
+            if (w != null && h != null && w > 0 && h > 0) "${w.toInt()}x${h.toInt()}" else null
+        },
+        frameRate = num(info, "source_fps"),
+        videoBitrateKbps = num(info, "video_bitrate"),
+        audioCodec = str(info, "audio_codec"),
+        audioChannels = str(info, "audio_channels"),
     )
 }
 

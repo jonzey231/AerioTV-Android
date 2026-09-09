@@ -1,0 +1,583 @@
+package com.aeriotv.android.feature.dvr
+
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
+import com.aeriotv.android.core.data.ProgramInfoTarget
+import com.aeriotv.android.core.data.RecordingFacts
+import com.aeriotv.android.feature.livetv.ProgramInfoSheet
+import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
+import com.aeriotv.android.feature.movies.AlphabetRail
+import com.aeriotv.android.feature.movies.PhoneCardDeck
+import com.aeriotv.android.feature.movies.nearestAvailable
+import com.aeriotv.android.feature.movies.railLetters
+import com.aeriotv.android.feature.movies.stripQualityPrefix
+import com.aeriotv.android.feature.playlist.PlaylistViewModel
+import com.aeriotv.android.feature.settings.SettingsViewModel
+import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
+import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
+import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.text.Normalizer
+import java.util.Date
+
+private typealias Rec = DvrViewModel.Recording
+
+/** DVR library sort (Apple parity: DVRView.SortOrder). Title A to Z default. */
+enum class DvrSortOrder(val wire: String, val label: String) {
+    Newest("newest", "Newest First"), Oldest("oldest", "Oldest First"),
+    Title("title", "Title A to Z"), Channel("channel", "Channel");
+    companion object { fun fromWire(s: String?) = entries.firstOrNull { it.wire == s } ?: Title }
+}
+
+/** Recording kind for the genre pills (Apple parity: DVRContentKind). */
+enum class DvrKind(val label: String) { Movies("Movies"), TVShows("TV Shows"), Sports("Sports"), News("News"), Kids("Kids"), Other("Other") }
+
+private fun classify(rec: Rec): DvrKind {
+    val c = (rec.category + " " + rec.title).lowercase()
+    return when {
+        Regex("sport|football|soccer|basketball|baseball|hockey|nfl|nba|mlb|nhl|golf|tennis|racing|ufc|wrestling").containsMatchIn(c) -> DvrKind.Sports
+        Regex("news|weather").containsMatchIn(c) -> DvrKind.News
+        Regex("kids|children|animation|cartoon|family").containsMatchIn(c) -> DvrKind.Kids
+        Regex("movie|film").containsMatchIn(rec.category.lowercase()) -> DvrKind.Movies
+        (rec.season ?: 0) > 0 || Regex("series|show|episode|drama|comedy|sitcom|reality|talk").containsMatchIn(c) -> DvrKind.TVShows
+        else -> DvrKind.Other
+    }
+}
+
+private fun bucket(title: String): Char {
+    val t = Normalizer.normalize(stripQualityPrefix(title), Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+    val c = t.firstOrNull { !it.isWhitespace() }?.uppercaseChar() ?: return '#'
+    return if (c in 'A'..'Z') c else '#'
+}
+
+private fun Rec.progressKey(): String = when (source) {
+    DvrViewModel.Source.Server -> "dvr-" + id.removePrefix("server-")
+    else -> playbackUrl ?: id
+}
+
+private fun Rec.serverId(): Int = if (source == DvrViewModel.Source.Server) id.removePrefix("server-").toIntOrNull() ?: -1 else -1
+
+/**
+ * DVR tab, phone and tablet (media-center redesign, Apple parity with the
+ * iPhone DVRView). Top to bottom: Recording Now / Continue Watching deck,
+ * Scheduled shelf, Recent Recordings deck, All Recordings header with the
+ * sort circle, kind pills, three-column poster grid, alphabet rail. Tap a
+ * poster to play, long press for the menu (Program Info first). TV keeps
+ * DvrTabContent.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun DvrMediaTabContent(
+    onPlayRecording: (String, String, Int) -> Unit,
+    onWatchLive: (String, String, Boolean, Long, Int?) -> Unit,
+    onWatchFromBeginning: (String, String, Boolean, Long, Int?, Boolean) -> Unit,
+    viewModel: DvrViewModel = hiltViewModel(),
+    settingsVm: SettingsViewModel = hiltViewModel(),
+    playlistVm: PlaylistViewModel = hiltViewModel(),
+    watchVm: WatchProgressViewModel = hiltViewModel(),
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val playlistState by playlistVm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact
+    val sortWire by settingsVm.dvrSortOrder.collectAsStateWithLifecycle(initialValue = "title")
+    val sortOrder = DvrSortOrder.fromWire(sortWire)
+    val recent by watchVm.observeRecent(80).collectAsStateWithLifecycle(initialValue = emptyList())
+    val now = System.currentTimeMillis()
+
+    val channelName: (Rec) -> String = { rec ->
+        playlistState.channels.firstOrNull { it.dispatcharrChannelId != null && it.dispatcharrChannelId == rec.dispatcharrChannelId }?.name ?: ""
+    }
+    val channelLogo: (Rec) -> String? = { rec ->
+        playlistState.channels.firstOrNull { it.dispatcharrChannelId != null && it.dispatcharrChannelId == rec.dispatcharrChannelId }?.tvgLogo?.takeIf { it.isNotBlank() }
+    }
+    val progressOf: (Rec) -> Float = { rec ->
+        val row = recent.firstOrNull { it.videoId == rec.progressKey() }
+        val total = (rec.endMillis - rec.startMillis).toDouble()
+        if (row == null || row.positionMs <= 0L) 0f
+        else (row.positionMs / (if (row.durationMs > 0) row.durationMs.toDouble() else total.coerceAtLeast(1.0))).toFloat().coerceIn(0f, 1f)
+    }
+
+    val recordings = state.recordings
+    val recordingNow = remember(recordings, now) { recordings.filter { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording }.sortedByDescending { it.startMillis } }
+    val scheduled = remember(recordings, now) { recordings.filter { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Scheduled }.sortedBy { it.startMillis } }
+    val completed = remember(recordings, now) { recordings.filter { val s = it.effectiveStatus(now); s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped } }
+    val continueWatching = remember(recordingNow, completed, recent) {
+        recordingNow + completed.filter { val p = progressOf(it); p > 0f && p < 0.97f }.sortedByDescending { it.startMillis }
+    }
+    val recentRecordings = remember(completed) { completed.sortedByDescending { it.startMillis }.take(20) }
+    val library = remember(recordingNow, completed) { recordingNow + completed }
+    var selectedKind by remember { mutableStateOf<DvrKind?>(null) }
+    val kindsPresent = remember(library) { library.map(::classify).toSet() }
+    val filteredLibrary = remember(library, selectedKind, sortOrder) {
+        library.filter { selectedKind == null || classify(it) == selectedKind }.let { list ->
+            when (sortOrder) {
+                DvrSortOrder.Newest -> list.sortedByDescending { it.startMillis }
+                DvrSortOrder.Oldest -> list.sortedBy { it.startMillis }
+                DvrSortOrder.Title -> list.sortedWith(compareBy({ stripQualityPrefix(it.title).lowercase() }, { it.startMillis }))
+                DvrSortOrder.Channel -> list.sortedWith(compareBy({ channelName(it).lowercase() }, { it.startMillis }))
+            }
+        }
+    }
+    val available = remember(filteredLibrary) { filteredLibrary.map { bucket(it.title) }.toSet() }
+
+    var infoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
+    var pendingDelete by remember { mutableStateOf<Rec?>(null) }
+    var pendingEdit by remember { mutableStateOf<Rec?>(null) }
+    var showSort by remember { mutableStateOf(false) }
+    val gridState = rememberLazyGridState()
+    val bottomInset = LocalTabBarBottomInset.current
+
+    fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    fun play(rec: Rec) {
+        val url = rec.playbackUrl
+        if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) {
+            rec.inProgressUrl?.let { onWatchFromBeginning(it, rec.title, rec.isDvr, rec.endMillis, rec.dispatcharrChannelId, true) }
+                ?: toast("This recording is not playable yet.")
+        } else if (!url.isNullOrBlank()) onPlayRecording(url, rec.title, rec.serverId())
+        else toast("This recording has no playable file yet.")
+    }
+    fun playFromStart(rec: Rec) {
+        if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) {
+            rec.inProgressUrl?.let { onWatchFromBeginning(it, rec.title, rec.isDvr, rec.endMillis, rec.dispatcharrChannelId, false) }
+        } else {
+            watchVm.delete(rec.progressKey()); play(rec)
+        }
+    }
+    fun jumpToLive(rec: Rec) { rec.inProgressUrl?.let { onWatchLive(it, rec.title, rec.isDvr, rec.endMillis, rec.dispatcharrChannelId) } }
+    fun showInfo(rec: Rec) {
+        val statusLabel = when (rec.effectiveStatus(now)) {
+            DvrViewModel.Recording.Status.Scheduled -> "Scheduled"; DvrViewModel.Recording.Status.Recording -> "Recording"; DvrViewModel.Recording.Status.Completed -> "Completed"
+            DvrViewModel.Recording.Status.Stopped -> "Stopped"; DvrViewModel.Recording.Status.Failed -> "Failed"; DvrViewModel.Recording.Status.Unknown -> "Unknown"
+        }
+        val ext = (rec.fileName ?: rec.playbackUrl ?: "").substringAfterLast('.', "").takeIf { it.length in 2..5 && !it.contains('/') }
+        infoTarget = ProgramInfoTarget(
+            channelName = channelName(rec), title = rec.title.ifBlank { "Recording" },
+            startMillis = rec.startMillis, endMillis = rec.endMillis,
+            description = rec.description, category = rec.category,
+            channelDispatcharrId = rec.dispatcharrChannelId, dispatcharrProgramId = rec.programId,
+            subTitle = rec.subTitle, season = rec.season, episode = rec.episode,
+            recording = RecordingFacts(
+                recordedOnMillis = rec.startMillis, windowStartMillis = rec.startMillis, windowEndMillis = rec.endMillis,
+                fileSizeBytes = rec.fileSizeBytes,
+                format = if (ext.equals("m3u8", true)) "HLS" else ext,
+                location = if (rec.source == DvrViewModel.Source.Local) "This device" else (playlistState.playlist?.name ?: "Dispatcharr"),
+                status = statusLabel,
+                videoCodec = rec.videoCodec, resolution = rec.resolution, frameRate = rec.frameRate,
+                videoBitrateKbps = rec.videoBitrateKbps, audioCodec = rec.audioCodec, audioChannels = rec.audioChannels,
+            ),
+        )
+    }
+
+    @Composable
+    fun menuItems(rec: Rec, close: () -> Unit) {
+        val s = rec.effectiveStatus(now)
+        val isServer = rec.source == DvrViewModel.Source.Server
+        DropdownMenuItem(text = { Text("Program Info") }, onClick = { close(); showInfo(rec) })
+        if (s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped) {
+            DropdownMenuItem(text = { Text("Play") }, onClick = { close(); play(rec) })
+            if (isServer) {
+                DropdownMenuItem(text = { Text("Watch from Beginning") }, onClick = { close(); playFromStart(rec) })
+                DropdownMenuItem(text = { Text("Save to Device") }, onClick = { close(); scope.launch { viewModel.saveToDevice(rec).onFailure { toast("Save failed: ${it.message}") }.onSuccess { toast("Saving to device") } } })
+                DropdownMenuItem(text = { Text("Remove Commercials") }, onClick = { close(); scope.launch { viewModel.applyComskip(rec).onFailure { toast("Comskip failed: ${it.message}") }.onSuccess { toast("Comskip started") } } })
+            }
+        }
+        if (s == DvrViewModel.Recording.Status.Recording) {
+            if (rec.inProgressUrl != null) {
+                DropdownMenuItem(text = { Text("Start at Live") }, onClick = { close(); jumpToLive(rec) })
+                DropdownMenuItem(text = { Text("Watch from Beginning") }, onClick = { close(); playFromStart(rec) })
+            }
+            DropdownMenuItem(text = { Text("Stop Recording") }, onClick = { close(); scope.launch { viewModel.stopRecording(rec).onFailure { toast("Stop failed: ${it.message}") } } })
+        }
+        if (s == DvrViewModel.Recording.Status.Scheduled) {
+            if (isServer) DropdownMenuItem(text = { Text("Edit Recording") }, onClick = { close(); pendingEdit = rec })
+            DropdownMenuItem(text = { Text("Cancel Recording", color = MaterialTheme.colorScheme.error) }, onClick = { close(); pendingDelete = rec })
+        } else {
+            DropdownMenuItem(
+                text = { Text(if (isServer) "Delete from Server" else "Delete", color = MaterialTheme.colorScheme.error) },
+                onClick = { close(); pendingDelete = rec },
+            )
+        }
+    }
+
+    val leadingCount = remember(continueWatching.isEmpty(), scheduled.isEmpty(), recentRecordings.size, kindsPresent.size) {
+        1 + (if (continueWatching.isNotEmpty()) 1 else 0) + (if (scheduled.isNotEmpty()) 1 else 0) +
+            (if (recentRecordings.size > 1) 1 else 0) + 1 + (if (kindsPresent.size > 1) 1 else 0)
+    }
+    val headerIndex = leadingCount - 1 - (if (kindsPresent.size > 1) 1 else 0)
+    val railVisible by remember(headerIndex, filteredLibrary.size) {
+        derivedStateOf { compact && filteredLibrary.size >= 9 && gridState.firstVisibleItemIndex >= headerIndex }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+        if (recordings.isEmpty() && !state.isLoading) {
+            Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("No Recordings", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                Spacer(Modifier.height(6.dp))
+                Text("Record a program from the guide or Live TV.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            PullToRefreshBox(isRefreshing = state.isLoading && recordings.isNotEmpty(), onRefresh = { viewModel.refresh() }, modifier = Modifier.fillMaxSize()) {
+                LazyVerticalGrid(
+                    columns = if (compact) GridCells.Fixed(3) else GridCells.Adaptive(minSize = 120.dp),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = if (compact) 34.dp else 16.dp, top = 0.dp, bottom = bottomInset + 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    item(key = "room", span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(22.dp)) }
+                    if (continueWatching.isNotEmpty()) {
+                        item(key = "cw", span = { GridItemSpan(maxLineSpan) }) {
+                            DeckSection(
+                                title = if (continueWatching.all { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording }) "Recording Now" else "Continue Watching",
+                                items = continueWatching, compact = compact,
+                            ) { rec ->
+                                DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
+                                    onPrimary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) playFromStart(rec) else play(rec) },
+                                    onSecondary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) jumpToLive(rec) else playFromStart(rec) },
+                                    onStop = { scope.launch { viewModel.stopRecording(rec) } },
+                                    onInfo = { showInfo(rec) })
+                            }
+                        }
+                    }
+                    if (scheduled.isNotEmpty()) {
+                        item(key = "scheduled", span = { GridItemSpan(maxLineSpan) }) {
+                            Column {
+                                SectionTitle("Scheduled")
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    items(scheduled.size, key = { scheduled[it].id }) { i ->
+                                        val rec = scheduled[i]
+                                        Box(modifier = Modifier.width(150.dp)) {
+                                            DvrPosterCard(rec, channelLogo(rec), 0f, now, onClick = { showInfo(rec) }, menu = { close -> menuItems(rec, close) })
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (recentRecordings.size > 1) {
+                        item(key = "recent", span = { GridItemSpan(maxLineSpan) }) {
+                            DeckSection(title = "Recent Recordings", items = recentRecordings, compact = compact) { rec ->
+                                DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
+                                    onPrimary = { play(rec) }, onSecondary = { playFromStart(rec) },
+                                    onStop = {}, onInfo = { showInfo(rec) })
+                            }
+                        }
+                    }
+                    if (library.isNotEmpty()) {
+                        item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier.clickable { scope.launch { gridState.animateScrollToItem(headerIndex) } },
+                                    verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Text("All Recordings", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(filteredLibrary.size.toString(), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.padding(bottom = 1.dp))
+                                }
+                                Spacer(Modifier.weight(1f))
+                                Box {
+                                    Box(
+                                        modifier = Modifier.size(38.dp).clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+                                            .clickable { showSort = true },
+                                        contentAlignment = Alignment.Center,
+                                    ) { Icon(Icons.Filled.SwapVert, contentDescription = "Sort", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp)) }
+                                    DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
+                                        DvrSortOrder.entries.forEach { o ->
+                                            DropdownMenuItem(
+                                                text = { Text(o.label) },
+                                                trailingIcon = { if (o == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
+                                                onClick = { showSort = false; settingsVm.setDvrSortOrder(o.wire) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (kindsPresent.size > 1) {
+                            item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    item { KindPill("All", selectedKind == null) { selectedKind = null } }
+                                    DvrKind.entries.filter { it in kindsPresent }.forEach { k ->
+                                        item(key = k.name) { KindPill(k.label, selectedKind == k) { selectedKind = if (selectedKind == k) null else k } }
+                                    }
+                                }
+                            }
+                        }
+                        items(filteredLibrary, key = { it.id }) { rec ->
+                            DvrPosterCard(rec, channelLogo(rec), progressOf(rec), now, onClick = { play(rec) }, menu = { close -> menuItems(rec, close) })
+                        }
+                    }
+                }
+            }
+            if (railVisible) {
+                AlphabetRail(
+                    available = available,
+                    onLetter = { letter ->
+                        val idx = filteredLibrary.indexOfFirst { bucket(it.title) == letter }
+                        if (idx >= 0) scope.launch { gridState.scrollToItem(leadingCount + idx) }
+                    },
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 2.dp),
+                )
+            }
+        }
+    }
+
+    infoTarget?.let { ProgramInfoSheet(target = it, onDismiss = { infoTarget = null }) }
+    pendingEdit?.let { rec ->
+        EditRecordingSheet(
+            recording = rec,
+            onDismiss = { pendingEdit = null },
+            onSave = { newStart, newEnd, newTitle, newDescription ->
+                val id = rec.serverId()
+                pendingEdit = null
+                if (id <= 0) { toast("Invalid recording id."); return@EditRecordingSheet }
+                scope.launch {
+                    viewModel.editServerRecording(recordingId = id, startMillis = newStart, endMillis = newEnd, title = newTitle, description = newDescription)
+                        .fold(onSuccess = { toast("Recording updated.") }, onFailure = { toast("Update failed: ${it.message ?: it::class.simpleName}") })
+                }
+            },
+        )
+    }
+    pendingDelete?.let { rec ->
+        val scheduledNow = rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Scheduled
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(if (scheduledNow) "Cancel Recording" else "Delete Recording") },
+            text = { Text(if (scheduledNow) "Cancel the scheduled recording of \"${rec.title}\"?" else "Delete \"${rec.title}\"? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = rec; pendingDelete = null
+                    scope.launch { viewModel.deleteRecording(target).onFailure { toast("Delete failed: ${it.message}") } }
+                }) { Text(if (scheduledNow) "Cancel Recording" else "Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Keep") } },
+        )
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 10.dp))
+}
+
+@Composable
+private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, card: @Composable (T) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SectionTitle(title)
+        if (compact) {
+            Box(modifier = Modifier.layout { measurable, constraints ->
+                val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
+                val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
+                layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+            }) {
+                PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }) { item, _ -> card(item) }
+            }
+        } else {
+            val pagerState = androidx.compose.foundation.pager.rememberPagerState { items.size }
+            androidx.compose.foundation.pager.HorizontalPager(
+                state = pagerState, pageSize = androidx.compose.foundation.pager.PageSize.Fill, pageSpacing = 8.dp,
+                modifier = Modifier.fillMaxWidth(),
+                pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { card(items[i]) } },
+            )
+        }
+    }
+}
+
+@Composable
+private fun KindPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.clip(CircleShape)
+            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 8.dp),
+    ) {
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+             color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun metaLine(rec: Rec, now: Long): String {
+    val day = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(rec.startMillis))
+    val s = rec.effectiveStatus(now)
+    val second = when (s) {
+        DvrViewModel.Recording.Status.Recording -> "Recording"
+        DvrViewModel.Recording.Status.Scheduled -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(rec.startMillis))
+        else -> { val m = ((rec.endMillis - rec.startMillis) / 60_000L).toInt(); if (m >= 60) "${m / 60} h ${m % 60} min" else "$m min" }
+    }
+    val se = if ((rec.season ?: 0) > 0) "S${rec.season} E${rec.episode ?: 0}" else null
+    return listOfNotNull(day, second, se).joinToString(" · ")
+}
+
+/** 2:3 poster (Apple parity: DVRPosterCard): art or channel logo, REC badge, progress bar, two-line title, meta line. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun DvrPosterCard(
+    rec: Rec, channelLogo: String?, progress: Float, now: Long,
+    onClick: () -> Unit,
+    menu: @Composable (close: () -> Unit) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = { menuOpen = true }),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surface)) {
+            when {
+                !rec.posterUrl.isNullOrBlank() -> AsyncImage(model = rec.posterUrl, contentDescription = rec.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                !channelLogo.isNullOrBlank() -> AsyncImage(model = channelLogo, contentDescription = rec.title, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(18.dp))
+                else -> Text(rec.title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 4, modifier = Modifier.align(Alignment.Center).padding(8.dp))
+            }
+            if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) {
+                Row(
+                    modifier = Modifier.align(Alignment.TopStart).padding(5.dp).clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 5.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(Color(0xFFFF4757)))
+                    Text("REC", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color(0xFFFF4757))
+                }
+            }
+            if (progress > 0f) {
+                Box(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.Black.copy(alpha = 0.45f))) {
+                    Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progress).background(MaterialTheme.colorScheme.primary))
+                }
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) { menu { menuOpen = false } }
+        }
+        Text(rec.title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp, modifier = Modifier.height(30.dp))
+        Text(metaLine(rec, now), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 4.dp))
+    }
+}
+
+/** Hero card (Apple parity: DVRHero on iPhone, inDeck). Tap on the card opens Program Info. */
+@Composable
+fun DvrHeroCard(
+    rec: Rec, channelName: String, channelLogo: String?, progress: Float, now: Long,
+    onPrimary: () -> Unit, onSecondary: () -> Unit, onStop: () -> Unit, onInfo: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val bg = MaterialTheme.colorScheme.background
+    val recording = rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording
+    val canPlay = recording && rec.inProgressUrl != null || !recording && rec.playbackUrl != null
+    Box(modifier = modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onInfo)) {
+        when {
+            !rec.posterUrl.isNullOrBlank() -> AsyncImage(model = rec.posterUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            !channelLogo.isNullOrBlank() -> AsyncImage(model = channelLogo, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth(0.28f).fillMaxHeight().align(Alignment.CenterEnd).padding(24.dp))
+        }
+        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(bg.copy(alpha = 0.05f), bg.copy(alpha = 0.92f)))))
+        Column(modifier = Modifier.align(Alignment.BottomStart).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (recording) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFFF4757)))
+                    Text("Recording now", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFF4757))
+                }
+            }
+            Text(rec.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, lineHeight = 26.sp, color = MaterialTheme.colorScheme.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            rec.subTitle?.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            val meta = listOfNotNull(channelName.takeIf { it.isNotBlank() }, metaLine(rec, now)).joinToString(" · ")
+            Text(meta, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 4.dp)) {
+                if (recording) {
+                    if (canPlay) {
+                        HeroPill("Watch from Start", Icons.Filled.PlayArrow, primary = true, onPrimary)
+                        HeroRound(Icons.Filled.Sensors, "Jump to Live", onSecondary)
+                    }
+                    HeroRound(Icons.Filled.Stop, "Stop Recording", onStop)
+                } else {
+                    HeroPill(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, onPrimary)
+                    if (progress > 0f) HeroRound(Icons.Filled.Replay, "Play from Beginning", onSecondary)
+                }
+                HeroRound(Icons.Outlined.Info, "Details", onInfo)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroPill(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, primary: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.height(40.dp).clip(CircleShape)
+            .background(if (primary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+            .clickable(onClick = onClick).padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = if (primary) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = if (primary) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground)
+    }
+}
+
+@Composable
+private fun HeroRound(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp)) }
+}

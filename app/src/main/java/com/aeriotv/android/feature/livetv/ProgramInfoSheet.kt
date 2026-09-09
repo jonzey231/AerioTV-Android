@@ -355,6 +355,12 @@ private fun ProgramInfoBody(
 
     Spacer(Modifier.height(sectionGap))
     InfoColumnsRow(target, rowPadding = metaRowPadding)
+    target.recording?.let { facts ->
+        Spacer(Modifier.height(sectionGap))
+        Column {
+            facts.rows().forEach { (label, value) -> InfoRow(label = label, value = value, verticalPadding = metaRowPadding) }
+        }
+    }
 
     Spacer(Modifier.height(sectionGap))
     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))

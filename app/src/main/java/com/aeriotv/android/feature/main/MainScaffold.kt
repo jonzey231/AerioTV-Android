@@ -1388,11 +1388,20 @@ private fun MainTabContent(
     FavoritesTabContent(onChannelClick = onChannelClick)
             }
             AppTab.DVR -> {
+                // Media center (phone/tablet); TV keeps its list until its own phase.
+                if (!rememberLiveTvFormFactor().isTv) {
+                    com.aeriotv.android.feature.dvr.DvrMediaTabContent(
+                        onPlayRecording = onPlayRecording,
+                        onWatchLive = onWatchLive,
+                        onWatchFromBeginning = onWatchFromBeginning,
+                    )
+                } else {
     DvrTabContent(
                     onPlayRecording = onPlayRecording,
                     onWatchLive = onWatchLive,
                     onWatchFromBeginning = onWatchFromBeginning,
                 )
+                }
             }
             AppTab.Movies -> {
     com.aeriotv.android.feature.movies.MediaTabContent(

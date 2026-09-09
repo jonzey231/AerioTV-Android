@@ -239,6 +239,8 @@ class SettingsViewModel @Inject constructor(
     fun setMoviesSortOrder(value: String) { viewModelScope.launch { prefs.setMoviesSortOrder(value) } }
     val seriesSortOrder: Flow<String> = prefs.seriesSortOrder
     fun setSeriesSortOrder(value: String) { viewModelScope.launch { prefs.setSeriesSortOrder(value) } }
+    val dvrSortOrder: Flow<String> = prefs.dvrSortOrder
+    fun setDvrSortOrder(value: String) { viewModelScope.launch { prefs.setDvrSortOrder(value) } }
 
     val vodLibraryRefreshHours: Flow<Int> = prefs.vodLibraryRefreshHours
     fun setVodLibraryRefreshHours(hours: Int) {

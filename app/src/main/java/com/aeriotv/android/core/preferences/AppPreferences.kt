@@ -379,6 +379,8 @@ class AppPreferences @Inject constructor(
     suspend fun setMoviesSortOrder(value: String) { store.edit { it[KEY_MOVIES_SORT_ORDER] = value } }
     val seriesSortOrder: Flow<String> = store.data.map { it[KEY_SERIES_SORT_ORDER] ?: "titleAZ" }
     suspend fun setSeriesSortOrder(value: String) { store.edit { it[KEY_SERIES_SORT_ORDER] = value } }
+    val dvrSortOrder: Flow<String> = store.data.map { it[KEY_DVR_SORT_ORDER] ?: "title" }
+    suspend fun setDvrSortOrder(value: String) { store.edit { it[KEY_DVR_SORT_ORDER] = value } }
 
     val vodLibraryRefreshHours: Flow<Int> =
         store.data.map { it[KEY_VOD_LIBRARY_REFRESH_HOURS] ?: 24 }
@@ -1510,6 +1512,7 @@ class AppPreferences @Inject constructor(
         val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")
         val KEY_MOVIES_SORT_ORDER = stringPreferencesKey("movies_sort_order")
         val KEY_SERIES_SORT_ORDER = stringPreferencesKey("series_sort_order")
+        val KEY_DVR_SORT_ORDER = stringPreferencesKey("dvr_sort_order")
         val KEY_MATCH_CONTENT_RESOLUTION = booleanPreferencesKey("match_content_resolution")
         val KEY_AUTO_RECOVER_FROZEN_STREAMS =
             booleanPreferencesKey("app_behaviors_auto_recover_frozen_streams")
