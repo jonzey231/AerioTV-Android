@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
@@ -398,6 +399,12 @@ fun MediaTabContent(
                             onValueChange = { submitQuery(it) },
                             placeholder = { Text(if (kind == MediaKind.Movies) "Search movies" else "Search TV shows") },
                             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                            // Clears the query and closes the field (Logan 2026-09-09).
+                            trailingIcon = {
+                                androidx.compose.material3.IconButton(onClick = { submitQuery(""); searchActive = false }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Clear and close search")
+                                }
+                            },
                             singleLine = true,
                             shape = androidx.compose.foundation.shape.CircleShape,
                             colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
