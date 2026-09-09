@@ -318,7 +318,8 @@ fun MainScaffold(
     val stickyTabs = remember(state.playlist?.id) { mutableSetOf<AppTab>() }
     val tabs = run {
         val live = visibleTabs(
-            hasFavorites = hasRenderableFavorites,
+            // Phone/tablet: Favorites is a pinned Live TV group, not a tab (Apple parity).
+            hasFavorites = hasRenderableFavorites && !splitVod,
             hasVod = hasVodContent,
             hasRecordings = hasRecordings,
             splitVod = splitVod,
@@ -326,7 +327,7 @@ fun MainScaffold(
             hasSeries = hasSeriesContent,
         )
         stickyTabs += live
-        if (favoritesOrNull?.isEmpty() == true) stickyTabs -= AppTab.Favorites
+        if (favoritesOrNull?.isEmpty() == true || splitVod) stickyTabs -= AppTab.Favorites
         if (!vodSourceOk) { stickyTabs -= AppTab.OnDemand; stickyTabs -= AppTab.Movies; stickyTabs -= AppTab.TVShows }
         visibleTabs(
             hasFavorites = AppTab.Favorites in stickyTabs,
@@ -442,6 +443,7 @@ fun MainScaffold(
         // A default saved as On Demand opens Movies where the tab was split.
         val target = AppTab.entries.firstOrNull { it.name == defaultTabPref }
             ?.let { if (it == AppTab.OnDemand && splitVod) AppTab.Movies else it }
+            ?.let { if (it == AppTab.Favorites && splitVod) AppTab.LiveTV else it }
         when {
             target == null -> initialTabApplied = true
             target in tabs -> {

@@ -152,6 +152,9 @@ class PlaylistViewModel @Inject constructor(
 
     companion object {
         const val ALL_GROUPS = "All"
+        /** Pinned Favorites group inside Live TV (Apple parity: Favorites is a
+         *  channel group, not a tab). Never a provider group name. */
+        const val FAVORITES_GROUP = "__favorites__"
         private const val TAG = "PlaylistViewModel"
 
         /**

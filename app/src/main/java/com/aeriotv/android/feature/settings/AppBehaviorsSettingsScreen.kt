@@ -172,7 +172,8 @@ fun AppBehaviorsSettingsScreen(
                 val tabIsTv = rememberIsTvDevice()
                 AppTab.entries.filter {
                     it != AppTab.Search &&
-                        (if (tabIsTv) it != AppTab.Movies && it != AppTab.TVShows else it != AppTab.OnDemand)
+                        (if (tabIsTv) it != AppTab.Movies && it != AppTab.TVShows
+                         else it != AppTab.OnDemand && it != AppTab.Favorites)
                 }.forEach { tab ->
                     val selected = (defaultTab.isEmpty() && tab == AppTab.LiveTV) ||
                         defaultTab == tab.name

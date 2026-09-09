@@ -194,13 +194,13 @@ fun GuideScreen(
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000L); nowMs = System.currentTimeMillis() } }
 
-    val allGroupNames = remember(state.channels, groupSortMode, groupOrder) {
+    val allGroupNames = remember(state.channels, groupSortMode, groupOrder, favoriteIds.isNotEmpty()) {
         com.aeriotv.android.feature.livetv.GuideMemo.get(
             "groupNames",
-            listOf(com.aeriotv.android.feature.livetv.GuideMemo.Ref(state.channels), groupSortMode, groupOrder),
+            listOf(com.aeriotv.android.feature.livetv.GuideMemo.Ref(state.channels), groupSortMode, groupOrder, favoriteIds.isNotEmpty()),
         ) {
             val sourceOrder = state.channels.asSequence().map { it.groupTitle }.filter { it.isNotBlank() }.distinct().toList()
-            orderGroups(sourceOrder, groupSortMode, groupOrder)
+            orderGroups(sourceOrder, groupSortMode, groupOrder, hasFavorites = favoriteIds.isNotEmpty())
         }
     }
     val groups = remember(allGroupNames, hiddenGroups) {

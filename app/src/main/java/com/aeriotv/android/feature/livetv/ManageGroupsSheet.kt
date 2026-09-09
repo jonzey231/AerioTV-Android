@@ -90,20 +90,28 @@ fun orderGroups(
     allGroups: List<String>,
     sortMode: GroupSortMode,
     savedOrder: List<String>,
+    /** Include the pinned Favorites token (when the user has favorites). */
+    hasFavorites: Boolean = false,
 ): List<String> {
     // The All Channels token is part of the ordered list (Logan 2026-09-08,
     // Apple parity): in Manual mode any group can sit above it. A provider
     // group literally named "All" is dropped so it can never collide with
     // the sentinel (#45 review).
-    val groups = allGroups.filterNot { it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true) }
+    val groups = allGroups.filterNot {
+        it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true) || it == PlaylistViewModel.FAVORITES_GROUP
+    }
+    val pinned = buildList {
+        if (hasFavorites) add(PlaylistViewModel.FAVORITES_GROUP)
+        add(PlaylistViewModel.ALL_GROUPS)
+    }
     return when (sortMode) {
-        GroupSortMode.Default -> listOf(PlaylistViewModel.ALL_GROUPS) + groups
-        GroupSortMode.Alphabetical -> listOf(PlaylistViewModel.ALL_GROUPS) + groups.sortedBy { it.lowercase() }
+        GroupSortMode.Default -> pinned + groups
+        GroupSortMode.Alphabetical -> pinned + groups.sortedBy { it.lowercase() }
         GroupSortMode.Manual -> {
-            val live = groups.toSet() + PlaylistViewModel.ALL_GROUPS
+            val live = groups.toSet() + pinned
             val ordered = savedOrder.filter { it in live }.distinct()
             val orderedSet = ordered.toSet()
-            val rest = (listOf(PlaylistViewModel.ALL_GROUPS) + groups).filterNot { it in orderedSet }
+            val rest = (pinned + groups).filterNot { it in orderedSet }
             ordered + rest
         }
     }
@@ -237,7 +245,7 @@ fun ManageGroupsSheet(
             // Manual order carries All Channels inside the list so it can be
             // moved like any group; other modes keep it pinned above.
             val listGroups = if (manualReorder) allGroups
-                else allGroups.filterNot { it == PlaylistViewModel.ALL_GROUPS }
+                else allGroups.filterNot { it == PlaylistViewModel.ALL_GROUPS || it == PlaylistViewModel.FAVORITES_GROUP }
             if (allGroups.isNotEmpty() && !manualReorder) {
                 // GH #80: the All Channels pill is hideable too (large playlists
                 // pay for it on every open). Pinned above the list, never reordered.
@@ -436,7 +444,7 @@ fun TvGroupPicker(
     // old LaunchedEffect(allGroups) reset clobbered the working order when a
     // slow commit round-tripped mid-second-move).
     val listGroups = if (manualReorder) allGroups
-        else allGroups.filterNot { it == PlaylistViewModel.ALL_GROUPS }
+        else allGroups.filterNot { it == PlaylistViewModel.ALL_GROUPS || it == PlaylistViewModel.FAVORITES_GROUP }
     var workingOrder by remember { mutableStateOf(listGroups) }
     val commitAndDismiss = {
         onCommit(workingHidden, if (orderDirty) workingOrder else null)

@@ -79,6 +79,7 @@ private fun computeDisplayChannelsUncached(
         .filter { ch ->
             when {
                 collectionSelected -> collectionMembers?.contains(ch.id) ?: true
+                selectedGroup == PlaylistViewModel.FAVORITES_GROUP -> ch.id in favoriteIds
                 selectedGroup != PlaylistViewModel.ALL_GROUPS ->
                     ch.groupTitle.equals(selectedGroup, ignoreCase = true)
                 query.isNotEmpty() -> true

@@ -225,7 +225,7 @@ fun ChannelListScreen(
     // Earlier Android revisions sorted alphabetically, which scrambled
     // Dispatcharr's curated group ordering. Sequence.distinct() preserves
     // encounter order so dropping the .sortedBy gets us iOS-matching behavior.
-    val allGroupsRaw by remember(state.channels, groupSortMode, groupOrder) {
+    val allGroupsRaw by remember(state.channels, groupSortMode, groupOrder, favoriteIds.isNotEmpty()) {
         derivedStateOf {
             val sourceOrder = state.channels.asSequence()
                 .map { it.groupTitle }
@@ -234,7 +234,7 @@ fun ChannelListScreen(
                 .toList()
             // Apply the user's Manage Groups sort preference (Default / A-Z /
             // Manual) on top of the source order.
-            com.aeriotv.android.feature.livetv.orderGroups(sourceOrder, groupSortMode, groupOrder)
+            com.aeriotv.android.feature.livetv.orderGroups(sourceOrder, groupSortMode, groupOrder, hasFavorites = favoriteIds.isNotEmpty())
         }
     }
 
@@ -512,7 +512,7 @@ fun ChannelListScreen(
                     FilterChip(
                         selected = state.selectedGroup == group,
                         onClick = { viewModel.onGroupSelected(group) },
-                        label = { Text(group, style = MaterialTheme.typography.labelLarge) },
+                        label = { Text(com.aeriotv.android.feature.livetv.groupSidebarLabel(group), style = MaterialTheme.typography.labelLarge) },
                         shape = CircleShape,
                         colors = FilterChipDefaults.filterChipColors(
                             containerColor = Color.Transparent,

@@ -10,6 +10,7 @@ import com.aeriotv.android.feature.playlist.PlaylistViewModel
 fun groupTokens(visibleGroups: List<String>, hiddenGroups: Set<String>): List<String> {
     // orderGroups now places the All token inside the list (any group can
     // sit above it in Manual order); keep that position when it is there.
+    // The pinned Favorites token rides along wherever orderGroups placed it.
     val others = visibleGroups.filterNot { it == PlaylistViewModel.ALL_GROUPS }
     val allShown = PlaylistViewModel.ALL_GROUPS !in hiddenGroups || others.isEmpty()
     return if (PlaylistViewModel.ALL_GROUPS in visibleGroups) {

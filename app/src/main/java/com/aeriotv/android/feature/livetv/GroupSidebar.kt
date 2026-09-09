@@ -67,8 +67,11 @@ import com.aeriotv.android.ui.tv.tvFocusScale
  * lifecycle - dangling ids, hidden-group bypass - is pill-tested; fold them
  * in when the sidebar earns a settings surface).
  */
-internal fun groupSidebarLabel(token: String): String =
-    if (token == PlaylistViewModel.ALL_GROUPS) "All Channels" else token
+internal fun groupSidebarLabel(token: String): String = when (token) {
+    PlaylistViewModel.ALL_GROUPS -> "All Channels"
+    PlaylistViewModel.FAVORITES_GROUP -> "Favorites"
+    else -> token
+}
 
 @Composable
 internal fun GroupSidebarPanel(

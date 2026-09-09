@@ -294,7 +294,7 @@ fun LiveTvPillsRow(
             FilterChip(
                 selected = selectedGroup == group,
                 onClick = { onSelectGroup(group) },
-                label = { Text(group, style = MaterialTheme.typography.labelLarge) },
+                label = { Text(groupSidebarLabel(group), style = MaterialTheme.typography.labelLarge) },
                 shape = CircleShape,
                 colors = FilterChipDefaults.filterChipColors(
                     containerColor = Color.Transparent,
