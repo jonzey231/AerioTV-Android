@@ -262,7 +262,8 @@ fun MediaTabContent(
                             val heroCard: @Composable (MediaHeroPage) -> Unit = { page ->
                                 val videoId = page.key.removePrefix("cw:")
                                 val play: () -> Unit = {
-                                    if (kind == MediaKind.Movies) onPlayMovie(videoId) else onEpisodeResume(videoId)
+                                    if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, page.title); onPlayMovie(videoId) }
+                                    else onEpisodeResume(videoId)
                                 }
                                 MediaHeroCard(
                                     page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
@@ -316,7 +317,7 @@ fun MediaTabContent(
                                 MediaHeroCard(
                                     page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
                                     onPrimary = {
-                                        item?.movieUuid?.let(onPlayMovie) ?: item?.seriesId?.let(onSeriesClick)
+                                        item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onPlayMovie(u) } ?: item?.seriesId?.let(onSeriesClick)
                                     },
                                     onPlayFromStart = {},
                                     onDetails = { item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: item?.seriesId?.let(onSeriesClick) },

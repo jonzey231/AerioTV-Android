@@ -1089,9 +1089,19 @@ class OnDemandViewModel @Inject constructor(
         if (hint.isEmpty()) return
         _state.update { it.copy(resolvingKeys = it.resolvingKeys + key) }
         viewModelScope.launch {
-            try {
-                val playlist = playlistRepository.activePlaylist() ?: return@launch
-                if (playlist.apiKey.isNullOrBlank()) return@launch
+            try { resolveMovieNow(uuid, hint) } finally {
+                _state.update { it.copy(resolvingKeys = it.resolvingKeys - key) }
+            }
+        }
+    }
+
+    /** Suspending core of [resolveMovie]; also used by the playback resolver
+     *  so a deck Resume on a reassigned uuid plays without opening Details. */
+    private suspend fun resolveMovieNow(uuid: String, hint: String): DispatcharrVODMovie? {
+        movieByUuid(uuid)?.let { return it }
+        run {
+                val playlist = playlistRepository.activePlaylist() ?: return null
+                if (playlist.apiKey.isNullOrBlank()) return null
                 ensureDispatcharrCategories(playlist)
                 val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
                 // Search on the bare name: playlists prefix quality tags
@@ -1122,9 +1132,7 @@ class OnDemandViewModel @Inject constructor(
                 } else {
                     Log.w(TAG, "[VOD] resolveMovie: no match among ${results.size} hits for '$q'")
                 }
-            } finally {
-                _state.update { it.copy(resolvingKeys = it.resolvingKeys - key) }
-            }
+                return hit
         }
     }
 
@@ -1864,6 +1872,7 @@ class OnDemandViewModel @Inject constructor(
         // A row that carried a reassigned uuid was mapped to the live movie by
         // resolveMovie; play through the live uuid, not the stale one.
         val movie = movieByUuid(movieUuid)
+            ?: movieTitleHints[movieUuid]?.let { hint -> resolveMovieNow(movieUuid, hint) }
         val liveUuid = movie?.uuid ?: movieUuid
         // Version pinning: a picked provider copy replaces the firstStreamId
         // default entirely (its stream_id + m3u_account_id ride the proxy URL;
