@@ -34,15 +34,27 @@ fun rememberViewport(): Viewport {
     // Memoize against width/height only: an IME-driven LocalConfiguration tick
     // (Android TV soft keyboard) must NOT churn a fresh Viewport and re-measure
     // every form/list that reads this (contributes to GH #1).
-    return remember(config.screenWidthDp, config.screenHeightDp) {
+    // Physical size tells a foldable's inner display (about 7.6 in) from a
+    // real tablet; both report "expanded" width, but Logan (2026-09-08) wants
+    // foldables to keep the bottom navigation bar.
+    val metrics = androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics
+    val diagonalInches = remember(metrics.widthPixels, metrics.heightPixels, metrics.xdpi, metrics.ydpi) {
+        val wIn = metrics.widthPixels / metrics.xdpi.coerceAtLeast(1f)
+        val hIn = metrics.heightPixels / metrics.ydpi.coerceAtLeast(1f)
+        kotlin.math.sqrt(wIn * wIn + hIn * hIn)
+    }
+    return remember(config.screenWidthDp, config.screenHeightDp, diagonalInches) {
         Viewport(
             widthDp = config.screenWidthDp,
             heightDp = config.screenHeightDp,
+            diagonalInches = diagonalInches,
         )
     }
 }
 
-data class Viewport(val widthDp: Int, val heightDp: Int) {
+data class Viewport(val widthDp: Int, val heightDp: Int, val diagonalInches: Float = 0f) {
+    /** Expanded width on a screen at least 8 in across: a tablet, not an unfolded phone. */
+    val isTabletSize: Boolean get() = isExpanded && diagonalInches >= 8f
     val isCompact: Boolean get() = widthDp < 600
     val isMedium: Boolean get() = widthDp in 600..839
     val isExpanded: Boolean get() = widthDp >= 840
@@ -157,7 +169,8 @@ val LocalTabBarBottomInset = androidx.compose.runtime.compositionLocalOf { 104.d
  * already puts its tab bar on top -- so tablets match across both platforms.
  * Phones keep the bottom pill; TV has its own 10-foot top bar already.
  */
-val Viewport.prefersTopTabBar: Boolean get() = isTwoPaneEligible
+/** Top tab bar only on real tablets; phones and foldables keep the bottom bar (Logan 2026-09-08). */
+val Viewport.prefersTopTabBar: Boolean get() = isTwoPaneEligible && isTabletSize
 
 /**
  * Size multiplier for the tablet top tab bar, 1.0 at the iPad 12.9-inch
