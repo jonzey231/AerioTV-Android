@@ -1338,6 +1338,23 @@ class DispatcharrClient @Inject constructor() {
     suspend fun getVODSeriesPage(url: String, apiKey: String): VODSeriesPage =
         withContext(vodDecodeDispatcher) { getVODSeriesPageImpl(url, apiKey) }
 
+    /**
+     * GET /api/vod/series/<id>/ -- one series by primary key. Used when a
+     * Continue Watching / Watchlist row points at a series the capped or
+     * filtered library walk never loaded, so the detail screen can still open.
+     */
+    suspend fun getVODSeriesById(baseUrl: String, apiKey: String, id: Int): DispatcharrVODSeries =
+        withContext(vodDecodeDispatcher) {
+            val url = "${baseUrl.trimEnd('/')}/api/vod/series/$id/"
+            val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
+            unauthorizedCheck(response, url)
+            if (!response.status.isSuccess()) {
+                throw DispatcharrError.Transport("VOD series $id fetch failed: HTTP ${response.status.value}")
+            }
+            val raw: JsonElement = response.body()
+            json.decodeFromJsonElement(serializer<DispatcharrVODSeries>(), raw)
+        }
+
     private suspend fun getVODSeriesPageImpl(url: String, apiKey: String): VODSeriesPage {
         val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
         unauthorizedCheck(response, url)

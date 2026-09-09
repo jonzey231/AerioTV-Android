@@ -118,6 +118,8 @@ fun SeriesDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val series = viewModel.seriesById(seriesId)
+    LaunchedEffect(seriesId, series == null) { if (series == null) viewModel.resolveSeries(seriesId) }
+    val resolvingSeries = series == null && viewModel.isResolving("s:$seriesId")
     val info = state.seriesProviderInfo[seriesId]
     val recent by watchVm.observeRecent(50).collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
@@ -353,11 +355,15 @@ fun SeriesDetailScreen(
                 modifier = Modifier.fillMaxSize().padding(24.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "Series not found",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (resolvingSeries) {
+                    androidx.compose.material3.CircularProgressIndicator()
+                } else {
+                    Text(
+                        text = "Series not found",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         } else {
             // TV: same large-card deadband spec as the VOD grids; the Cast &

@@ -250,7 +250,7 @@ fun MediaTabContent(
                                     page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
                                     onPrimary = play,
                                     onPlayFromStart = { watchVm.delete(videoId); play() },
-                                    onDetails = { page.item?.movieUuid?.let(onMovieClick) ?: page.item?.seriesId?.let(onSeriesClick) },
+                                    onDetails = { page.item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: page.item?.seriesId?.let(onSeriesClick) },
                                     onRemove = { watchVm.delete(videoId) },
                                     isOnWatchlist = page.item?.key in watchlistKeys,
                                     onToggleWatchlist = page.item?.let { item -> { watchlistVm.toggle(item) } },
@@ -322,7 +322,7 @@ fun MediaTabContent(
                                         item?.movieUuid?.let(onPlayMovie) ?: item?.seriesId?.let(onSeriesClick)
                                     },
                                     onPlayFromStart = {},
-                                    onDetails = { item?.movieUuid?.let(onMovieClick) ?: item?.seriesId?.let(onSeriesClick) },
+                                    onDetails = { item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: item?.seriesId?.let(onSeriesClick) },
                                     onRemove = { item?.let { watchlistVm.remove(it.key) } },
                                     removeLabel = "Remove from Watchlist",
                                 )
@@ -493,9 +493,6 @@ fun MediaPosterCard(
         modifier = modifier.combinedClickable(onClick = onClick, onLongClick = { if (menu != null) menuOpen = true }),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (menu != null) {
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) { menu { menuOpen = false } }
-        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -503,6 +500,12 @@ fun MediaPosterCard(
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surface),
         ) {
+            // Anchored inside the poster Box: as a direct Column child the
+            // zero-size popup anchor still collected a spacedBy gap and nudged
+            // the card down while the menu was open.
+            if (menu != null) {
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) { menu { menuOpen = false } }
+            }
             // Title placeholder sits under the image so a poster that never
             // loads (or has no URL) still names the item.
             Text(

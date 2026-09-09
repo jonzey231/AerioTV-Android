@@ -117,6 +117,12 @@ fun MovieDetailScreen(
     val context = LocalContext.current
     val recent by watchVm.observeRecent(50).collectAsStateWithLifecycle(initialValue = emptyList())
     val progress = recent.firstOrNull { it.videoId == movieUuid }
+    // Continue Watching / Watchlist row for a title the library walk never
+    // loaded: fetch it by name before giving up with "not found".
+    LaunchedEffect(movieUuid, movie == null, progress?.title) {
+        if (movie == null) viewModel.resolveMovie(movieUuid, progress?.title)
+    }
+    val resolvingMovie = movie == null && viewModel.isResolving("m:$movieUuid")
     val hasResume = progress != null && progress.positionMs > 0L &&
         (progress.durationMs <= 0L || progress.positionMs < progress.durationMs - 5 * 60_000L)
     val info = movie?.id?.let { state.movieProviderInfo[it] }
@@ -230,11 +236,15 @@ fun MovieDetailScreen(
                 modifier = Modifier.fillMaxSize().padding(24.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "Movie not found",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (resolvingMovie) {
+                    androidx.compose.material3.CircularProgressIndicator()
+                } else {
+                    Text(
+                        text = "Movie not found",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         } else {
             // TV: same large-card deadband spec as the VOD grids; the Cast &

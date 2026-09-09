@@ -99,16 +99,67 @@ enum class DvrSortOrder(val wire: String, val label: String) {
 /** Recording kind for the genre pills (Apple parity: DVRContentKind). */
 enum class DvrKind(val label: String) { Movies("Movies"), TVShows("TV Shows"), Sports("Sports"), News("News"), Kids("Kids"), Other("Other") }
 
+// Port of the Apple DVRClassifier (DVRArtResolver.swift): category words
+// first, newscast title shapes, real (non date-coded) episode identity, then
+// title and subtitle hints, and finally airing length when the EPG says
+// nothing. Memoised per row because the tab classifies every row per render.
+private val sportsWords = listOf(
+    "sport", "football", "soccer", "basketball", "baseball", "hockey", "nfl", "nba",
+    "mlb", "nhl", "ncaa", "golf", "tennis", "racing", "nascar", "formula 1", "f1",
+    "ufc", "mma", "boxing", "wrestling", "wwe", "olympic", "cricket", "rugby",
+    "motogp", "lacrosse", "volleyball", "playoffs", "championship", "premier league",
+    "la liga", "bundesliga", "serie a", "champions league",
+)
+private val movieWords = listOf("movie", "film", "cinema")
+private val newsWords = listOf("news", "newscast", "current affairs", "weather", "politics", "public affairs")
+private val newsTitleWords = listOf(
+    "news", "newshour", "nightly", "60 minutes", "dateline", "meet the press",
+    "face the nation", "this week", "good morning america", "today show",
+)
+private val kidsWords = listOf("kids", "children", "preschool", "family", "cartoon")
+private val seriesWords = listOf(
+    "series", "episode", "sitcom", "drama", "comedy", "reality", "talk", "animation",
+    "documentary", "game show", "soap", "crime", "sci-fi", "science fiction", "fantasy",
+    "mystery", "variety",
+)
+private val newscastTimeTitle = Regex("""\bat \d{1,2}(:\d{2})?\s*(am|pm)?$""")
+private val classifyMemo = java.util.concurrent.ConcurrentHashMap<String, DvrKind>()
+
 private fun classify(rec: Rec): DvrKind {
-    val c = (rec.category + " " + rec.title).lowercase()
-    return when {
-        Regex("sport|football|soccer|basketball|baseball|hockey|nfl|nba|mlb|nhl|golf|tennis|racing|ufc|wrestling").containsMatchIn(c) -> DvrKind.Sports
-        Regex("news|weather").containsMatchIn(c) -> DvrKind.News
-        Regex("kids|children|animation|cartoon|family").containsMatchIn(c) -> DvrKind.Kids
-        Regex("movie|film").containsMatchIn(rec.category.lowercase()) -> DvrKind.Movies
-        (rec.season ?: 0) > 0 || Regex("series|show|episode|drama|comedy|sitcom|reality|talk").containsMatchIn(c) -> DvrKind.TVShows
-        else -> DvrKind.Other
+    val key = rec.id + "|" + rec.category + "|" + rec.title + "|" + rec.subTitle + "|" + rec.description.hashCode() +
+        "|" + rec.season + "|" + rec.episode + "|" + rec.startMillis + "|" + rec.endMillis
+    classifyMemo[key]?.let { return it }
+    val category = rec.category.lowercase()
+    val title = rec.title.lowercase()
+    val sub = rec.subTitle.orEmpty().lowercase()
+    val desc = rec.description.lowercase()
+    // "S2026 E905" is a date code, not an episode identity.
+    val realEpisode = (rec.season ?: 0) in 1..1899 && (rec.episode ?: 0) > 0
+    val kind = when {
+        sportsWords.any { category.contains(it) } -> DvrKind.Sports
+        newsWords.any { category.contains(it) } -> DvrKind.News
+        kidsWords.any { category.contains(it) } -> DvrKind.Kids
+        newsTitleWords.any { title.contains(it) } -> DvrKind.News
+        newscastTimeTitle.containsMatchIn(title) -> DvrKind.News
+        desc.contains("news coverage") || desc.contains("local news") || desc.contains("regional news") ||
+            desc.contains("headlines") || desc.startsWith("news") -> DvrKind.News
+        realEpisode -> DvrKind.TVShows
+        movieWords.any { category.contains(it) } -> DvrKind.Movies
+        seriesWords.any { category.contains(it) } -> DvrKind.TVShows
+        sportsWords.any { title.contains(it) } -> DvrKind.Sports
+        sub.isNotEmpty() -> DvrKind.TVShows
+        else -> {
+            val minutes = (rec.endMillis - rec.startMillis) / 60_000
+            when {
+                minutes >= 80 -> DvrKind.Movies
+                minutes >= 15 -> DvrKind.TVShows
+                else -> DvrKind.Other
+            }
+        }
     }
+    if (classifyMemo.size > 2000) classifyMemo.clear()
+    classifyMemo[key] = kind
+    return kind
 }
 
 private fun bucket(title: String): Char {

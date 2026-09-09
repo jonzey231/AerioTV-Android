@@ -73,6 +73,12 @@ class OnDemandViewModel @Inject constructor(
         val isLoading: Boolean = false,
         val error: String? = null,
         val movies: List<DispatcharrVODMovie> = emptyList(),
+        // Titles opened from Continue Watching / Watchlist that the library
+        // walk never loaded (row cap, disabled group, provider gone), fetched
+        // on demand so the detail screen opens instead of "not found".
+        val resolvedMovies: Map<String, DispatcharrVODMovie> = emptyMap(),
+        val resolvedSeries: Map<Int, DispatcharrVODSeries> = emptyMap(),
+        val resolvingKeys: Set<String> = emptySet(),
         val totalCount: Int = 0,
         val searchQuery: String = "",
         // Server-side search results (Dispatcharr `?search=`). `visible` renders
@@ -1003,13 +1009,87 @@ class OnDemandViewModel @Inject constructor(
     fun seriesById(id: Int): DispatcharrVODSeries? =
         _state.value.series.firstOrNull { it.id == id }
             ?: _state.value.seriesSearchResults.firstOrNull { it.id == id }
+            ?: _state.value.resolvedSeries[id]
 
     fun movieById(id: Int): DispatcharrVODMovie? =
         _state.value.movies.firstOrNull { it.id == id }
+            ?: _state.value.resolvedMovies.values.firstOrNull { it.id == id }
 
     fun movieByUuid(uuid: String): DispatcharrVODMovie? =
         _state.value.movies.firstOrNull { it.uuid == uuid }
             ?: _state.value.searchResults.firstOrNull { it.uuid == uuid }
+            ?: _state.value.resolvedMovies[uuid]
+
+    /** True while [resolveMovie] / [resolveSeries] is fetching this key. */
+    fun isResolving(key: String): Boolean = key in _state.value.resolvingKeys
+
+    // Display titles noted by the Movies / TV Shows decks when a Continue
+    // Watching or Watchlist row is opened, so a movie missing from the walk
+    // can be found by name (the movie list has no lookup by uuid).
+    private val movieTitleHints = HashMap<String, String>()
+    fun noteMovieTitle(uuid: String, title: String) { movieTitleHints[uuid] = title }
+
+    /**
+     * Fetch a movie the library walk never loaded. Dispatcharr's movie
+     * endpoint is keyed by primary key, and the app only carries the uuid
+     * (the play/route key), so the lookup is a name search filtered to the
+     * uuid. [titleHint] comes from the watch-progress row or the Watchlist.
+     */
+    fun resolveMovie(uuid: String, titleHint: String?) {
+        if (movieByUuid(uuid) != null) return
+        val key = "m:$uuid"
+        if (key in _state.value.resolvingKeys) return
+        val hint = (titleHint ?: movieTitleHints[uuid])?.trim().orEmpty()
+        if (hint.isEmpty()) return
+        _state.update { it.copy(resolvingKeys = it.resolvingKeys + key) }
+        viewModelScope.launch {
+            try {
+                val playlist = playlistRepository.activePlaylist() ?: return@launch
+                if (playlist.apiKey.isNullOrBlank()) return@launch
+                ensureDispatcharrCategories(playlist)
+                val base = playlistRepository.effectiveBaseUrl(playlist).trimEnd('/')
+                // Search on the bare name: playlists prefix quality tags
+                // ("4K: ") and suffix years that the row title may or may not
+                // carry, and the server search is a plain substring match.
+                val q = hint.replace(Regex("""^\s*(4K|UHD|HD|FHD|SD)\s*[:\-]\s*""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""\s*\((?:19|20)\d{2}\)\s*$"""), "").trim().ifEmpty { hint }
+                val url = "$base/api/vod/movies/?search=" + java.net.URLEncoder.encode(q, "UTF-8") + "&page_size=100"
+                val page = runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { key2 -> dispatcharrClient.getVODMoviesPage(url, key2) }
+                }.onFailure { warnUnlessCancelled("resolveMovie '$q' failed", it) }.getOrNull()
+                val hit = page?.results?.firstOrNull { it.uuid == uuid }?.let(::stampMovieGroup)
+                if (hit != null) {
+                    _state.update { it.copy(resolvedMovies = it.resolvedMovies + (uuid to hit)) }
+                } else {
+                    Log.w(TAG, "[VOD] resolveMovie: uuid not among ${page?.results?.size ?: -1} hits for '$q'")
+                }
+            } finally {
+                _state.update { it.copy(resolvingKeys = it.resolvingKeys - key) }
+            }
+        }
+    }
+
+    /** Series counterpart of [resolveMovie]; the series endpoint is keyed by id. */
+    fun resolveSeries(id: Int) {
+        if (seriesById(id) != null) return
+        val key = "s:$id"
+        if (key in _state.value.resolvingKeys) return
+        _state.update { it.copy(resolvingKeys = it.resolvingKeys + key) }
+        viewModelScope.launch {
+            try {
+                val playlist = playlistRepository.activePlaylist() ?: return@launch
+                if (playlist.apiKey.isNullOrBlank()) return@launch
+                ensureDispatcharrCategories(playlist)
+                val base = playlistRepository.effectiveBaseUrl(playlist)
+                val hit = runCatching {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { key2 -> dispatcharrClient.getVODSeriesById(base, key2, id) }
+                }.onFailure { warnUnlessCancelled("resolveSeries $id failed", it) }.getOrNull()?.let(::stampSeriesGroup)
+                if (hit != null) _state.update { it.copy(resolvedSeries = it.resolvedSeries + (id to hit)) }
+            } finally {
+                _state.update { it.copy(resolvingKeys = it.resolvingKeys - key) }
+            }
+        }
+    }
 
     /**
      * Navigation target for a "Known For" tile in the cast bio sheet: the
