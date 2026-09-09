@@ -2,6 +2,7 @@ package com.aeriotv.android.feature.movies
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -86,8 +87,29 @@ fun MediaTabContent(
     viewModel: OnDemandViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel = hiltViewModel(),
+    watchlistVm: WatchlistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Watchlist (Apple parity): a second deck under Continue Watching, and
+    // Add / Remove entries on every poster and hero menu.
+    val watchlistEntries by watchlistVm.entries.collectAsStateWithLifecycle(initialValue = emptyList())
+    val watchlistKeys = remember(watchlistEntries) { watchlistEntries.map { it.key }.toSet() }
+    val watchlistPages: List<MediaHeroPage> = remember(watchlistEntries, state.movies, state.series, kind) {
+        watchlistEntries.filter { it.isMovie == (kind == MediaKind.Movies) }.map { e ->
+            val m = if (e.isMovie) state.movies.firstOrNull { "m:" + it.uuid == e.key } else null
+            val sr = if (!e.isMovie) state.series.firstOrNull { "s:" + it.id == e.key } else null
+            val item = m?.toMediaItem() ?: sr?.toMediaItem() ?: MediaItem(
+                key = e.key, title = e.title, year = e.year, rating = e.rating, posterUrl = e.posterUrl, category = null,
+                movieUuid = if (e.isMovie) e.key.removePrefix("m:") else null,
+                seriesId = if (!e.isMovie) e.key.removePrefix("s:").toIntOrNull() else null,
+            )
+            MediaHeroPage(
+                key = "wl:" + e.key, title = item.title, artUrl = item.posterUrl, year = item.year, season = null, episode = null,
+                durationSecs = m?.durationSecs, genre = m?.genre ?: sr?.genre, rating = item.rating,
+                positionMs = 0L, durationMs = 0L, item = item, tmdbId = m?.tmdbId ?: sr?.tmdbId, isMovie = e.isMovie,
+            )
+        }
+    }
     // Continue Watching (Apple parity, heroPages): unfinished progress rows,
     // newest first, movies for the Movies tab and one page per series for
     // TV Shows (the newest episode row wins), at most 12.
@@ -166,8 +188,8 @@ fun MediaTabContent(
     // Hero backdrops (Apple parity: TMDB backdrop per hero page when a key is
     // set); the cropped poster shows until one arrives. Cached per page key.
     var backdrops by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
-    LaunchedEffect(heroPages.map { it.key }) {
-        for (page in heroPages) {
+    LaunchedEffect(heroPages.map { it.key } + watchlistPages.map { it.key }) {
+        for (page in heroPages + watchlistPages) {
             if (backdrops.containsKey(page.key)) continue
             val url = viewModel.resolveTmdbBackdropUrl(page.tmdbId, searchTitle(page.title), page.isMovie)
             backdrops = backdrops + (page.key to url)
@@ -176,7 +198,8 @@ fun MediaTabContent(
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     // Full-span leading items: room, header, (search), (pills).
-    val leadingCount = 2 + (if (searchActive) 1 else 0) + (if (!isSearching && genrePills.isNotEmpty()) 1 else 0)
+    val leadingCount = 2 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0) +
+        (if (searchActive) 1 else 0) + (if (!isSearching && genrePills.isNotEmpty()) 1 else 0)
     val railVisible by remember(leadingCount, library.size) {
         derivedStateOf { compact && !isSearching && library.size >= 9 && gridState.firstVisibleItemIndex >= 1 }
     }
@@ -229,6 +252,8 @@ fun MediaTabContent(
                                     onPlayFromStart = { watchVm.delete(videoId); play() },
                                     onDetails = { page.item?.movieUuid?.let(onMovieClick) ?: page.item?.seriesId?.let(onSeriesClick) },
                                     onRemove = { watchVm.delete(videoId) },
+                                    isOnWatchlist = page.item?.key in watchlistKeys,
+                                    onToggleWatchlist = page.item?.let { item -> { watchlistVm.toggle(item) } },
                                 )
                             }
                             if (compact) {
@@ -281,6 +306,46 @@ fun MediaTabContent(
                         },
                     )
                 }
+                if (watchlistPages.isNotEmpty()) {
+                    item(key = "watchlist", span = { GridItemSpan(maxLineSpan) }) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
+                            Text(
+                                "Watchlist", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.padding(bottom = 10.dp),
+                            )
+                            val wlCard: @Composable (MediaHeroPage) -> Unit = { page ->
+                                val item = page.item
+                                MediaHeroCard(
+                                    page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
+                                    onPrimary = {
+                                        item?.movieUuid?.let(onPlayMovie) ?: item?.seriesId?.let(onSeriesClick)
+                                    },
+                                    onPlayFromStart = {},
+                                    onDetails = { item?.movieUuid?.let(onMovieClick) ?: item?.seriesId?.let(onSeriesClick) },
+                                    onRemove = { item?.let { watchlistVm.remove(it.key) } },
+                                    removeLabel = "Remove from Watchlist",
+                                )
+                            }
+                            if (compact) {
+                                Box(modifier = Modifier.layout { measurable, constraints ->
+                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
+                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+                                }) {
+                                    PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> wlCard(page) }
+                                }
+                            } else {
+                                val pagerState = androidx.compose.foundation.pager.rememberPagerState { watchlistPages.size }
+                                androidx.compose.foundation.pager.HorizontalPager(
+                                    state = pagerState, pageSize = androidx.compose.foundation.pager.PageSize.Fill, pageSpacing = 8.dp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { wlCard(watchlistPages[i]) } },
+                                )
+                            }
+                        }
+                    }
+                }
                 if (searchActive) {
                     item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
                         OutlinedTextField(
@@ -310,9 +375,18 @@ fun MediaTabContent(
                     }
                 }
                 items(gridItems, key = { it.key }) { item ->
-                    MediaPosterCard(item = item, onClick = {
-                        item.movieUuid?.let(onMovieClick) ?: item.seriesId?.let(onSeriesClick)
-                    })
+                    val open = { item.movieUuid?.let(onMovieClick) ?: item.seriesId?.let(onSeriesClick); Unit }
+                    MediaPosterCard(
+                        item = item,
+                        onClick = open,
+                        menu = { close ->
+                            DropdownMenuItem(text = { Text("Details") }, onClick = { close(); open() })
+                            DropdownMenuItem(
+                                text = { Text(if (item.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") },
+                                onClick = { close(); watchlistVm.toggle(item) },
+                            )
+                        },
+                    )
                 }
             }
         }
@@ -405,10 +479,23 @@ private fun GenrePill(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 2:3 poster, 8 dp corners, rating badge bottom-end, two-line title, year line. */
+/** 2:3 poster, 8 dp corners, rating badge bottom-end, two-line title, year line. Long press opens [menu]. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun MediaPosterCard(item: MediaItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.clickable(onClick = onClick), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+fun MediaPosterCard(
+    item: MediaItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    menu: (@Composable (close: () -> Unit) -> Unit)? = null,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier.combinedClickable(onClick = onClick, onLongClick = { if (menu != null) menuOpen = true }),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (menu != null) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) { menu { menuOpen = false } }
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()

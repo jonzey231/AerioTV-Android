@@ -83,6 +83,10 @@ fun MediaHeroCard(
     onDetails: () -> Unit,
     onRemove: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    /** Long-press menu: Add to / Remove from Watchlist (Apple parity). */
+    isOnWatchlist: Boolean = false,
+    onToggleWatchlist: (() -> Unit)? = null,
+    removeLabel: String = "Remove from Continue Watching",
 ) {
     val bg = MaterialTheme.colorScheme.background
     var menu by remember { mutableStateOf(false) }
@@ -138,7 +142,7 @@ fun MediaHeroCard(
                             .height(40.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary)
-                            .combinedClickable(onClick = onPrimary, onLongClick = { if (onRemove != null) menu = true })
+                            .combinedClickable(onClick = onPrimary, onLongClick = { if (onRemove != null || onToggleWatchlist != null) menu = true })
                             .padding(horizontal = 18.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -146,12 +150,20 @@ fun MediaHeroCard(
                         Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
                         Text(if (page.hasProgress) "Resume" else "Play", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimary)
                     }
-                    if (onRemove != null) {
+                    if (onRemove != null || onToggleWatchlist != null) {
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Remove from Continue Watching", color = MaterialTheme.colorScheme.error) },
-                                onClick = { menu = false; onRemove() },
-                            )
+                            if (onToggleWatchlist != null) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isOnWatchlist) "Remove from Watchlist" else "Add to Watchlist") },
+                                    onClick = { menu = false; onToggleWatchlist() },
+                                )
+                            }
+                            if (onRemove != null) {
+                                DropdownMenuItem(
+                                    text = { Text(removeLabel, color = MaterialTheme.colorScheme.error) },
+                                    onClick = { menu = false; onRemove() },
+                                )
+                            }
                         }
                     }
                 }

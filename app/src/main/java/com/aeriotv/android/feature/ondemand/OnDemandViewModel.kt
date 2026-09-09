@@ -283,6 +283,12 @@ class OnDemandViewModel @Inject constructor(
      * `VODStore.clear()`.
      */
     private fun resetVodState() {
+        // A running sweep belongs to the OLD playlist: cancel it so the
+        // single-flight guard in refresh()/refreshSeries() lets the new one run.
+        movieSweepJob?.cancel()
+        seriesSweepJob?.cancel()
+        movieSweepJob = null
+        seriesSweepJob = null
         xtreamProbeJob?.cancel()
         xtreamItemsJob?.cancel()
         xtreamProbeJob = null
@@ -505,8 +511,22 @@ class OnDemandViewModel @Inject constructor(
         }
     }
 
+    // Single-flight sweeps. A second refresh() while the per-category walk is
+    // still running (pull to refresh again, Settings refresh, a tab re-enter)
+    // used to start a SECOND walk that published its own shorter `merged` list
+    // over the first one's, so the All Movies count bounced between the two
+    // runs (7862 / 3415 / 3502, Logan's Fold recording 2026-09-08). One walk
+    // at a time; a request during a walk is a no-op since the walk already
+    // produces the freshest list.
+    private var movieSweepJob: kotlinx.coroutines.Job? = null
+    private var seriesSweepJob: kotlinx.coroutines.Job? = null
+
     fun refresh() {
-        viewModelScope.launch {
+        if (movieSweepJob?.isActive == true) {
+            Log.i(TAG, "[VOD] movie sweep already running; ignoring refresh()")
+            return
+        }
+        movieSweepJob = viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist()
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
@@ -717,7 +737,11 @@ class OnDemandViewModel @Inject constructor(
     }
 
     fun refreshSeries() {
-        viewModelScope.launch {
+        if (seriesSweepJob?.isActive == true) {
+            Log.i(TAG, "[VOD] series sweep already running; ignoring refreshSeries()")
+            return
+        }
+        seriesSweepJob = viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist()
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
