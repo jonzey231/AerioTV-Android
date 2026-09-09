@@ -49,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.graphics.Color
@@ -257,14 +258,11 @@ fun MediaTabContent(
                                 )
                             }
                             if (compact) {
-                                // Card deck spans the grid's own 16 dp gutter, so pull it back out.
-                                // The grid pads 16 dp start and 34 dp end (rail lane); the
-                                // deck wants the full window width, so widen by both.
-                                Box(modifier = Modifier.layout { measurable, constraints ->
-                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
-                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
-                                }) {
+                                // iPhone parity (Logan 2026-09-09): the deck is the plain
+                                // content width and clips at its bounds, so nothing shows
+                                // left of the front card at rest and the trailing cards
+                                // peek out to the right inside the content margin.
+                                Box(modifier = Modifier.fillMaxWidth().clipToBounds()) {
                                     PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> heroCard(page) }
                                 }
                             } else {
@@ -303,11 +301,7 @@ fun MediaTabContent(
                                 )
                             }
                             if (compact) {
-                                Box(modifier = Modifier.layout { measurable, constraints ->
-                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
-                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
-                                }) {
+                                Box(modifier = Modifier.fillMaxWidth().clipToBounds()) {
                                     PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> wlCard(page) }
                                 }
                             } else {

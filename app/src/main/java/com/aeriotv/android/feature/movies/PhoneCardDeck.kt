@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -102,14 +103,18 @@ fun <T> PhoneCardDeck(
                     onDragCancel = { scope.launch { drag.animateTo(0f) } },
                 )
             }
-            Box(modifier = Modifier.fillMaxWidth().height(cardHeight).then(gesture)) {
+            // Clipped at the front card's left edge (iPhone, Logan 2026-09-09):
+            // the parked previous card is fully hidden at rest and slides in
+            // from that edge during a drag, so the deck reads as an endless
+            // scroll; the trailing cards still peek out to the right.
+            Box(modifier = Modifier.fillMaxWidth().height(cardHeight).then(gesture).padding(start = margin).clipToBounds()) {
                 items.forEachIndexed { i, item ->
                     val rel = wrapped(i - p)
                     if (rel <= -1.5f || rel >= 3.5f) return@forEachIndexed
                     val front = abs(rel) < 0.02f
                     val clamped = rel.coerceAtMost(3f)
-                    val xDp: Dp = if (rel >= 0f) margin + peek * clamped
-                        else margin - (cardW + margin - sliver) * (-rel).coerceAtMost(1f)
+                    val xDp: Dp = if (rel >= 0f) peek * clamped
+                        else -(cardW + margin - sliver) * (-rel).coerceAtMost(1f)
                     val scale = if (rel >= 0f) 1f - clamped * 0.03f else 1f
                     val alpha = if (rel >= 0f) 1f - clamped * 0.2f else 0.9f + rel.coerceAtLeast(-1f) * 0.3f
                     Box(

@@ -54,6 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -486,11 +487,7 @@ private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, car
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionTitle(title)
         if (compact) {
-            Box(modifier = Modifier.layout { measurable, constraints ->
-                val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
-                val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
-            }) {
+            Box(modifier = Modifier.fillMaxWidth().clipToBounds()) {
                 PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }) { item, _ -> card(item) }
             }
         } else {
