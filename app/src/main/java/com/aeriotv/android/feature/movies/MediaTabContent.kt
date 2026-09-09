@@ -254,8 +254,14 @@ fun MediaTabContent(
             runCatching { searchFocus.requestFocus() }
         }
     }
-    val railVisible by remember(leadingCount, library.size) {
-        derivedStateOf { compact && !isSearching && library.size >= 9 && gridState.firstVisibleItemIndex >= 1 }
+    // Rail only once the library owns the display: the header and pill
+    // rows have scrolled off (iPhone rule; Logan 2026-09-09: it faded in
+    // over the pills).
+    val railVisible by remember(leadingCount, library.size, headerIndex) {
+        derivedStateOf {
+            compact && !isSearching && library.size >= 9 &&
+                gridState.firstVisibleItemIndex >= headerIndex + 2
+        }
     }
     val bottomInset = LocalTabBarBottomInset.current
     // Bottom room while searching: only what is needed to let the header
