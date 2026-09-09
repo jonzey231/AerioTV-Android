@@ -26,6 +26,15 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.FiberManualRecord
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,6 +54,7 @@ import com.aeriotv.android.feature.livetv.RetainedChannelsViewModel
 import com.aeriotv.android.feature.livetv.TvGroupPicker
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -644,6 +654,41 @@ fun GuideScreen(
         val replayable = !cell.isPlaceholder && channel.canReplay(cell, nowMs)
         // Apple TV order (Logan 2026-09-02): Favorites, Multiview, Collection,
         // Program Info, Record from Now, then the Android-only extras.
+        val watchFromStart: () -> Unit = {
+            viewModel.playCatchup(channel, cell) { result ->
+                result.onSuccess { r ->
+                    onPlayCatchup(channel.id, r.url, cell.title, cell.startMillis, cell.endMillis, r.panelTimeZoneId, r.channelUuid.orEmpty())
+                }
+            }
+        }
+        val reminderSet = key in reminderKeys
+        val toggleReminder: () -> Unit = {
+            if (reminderSet) remindersVm.cancelReminder(key)
+            else remindersVm.setReminder(channel.name, cell.title, cell.startMillis, cell.endMillis, channel.id)
+        }
+        if (!isTv) {
+            // Phone and tablet: Material 3 modal bottom sheet (the platform's
+            // long-press action surface; Logan 2026-09-09), items in the iPhone
+            // context-menu order. Jump To lives on the clock cell here.
+            val sheetActions = buildList {
+                if (isLive && channel.url.isNotBlank()) add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { onChannelClick(channel) })
+                else if (replayable) add(TvMenuAction("Watch from Start", Icons.Outlined.History, onClick = watchFromStart))
+                add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites", if (isFavorite) Icons.Outlined.StarOutline else Icons.Filled.Star) { favoritesVm.toggle(channel) })
+                add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", Icons.Outlined.GridView, enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
+                add(TvMenuAction("Add Channel to Collection", Icons.Outlined.CreateNewFolder) { collectionPickerFor = channel.id to channel.name })
+                if (!cell.isPlaceholder) {
+                    add(TvMenuAction("Program Info", Icons.Outlined.Info) { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
+                    if (canRecord) add(TvMenuAction(if (isLive) "Record from Now" else "Record", Icons.Outlined.FiberManualRecord) { recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
+                    if (cell.startMillis > nowMs) add(TvMenuAction(if (reminderSet) "Cancel Reminder" else "Set Reminder", Icons.Outlined.Notifications, onClick = toggleReminder))
+                }
+            }
+            GuideCellActionSheet(
+                title = cell.title,
+                subtitle = channel.name,
+                actions = sheetActions,
+                onDismiss = { menuFor = null },
+            )
+        } else {
         val actions = buildList {
             add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites") { favoritesVm.toggle(channel) })
             add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
@@ -655,23 +700,14 @@ fun GuideScreen(
             if (!cell.isPlaceholder) {
                 add(TvMenuAction("Program Info") { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
                 if (canRecord) add(TvMenuAction(if (isLive) "Record from Now" else "Record") { recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
-                if (replayable) add(TvMenuAction("Watch from Start") {
-                    viewModel.playCatchup(channel, cell) { result ->
-                        result.onSuccess { r ->
-                            onPlayCatchup(channel.id, r.url, cell.title, cell.startMillis, cell.endMillis, r.panelTimeZoneId, r.channelUuid.orEmpty())
-                        }
-                    }
-                })
+                if (replayable) add(TvMenuAction("Watch from Start", onClick = watchFromStart))
                 if (cell.startMillis > nowMs) {
-                    val set = key in reminderKeys
-                    add(TvMenuAction(if (set) "Cancel Reminder" else "Set Reminder") {
-                        if (set) remindersVm.cancelReminder(key)
-                        else remindersVm.setReminder(channel.name, cell.title, cell.startMillis, cell.endMillis, channel.id)
-                    })
+                    add(TvMenuAction(if (reminderSet) "Cancel Reminder" else "Set Reminder", onClick = toggleReminder))
                 }
             }
         }
         TvActionMenuDialog(title = cell.title, actions = actions, guard = menuGuard, onDismiss = { menuFor = null })
+        }
     }
     if (showJumpSheet) {
         com.aeriotv.android.feature.livetv.GuideJumpSheet(
@@ -760,3 +796,67 @@ private fun GroupPills(
 }
 
 private const val QUANTUM_MS = 15 * 60_000L
+
+
+/**
+ * Long-press action surface for a guide cell on phone and tablet: the
+ * Material 3 modal bottom sheet, a title block and one icon row per
+ * action. Tapping a row runs it and closes the sheet.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun GuideCellActionSheet(
+    title: String,
+    subtitle: String,
+    actions: List<TvMenuAction>,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            actions.forEach { action ->
+                androidx.compose.material3.ListItem(
+                    headlineContent = {
+                        Text(
+                            action.label,
+                            color = if (action.enabled) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    },
+                    leadingContent = {
+                        action.icon?.let {
+                            Icon(
+                                it, contentDescription = null,
+                                tint = if (action.enabled) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            )
+                        }
+                    },
+                    colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                    modifier = Modifier.clickable(enabled = action.enabled) { action.onClick(); onDismiss() },
+                )
+            }
+        }
+    }
+}
