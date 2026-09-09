@@ -35,6 +35,12 @@ enum class SyncCategory(
         fileName = "favorites.v1.json",
         storageSuffix = "favorites",
     ),
+    Watchlist(
+        displayName = "Watchlist",
+        subtitle = "Movies and TV shows you saved for later",
+        fileName = "watchlist.v1.json",
+        storageSuffix = "watchlist",
+    ),
     Preferences(
         displayName = "App Preferences",
         subtitle = "Theme, appearance mode, accent color, default tab, hidden groups, palette overrides",

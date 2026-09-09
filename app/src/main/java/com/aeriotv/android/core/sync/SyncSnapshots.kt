@@ -109,6 +109,32 @@ data class FavoritesSnapshot(
     val entries: List<FavoriteSnapshotEntry>,
 )
 
+/**
+ * Watchlist row. Field names map 1:1 onto the iOS WatchlistEntry model
+ * (vodID / vodType / serverID / releaseYear / rating / addedAt) so an iOS
+ * port can read this file verbatim. [removedAt] is a tombstone: a removal
+ * travels as a row with removedAt set, and the later of addedAt / removedAt
+ * wins on merge, so removing a title on one device removes it everywhere.
+ */
+@Serializable
+data class WatchlistSnapshotEntry(
+    val vodId: String,
+    val vodType: String = "movie",
+    val title: String,
+    val posterUrl: String? = null,
+    val releaseYear: String = "",
+    val rating: String = "",
+    val serverId: String? = null,
+    val addedAt: Long,
+    val removedAt: Long? = null,
+)
+
+@Serializable
+data class WatchlistSnapshot(
+    val envelope: SyncEnvelope,
+    val entries: List<WatchlistSnapshotEntry>,
+)
+
 @Serializable
 data class PreferencesSnapshot(
     val envelope: SyncEnvelope,

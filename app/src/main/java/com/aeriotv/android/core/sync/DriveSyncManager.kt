@@ -45,6 +45,7 @@ class DriveSyncManager @Inject constructor(
     private val reminderDao: ReminderDao,
     private val favoriteChannelDao: com.aeriotv.android.core.data.db.dao.FavoriteChannelDao,
     private val appPreferences: AppPreferences,
+    private val watchlistStore: com.aeriotv.android.core.preferences.WatchlistStore,
 ) {
 
     private val okHttp: OkHttpClient = OkHttpClient.Builder()
@@ -253,6 +254,7 @@ class DriveSyncManager @Inject constructor(
             SyncCategory.WatchProgress -> json.encodeToString(buildWatchProgressSnapshot())
             SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
             SyncCategory.Favorites -> json.encodeToString(buildFavoritesSnapshot())
+            SyncCategory.Watchlist -> json.encodeToString(buildWatchlistSnapshot())
             SyncCategory.Preferences -> json.encodeToString(buildPreferencesSnapshot())
             SyncCategory.Credentials -> json.encodeToString(buildCredentialsSnapshot())
         }
@@ -274,6 +276,7 @@ class DriveSyncManager @Inject constructor(
                 SyncCategory.WatchProgress -> applyWatchProgressSnapshot(json.decodeFromString(body))
                 SyncCategory.Reminders -> applyRemindersSnapshot(json.decodeFromString(body))
                 SyncCategory.Favorites -> applyFavoritesSnapshot(json.decodeFromString(body))
+                SyncCategory.Watchlist -> applyWatchlistSnapshot(json.decodeFromString(body))
                 SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body))
                 SyncCategory.Credentials -> applyCredentialsSnapshot(json.decodeFromString(body))
             }
@@ -317,6 +320,44 @@ class DriveSyncManager @Inject constructor(
     }
 
     /** Task #52: favorites + the user's manual order (iOS parity). */
+    private suspend fun buildWatchlistSnapshot(): WatchlistSnapshot =
+        WatchlistSnapshot(
+            envelope = envelope(),
+            entries = watchlistStore.allOnce().map { e ->
+                WatchlistSnapshotEntry(
+                    vodId = e.key.substringAfter(':'),
+                    vodType = if (e.isMovie) "movie" else "series",
+                    title = e.title,
+                    posterUrl = e.posterUrl,
+                    releaseYear = e.year?.toString() ?: "",
+                    rating = e.rating ?: "",
+                    serverId = e.playlistId,
+                    addedAt = e.addedAt,
+                    removedAt = e.removedAt,
+                )
+            },
+        )
+
+    /** Tombstone-aware merge; see WatchlistStore.mergeRemote. */
+    private suspend fun applyWatchlistSnapshot(snapshot: WatchlistSnapshot) {
+        watchlistStore.mergeRemote(
+            snapshot.entries.map { r ->
+                val movie = r.vodType != "series"
+                com.aeriotv.android.core.preferences.WatchlistStore.Entry(
+                    key = (if (movie) "m:" else "s:") + r.vodId,
+                    title = r.title,
+                    posterUrl = r.posterUrl,
+                    year = r.releaseYear.toIntOrNull(),
+                    rating = r.rating.ifBlank { null },
+                    isMovie = movie,
+                    playlistId = r.serverId,
+                    addedAt = r.addedAt,
+                    removedAt = r.removedAt,
+                )
+            },
+        )
+    }
+
     private suspend fun buildFavoritesSnapshot(): FavoritesSnapshot {
         val rows = favoriteChannelDao.allOnce()
         return FavoritesSnapshot(
