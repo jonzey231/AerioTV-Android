@@ -655,18 +655,23 @@ fun MediaPosterCard(
             if (menu != null) {
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) { menu { menuOpen = false } }
             }
-            // Title placeholder sits under the image so a poster that never
-            // loads (or has no URL) still names the item.
-            Text(
-                item.title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 4,
-                modifier = Modifier.align(Alignment.Center).padding(8.dp),
-            )
+            // A small spinner where the poster will be while the art is
+            // missing or still loading; the title is under the box (Logan
+            // 2026-09-09, both platforms).
+            var artLoaded by remember(item.posterUrl) { mutableStateOf(false) }
+            if (!artLoaded) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(22.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            }
             if (!item.posterUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = item.posterUrl,
                     contentDescription = item.title,
                     contentScale = ContentScale.Crop,
+                    onSuccess = { artLoaded = true },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
