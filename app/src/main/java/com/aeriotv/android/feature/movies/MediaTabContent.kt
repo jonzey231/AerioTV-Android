@@ -493,7 +493,7 @@ fun MediaTabContent(
                 }
                 if (showProviderPills) {
                     item(key = "providers", span = { GridItemSpan(maxLineSpan) }) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EdgeToEdgePillRow {
                             item(key = "all") {
                                 GenrePill("All Providers", selectedProviderId == null) { viewModel.selectProvider(null, kind == MediaKind.Movies) }
                             }
@@ -606,9 +606,32 @@ private fun HeaderCircle(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 
 @Composable
 private fun GenrePills(pills: List<String>, selected: String?, onSelect: (String?) -> Unit) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    EdgeToEdgePillRow {
         item(key = "all") { GenrePill("All", selected == null) { onSelect(null) } }
         items(pills.size, key = { pills[it] }) { i -> GenrePill(pills[i], selected == pills[i]) { onSelect(pills[i]) } }
+    }
+}
+
+/**
+ * Pill row that runs to both screen edges so pills scroll off screen like
+ * the iPhone's (Logan 2026-09-09): the grid pads 16 dp start and the rail
+ * lane on the end, so the row is widened over both and its own content
+ * padding restores the 16 dp lead.
+ */
+@Composable
+private fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+    val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact
+    val endLane = if (compact) 16.dp + 18.dp else 16.dp
+    Box(modifier = Modifier.layout { measurable, constraints ->
+        val extra = 16.dp.roundToPx() + endLane.roundToPx()
+        val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
+        layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+    }) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp),
+            content = content,
+        )
     }
 }
 
@@ -619,10 +642,12 @@ private fun GenrePill(label: String, selected: Boolean, onClick: () -> Unit) {
             .clip(CircleShape)
             .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .padding(horizontal = 18.dp, vertical = 7.dp),
     ) {
+        // iPhone pill: 15pt medium, 33pt tall. Roboto's default line box is
+        // taller than SF's, so the line height is pinned (Logan 2026-09-09).
         Text(
-            label, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            label, fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium, maxLines = 1,
             color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
