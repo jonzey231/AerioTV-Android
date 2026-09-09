@@ -95,7 +95,12 @@ android {
             matchingFallbacks += "release"
         }
         release {
-            isMinifyEnabled = false
+            // R8 on (Play Console 2026-09-09: "App optimization is below our
+            // threshold, Obfuscation 1%"). Keep rules in proguard-rules.pro;
+            // line numbers are kept and the source file renamed so crash
+            // traces still resolve through the uploaded mapping.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
