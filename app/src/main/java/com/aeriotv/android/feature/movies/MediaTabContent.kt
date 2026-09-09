@@ -266,11 +266,11 @@ fun MediaTabContent(
                                     // iPhone: the deck runs from the 16 dp content margin to the
                                     // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
                                     // end side only; the deck clips itself at the front card's edge.
-                                    val extra = 34.dp.roundToPx()
+                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(0, 0) }
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
                                 }) {
-                                    PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> heroCard(page) }
+                                    PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }, leadInset = 16.dp) { page, _ -> heroCard(page) }
                                 }
                             } else {
                                 val pagerState = androidx.compose.foundation.pager.rememberPagerState { heroPages.size }
@@ -312,11 +312,11 @@ fun MediaTabContent(
                                     // iPhone: the deck runs from the 16 dp content margin to the
                                     // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
                                     // end side only; the deck clips itself at the front card's edge.
-                                    val extra = 34.dp.roundToPx()
+                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(0, 0) }
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
                                 }) {
-                                    PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> wlCard(page) }
+                                    PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }, leadInset = 16.dp) { page, _ -> wlCard(page) }
                                 }
                             } else {
                                 val pagerState = androidx.compose.foundation.pager.rememberPagerState { watchlistPages.size }

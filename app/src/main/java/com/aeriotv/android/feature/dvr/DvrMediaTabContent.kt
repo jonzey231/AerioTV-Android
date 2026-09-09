@@ -491,11 +491,11 @@ private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, car
                                     // iPhone: the deck runs from the 16 dp content margin to the
                                     // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
                                     // end side only; the deck clips itself at the front card's edge.
-                                    val extra = 34.dp.roundToPx()
+                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(0, 0) }
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
                                 }) {
-                PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }) { item, _ -> card(item) }
+                PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }, leadInset = 16.dp) { item, _ -> card(item) }
             }
         } else {
             val pagerState = androidx.compose.foundation.pager.rememberPagerState { items.size }

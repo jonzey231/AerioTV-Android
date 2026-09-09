@@ -58,6 +58,10 @@ fun <T> PhoneCardDeck(
     modifier: Modifier = Modifier,
     key: (T) -> Any = { it as Any },
     onCurrentChange: (T) -> Unit = {},
+    /** Distance from the deck's left edge to the content margin; the deck is
+     *  laid out from the SCREEN edge so an outgoing card slides off past it
+     *  instead of being cut at the front card's edge (iPhone parity). */
+    leadInset: Dp = 0.dp,
     card: @Composable (item: T, isFront: Boolean) -> Unit,
 ) {
     if (items.isEmpty()) return
@@ -73,7 +77,7 @@ fun <T> PhoneCardDeck(
     Column(modifier = modifier.fillMaxWidth()) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(cardHeight)) {
             val widthPx = with(density) { maxWidth.toPx() }
-            val cardW = maxWidth - margin * 2 - peek * 2
+            val cardW = maxWidth - leadInset - margin * 2 - peek * 2
             val cardWPx = with(density) { cardW.toPx() }
             val commitPx = with(density) { 60.dp.toPx() }
             val p = index - drag.value / cardWPx
@@ -107,18 +111,18 @@ fun <T> PhoneCardDeck(
                     onDragCancel = { scope.launch { drag.animateTo(0f) } },
                 )
             }
-            // Clipped at the front card's left edge (iPhone, Logan 2026-09-09):
-            // the parked previous card is fully hidden at rest and slides in
-            // from that edge during a drag, so the deck reads as an endless
-            // scroll; the trailing cards still peek out to the right.
-            Box(modifier = Modifier.fillMaxWidth().height(cardHeight).then(gesture).padding(start = margin).clipToBounds()) {
+            // Clipped at the deck's own edge, which the callers put at the
+            // screen edge: an outgoing card slides off past it with no hard
+            // line at the content margin (iPhone, Logan 2026-09-09).
+            Box(modifier = Modifier.fillMaxWidth().height(cardHeight).then(gesture).clipToBounds()) {
                 items.forEachIndexed { i, item ->
                     val rel = wrapped(i - p)
                     if (rel <= -1.5f || rel >= 3.5f) return@forEachIndexed
                     val front = abs(rel) < 0.02f
                     val clamped = rel.coerceAtMost(3f)
-                    val xDp: Dp = if (rel >= 0f) peek * clamped
-                        else -(cardW + peek) * (-rel).coerceAtMost(1f)
+                    val front0 = leadInset + margin
+                    val xDp: Dp = if (rel >= 0f) front0 + peek * clamped
+                        else front0 - (cardW + front0) * (-rel).coerceAtMost(1f)
                     val scale = if (rel >= 0f) 1f - clamped * 0.03f else 1f
                     val alpha = if (rel >= 0f) 1f - clamped * 0.2f else 1f
                     Box(
