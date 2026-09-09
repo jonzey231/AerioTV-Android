@@ -1191,15 +1191,16 @@ fun AerioTVNavHost(
                 route = Routes.SERIES_DETAIL,
                 arguments = listOf(navArgument("seriesId") { type = NavType.IntType }),
             ) { entry ->
-                // Scope OnDemandViewModel to the MAIN backstack entry — the
-                // detail route is pushed ON TOP of MAIN, so MAIN's entry stays
-                // alive underneath, and resolving the VM through that entry
-                // gives this screen the SAME instance the On Demand tab
-                // populated. Default `hiltViewModel()` here would scope to
-                // this nav entry and hand back a fresh empty VM, which is
-                // the bug that caused "Series not found" on direct entry.
+                // Scope OnDemandViewModel to the PLAYLIST_GRAPH entry: the MAIN
+                // destination provides that entry as the tabs' ViewModelStoreOwner
+                // (Streamer 2026-09-03, one PlaylistViewModel for the whole main
+                // screen), so it is where the Movies / TV Shows / On Demand tabs
+                // populated the library. Resolving against MAIN (the old choice,
+                // from before that change) handed back a SECOND, empty instance
+                // and the detail opened to "not found" until that instance's
+                // deferred snapshot restore caught up (phone 2026-09-09).
                 val mainEntry = remember(entry) {
-                    navController.getBackStackEntry(Routes.MAIN)
+                    navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
                 val onDemandVm: OnDemandViewModel = hiltViewModel(mainEntry)
                 val seriesId = entry.arguments?.getInt("seriesId") ?: 0
@@ -1227,8 +1228,9 @@ fun AerioTVNavHost(
                 route = Routes.MOVIE_DETAIL,
                 arguments = listOf(navArgument("movieUuid") { type = NavType.StringType }),
             ) { entry ->
+                // Same owner as SERIES_DETAIL above: the graph entry the tabs use.
                 val mainEntry = remember(entry) {
-                    navController.getBackStackEntry(Routes.MAIN)
+                    navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
                 val onDemandVm: OnDemandViewModel = hiltViewModel(mainEntry)
                 val movieUuid = Uri.decode(entry.arguments?.getString("movieUuid").orEmpty())
@@ -1263,7 +1265,7 @@ fun AerioTVNavHost(
                 // the episode cache AND the series' pinned Version selection
                 // carry into this route (see the VOD_PLAYER route below).
                 val vodMainEntry = remember(entry) {
-                    runCatching { navController.getBackStackEntry(Routes.MAIN) }.getOrNull()
+                    runCatching { navController.getBackStackEntry(Routes.PLAYLIST_GRAPH) }.getOrNull()
                 }
                 val onDemandVm: OnDemandViewModel = if (vodMainEntry != null) {
                     hiltViewModel(vodMainEntry)
@@ -1475,7 +1477,7 @@ fun AerioTVNavHost(
                 // user's pinned Version selection carry into this route; a
                 // deep-link entry without MAIN falls back to a fresh instance.
                 val vodMainEntry = remember(entry) {
-                    runCatching { navController.getBackStackEntry(Routes.MAIN) }.getOrNull()
+                    runCatching { navController.getBackStackEntry(Routes.PLAYLIST_GRAPH) }.getOrNull()
                 }
                 val onDemandVm: OnDemandViewModel = if (vodMainEntry != null) {
                     hiltViewModel(vodMainEntry)

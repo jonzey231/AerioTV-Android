@@ -35,6 +35,12 @@ class VodLibrarySnapshotStore @Inject constructor(
         val series: List<DispatcharrVODSeries> = emptyList(),
         val movieGroupNames: List<String> = emptyList(),
         val seriesGroupNames: List<String> = emptyList(),
+        // When each kind's sweep last ran to completion. 0 = never (or the
+        // sweep was killed mid-walk: an app update, a force stop), so the
+        // launch gate re-sweeps that kind even though the file is fresh.
+        // Pre-field snapshots decode as 0 and re-sweep once.
+        val moviesCompletedAtMs: Long = 0L,
+        val seriesCompletedAtMs: Long = 0L,
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

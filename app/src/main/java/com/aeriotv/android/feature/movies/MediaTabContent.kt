@@ -281,31 +281,6 @@ fun MediaTabContent(
                         }
                     }
                 }
-                item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-                    LibraryHeader(
-                        title = if (isSearching) "Results" else kind.libraryTitle,
-                        count = gridItems.size,
-                        onTitleTap = { scope.launch { gridState.animateScrollToItem(1) } },
-                        onSearch = { searchActive = !searchActive; if (!searchActive) submitQuery("") },
-                        onSort = { showSort = true },
-                        onFilter = { showManageGroups = true },
-                        sortMenu = {
-                            DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
-                                MediaSortOrder.entries.forEach { order ->
-                                    DropdownMenuItem(
-                                        text = { Text(order.label) },
-                                        trailingIcon = { if (order == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
-                                        onClick = {
-                                            showSort = false
-                                            if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(order.wire)
-                                            else settingsVm.setSeriesSortOrder(order.wire)
-                                        },
-                                    )
-                                }
-                            }
-                        },
-                    )
-                }
                 if (watchlistPages.isNotEmpty()) {
                     item(key = "watchlist", span = { GridItemSpan(maxLineSpan) }) {
                         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
@@ -345,6 +320,31 @@ fun MediaTabContent(
                             }
                         }
                     }
+                }
+                item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
+                    LibraryHeader(
+                        title = if (isSearching) "Results" else kind.libraryTitle,
+                        count = gridItems.size,
+                        onTitleTap = { scope.launch { gridState.animateScrollToItem(1) } },
+                        onSearch = { searchActive = !searchActive; if (!searchActive) submitQuery("") },
+                        onSort = { showSort = true },
+                        onFilter = { showManageGroups = true },
+                        sortMenu = {
+                            DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
+                                MediaSortOrder.entries.forEach { order ->
+                                    DropdownMenuItem(
+                                        text = { Text(order.label) },
+                                        trailingIcon = { if (order == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
+                                        onClick = {
+                                            showSort = false
+                                            if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(order.wire)
+                                            else settingsVm.setSeriesSortOrder(order.wire)
+                                        },
+                                    )
+                                }
+                            }
+                        },
+                    )
                 }
                 if (searchActive) {
                     item(key = "search", span = { GridItemSpan(maxLineSpan) }) {

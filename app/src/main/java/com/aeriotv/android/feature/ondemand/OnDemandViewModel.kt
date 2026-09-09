@@ -212,14 +212,29 @@ class OnDemandViewModel @Inject constructor(
                         unsupportedSource = false, isLoading = false, isLoadingSeries = false,
                     )
                 }
-                val ageMs = System.currentTimeMillis() - snap.savedAtMs
+                val now = System.currentTimeMillis()
+                val ageMs = now - snap.savedAtMs
                 val limitMs = appPreferences.vodLibraryRefreshHours.first() * 3_600_000L
                 Log.i(TAG, "[VOD-CACHE] restored ${snap.movies.size} movies, ${snap.series.size} series from ${ageMs / 60_000} min ago")
-                if (limitMs > 0 && ageMs in 0 until limitMs) {
-                    Log.i(TAG, "[VOD-CACHE] snapshot younger than ${limitMs / 3_600_000} h; skipping launch sweep")
+                // Gate each kind on ITS OWN completion stamp: the movie sweep
+                // saves the file while the series sweep is still walking, so
+                // a series sweep killed mid-walk (app update, force stop) left
+                // a fresh file with a partial series list that the age check
+                // alone would have served for the whole cadence window.
+                moviesCompletedAtMs = snap.moviesCompletedAtMs
+                seriesCompletedAtMs = snap.seriesCompletedAtMs
+                val fresh = { at: Long -> limitMs > 0 && (now - at) in 0 until limitMs }
+                val moviesFresh = fresh(snap.moviesCompletedAtMs)
+                val seriesFresh = fresh(snap.seriesCompletedAtMs)
+                if (moviesFresh && seriesFresh) {
+                    Log.i(TAG, "[VOD-CACHE] both sweeps younger than ${limitMs / 3_600_000} h; skipping launch sweep")
                     restoredFromSnapshot = true
                     return@launch
                 }
+                Log.i(TAG, "[VOD-CACHE] launch sweep: movies=${if (moviesFresh) "fresh" else "stale"} series=${if (seriesFresh) "fresh" else "stale"}")
+                if (!moviesFresh) refresh()
+                if (!seriesFresh) refreshSeries()
+                return@launch
             }
             refresh()
             refreshSeries()
@@ -229,8 +244,23 @@ class OnDemandViewModel @Inject constructor(
     /** True when the launch served the saved library and skipped the sweep. */
     private var restoredFromSnapshot = false
 
-    /** Write the current lists as the playlist's library snapshot. */
-    private fun persistSnapshot() {
+    // Completion stamps carried into every save (see the launch gate).
+    private var moviesCompletedAtMs = 0L
+    private var seriesCompletedAtMs = 0L
+
+    /**
+     * Write the current lists as the playlist's library snapshot.
+     * [completed] names the kind whose sweep just finished; its stamp is
+     * refreshed, the other kind keeps whatever it had.
+     */
+    private fun persistSnapshot(completed: MediaSweep? = null) {
+        val now = System.currentTimeMillis()
+        when (completed) {
+            MediaSweep.Movies -> moviesCompletedAtMs = now
+            MediaSweep.Series -> seriesCompletedAtMs = now
+            MediaSweep.Both -> { moviesCompletedAtMs = now; seriesCompletedAtMs = now }
+            null -> Unit
+        }
         viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist() ?: return@launch
             val st = _state.value
@@ -238,9 +268,10 @@ class OnDemandViewModel @Inject constructor(
             snapshotStore.save(
                 VodLibrarySnapshotStore.Snapshot(
                     identity = snapshotStore.identity(playlist),
-                    savedAtMs = System.currentTimeMillis(),
+                    savedAtMs = now,
                     movies = st.movies, series = st.series,
                     movieGroupNames = st.movieGroupNames, seriesGroupNames = st.seriesGroupNames,
+                    moviesCompletedAtMs = moviesCompletedAtMs, seriesCompletedAtMs = seriesCompletedAtMs,
                 ),
             )
         }
@@ -295,6 +326,8 @@ class OnDemandViewModel @Inject constructor(
         seriesSweepJob?.cancel()
         movieSweepJob = null
         seriesSweepJob = null
+        moviesCompletedAtMs = 0L
+        seriesCompletedAtMs = 0L
         xtreamProbeJob?.cancel()
         xtreamItemsJob?.cancel()
         xtreamProbeJob = null
@@ -524,6 +557,8 @@ class OnDemandViewModel @Inject constructor(
     // runs (7862 / 3415 / 3502, Logan's Fold recording 2026-09-08). One walk
     // at a time; a request during a walk is a no-op since the walk already
     // produces the freshest list.
+    enum class MediaSweep { Movies, Series, Both }
+
     private var movieSweepJob: kotlinx.coroutines.Job? = null
     private var seriesSweepJob: kotlinx.coroutines.Job? = null
 
@@ -587,10 +622,16 @@ class OnDemandViewModel @Inject constructor(
             // share" of the row cap rounded down to a single page per category
             // on accounts with 150+ categories: 2,250 of 5,044 movies
             // (Logan 2026-09-08). The total cap alone bounds memory.
-            val perCatCap = totalCap
+            val perCatCap = VOD_PER_CATEGORY_CAP
             val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODMovie>()
             val seen = HashSet<String>()
+            // First fill paints progressively so an empty tab shows rows at
+            // once. A RE-sweep over a populated tab keeps the old list on
+            // screen (with the refresh spinner) until the walk completes:
+            // publishing the growing list emptied the grid to "No Movies"
+            // and regrew it, and the header count ran up from 0 again.
+            val progressive = _state.value.movies.isEmpty()
             // Categories that have >=1 movie for THIS account are the real
             // groups for this playlist; Manage Groups is published from here.
             // Presence is recorded from the category's OWN first-page response
@@ -632,7 +673,9 @@ class OnDemandViewModel @Inject constructor(
                             if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
                         }
                         nextUrl = firstPage.next
-                        if (!firstPainted) {
+                        if (!progressive) {
+                            // keep the old list; final publish below
+                        } else if (!firstPainted) {
                             firstPainted = true
                             _state.update { it.copy(isLoading = false, movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null, error = null) }
                         } else {
@@ -655,7 +698,7 @@ class OnDemandViewModel @Inject constructor(
                         if (seen.add(m.uuid)) { merged += m.copy(categoryName = catName); fetchedForCat++ }
                     }
                     nextUrl = p.next
-                    _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
+                    if (progressive) _state.update { it.copy(movies = merged.toList(), totalCount = merged.size, moviesNextCursor = null) }
                 }
             }
             // Ensure the spinner clears even if every category returned empty.
@@ -673,7 +716,7 @@ class OnDemandViewModel @Inject constructor(
                         else groupsWithContent.toList().sorted(),
                 )
             }
-            if (merged.isNotEmpty()) persistSnapshot()
+            if (merged.isNotEmpty()) persistSnapshot(MediaSweep.Movies)
         }
     }
 
@@ -793,9 +836,10 @@ class OnDemandViewModel @Inject constructor(
             // share" of the row cap rounded down to a single page per category
             // on accounts with 150+ categories: 2,250 of 5,044 movies
             // (Logan 2026-09-08). The total cap alone bounds memory.
-            val perCatCap = totalCap
+            val perCatCap = VOD_PER_CATEGORY_CAP
             val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODSeries>()
+            val progressive = _state.value.series.isEmpty()
             val seen = HashSet<Int>()
             // Presence is recorded from each category's own first-page response,
             // independent of the row cap and the shared `seen` de-dup set. See
@@ -821,7 +865,9 @@ class OnDemandViewModel @Inject constructor(
                             if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
                         }
                         nextUrl = firstPage.next
-                        if (!firstPainted) {
+                        if (!progressive) {
+                            // keep the old list; final publish below
+                        } else if (!firstPainted) {
                             firstPainted = true
                             _state.update { it.copy(isLoadingSeries = false, series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null, seriesError = null) }
                         } else {
@@ -842,7 +888,7 @@ class OnDemandViewModel @Inject constructor(
                         if (seen.add(s.id)) { merged += s.copy(categoryName = catName); fetchedForCat++ }
                     }
                     nextUrl = p.next
-                    _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
+                    if (progressive) _state.update { it.copy(series = merged.toList(), seriesTotalCount = merged.size, seriesNextCursor = null) }
                 }
             }
             _state.update {
@@ -855,7 +901,7 @@ class OnDemandViewModel @Inject constructor(
                         else groupsWithContent.toList().sorted(),
                 )
             }
-            if (merged.isNotEmpty()) persistSnapshot()
+            if (merged.isNotEmpty()) persistSnapshot(MediaSweep.Series)
         }
     }
 
@@ -1975,7 +2021,7 @@ class OnDemandViewModel @Inject constructor(
                 hasDeferredXtreamContent = pendingMovieCats.isNotEmpty() || pendingSeriesCats.isNotEmpty(),
             )
         }
-        if (xtreamItemsLoaded) persistSnapshot()
+        if (xtreamItemsLoaded) persistSnapshot(MediaSweep.Both)
     }
 
     /**
@@ -2040,7 +2086,7 @@ class OnDemandViewModel @Inject constructor(
             flush()
             _state.update { it.copy(isLoading = false, isLoadingSeries = false) }
             xtreamItemsLoaded = true
-            persistSnapshot()
+            persistSnapshot(MediaSweep.Both)
         }
     }
 
@@ -2145,9 +2191,17 @@ class OnDemandViewModel @Inject constructor(
          * unfiltered fallback still uses MAX_EAGER_VOD_PAGES.
          */
         // Raised from 5000 (2026-09-08): a real account holds 5,044 movies and
-        // the cap cut the last of them. Rows are small; 10k fits phones and
-        // the Onn class of box (JSON decode already runs off the main thread).
-        const val VOD_TOTAL_CAP = 10_000
+        // the cap cut the last of them. Raised again 2026-09-09: with a
+        // provider re-enabled the same account holds 10k+ of each kind, and
+        // an alphabetical walk that fills the cap on its first categories
+        // ("AL: ..." held 10,000 series alone) hides every later group. Per
+        // category the walk stops at VOD_PER_CATEGORY_CAP (Apple parity:
+        // StreamingAPIs.vodPaginationItemCap = 5,000 per call); the total
+        // only bounds memory. Rows are small; JSON decode is off-main.
+        const val VOD_TOTAL_CAP = 40_000
+
+        /** Rows walked per category before moving on (Apple: 5,000 per call). */
+        const val VOD_PER_CATEGORY_CAP = 5_000
 
         /** Debounce before a keystroke fires a server-side VOD search. */
         const val SEARCH_DEBOUNCE_MS = 300L
