@@ -374,6 +374,12 @@ class AppPreferences @Inject constructor(
      * 168 = weekly. Pull to refresh always sweeps. Apple parity:
      * "vodLibraryRefreshHours".
      */
+    /** Movies / TV Shows library sort (Apple parity: moviesSortOrder / seriesSortOrder). */
+    val moviesSortOrder: Flow<String> = store.data.map { it[KEY_MOVIES_SORT_ORDER] ?: "titleAZ" }
+    suspend fun setMoviesSortOrder(value: String) { store.edit { it[KEY_MOVIES_SORT_ORDER] = value } }
+    val seriesSortOrder: Flow<String> = store.data.map { it[KEY_SERIES_SORT_ORDER] ?: "titleAZ" }
+    suspend fun setSeriesSortOrder(value: String) { store.edit { it[KEY_SERIES_SORT_ORDER] = value } }
+
     val vodLibraryRefreshHours: Flow<Int> =
         store.data.map { it[KEY_VOD_LIBRARY_REFRESH_HOURS] ?: 24 }
     suspend fun setVodLibraryRefreshHours(hours: Int) {
@@ -1502,6 +1508,8 @@ class AppPreferences @Inject constructor(
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
         val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")
+        val KEY_MOVIES_SORT_ORDER = stringPreferencesKey("movies_sort_order")
+        val KEY_SERIES_SORT_ORDER = stringPreferencesKey("series_sort_order")
         val KEY_MATCH_CONTENT_RESOLUTION = booleanPreferencesKey("match_content_resolution")
         val KEY_AUTO_RECOVER_FROZEN_STREAMS =
             booleanPreferencesKey("app_behaviors_auto_recover_frozen_streams")

@@ -168,7 +168,12 @@ fun AppBehaviorsSettingsScreen(
             ) {
                 // Search is a TV-only nav tab and not a sensible launch tab;
                 // on phones it does not exist at all.
-                AppTab.entries.filter { it != AppTab.Search }.forEach { tab ->
+                // TV still hosts On Demand; phone and tablet have Movies + TV Shows.
+                val tabIsTv = rememberIsTvDevice()
+                AppTab.entries.filter {
+                    it != AppTab.Search &&
+                        (if (tabIsTv) it != AppTab.Movies && it != AppTab.TVShows else it != AppTab.OnDemand)
+                }.forEach { tab ->
                     val selected = (defaultTab.isEmpty() && tab == AppTab.LiveTV) ||
                         defaultTab == tab.name
                     SettingsSelectionRow(

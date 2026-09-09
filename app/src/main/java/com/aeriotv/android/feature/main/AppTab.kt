@@ -3,6 +3,8 @@ package com.aeriotv.android.feature.main
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -61,6 +63,24 @@ enum class AppTab(
         label = "On Demand",
         iconSelected = Icons.Filled.OndemandVideo,
         iconUnselected = Icons.Outlined.OndemandVideo,
+    ),
+
+    /**
+     * Media-center redesign (Apple parity, phone/tablet first, 2026-09-08):
+     * On Demand splits into Movies and TV Shows. TV keeps On Demand until its
+     * own redesign phase; visibleTabs picks by form factor.
+     */
+    Movies(
+        id = "movies",
+        label = "Movies",
+        iconSelected = Icons.Filled.Movie,
+        iconUnselected = Icons.Outlined.Movie,
+    ),
+    TVShows(
+        id = "tvshows",
+        label = "TV Shows",
+        iconSelected = Icons.Filled.Tv,
+        iconUnselected = Icons.Outlined.Tv,
     ),
     Settings(
         id = "settings",

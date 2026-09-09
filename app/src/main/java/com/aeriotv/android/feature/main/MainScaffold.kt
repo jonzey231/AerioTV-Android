@@ -305,20 +305,34 @@ fun MainScaffold(
     // tab that has been shown stays for the rest of the playlist session;
     // only a real user action retires it (favorites emptied, On Demand
     // switched off for the playlist, or an unsupported source).
+    // Media center (phone/tablet): Movies and TV Shows tabs, each shown while
+    // its library has content or is still loading. TV keeps On Demand.
+    val splitVod = !rememberLiveTvFormFactor().isTv
+    val vodSourceOk = activePlaylistVodEnabled && !onDemandState.unsupportedSource
+    val hasMoviesContent = vodSourceOk &&
+        (onDemandState.hasMovies || onDemandState.isLoading || onDemandState.hasDeferredXtreamContent)
+    val hasSeriesContent = vodSourceOk &&
+        (onDemandState.hasSeries || onDemandState.isLoadingSeries || onDemandState.hasDeferredXtreamContent)
     val stickyTabs = remember(state.playlist?.id) { mutableSetOf<AppTab>() }
     val tabs = run {
         val live = visibleTabs(
             hasFavorites = hasRenderableFavorites,
             hasVod = hasVodContent,
             hasRecordings = hasRecordings,
+            splitVod = splitVod,
+            hasMovies = hasMoviesContent,
+            hasSeries = hasSeriesContent,
         )
         stickyTabs += live
         if (favoritesOrNull?.isEmpty() == true) stickyTabs -= AppTab.Favorites
-        if (!activePlaylistVodEnabled || onDemandState.unsupportedSource) stickyTabs -= AppTab.OnDemand
+        if (!vodSourceOk) { stickyTabs -= AppTab.OnDemand; stickyTabs -= AppTab.Movies; stickyTabs -= AppTab.TVShows }
         visibleTabs(
             hasFavorites = AppTab.Favorites in stickyTabs,
             hasVod = AppTab.OnDemand in stickyTabs,
             hasRecordings = AppTab.DVR in stickyTabs,
+            splitVod = splitVod,
+            hasMovies = AppTab.Movies in stickyTabs,
+            hasSeries = AppTab.TVShows in stickyTabs,
         )
     }
     val miniPlayerVm: MiniPlayerViewModel = hiltViewModel()
@@ -423,7 +437,9 @@ fun MainScaffold(
     // (already the initial selection), so there's nothing to apply.
     LaunchedEffect(defaultTabPref, tabs) {
         if (initialTabApplied || defaultTabPref.isEmpty()) return@LaunchedEffect
+        // A default saved as On Demand opens Movies where the tab was split.
         val target = AppTab.entries.firstOrNull { it.name == defaultTabPref }
+            ?.let { if (it == AppTab.OnDemand && splitVod) AppTab.Movies else it }
         when {
             target == null -> initialTabApplied = true
             target in tabs -> {
@@ -471,6 +487,7 @@ fun MainScaffold(
     // DEEPER and is enabled only while a sub-screen is open, so it takes
     // priority there; this only fires on a tab root.
     val homeTab = AppTab.entries.firstOrNull { it.name == defaultTabPref }
+        ?.let { if (it == AppTab.OnDemand && splitVod) AppTab.Movies else it }
         ?.takeIf { it in tabs && it != AppTab.Search } ?: AppTab.LiveTV
     // TV: the leaving tab's content nodes vanish, and Compose's fallback
     // hands focus to the LEFTMOST pill (Live TV) while the home tab is
@@ -1372,6 +1389,24 @@ private fun MainTabContent(
                     onWatchFromBeginning = onWatchFromBeginning,
                 )
             }
+            AppTab.Movies -> {
+    com.aeriotv.android.feature.movies.MediaTabContent(
+                    kind = com.aeriotv.android.feature.movies.MediaKind.Movies,
+                    onMovieClick = { uuid -> onMovieClick(uuid) },
+                    onSeriesClick = { id -> onSeriesClick(id) },
+                    onEpisodeResume = onEpisodeResume,
+                    onResumeMovie = onResumeMovie,
+                )
+            }
+            AppTab.TVShows -> {
+    com.aeriotv.android.feature.movies.MediaTabContent(
+                    kind = com.aeriotv.android.feature.movies.MediaKind.TVShows,
+                    onMovieClick = { uuid -> onMovieClick(uuid) },
+                    onSeriesClick = { id -> onSeriesClick(id) },
+                    onEpisodeResume = onEpisodeResume,
+                    onResumeMovie = onResumeMovie,
+                )
+            }
             AppTab.OnDemand -> {
     OnDemandTabContent(
                     onMovieClick = { movie -> onMovieClick(movie.uuid) },
@@ -2141,11 +2176,18 @@ internal fun visibleTabs(
     hasFavorites: Boolean = false,
     hasVod: Boolean = false,
     hasRecordings: Boolean = false,
+    /** Phone/tablet media center: Movies + TV Shows instead of On Demand. */
+    splitVod: Boolean = false,
+    hasMovies: Boolean = hasVod,
+    hasSeries: Boolean = hasVod,
 ): List<AppTab> = buildList {
     add(AppTab.LiveTV)
     if (hasFavorites) add(AppTab.Favorites)
     if (hasRecordings) add(AppTab.DVR)
-    if (hasVod) add(AppTab.OnDemand)
+    if (splitVod) {
+        if (hasMovies) add(AppTab.Movies)
+        if (hasSeries) add(AppTab.TVShows)
+    } else if (hasVod) add(AppTab.OnDemand)
     add(AppTab.Settings)
     // AppTab.Search is deliberately NOT a pill: on TV it renders as the
     // floating circle LEFT of Live TV inside TvTopTabBar (Logan 2026-08-06:
