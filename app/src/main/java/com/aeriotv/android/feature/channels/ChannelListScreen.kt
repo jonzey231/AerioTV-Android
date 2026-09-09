@@ -1298,153 +1298,45 @@ internal fun ChannelRow(
                         onDismiss = { menuOpen = false },
                     )
                 }
-            } else DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-            ) {
-                // Apple cardMenuItems order (ChannelListView.swift:3217):
-                // Watch, Favorites, Multiview, Collection, Program Info, Record.
-                DropdownMenuItem(
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+            } else if (menuOpen) {
+                // Phone and tablet: Material 3 modal bottom sheet, the same
+                // surface the guide cell uses (Logan 2026-09-09). Apple
+                // cardMenuItems order (ChannelListView.swift:3217): Watch,
+                // Favorites, Multiview, Collection, Program Info, Record.
+                com.aeriotv.android.feature.livetv.LiveTvActionSheet(
+                    title = channel.name,
+                    subtitle = nowProgramme?.title ?: " ",
+                    actions = buildList {
+                        add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { onPlay() })
+                        add(
+                            TvMenuAction(
+                                if (isFavorite) "Remove from Favorites" else "Add to Favorites",
+                                if (isFavorite) Icons.Outlined.Star else Icons.Filled.Star,
+                            ) { onToggleFavorite() },
                         )
+                        onToggleMultiview?.let { toggle ->
+                            add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", Icons.Outlined.GridView) { toggle() })
+                        }
+                        collectionsMenu?.let { cm ->
+                            add(TvMenuAction("Add Channel to Collection", Icons.Outlined.Folder) { cm.onOpenPicker(channel.id, channel.name, -1, 0L) })
+                            val active = cm.activeCollectionId?.let { id -> cm.collections.firstOrNull { it.id == id } }
+                            if (active != null && channel.id in active.memberIds) {
+                                add(TvMenuAction("Remove from ${active.name}", Icons.Outlined.Folder, destructive = true) { cm.onRemoveMember(active.id, channel.id) })
+                            } else if (cm.activeCollectionId == null && cm.collections.any { channel.id in it.memberIds }) {
+                                add(TvMenuAction("Remove from All Collections", Icons.Outlined.Folder, destructive = true) { cm.onRemoveFromAll(channel.id) })
+                            }
+                        }
+                        if (nowProgramme != null) {
+                            add(TvMenuAction("Program Info", Icons.Outlined.Info) {
+                                onShowProgramInfo(nowProgramme.toInfoTarget(channel.name, channel.dispatcharrChannelId))
+                            })
+                        }
+                        if (channel.url.isNotBlank()) {
+                            add(TvMenuAction(if (nowProgramme != null) "Record from Now" else "Record", Icons.Outlined.FiberManualRecord) { recordFromMenu() })
+                        }
                     },
-                    text = { Text("Watch") },
-                    onClick = menuGuard.wrap {
-                        menuOpen = false
-                        onPlay()
-                    },
+                    onDismiss = { menuOpen = false },
                 )
-                DropdownMenuItem(
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
-                            contentDescription = null,
-                            tint = if (isFavorite) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    },
-                    text = {
-                        Text(if (isFavorite) "Remove from Favorites" else "Add to Favorites")
-                    },
-                    onClick = menuGuard.wrap {
-                        menuOpen = false
-                        onToggleFavorite()
-                    },
-                )
-                onToggleMultiview?.let { toggle ->
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.GridView,
-                                contentDescription = null,
-                                tint = if (inMultiview) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        },
-                        text = { Text(if (inMultiview) "Remove from Multiview" else "Add to Multiview") },
-                        onClick = menuGuard.wrap {
-                            menuOpen = false
-                            toggle()
-                        },
-                    )
-                }
-                // #45: Add to Collection + the contextual remove (iOS
-                // cardMenuButtons order: right after Favorites).
-                collectionsMenu?.let { cm ->
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Folder,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        },
-                        text = { Text("Add to Collection…") },
-                        onClick = menuGuard.wrap {
-                            menuOpen = false
-                            cm.onOpenPicker(channel.id, channel.name, -1, 0L)
-                        },
-                    )
-                    val active = cm.activeCollectionId
-                        ?.let { id -> cm.collections.firstOrNull { it.id == id } }
-                    if (active != null && channel.id in active.memberIds) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "Remove from ${active.name}",
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            onClick = menuGuard.wrap {
-                                menuOpen = false
-                                cm.onRemoveMember(active.id, channel.id)
-                            },
-                        )
-                    } else if (cm.activeCollectionId == null &&
-                        cm.collections.any { channel.id in it.memberIds }
-                    ) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "Remove from All Collections",
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            onClick = menuGuard.wrap {
-                                menuOpen = false
-                                cm.onRemoveFromAll(channel.id)
-                            },
-                        )
-                    }
-                }
-                if (nowProgramme != null) {
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                Icons.Outlined.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        },
-                        text = { Text("Program Info") },
-                        onClick = menuGuard.wrap {
-                            menuOpen = false
-                            onShowProgramInfo(nowProgramme.toInfoTarget(channel.name, channel.dispatcharrChannelId))
-                        },
-                    )
-                }
-                // Record row needs only a playable URL. The old gate also
-                // required a Dispatcharr channel id, from back when server
-                // scheduling was the only DVR path and an M3U tap dead-ended
-                // in a "DVR requires Dispatcharr" toast. On-device recording
-                // (LocalRecordingService) removed that dead end: the sheet
-                // seeds destination=local whenever the source can't schedule
-                // server-side and hides the toggle, so M3U / Xtream users get
-                // a working recording instead of a missing menu row. The
-                // future-programme rows in the expanded panel never had this
-                // gate, which is why Record appeared there but not here.
-                if (channel.url.isNotBlank()) {
-                    val recordLabel = if (nowProgramme != null) "Record from Now" else "Record"
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.FiberManualRecord,
-                                contentDescription = null,
-                                tint = Color(0xFFFF4757),
-                            )
-                        },
-                        text = { Text(recordLabel) },
-                        onClick = menuGuard.wrap {
-                            menuOpen = false
-                            recordFromMenu()
-                        },
-                    )
-                }
             }
         }
 

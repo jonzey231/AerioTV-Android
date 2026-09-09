@@ -682,7 +682,7 @@ fun GuideScreen(
                     if (cell.startMillis > nowMs) add(TvMenuAction(if (reminderSet) "Cancel Reminder" else "Set Reminder", Icons.Outlined.Notifications, onClick = toggleReminder))
                 }
             }
-            GuideCellActionSheet(
+            com.aeriotv.android.feature.livetv.LiveTvActionSheet(
                 title = cell.title,
                 subtitle = channel.name,
                 actions = sheetActions,
@@ -796,67 +796,3 @@ private fun GroupPills(
 }
 
 private const val QUANTUM_MS = 15 * 60_000L
-
-
-/**
- * Long-press action surface for a guide cell on phone and tablet: the
- * Material 3 modal bottom sheet, a title block and one icon row per
- * action. Tapping a row runs it and closes the sheet.
- */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun GuideCellActionSheet(
-    title: String,
-    subtitle: String,
-    actions: List<TvMenuAction>,
-    onDismiss: () -> Unit,
-) {
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-            Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            actions.forEach { action ->
-                androidx.compose.material3.ListItem(
-                    headlineContent = {
-                        Text(
-                            action.label,
-                            color = if (action.enabled) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        )
-                    },
-                    leadingContent = {
-                        action.icon?.let {
-                            Icon(
-                                it, contentDescription = null,
-                                tint = if (action.enabled) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            )
-                        }
-                    },
-                    colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-                    modifier = Modifier.clickable(enabled = action.enabled) { action.onClick(); onDismiss() },
-                )
-            }
-        }
-    }
-}
