@@ -6,6 +6,7 @@ import com.aeriotv.android.core.ui.ClockFormat
 import android.os.Trace
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -120,6 +121,12 @@ fun GuideGrid(
     onGridFocusChanged: (Boolean) -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier,
+    /** Guide jump (Apple parity): the target shown in the clock cell while away from now. */
+    jumpLabel: String? = null,
+    /** Clock cell tap: snap to now. */
+    onClockTap: () -> Unit = {},
+    /** Clock cell long press: open Jump To. */
+    onClockLongPress: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val hourWidthPx = with(density) { hourWidth.toPx() }
@@ -294,7 +301,8 @@ fun GuideGrid(
             .focusable()
             .onPreviewKeyEvent(keyHandler),
     ) {
-        TimeHeader(state, nowMs, railWidth, headerHeight, pxPerMs, textMeasurer)
+        TimeHeader(state, nowMs, railWidth, headerHeight, pxPerMs, textMeasurer,
+                   jumpLabel = jumpLabel, onClockTap = onClockTap, onClockLongPress = onClockLongPress)
         val railPx = with(density) { railWidth.toPx() }
         LazyColumn(
             state = listState,
@@ -347,6 +355,7 @@ private fun pageRows(listState: LazyListState): Int {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun TimeHeader(
     state: GuideGridState,
     nowMs: Long,
@@ -354,6 +363,9 @@ private fun TimeHeader(
     headerHeight: Dp,
     pxPerMs: Float,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    jumpLabel: String? = null,
+    onClockTap: () -> Unit = {},
+    onClockLongPress: () -> Unit = {},
 ) {
     // Apple TV: time labels in the accent colour.
     val labelStyle = TextStyle(
@@ -365,9 +377,24 @@ private fun TimeHeader(
     val clockMode = rememberClockMode()
     val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     Row(modifier = Modifier.fillMaxWidth().height(headerHeight)) {
-        Box(modifier = Modifier.width(railWidth).fillMaxSize(), contentAlignment = Alignment.Center) {
+        // Clock cell: tap snaps to now, long press opens Jump To (Roman via
+        // Discord 2026-09-06). While a jump is active it shows the target in
+        // the accent colour.
+        Box(
+            modifier = Modifier
+                .width(railWidth)
+                .fillMaxSize()
+                .combinedClickable(onClick = onClockTap, onLongClick = onClockLongPress),
+            contentAlignment = Alignment.Center,
+        ) {
             val clock = remember(nowMs / 60_000L, clockMode) { ClockFormat.short(clockMode).format(Date(nowMs)) }
-            Text(clock, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text(
+                jumpLabel ?: clock,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (jumpLabel != null) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Unspecified,
+                fontWeight = if (jumpLabel != null) FontWeight.SemiBold else null,
+                maxLines = 1,
+            )
         }
         Canvas(modifier = Modifier.fillMaxSize()) {
             val vs = state.viewportStartMs

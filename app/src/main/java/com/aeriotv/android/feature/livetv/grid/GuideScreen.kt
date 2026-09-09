@@ -257,9 +257,21 @@ fun GuideScreen(
     val windowStartMs = remember(historyHours) {
         (System.currentTimeMillis() - historyHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS
     }
-    val windowEndMs = remember(forwardHours) {
-        (System.currentTimeMillis() + forwardHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS
+    // Guide jump-to-day (Roman via Discord 2026-09-06; Apple parity): the
+    // target instant while a jump is active. The window grows to hold it
+    // (plus three hours of room), the view model fetches the missing days,
+    // and the jump ends on its own once the now line scrolls back on screen.
+    var jumpTargetMs by remember { mutableStateOf<Long?>(null) }
+    var pendingJumpScroll by remember { mutableStateOf(false) }
+    var showJumpSheet by remember { mutableStateOf(false) }
+    val jumpWindowEnd = jumpTargetMs?.let { (it + 3 * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS }
+    val windowEndMs = remember(forwardHours, jumpWindowEnd) {
+        maxOf(
+            (System.currentTimeMillis() + forwardHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS,
+            jumpWindowEnd ?: 0L,
+        )
     }
+    LaunchedEffect(jumpWindowEnd) { jumpWindowEnd?.let { viewModel.ensureGuideForward(it) } }
     val grid = remember { GuideGridState(initialViewportStartMs = System.currentTimeMillis() - 15 * 60_000L) }
     val rows = remember(displayChannels, state.epgByChannel, windowStartMs, windowEndMs) {
         com.aeriotv.android.feature.livetv.GuideMemo.get(
@@ -271,7 +283,34 @@ fun GuideScreen(
             ),
         ) { GuideGridRows(displayChannels, state.epgByChannel as? GuideCatalog, windowStartMs, windowEndMs) }
     }
-    LaunchedEffect(rows) { grid.installRows(rows) }
+    LaunchedEffect(rows) {
+        grid.installRows(rows)
+        // Land the jump once the rows reach far enough to hold it.
+        val target = jumpTargetMs
+        if (pendingJumpScroll && target != null && rows.windowEndMs >= target) {
+            grid.scrollViewportTo(target - grid.leadMs)
+            pendingJumpScroll = false
+        }
+    }
+    // Auto-end (Logan's rule): scrolling back until now is on screen ends the jump.
+    LaunchedEffect(jumpTargetMs) {
+        if (jumpTargetMs == null) return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow { grid.viewportStartMs }.collect { vs ->
+            if (!pendingJumpScroll) {
+                val now = System.currentTimeMillis()
+                if (now in vs..(vs + grid.viewportDurationMs)) jumpTargetMs = null
+            }
+        }
+    }
+    val jumpLabel = remember(jumpTargetMs) {
+        jumpTargetMs?.let { java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault()).format(java.util.Date(it)) }
+    }
+    val startJump: (Long) -> Unit = { target ->
+        jumpTargetMs = target
+        pendingJumpScroll = true
+        if (grid.rows.windowEndMs >= target) { grid.scrollViewportTo(target - grid.leadMs); pendingJumpScroll = false }
+    }
+    val snapToNow: () -> Unit = { jumpTargetMs = null; pendingJumpScroll = false; grid.anchorToNow(System.currentTimeMillis()) }
 
     val gridFocus = remember { FocusRequester() }
     val pillsFocus = remember { FocusRequester() }
@@ -352,6 +391,7 @@ fun GuideScreen(
                 true
             }
             com.aeriotv.android.core.remote.GuideRemoteAction.OPEN_SEARCH -> { onOpenSearch(); true }
+            com.aeriotv.android.core.remote.GuideRemoteAction.JUMP_TO_DAY -> { showJumpSheet = true; true }
             else -> false
         }
     }
@@ -492,6 +532,9 @@ fun GuideScreen(
                     else onChannelClick(channel)
                 },
                 onOpenMenu = { channel, cell -> menuFor = channel to cell; menuGuard.arm() },
+                jumpLabel = jumpLabel,
+                onClockTap = snapToNow,
+                onClockLongPress = { showJumpSheet = true },
                 // Favorites (TV): no pills above the grid, so UP must leave
                 // through the content group's exit redirect (which lands on
                 // the SELECTED tab's pill); a direct request on the bar's
@@ -575,6 +618,10 @@ fun GuideScreen(
             add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites") { favoritesVm.toggle(channel) })
             add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
             add(TvMenuAction("Add to Collection...") { collectionPickerFor = channel.id to channel.name })
+            // Guide jump (TV): the clock cell is not on the D-pad path, so the
+            // cell menu carries Jump To and Back to Now.
+            add(TvMenuAction("Jump to a Day and Time") { showJumpSheet = true })
+            if (jumpTargetMs != null) add(TvMenuAction("Back to Now") { snapToNow() })
             if (!cell.isPlaceholder) {
                 add(TvMenuAction("Program Info") { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
                 if (canRecord) add(TvMenuAction(if (isLive) "Record from Now" else "Record") { recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
@@ -595,6 +642,15 @@ fun GuideScreen(
             }
         }
         TvActionMenuDialog(title = cell.title, actions = actions, guard = menuGuard, onDismiss = { menuFor = null })
+    }
+    if (showJumpSheet) {
+        com.aeriotv.android.feature.livetv.GuideJumpSheet(
+            daysBack = (historyHours / 24).coerceIn(0, 7),
+            daysAhead = 7,
+            onJump = startJump,
+            onBackToNow = snapToNow,
+            onDismiss = { showJumpSheet = false; runCatching { gridFocus.requestFocus() } },
+        )
     }
     programInfoTarget?.let { target ->
         ProgramInfoSheet(target = target, onDismiss = { programInfoTarget = null; runCatching { gridFocus.requestFocus() } })

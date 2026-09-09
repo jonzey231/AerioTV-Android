@@ -67,6 +67,7 @@ object RemoteControlHints {
         GuideRemoteAction.PAGE_UP -> "page channels up"
         GuideRemoteAction.PAGE_DOWN -> "page channels down"
         GuideRemoteAction.JUMP_TO_NOW -> "jump to now"
+        GuideRemoteAction.JUMP_TO_DAY -> "jump to a day and time"
         GuideRemoteAction.JUMP_TO_TOP -> "jump to the top channel"
         GuideRemoteAction.RESUME_PLAYER -> "return to the player"
         else -> null
@@ -90,6 +91,7 @@ object RemoteControlHints {
         GuideRemoteAction.PAGE_UP -> "page up"
         GuideRemoteAction.PAGE_DOWN -> "page down"
         GuideRemoteAction.JUMP_TO_NOW -> "now"
+        GuideRemoteAction.JUMP_TO_DAY -> "jump to"
         GuideRemoteAction.JUMP_TO_TOP -> "top channel"
         GuideRemoteAction.RESUME_PLAYER -> "player"
         else -> null

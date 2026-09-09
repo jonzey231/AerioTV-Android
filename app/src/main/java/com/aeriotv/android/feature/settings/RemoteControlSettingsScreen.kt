@@ -87,6 +87,7 @@ private fun guideActionChoices(slot: RemoteSlot): List<GuideRemoteAction> = buil
     add(GuideRemoteAction.PAGE_UP)
     add(GuideRemoteAction.PAGE_DOWN)
     add(GuideRemoteAction.JUMP_TO_NOW)
+    add(GuideRemoteAction.JUMP_TO_DAY)
     add(GuideRemoteAction.JUMP_TO_TOP)
     add(GuideRemoteAction.FOCUS_GROUP_PILLS)
     add(GuideRemoteAction.RESUME_PLAYER)
@@ -151,6 +152,7 @@ private val GuideRemoteAction.displayName: String
         GuideRemoteAction.TIMELINE_BACK -> "Browse earlier programs"
         GuideRemoteAction.TIMELINE_FORWARD -> "Browse later programs"
         GuideRemoteAction.JUMP_TO_NOW -> "Jump to now"
+        GuideRemoteAction.JUMP_TO_DAY -> "Jump to a day and time"
         GuideRemoteAction.JUMP_TO_TOP -> "Jump to top channel"
         GuideRemoteAction.FOCUS_GROUP_PILLS -> "Go to group pills"
         GuideRemoteAction.RESUME_PLAYER -> "Return to player"

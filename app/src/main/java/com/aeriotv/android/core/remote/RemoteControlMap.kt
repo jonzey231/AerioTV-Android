@@ -77,6 +77,7 @@ enum class GuideRemoteAction(val wire: String) {
     PAGE_UP("pageUp"), PAGE_DOWN("pageDown"),
     TIMELINE_BACK("timelineBack"), TIMELINE_FORWARD("timelineForward"),
     JUMP_TO_NOW("jumpToNow"), JUMP_TO_TOP("jumpToTop"),
+    JUMP_TO_DAY("jumpToDay"),
     FOCUS_GROUP_PILLS("focusGroupPills"),
     RESUME_PLAYER("resumePlayer"), CLOSE_MINI_PLAYER("closeMiniPlayer"),
     PROGRAM_INFO("programInfo"), OPEN_SEARCH("openSearch"),

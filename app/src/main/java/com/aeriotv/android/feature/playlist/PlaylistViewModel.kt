@@ -670,6 +670,36 @@ class PlaylistViewModel @Inject constructor(
      * so every path produces the same guide for the same cache. Unchanged
      * channels keep their previous list instance (no recomposition).
      */
+    /** Guide jump: how far forward the catalog has been asked to cover (ms); 0 = default window. */
+    private var guideForwardThroughMs = 0L
+    private var guideForwardFetchedThroughMs = 0L
+    private var guideForwardJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Guide jump-to-day (Apple parity, GuideStore.ensureForwardWindow): make
+     * sure the catalog covers [throughMs]. Dispatcharr sources fetch the
+     * missing day chunks on demand; every source then rebuilds the catalog
+     * with the wider forward edge. Never refetches a day already pulled.
+     */
+    fun ensureGuideForward(throughMs: Long) {
+        val playlist = _state.value.playlist ?: return
+        if (throughMs <= guideForwardThroughMs) return
+        guideForwardThroughMs = throughMs
+        guideForwardJob?.cancel()
+        guideForwardJob = viewModelScope.launch {
+            val windowHours = runCatching { appPreferences.epgWindowHours.first() }.getOrDefault(24)
+                .let { if (it <= 0) 7 * 24 else it.coerceAtLeast(24) }
+            val defaultEnd = System.currentTimeMillis() + windowHours * 3_600_000L
+            val from = maxOf(defaultEnd, guideForwardFetchedThroughMs)
+            if (throughMs > from) {
+                runCatching { repository.fetchDispatcharrGridRange(playlist, from, throughMs) }
+                    .onFailure { Log.w(TAG, "guide forward fetch failed", it) }
+                guideForwardFetchedThroughMs = throughMs
+            }
+            rebuildGuideCatalog(playlist, "jump")
+        }
+    }
+
     private suspend fun rebuildGuideCatalog(playlist: PlaylistEntity, reason: String, quick: Boolean = false) {
         val channels = _state.value.channels
         if (channels.isEmpty()) return
@@ -681,7 +711,10 @@ class PlaylistViewModel @Inject constructor(
         // Quick pass: only what the guide paints at launch (a couple of hours
         // back, the evening ahead); the full retention window follows.
         val fromMillis = if (quick) now - 2L * 60L * 60L * 1000L else now - retentionDays * 24L * 60L * 60L * 1000L
-        val toMillis = if (quick) now + 8L * 60L * 60L * 1000L else now + windowHours * 60L * 60L * 1000L
+        val toMillis = maxOf(
+            if (quick) now + 8L * 60L * 60L * 1000L else now + windowHours * 60L * 60L * 1000L,
+            guideForwardThroughMs,
+        )
         val t0 = android.os.SystemClock.elapsedRealtime()
         val rows = runCatching { repository.loadCachedEpg(playlist.id, fromMillis, toMillis) }
             .onFailure { Log.w(TAG, "rebuildGuideCatalog($reason): cache read failed", it) }

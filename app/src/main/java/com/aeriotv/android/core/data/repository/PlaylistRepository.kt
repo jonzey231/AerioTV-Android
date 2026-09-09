@@ -671,6 +671,43 @@ class PlaylistRepository @Inject constructor(
      * the Guide Window, one day per request via `start`/`end`, merging each
      * chunk into the cache (non-authoritative, like an upstream layer).
      */
+    /**
+     * Guide jump (Apple parity, GuideStore.ensureForwardWindow): fetch
+     * [fromMs, throughMs) from Dispatcharr's grid one day per request and
+     * merge each chunk into the cache. Returns the number of programmes
+     * merged; 0 for non-Dispatcharr sources (their feed already holds
+     * whatever future it has).
+     */
+    suspend fun fetchDispatcharrGridRange(playlist: PlaylistEntity, fromMs: Long, throughMs: Long): Int {
+        val sourceType = SourceType.entries.firstOrNull { it.name == playlist.sourceType }
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey || sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr || playlist.apiKey.isNullOrBlank() || throughMs <= fromMs) return 0
+        val base = effectiveBaseUrl(playlist)
+        val dayMs = 86_400_000L
+        var total = 0
+        var start = fromMs
+        while (start < throughMs) {
+            val end = minOf(throughMs, start + dayMs)
+            val programmes = runCatching {
+                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                    dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+                }
+            }.getOrElse {
+                if (it is CancellationException) throw it
+                Log.w("PlaylistRepo", "grid range chunk failed; stopping: $it")
+                return total
+            }
+            if (programmes.isNotEmpty()) {
+                runCatching { saveEpgToCache(playlist.id, programmes, authoritative = false) }
+                    .onFailure { Log.w("PlaylistRepo", "grid range merge failed", it) }
+                total += programmes.size
+            }
+            start = end
+        }
+        Log.i("PlaylistRepo", "grid range: merged $total programmes through ${java.time.Instant.ofEpochMilli(throughMs)}")
+        return total
+    }
+
     private fun extendGridWindowInBackground(playlist: PlaylistEntity, base: String) {
         layeringJobs.compute(playlist.id) { _, existing ->
             if (existing?.isActive == true) return@compute existing
