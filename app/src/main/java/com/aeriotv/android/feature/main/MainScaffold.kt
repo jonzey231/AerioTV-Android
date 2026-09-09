@@ -1251,8 +1251,13 @@ private fun FloatingTabBar(
     // changing tabs): sized up to the iPhone bar's proportions - the pill
     // now spans the width minus side margins with evenly distributed,
     // taller tab targets instead of a compact wrap-content cluster.
+    // Phone-sized pill on every window: on a foldable's inner display or a
+    // landscape phone it centres at 600 dp instead of spanning the width
+    // (Logan 2026-09-08: "WAY too big").
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
     Row(
         modifier = modifier
+            .widthIn(max = 600.dp)
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
             .clip(RoundedCornerShape(36.dp))
@@ -1295,6 +1300,7 @@ private fun FloatingTabBar(
                 )
             }
         }
+    }
     }
 }
 
