@@ -479,13 +479,6 @@ fun GuideScreen(
                         viewModel = retainedVm, buttonSize = 38.dp, iconSize = 18.dp,
                         onJumpToChannel = { id -> state.channels.firstOrNull { it.id == id }?.let(onChannelClick) },
                     )
-                    // Global Search: phones reach the full Search screen only
-                    // from app-bar entry points, so it stays in the header.
-                    LiveTvPhoneCircle(
-                        icon = Icons.Filled.TravelExplore,
-                        contentDescription = "Search everything",
-                        onClick = onOpenSearch,
-                    )
                 },
                 sortMenu = { SortMenu(currentMode = state.sortMode, onSelect = viewModel::onSortModeChange, phoneCircle = true) },
                 canToggleViewMode = canToggleViewMode,

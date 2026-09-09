@@ -477,6 +477,8 @@ private fun GridRow(
     val surface = colors.surface
     val railNumberStyle = TextStyle(color = tertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     val railNameStyle = TextStyle(color = onSurface, fontSize = 10.sp)
+    val railUnderNumberStyle = TextStyle(color = tertiary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+    val railStarStyle = TextStyle(color = Color(0xFFFFA502), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     // TalkBack: one node per row (channel + what is on now). Read in
     // composition on the 30 s tick only, never per press.
     val rowDescription = remember(channel.id, nowMs / 60_000L) {
@@ -525,19 +527,33 @@ private fun GridRow(
         // Settings > Appearance > Channel List toggles (Show Channel Logos /
         // Numbers / Names): each element is skipped when off, and the rest
         // re-centre in the freed space.
-        if (rail.numbers) {
+        if (rail.numbers && !(narrowRail && size.height >= 90.dp.toPx())) {
             if (narrowRail) drawText(number.title, topLeft = Offset(3.dp.toPx(), 2.dp.toPx()))
             else drawText(number.title, topLeft = Offset(6.dp.toPx(), (size.height - number.title.size.height) / 2f))
         }
+        // iPhone rail (EPGGuideView.swift GuideChannelButton, phone branch):
+        // logo 40x28, name 10pt, number 8pt bold UNDER the name, all centred;
+        // the favorite star sits top-trailing as its own glyph (11pt, warning),
+        // left of the catch-up clock when both show. Wider rails keep the
+        // inline star and the number in the corner.
+        val phoneRail = narrowRail && size.height >= 90.dp.toPx()
         val name = if (rail.names) textCache.getOrPut(RAIL_NAME_KEY) {
-            CellText(textMeasurer.measure((if (isFavorite) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
+            CellText(textMeasurer.measure((if (isFavorite && !phoneRail) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
         } else null
         val logo = if (rail.logos && channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
-        val logoH = 24.dp.toPx(); val logoW = 36.dp.toPx()
-        val nameH = name?.title?.size?.height ?: 0
+        val logoH = if (phoneRail) 28.dp.toPx() else 24.dp.toPx(); val logoW = if (phoneRail) 40.dp.toPx() else 36.dp.toPx()
+        val underNumber = if (phoneRail && rail.numbers) textCache.getOrPut(RAIL_UNDER_NUMBER_KEY) {
+            CellText(textMeasurer.measure(channel.channelNumber.orEmpty(), style = railUnderNumberStyle, maxLines = 1, constraints = Constraints(maxWidth = nameW)), null)
+        } else null
+        val nameH = (name?.title?.size?.height ?: 0) + (underNumber?.let { it.title.size.height + 1.dp.toPx().toInt() } ?: 0)
         val nameX = nameLeft + (nameW - (name?.title?.size?.width ?: 0)) / 2f
+        fun drawNameStack(top: Float) {
+            var ny = top
+            name?.let { drawText(it.title, topLeft = Offset(nameX, ny)); ny += it.title.size.height + 1.dp.toPx() }
+            underNumber?.let { drawText(it.title, topLeft = Offset(nameLeft + (nameW - it.title.size.width) / 2f, ny)) }
+        }
         if (logo != null) {
-            val gap = if (name != null) 2.dp.toPx() else 0f
+            val gap = if (name != null || underNumber != null) (if (phoneRail) 4.dp.toPx() else 2.dp.toPx()) else 0f
             val top = (size.height - logoH - nameH - gap) / 2f
             val scale = minOf(logoW / logo.width, logoH / logo.height)
             val dw = logo.width * scale; val dh = logo.height * scale
@@ -546,9 +562,16 @@ private fun GridRow(
                 dstOffset = IntOffset((nameLeft + (nameW - dw) / 2f).toInt(), (top + (logoH - dh) / 2f).toInt()),
                 dstSize = IntSize(dw.toInt(), dh.toInt()),
             )
-            name?.let { drawText(it.title, topLeft = Offset(nameX, top + logoH + gap)) }
-        } else name?.let {
-            drawText(it.title, topLeft = Offset(nameX, (size.height - nameH) / 2f))
+            drawNameStack(top + logoH + gap)
+        } else if (name != null || underNumber != null) {
+            drawNameStack((size.height - nameH) / 2f)
+        }
+        if (phoneRail && isFavorite) {
+            val star = textCache.getOrPut(RAIL_STAR_KEY) {
+                CellText(textMeasurer.measure("\u2605", style = railStarStyle, maxLines = 1), null)
+            }
+            val right = railWidthPx - 6.dp.toPx() - (if (channel.hasCatchup) 12.dp.toPx() + 4.dp.toPx() else 0f)
+            drawText(star.title, topLeft = Offset(right - star.title.size.width, 4.dp.toPx()))
         }
         if (channel.hasCatchup) {
             val iconPx = 12.dp.toPx()
@@ -644,11 +667,16 @@ private fun GridRow(
                         text.desc?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
                         text.range?.let { time ->
                             // Bottom line sits on the row floor; the lines above stack from the top.
-                            val ty = maxOf(y, size.height - 3.dp.toPx() - time.size.height)
-                            var bx = x
-                            drawText(time, topLeft = Offset(bx, ty)); bx += time.size.width + 5.dp.toPx()
+                            // Phone rows (iPhone): time on its own line, the S/E pill and
+                            // badges on a line under it; 72 dp rows keep them together.
+                            val stacked = descLines == 2 && (text.pill != null || text.badges.isNotEmpty())
                             val chipH = time.size.height - 4.dp.toPx()
-                            val chipY = ty + (time.size.height - chipH) / 2f
+                            val ty = if (stacked) maxOf(y, size.height - 3.dp.toPx() - chipH - 3.dp.toPx() - time.size.height)
+                                else maxOf(y, size.height - 3.dp.toPx() - time.size.height)
+                            var bx = x
+                            drawText(time, topLeft = Offset(bx, ty))
+                            if (stacked) bx = x else bx += time.size.width + 5.dp.toPx()
+                            val chipY = if (stacked) ty + time.size.height + 3.dp.toPx() else ty + (time.size.height - chipH) / 2f
                             text.pill?.let { pill ->
                                 val cw = pill.size.width + 5.dp.toPx()
                                 if (bx + cw <= x0 + w) {
@@ -717,6 +745,8 @@ private fun GuideRemoteAction.orDefault(default: GuideRemoteAction) = if (this =
 private const val MIN_CELL_PX = 6f
 private const val RAIL_NUMBER_KEY = Long.MIN_VALUE + 1
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
+private const val RAIL_UNDER_NUMBER_KEY = Long.MIN_VALUE + 3
+private const val RAIL_STAR_KEY = Long.MIN_VALUE + 4
 private val NOW_RED = Color(0xFFFF4757)
 
 private class CellText(

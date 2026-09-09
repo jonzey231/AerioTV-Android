@@ -374,14 +374,6 @@ fun ChannelListScreen(
                         state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
                     },
                 )
-                // Global Search (parity #41): the full Search screen (movies /
-                // shows / EPG). Phones reach it only from app-bar entry points,
-                // so it stays beside the channel-name filter.
-                com.aeriotv.android.feature.livetv.LiveTvPhoneCircle(
-                    icon = Icons.Filled.TravelExplore,
-                    contentDescription = "Search everything",
-                    onClick = onOpenSearch,
-                )
             },
             sortMenu = {
                 SortMenu(
@@ -901,6 +893,9 @@ internal fun ChannelRow(
     onToggleMultiview: (() -> Unit)? = null,
     inMultiview: Boolean = false,
 ) {
+    // iPhone-shaped row on phone and tablet (time on the title line, italic
+    // sub-title line); TV keeps the fixed-slot layout.
+    val phoneRow = !rememberIsTvDevice()
     val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -1116,6 +1111,10 @@ internal fun ChannelRow(
                             )
                         }
                     }
+                    val subtitle = nowProgramme?.subTitle?.takeIf {
+                        LocalShowProgramSubtitles.current &&
+                            !subtitleIsRedundant(it, nowProgramme.title, nowProgramme.description)
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = nowProgramme?.title ?: " ",
@@ -1128,6 +1127,18 @@ internal fun ChannelRow(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        // iPhone (ChannelListView.swift:3079-3091): time left
+                        // sits on the title line before the badges; the trailing
+                        // column keeps only the chevron.
+                        if (phoneRow && nowProgramme != null) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = formatRemaining(nowProgramme),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
                         // Feed badges on the now-playing line; kept inline (same
                         // single-line height) so the row's fixed-slot alignment
                         // across channels is preserved.
@@ -1138,18 +1149,27 @@ internal fun ChannelRow(
                             }
                         }
                     }
+                    if (phoneRow && subtitle != null) {
+                        // iPhone: the sub-title is its own italic line above the
+                        // description (ChannelListView.swift:3094-3100).
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         // GH #34: lead the secondary line with the XMLTV
                         // <sub-title> (match/episode name) so same-title live
                         // events are distinguishable, then the description.
-                        // Folded into the existing fixed 2-line slot rather than
-                        // added as a new line, so the list's cross-row alignment
-                        // is preserved.
+                        // TV keeps it folded into the fixed 2-line slot so the
+                        // list's cross-row alignment is preserved; the phone
+                        // printed it on its own line above.
                         text = listOfNotNull(
-                            nowProgramme?.subTitle?.takeIf {
-                                LocalShowProgramSubtitles.current &&
-                                    !subtitleIsRedundant(it, nowProgramme.title, nowProgramme.description)
-                            },
+                            subtitle.takeIf { !phoneRow },
                             nowProgramme?.description?.takeIf { it.isNotBlank() },
                         ).joinToString(" · ").ifBlank { " " },
                         style = MaterialTheme.typography.bodySmall,
@@ -1173,7 +1193,7 @@ internal fun ChannelRow(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    nowProgramme?.let {
+                    if (!phoneRow) nowProgramme?.let {
                         Text(
                             text = formatRemaining(it),
                             style = MaterialTheme.typography.labelMedium,
