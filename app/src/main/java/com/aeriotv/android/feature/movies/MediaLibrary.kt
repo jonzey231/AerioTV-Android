@@ -40,12 +40,25 @@ data class MediaItem(
     val ratingValue: Double? by lazy { rating?.trim()?.toDoubleOrNull() }
 }
 
-/** Provider titles often end in "(2015)"; the year has its own line, so drop it when it matches. */
+/**
+ * Provider titles carry markers the poster grid should not: a leading
+ * language prefix ("EN - ", "FR: "), trailing quality tags ("[1080p]",
+ * "[4K]") and a trailing "(2015)" that duplicates the year line. Also the
+ * title used for TMDB lookups.
+ */
 private val trailingYear = Regex("""\s*\((\d{4})\)\s*$""")
+private val trailingTag = Regex("""\s*\[[^\]]*\]\s*$""")
+private val leadingLang = Regex("""^[A-Za-z]{2,3}\s*[-:|]\s+""")
 fun displayTitle(raw: String, year: Int?): String {
-    val m = trailingYear.find(raw) ?: return raw.trim()
-    return if (year == null || m.groupValues[1] == year.toString()) raw.substring(0, m.range.first).trim() else raw.trim()
+    var t = raw.trim()
+    t = leadingLang.replace(t, "")
+    while (true) { val n = trailingTag.replace(t, "").trim(); if (n == t) break; t = n }
+    val m = trailingYear.find(t) ?: return t
+    return if (year == null || m.groupValues[1] == year.toString()) t.substring(0, m.range.first).trim() else t
 }
+
+/** Title for a TMDB search: display cleanup plus any remaining trailing year. */
+fun searchTitle(raw: String): String = trailingYear.replace(displayTitle(raw, null), "").trim()
 
 fun DispatcharrVODMovie.toMediaItem() = MediaItem(
     key = "m:$uuid", title = displayTitle(title.ifBlank { name ?: "" }, year), year = year, rating = rating,

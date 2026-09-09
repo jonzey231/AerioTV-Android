@@ -56,6 +56,8 @@ data class MediaHeroPage(
     val positionMs: Long,
     val durationMs: Long,
     val item: MediaItem?,
+    val tmdbId: String? = null,
+    val isMovie: Boolean = true,
 ) {
     val hasProgress: Boolean get() = positionMs > 0L
     val remainingLabel: String? get() {

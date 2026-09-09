@@ -103,12 +103,13 @@ fun MediaTabContent(
                 // "On Demand"; without the movie loaded there is nothing to show.
                 if (m == null && (r.title.isBlank() || r.title == "On Demand")) return@mapNotNull null
                 MediaHeroPage(
-                    key = "cw:" + r.videoId, title = m?.let { displayTitle(it.displayName, it.year) } ?: r.title,
+                    key = "cw:" + r.videoId, title = m?.let { displayTitle(it.displayName, it.year) } ?: displayTitle(r.title, null),
                     artUrl = m?.posterUrl ?: r.posterUrl, year = m?.year, season = null, episode = null,
                     durationSecs = m?.durationSecs ?: (r.durationMs / 1000L).toInt().takeIf { it > 0 },
                     genre = m?.genre, rating = m?.rating, positionMs = r.positionMs, durationMs = r.durationMs,
                     item = m?.toMediaItem() ?: MediaItem(key = "m:" + r.videoId, title = r.title, year = null, rating = null,
                         posterUrl = r.posterUrl, category = null, movieUuid = r.videoId),
+                    tmdbId = m?.tmdbId, isMovie = true,
                 )
             }.take(12)
         } else {
@@ -123,7 +124,7 @@ fun MediaTabContent(
                         season = r.seasonNumber, episode = r.episodeNumber,
                         durationSecs = (r.durationMs / 1000L).toInt().takeIf { it > 0 },
                         genre = series.genre, rating = series.rating, positionMs = r.positionMs, durationMs = r.durationMs,
-                        item = series.toMediaItem(),
+                        item = series.toMediaItem(), tmdbId = series.tmdbId, isMovie = false,
                     )
                 }.take(12)
         }
@@ -162,6 +163,16 @@ fun MediaTabContent(
     val gridItems = if (isSearching) results else library
     val available = remember(library) { library.map { it.bucket }.toSet() }
 
+    // Hero backdrops (Apple parity: TMDB backdrop per hero page when a key is
+    // set); the cropped poster shows until one arrives. Cached per page key.
+    var backdrops by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    LaunchedEffect(heroPages.map { it.key }) {
+        for (page in heroPages) {
+            if (backdrops.containsKey(page.key)) continue
+            val url = viewModel.resolveTmdbBackdropUrl(page.tmdbId, searchTitle(page.title), page.isMovie)
+            backdrops = backdrops + (page.key to url)
+        }
+    }
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     // Full-span leading items: room, header, (search), (pills).
@@ -213,7 +224,7 @@ fun MediaTabContent(
                                     if (kind == MediaKind.Movies) onPlayMovie(videoId) else onEpisodeResume(videoId)
                                 }
                                 MediaHeroCard(
-                                    page = page,
+                                    page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
                                     onPrimary = play,
                                     onPlayFromStart = { watchVm.delete(videoId); play() },
                                     onDetails = { page.item?.movieUuid?.let(onMovieClick) ?: page.item?.seriesId?.let(onSeriesClick) },

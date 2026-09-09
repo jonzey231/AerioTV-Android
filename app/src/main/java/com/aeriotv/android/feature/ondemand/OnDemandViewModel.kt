@@ -1161,6 +1161,12 @@ class OnDemandViewModel @Inject constructor(
         return tmdbService.detailsForTitle(title, isMovie, key)
     }
 
+    /** Hero backdrop (media center): TMDB backdrop for the title, or null. Same gates as [resolveTmdbDetails]. */
+    suspend fun resolveTmdbBackdropUrl(tmdbId: String?, title: String, isMovie: Boolean): String? {
+        val details = resolveTmdbDetails(tmdbId, title, isMovie) ?: return null
+        return details.backdropPath?.takeIf { it.isNotBlank() }?.let { tmdbService.imageUrlFor(it) }
+    }
+
     /**
      * Structured TMDB credits (cast with headshots + directors) for the
      * detail screens. Same opt-in + key gate and id-then-title resolution

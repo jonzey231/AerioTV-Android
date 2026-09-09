@@ -36,6 +36,8 @@ data class TmdbDetails(
     val year: String?,
     val voteAverage: String?,
     val posterPath: String?,
+    /** Landscape art for hero cards (media-center redesign). */
+    val backdropPath: String? = null,
 )
 
 /**
@@ -230,6 +232,9 @@ class TMDBService @Inject constructor() {
 
     private fun imageUrl(path: String, size: String): String =
         "https://image.tmdb.org/t/p/$size$path"
+
+    /** Public image URL for a TMDB path (hero backdrops use w1280). */
+    fun imageUrlFor(path: String, size: String = "w1280"): String = imageUrl(path, size)
 
     /** Headshot URL for a person's `profile_path`, null/blank-safe (TMDB
      *  omits the path for most minor cast). w185 is the grid-sized profile
@@ -460,6 +465,7 @@ class TMDBService @Inject constructor() {
                 ?.takeIf { it > 0.0 }
                 ?.let { String.format("%.1f", it) },
             posterPath = field("poster_path"),
+            backdropPath = field("backdrop_path"),
         )
     }.getOrNull()
 
