@@ -115,14 +115,21 @@ fun <T> PhoneCardDeck(
             // screen edge: an outgoing card slides off past it with no hard
             // line at the content margin (iPhone, Logan 2026-09-09).
             Box(modifier = Modifier.fillMaxWidth().height(cardHeight).then(gesture).clipToBounds()) {
+                // Single card: no wrap, no stack; it follows the finger with a
+                // dampened drag and springs back (the wrap math flung it off
+                // as the outgoing card, which read as the image reloading).
+                val single = count == 1
                 items.forEachIndexed { i, item ->
-                    val rel = wrapped(i - p)
+                    val rel = if (single) 0f else wrapped(i - p)
                     if (rel <= -1.5f || rel >= 3.5f) return@forEachIndexed
                     val front = abs(rel) < 0.02f
                     val clamped = rel.coerceAtMost(3f)
                     val front0 = leadInset + margin
-                    val xDp: Dp = if (rel >= 0f) front0 + peek * clamped
-                        else front0 - (cardW + front0) * (-rel).coerceAtMost(1f)
+                    val xDp: Dp = when {
+                        single -> front0 + with(density) { (drag.value * 0.35f).toDp() }
+                        rel >= 0f -> front0 + peek * clamped
+                        else -> front0 - (cardW + front0) * (-rel).coerceAtMost(1f)
+                    }
                     val scale = if (rel >= 0f) 1f - clamped * 0.03f else 1f
                     val alpha = if (rel >= 0f) 1f - clamped * 0.2f else 1f
                     Box(
