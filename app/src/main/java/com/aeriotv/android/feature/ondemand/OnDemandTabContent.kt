@@ -625,6 +625,13 @@ private fun MoviesSubScreen(
         CompositionLocalProvider(
             androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
         ) {
+        // Pull to refresh (phone/tablet): the only way to force a sweep now
+        // that launch serves the saved library while it is fresh.
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = state.isLoading,
+            onRefresh = { viewModel.refresh() },
+            modifier = Modifier.fillMaxSize(),
+        ) {
         LazyVerticalGrid(
             // Larger posters + overscan-safe padding on the 10-foot TV; phone
             // keeps the compact grid whose 104dp bottom clears the bottom
@@ -672,6 +679,8 @@ private fun MoviesSubScreen(
                 )
             }
         }
+        }
+
         }
     }
 
@@ -845,6 +854,13 @@ private fun SeriesSubScreen(
         CompositionLocalProvider(
             androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides bringIntoViewSpec,
         ) {
+        // Pull to refresh (phone/tablet): the only way to force a sweep now
+        // that launch serves the saved library while it is fresh.
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = state.isLoadingSeries,
+            onRefresh = { viewModel.refreshSeries() },
+            modifier = Modifier.fillMaxSize(),
+        ) {
         LazyVerticalGrid(
             // Series tab matches the Movies tab's TV / phone grid metrics.
             columns = GridCells.Adaptive(minSize = if (isTv) 108.dp else 120.dp),
@@ -887,6 +903,8 @@ private fun SeriesSubScreen(
                 )
             }
         }
+        }
+
         }
     }
 
