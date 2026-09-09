@@ -18,11 +18,15 @@ class WatchlistViewModel @Inject constructor(
 ) : ViewModel() {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val entries: Flow<List<WatchlistStore.Entry>> =
-        playlistRepository.observeActiveId().flatMapLatest { id -> store.observe(id) }
+        playlistRepository.observeActiveId().flatMapLatest { _ ->
+            store.observe(playlistRepository.activePlaylist()?.let(WatchlistStore::scopeFor))
+        }
+
+    private suspend fun scope(): String? = playlistRepository.activePlaylist()?.let(WatchlistStore::scopeFor)
 
     fun toggle(item: MediaItem) {
         viewModelScope.launch {
-            val playlistId = playlistRepository.activePlaylist()?.id
+            val playlistId = scope()
             store.toggle(
                 WatchlistStore.Entry(
                     key = item.key, title = item.title, posterUrl = item.posterUrl, year = item.year,
@@ -33,6 +37,6 @@ class WatchlistViewModel @Inject constructor(
     }
 
     fun remove(key: String) {
-        viewModelScope.launch { store.remove(key, playlistRepository.activePlaylist()?.id) }
+        viewModelScope.launch { store.remove(key, scope()) }
     }
 }

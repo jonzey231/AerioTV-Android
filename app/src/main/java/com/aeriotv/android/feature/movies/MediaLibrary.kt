@@ -46,7 +46,8 @@ data class MediaItem(
  * "[4K]") and a trailing "(2015)" that duplicates the year line. Also the
  * title used for TMDB lookups.
  */
-private val trailingYear = Regex("""\s*\((\d{4})\)\s*$""")
+// "(2019)" or " - 2019" at the end: both duplicate the year line.
+private val trailingYear = Regex("""\s*(?:\((\d{4})\)|[-\u2013]\s*(\d{4}))\s*$""")
 private val trailingTag = Regex("""\s*\[[^\]]*\]\s*$""")
 private val leadingLang = Regex("""^[A-Za-z]{2,3}\s*[-:|]\s+""")
 fun displayTitle(raw: String, year: Int?): String {
@@ -54,7 +55,8 @@ fun displayTitle(raw: String, year: Int?): String {
     t = leadingLang.replace(t, "")
     while (true) { val n = trailingTag.replace(t, "").trim(); if (n == t) break; t = n }
     val m = trailingYear.find(t) ?: return t
-    return if (year == null || m.groupValues[1] == year.toString()) t.substring(0, m.range.first).trim() else t
+    val found = m.groupValues[1].ifEmpty { m.groupValues[2] }
+    return if (year == null || found == year.toString()) t.substring(0, m.range.first).trim() else t
 }
 
 /** Title for a TMDB search: display cleanup plus any remaining trailing year. */

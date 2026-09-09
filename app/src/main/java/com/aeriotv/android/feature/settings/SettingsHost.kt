@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -204,7 +206,12 @@ private fun SettingsSidebar(
 ) {
     LazyColumn(
         modifier = modifier.fillMaxHeight(),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+        // Status bar inset: on the unfolded Fold the "Settings" title sat under
+        // the clock (Logan's emulator 2026-09-09).
+        contentPadding = PaddingValues(
+            start = 12.dp, end = 12.dp, bottom = 12.dp,
+            top = 12.dp + androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
+        ),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item("title") {

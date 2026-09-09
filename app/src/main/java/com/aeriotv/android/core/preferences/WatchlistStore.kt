@@ -45,6 +45,19 @@ class WatchlistStore @Inject constructor(
     }
 
     private val store get() = context.watchlistDataStore
+
+    companion object {
+        /**
+         * Cross-device scope for a playlist: the server host, not the local
+         * playlist row id (each device assigns its own ids, so a synced entry
+         * would never match). Mirrors the iOS serverID role. Null when the URL
+         * has no host, which matches every playlist.
+         */
+        fun scopeFor(p: com.aeriotv.android.core.data.db.entity.PlaylistEntity): String? =
+            runCatching { java.net.URI(p.urlString.trim()).host?.lowercase() }.getOrNull()?.takeIf { it.isNotBlank() }
+
+        private val KEY = stringPreferencesKey("entries")
+    }
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     fun observe(playlistId: String?): Flow<List<Entry>> = store.data.map { prefs ->
@@ -105,5 +118,4 @@ class WatchlistStore @Inject constructor(
     private fun decode(raw: String?): List<Entry> =
         raw?.let { runCatching { json.decodeFromString<List<Entry>>(it) }.getOrNull() } ?: emptyList()
 
-    private companion object { val KEY = stringPreferencesKey("entries") }
 }
