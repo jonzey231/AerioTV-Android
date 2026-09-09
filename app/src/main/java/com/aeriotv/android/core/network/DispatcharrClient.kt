@@ -1395,7 +1395,11 @@ class DispatcharrClient @Inject constructor() {
         category: String,
         pageSize: Int = 100,
     ): VODMoviesPage {
-        val typed = if (category.contains('|')) category else "$category|movie"
+        // Always pin the type: Dispatcharr splits on the LAST pipe, so a
+        // provider name like "|DE| NETFLIX" needs "|movie" appended too. The
+        // old contains('|') test sent those untyped and every such category
+        // failed (204 of them on Logan's account, 2026-09-08).
+        val typed = if (category.endsWith("|movie")) category else "$category|movie"
         val encoded = java.net.URLEncoder.encode(typed, "UTF-8")
         val url = "${baseUrl.trimEnd('/')}/api/vod/movies/?page_size=$pageSize&category=$encoded"
         return getVODMoviesPage(url, apiKey)
@@ -1419,7 +1423,7 @@ class DispatcharrClient @Inject constructor() {
         category: String,
         pageSize: Int = 100,
     ): VODSeriesPage {
-        val typed = if (category.contains('|')) category else "$category|series"
+        val typed = if (category.endsWith("|series")) category else "$category|series"
         val encoded = java.net.URLEncoder.encode(typed, "UTF-8")
         val url = "${baseUrl.trimEnd('/')}/api/vod/series/?page_size=$pageSize&category=$encoded"
         return getVODSeriesPage(url, apiKey)
