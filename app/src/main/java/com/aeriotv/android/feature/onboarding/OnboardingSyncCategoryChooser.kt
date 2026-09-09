@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,8 +74,19 @@ fun OnboardingSyncCategoryChooser(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        // TV keeps the centred 62% panel; a phone gets the full width less a
+        // margin, and a tablet a capped panel. The TV width on a phone left the
+        // rows barely wider than their toggle, so every title wrapped
+        // (Logan 2026-09-08, Nothing Phone and Z Fold).
+        val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+        val windowWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+        val widthModifier = when {
+            isTv -> Modifier.fillMaxWidth(0.62f)
+            windowWidth >= 700 -> Modifier.width(560.dp)
+            else -> Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+        }
         Surface(
-            modifier = Modifier.fillMaxWidth(0.62f).heightIn(max = 620.dp),
+            modifier = widthModifier.heightIn(max = 620.dp),
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.background,
         ) {
