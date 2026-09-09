@@ -663,7 +663,7 @@ private fun GridRow(
                         cell.startMillis < win.last && cell.endMillis > win.first
                     }
                     clipRect(x0, 0f, x0 + w, size.height) {
-                        var x = x0 + padH
+                        val x = x0 + padH
                         var y = 3.dp.toPx()
                         // Per-program catch-up badge (iPhone EPGGuideView cell,
                         // ChannelListView.canReplay): aired, and still inside the
@@ -671,14 +671,16 @@ private fun GridRow(
                         // before the title in the accent colour.
                         val replayable = !cell.isPlaceholder && channel.hasCatchup && cell.endMillis <= nowMs &&
                             nowMs - cell.endMillis <= minOf(channel.catchupDays, 30) * 86_400_000L
+                        var titleX = x
                         if (replayable) {
                             val iconPx = (text.title.size.height * 0.7f)
                             translate(left = x, top = y + (text.title.size.height - iconPx) / 2f) {
                                 with(catchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(colors.primary)) }
                             }
-                            x += iconPx + 4.dp.toPx()
+                            titleX += iconPx + 4.dp.toPx()
                         }
-                        drawText(text.title, topLeft = Offset(x, y)); y += text.title.size.height - 1.dp.toPx()
+                        // Only the title line moves over for the badge.
+                        drawText(text.title, topLeft = Offset(titleX, y)); y += text.title.size.height - 1.dp.toPx()
                         text.sub?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
                         text.desc?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
                         text.range?.let { time ->
