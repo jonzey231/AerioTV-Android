@@ -262,7 +262,14 @@ fun MediaTabContent(
                                 // content width and clips at its bounds, so nothing shows
                                 // left of the front card at rest and the trailing cards
                                 // peek out to the right inside the content margin.
-                                Box(modifier = Modifier.fillMaxWidth().clipToBounds()) {
+                                Box(modifier = Modifier.layout { measurable, constraints ->
+                                    // iPhone: the deck runs from the 16 dp content margin to the
+                                    // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
+                                    // end side only; the deck clips itself at the front card's edge.
+                                    val extra = 34.dp.roundToPx()
+                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(0, 0) }
+                                }) {
                                     PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> heroCard(page) }
                                 }
                             } else {
@@ -301,7 +308,14 @@ fun MediaTabContent(
                                 )
                             }
                             if (compact) {
-                                Box(modifier = Modifier.fillMaxWidth().clipToBounds()) {
+                                Box(modifier = Modifier.layout { measurable, constraints ->
+                                    // iPhone: the deck runs from the 16 dp content margin to the
+                                    // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
+                                    // end side only; the deck clips itself at the front card's edge.
+                                    val extra = 34.dp.roundToPx()
+                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(0, 0) }
+                                }) {
                                     PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> wlCard(page) }
                                 }
                             } else {
