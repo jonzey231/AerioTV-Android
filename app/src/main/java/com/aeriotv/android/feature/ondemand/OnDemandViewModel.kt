@@ -1103,11 +1103,24 @@ class OnDemandViewModel @Inject constructor(
                 val page = runCatching {
                     dispatcharrAuth.withApiKeyRetry(playlist.id) { key2 -> dispatcharrClient.getVODMoviesPage(url, key2) }
                 }.onFailure { warnUnlessCancelled("resolveMovie '$q' failed", it) }.getOrNull()
-                val hit = page?.results?.firstOrNull { it.uuid == uuid }?.let(::stampMovieGroup)
+                // Dispatcharr reassigns VOD uuids when a provider's catalog is
+                // rescanned, so a Continue Watching or Watchlist row can carry
+                // a uuid the server no longer has (phone 2026-09-09: every deck
+                // title opened "not found" and playback got a 503). Accept the
+                // exact uuid, else the single hit, else a hit whose cleaned
+                // name equals the hint; the stale uuid then maps to the live row
+                // and playback resolves through the live uuid.
+                val results = page?.results.orEmpty()
+                val cleanedHint = com.aeriotv.android.feature.movies.searchTitle(hint).lowercase()
+                val hit = (results.firstOrNull { it.uuid == uuid }
+                    ?: results.singleOrNull()
+                    ?: results.firstOrNull { com.aeriotv.android.feature.movies.searchTitle(it.displayName).lowercase() == cleanedHint })
+                    ?.let(::stampMovieGroup)
                 if (hit != null) {
+                    if (hit.uuid != uuid) Log.w(TAG, "[VOD] resolveMovie: '$q' now has uuid ${hit.uuid} (row carried $uuid)")
                     _state.update { it.copy(resolvedMovies = it.resolvedMovies + (uuid to hit)) }
                 } else {
-                    Log.w(TAG, "[VOD] resolveMovie: uuid not among ${page?.results?.size ?: -1} hits for '$q'")
+                    Log.w(TAG, "[VOD] resolveMovie: no match among ${results.size} hits for '$q'")
                 }
             } finally {
                 _state.update { it.copy(resolvingKeys = it.resolvingKeys - key) }
@@ -1848,7 +1861,10 @@ class OnDemandViewModel @Inject constructor(
         if (playlist.apiKey.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Active source is not Dispatcharr-backed."))
         }
-        val movie = _state.value.movies.firstOrNull { it.uuid == movieUuid }
+        // A row that carried a reassigned uuid was mapped to the live movie by
+        // resolveMovie; play through the live uuid, not the stale one.
+        val movie = movieByUuid(movieUuid)
+        val liveUuid = movie?.uuid ?: movieUuid
         // Version pinning: a picked provider copy replaces the firstStreamId
         // default entirely (its stream_id + m3u_account_id ride the proxy URL;
         // stream_id wins server-side when both land). Absent selection = Auto,
@@ -1860,7 +1876,7 @@ class OnDemandViewModel @Inject constructor(
                 dispatcharrClient.resolveVODStreamUrl(
                     baseUrl = base,
                     apiKey = key,
-                    movieUuid = movieUuid,
+                    movieUuid = liveUuid,
                     streamId = if (selection != null) selection.streamId?.toIntOrNull()
                     else movie?.firstStreamId,
                     m3uAccountId = selection?.accountId,
