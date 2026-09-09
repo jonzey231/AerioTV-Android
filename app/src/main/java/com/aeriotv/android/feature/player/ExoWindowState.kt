@@ -76,6 +76,28 @@ class ExoWindowState @Inject constructor() {
     @Volatile var dpadVerticalCaptured: Boolean = true
 
     /**
+     * Whether the fullscreen player currently OWNS D-pad LEFT/RIGHT
+     * (short/long slot actions, or - unmapped to a slot - live-rewind /
+     * catch-up scrubbing). Same purpose as [dpadVerticalCaptured] -
+     * PlayerScreen publishes false while chrome, a menu/sheet, the
+     * Recently Watched overlay, or the Channels overlay is up, so
+     * MainActivity's split hands the keys to Compose focus traversal
+     * instead. Two deliberate differences from the vertical predicate,
+     * both load-bearing:
+     *  - it does NOT release on the scrub HUD - that HUD is up exactly
+     *    because a hold is scrubbing the live-rewind buffer, and LEFT/
+     *    RIGHT must keep driving that scrub rather than handing off to
+     *    Compose focus mid-hold;
+     *  - it additionally excludes catch-up mode: PlayerScreen's own
+     *    LEFT/RIGHT block always scrubs the programme during catch-up
+     *    regardless of the map, and suppresses CHANNEL_LIST there too.
+     *    Publishing false for the whole of catch-up leaves that path
+     *    bit-for-bit unchanged.
+     * Defaults true (bare fullscreen video = mapped slot keys).
+     */
+    @Volatile var dpadHorizontalCaptured: Boolean = true
+
+    /**
      * Remote Control phase A2: session-scoped last-channel zap memory
      * (`lastChannel` zap-back, a 1-deep stack). [recordTune] is called
      * on every successful live tune with the channel's stable id; it

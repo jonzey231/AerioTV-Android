@@ -1372,7 +1372,14 @@ fun PlayerScreen(
                     }
                 }
                 // Remote Control: LEFT/RIGHT on bare fullscreen video
-                // (chrome hidden, no overlay). One unified block, two modes:
+                // (chrome hidden, no overlay). MainActivity.dispatchKeyEvent
+                // now handles these first for both the default and a custom
+                // map (see exoWindowState.dpadHorizontalCaptured, mirroring
+                // the split below), so ordinary fullscreen never reaches this
+                // block anymore. It remains the path during catch-up, which
+                // dpadHorizontalCaptured deliberately always releases, and in
+                // the edge case where chrome is hidden but a menu/sheet is
+                // open. One unified block, two modes:
                 //  - transport (rewind buffering with a SEEK-mapped slot, or
                 //    ANY catch-up replay): every ACTION_DOWN scrubs, exactly
                 //    the pre-initiative behavior - held keys auto-repeat the
@@ -1668,9 +1675,20 @@ fun PlayerScreen(
         exoWindowState.dpadVerticalCaptured = !chromeVisible && !scrubHudVisible &&
             scrubTargetWallMs == null && !recentsOverlayVisible &&
             !channelListVisible && !interactionLocked
+        // Unlike vertical, horizontal does NOT release on the scrub HUD -
+        // that HUD is up exactly when a hold is scrubbing, and LEFT/RIGHT
+        // must keep driving the scrub rather than handing off to Compose
+        // focus mid-hold. It additionally excludes catch-up mode, where
+        // this screen's own LEFT/RIGHT block always scrubs regardless of
+        // the map (see ExoWindowState.dpadHorizontalCaptured KDoc).
+        exoWindowState.dpadHorizontalCaptured = !chromeVisible && !recentsOverlayVisible &&
+            !channelListVisible && !interactionLocked && !isCatchupMode
     }
     DisposableEffect(exoWindowState) {
-        onDispose { exoWindowState.dpadVerticalCaptured = true }
+        onDispose {
+            exoWindowState.dpadVerticalCaptured = true
+            exoWindowState.dpadHorizontalCaptured = true
+        }
     }
     // streamUnavailable is a KEY (not just a guard): when it clears on
     // recovery, this effect must re-fire so the chrome that was pinned open

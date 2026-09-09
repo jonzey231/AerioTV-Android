@@ -98,6 +98,21 @@ class MainActivity : ComponentActivity() {
      *  release doesn't also fire the short action. */
     private var dpadVertLongFired = false
 
+    /** Same as [dpadVertLongFired], for the LEFT/RIGHT split. */
+    private var dpadHorizLongFired = false
+
+    /** True once a captured D-pad LEFT/RIGHT ACTION_DOWN has been seen, so a
+     *  stray ACTION_UP (dpadHorizontalCaptured can flip between the DOWN and
+     *  the UP of the same press) doesn't fire the short action on its own. */
+    private var dpadHorizDownSeen = false
+
+    /** uptimeMillis of the last dispatched horizontal short action while a
+     *  key auto-repeats, so a held LEFT/RIGHT with no long slot (e.g. the
+     *  legacy seek map during live-rewind buffering) can't fire faster than
+     *  DPAD_HORIZ_REPEAT_MS - unthrottled repeats would drive scrubStep's
+     *  acceleration to its mult=12 ceiling (PlayerScreen.kt) within a second. */
+    private var dpadHorizLastSeekAt = 0L
+
     /**
      * Audit task #22 mini-player resume. The Google TV Streamer remote has
      * no dedicated play/pause key, so we repurpose a double-press of D-pad
@@ -253,6 +268,72 @@ class MainActivity : ComponentActivity() {
                     KeyEvent.ACTION_UP -> {
                         if (!dpadVertLongFired) dispatchPlayerAction(shortAction)
                         dpadVertLongFired = false
+                        return true
+                    }
+                }
+            }
+        }
+        // Live LEFT/RIGHT: mirrors the UP/DOWN branch above so a remapped
+        // LEFT_SHORT/RIGHT_SHORT (or the default map's channel-list / last-
+        // channel / minimize / program-info slots) wins over the chrome pill
+        // row the same way surf keys do, instead of falling through to
+        // Compose focus and getting eaten by that row (see
+        // ExoWindowState.dpadHorizontalCaptured).
+        if (isTelevisionDevice() &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+            exoWindowState.mode.value == ExoWindowState.Mode.Fullscreen
+        ) {
+            val isLeft = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+            val shortAction = remoteMap.playerAction(
+                if (isLeft) com.aeriotv.android.core.remote.RemoteSlot.LEFT_SHORT
+                else com.aeriotv.android.core.remote.RemoteSlot.RIGHT_SHORT,
+            )
+            val longAction = remoteMap.playerAction(
+                if (isLeft) com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG
+                else com.aeriotv.android.core.remote.RemoteSlot.RIGHT_LONG,
+            )
+            if (!exoWindowState.dpadHorizontalCaptured) {
+                // Chrome / a menu / an overlay owns horizontal focus right
+                // now (or PlayerScreen's own catch-up block does): hand the
+                // keys to Compose untouched.
+            } else if (longAction == com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (shortAction == com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+                        // Nothing mapped: fall through every time, exactly
+                        // like the legacy unmapped-key chrome nav path.
+                    } else {
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (event.repeatCount == 0 ||
+                            now - dpadHorizLastSeekAt >= DPAD_HORIZ_REPEAT_MS
+                        ) {
+                            dpadHorizLastSeekAt = now
+                            if (dispatchPlayerAction(shortAction)) return true
+                        } else {
+                            return true // rate-limited repeat: swallow, don't re-dispatch yet
+                        }
+                    }
+                }
+            } else {
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> {
+                        if (event.repeatCount == 0) {
+                            dpadHorizLongFired = false
+                            dpadHorizDownSeen = true
+                        } else if (!dpadHorizLongFired &&
+                            (event.isLongPress || event.repeatCount >= MINI_CLOSE_HOLD_REPEAT)
+                        ) {
+                            dpadHorizLongFired = true
+                            dispatchPlayerAction(longAction)
+                        }
+                        return true
+                    }
+                    KeyEvent.ACTION_UP -> {
+                        if (dpadHorizDownSeen && !dpadHorizLongFired) {
+                            dispatchPlayerAction(shortAction)
+                        }
+                        dpadHorizLongFired = false
+                        dpadHorizDownSeen = false
                         return true
                     }
                 }
@@ -1081,5 +1162,11 @@ class MainActivity : ComponentActivity() {
          *  pin first; this bounds a missed release. Mirrors the guide hold-Left
          *  pin's 2.5s safety timeout. */
         const val RIGHT_HOLD_PIN_MS = 2_500L
+
+        /** Floor (ms) between dispatched horizontal short actions while a
+         *  key auto-repeats with no long slot mapped. Mirrors scrubStep's own
+         *  250ms held-scrub throttle (PlayerScreen.kt) so a map that lands a
+         *  seek action on LEFT_SHORT/RIGHT_SHORT can't outrun it. */
+        const val DPAD_HORIZ_REPEAT_MS = 250L
     }
 }
