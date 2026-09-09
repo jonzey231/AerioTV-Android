@@ -42,7 +42,10 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.aeriotv.android.feature.movies.toMediaItem
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -1219,6 +1222,73 @@ class OnDemandViewModel @Inject constructor(
             ?: searchDispatcharrKnownForSeries(item, wantTitle)
             ?: return null
         return KnownForTarget.Series(match.id)
+    }
+
+    /**
+     * "Related" strip for the phone/tablet detail screens: TMDB
+     * recommendations for [tmdbId] (resolved by [title] when the item has
+     * none) matched against the LOCAL library, so every tile is playable.
+     * Same matcher as [resolveKnownForTarget] (tmdbId when the entity has
+     * one, else the normalized title) but run over a snapshot on
+     * [Dispatchers.Default] with prebuilt indexes, because the recommendation
+     * list is up to 20 entries and the library can be thousands of titles
+     * (tvOS VODDetailView.loadRelatedIfNeeded). [selfKey] is the opened
+     * title's MediaItem key ("m:uuid" / "s:id") and is never returned; hits
+     * are deduped and capped at 12. Empty when TMDB is not configured.
+     */
+    suspend fun relatedTitles(
+        tmdbId: String?,
+        title: String,
+        isMovie: Boolean,
+        selfKey: String,
+    ): List<com.aeriotv.android.feature.movies.MediaItem> {
+        if (!isTmdbConfigured()) return emptyList()
+        val key = appPreferences.tmdbApiKey.first()
+        val id = tmdbId?.takeIf { it.isNotBlank() }
+            ?: tmdbService.resolveIdForTitleOrNull(title, isMovie, key)
+            ?: return emptyList()
+        val recs = tmdbService.recommendations(id, isMovie, key)
+        if (recs.isEmpty()) return emptyList()
+        val snapshot = _state.value
+        return withContext(Dispatchers.Default) {
+            val seen = mutableSetOf(selfKey)
+            val out = mutableListOf<com.aeriotv.android.feature.movies.MediaItem>()
+            if (isMovie) {
+                val library = snapshot.movies + snapshot.searchResults + snapshot.resolvedMovies.values
+                val byTmdb = HashMap<String, DispatcharrVODMovie>()
+                val byTitle = HashMap<String, DispatcharrVODMovie>()
+                for (m in library) {
+                    val t = m.tmdbId
+                    if (!t.isNullOrBlank()) byTmdb.putIfAbsent(t, m)
+                    else byTitle.putIfAbsent(normalizeVodTitle(m.displayName), m)
+                }
+                for (rec in recs) {
+                    if (!rec.isMovie) continue
+                    val hit = byTmdb[rec.id] ?: byTitle[normalizeVodTitle(rec.title)] ?: continue
+                    val item = hit.toMediaItem()
+                    if (seen.add(item.key)) out += item
+                    if (out.size >= 12) break
+                }
+            } else {
+                val library = snapshot.series + snapshot.seriesSearchResults + snapshot.resolvedSeries.values
+                val byTmdb = HashMap<String, DispatcharrVODSeries>()
+                val byTitle = HashMap<String, DispatcharrVODSeries>()
+                for (s in library) {
+                    val t = s.tmdbId
+                    if (!t.isNullOrBlank()) byTmdb.putIfAbsent(t, s)
+                    else byTitle.putIfAbsent(normalizeVodTitle(s.displayName), s)
+                }
+                for (rec in recs) {
+                    if (rec.isMovie) continue
+                    val hit = byTmdb[rec.id] ?: byTitle[normalizeVodTitle(rec.title)] ?: continue
+                    val item = hit.toMediaItem()
+                    if (seen.add(item.key)) out += item
+                    if (out.size >= 12) break
+                }
+            }
+            Log.d(TAG, "Related: ${recs.size} TMDB recommendations -> ${out.size} in library")
+            out
+        }
     }
 
     /** The active playlist when it is a Dispatcharr source with a usable

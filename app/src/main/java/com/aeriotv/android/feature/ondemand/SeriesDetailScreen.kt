@@ -86,6 +86,7 @@ import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
+import com.aeriotv.android.feature.movies.MediaItem
 import com.aeriotv.android.feature.watchprogress.UpNextEntry
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -124,6 +125,18 @@ fun SeriesDetailScreen(
     val info = state.seriesProviderInfo[seriesId]
     val recent by watchVm.observeRecent(50).collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
+    // "Related": TMDB recommendations filtered to the local library. Keyed on
+    // the library size too so it re-matches as the launch sweep publishes.
+    var relatedItems by remember(seriesId) { mutableStateOf<List<MediaItem>>(emptyList()) }
+    LaunchedEffect(seriesId, series == null, info, state.series.size) {
+        val s = series ?: return@LaunchedEffect
+        relatedItems = viewModel.relatedTitles(
+            tmdbId = info?.tmdbId ?: s.tmdbId,
+            title = s.displayName,
+            isMovie = false,
+            selfKey = "s:${s.id}",
+        )
+    }
 
     LaunchedEffect(seriesId) {
         // loadEpisodes now primes provider-info (Dispatcharr series_info) FIRST so the
@@ -561,6 +574,11 @@ fun SeriesDetailScreen(
                                     },
                                 ),
                         )
+                    }
+                }
+                if (!isTv && relatedItems.isNotEmpty()) {
+                    item(key = "related") {
+                        RelatedSection(items = relatedItems, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries)
                     }
                 }
                 if (!isTv) {

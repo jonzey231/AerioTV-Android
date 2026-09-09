@@ -389,6 +389,46 @@ class TMDBService @Inject constructor() {
      * trim+lowercase title ("" = confirmed miss); failed requests are never
      * cached. Shared by [detailsForTitle] and [creditsForTitle].
      */
+    /** Public wrapper over [resolveIdForTitle] for callers that hold a raw
+     *  (untrimmed) key, e.g. the Related strip resolving a title with no
+     *  stored TMDB id. */
+    suspend fun resolveIdForTitleOrNull(title: String, isMovie: Boolean, rawKey: String): String? {
+        val key = rawKey.trim()
+        if (key.isEmpty()) return null
+        return resolveIdForTitle(title, isMovie, key)
+    }
+
+    /**
+     * `/movie/{id}/recommendations` | `/tv/{id}/recommendations` (page 1)
+     * for the Related strip. Rows are mapped like [parseKnownFor] (title or
+     * name, poster path, id); the media type is fixed by the endpoint, so
+     * every row inherits [isMovie]. Rows without a title are dropped, rows
+     * without a poster are kept (the library card supplies its own art).
+     */
+    suspend fun recommendations(tmdbId: String, isMovie: Boolean, rawKey: String): List<TmdbKnownForItem> {
+        val key = rawKey.trim()
+        val id = tmdbId.trim()
+        if (key.isEmpty() || id.isEmpty()) return emptyList()
+        val kind = if (isMovie) "movie" else "tv"
+        val body = getJsonOrNull("/$kind/$id/recommendations", "page=1", key) ?: return emptyList()
+        return runCatching {
+            json.parseToJsonElement(body).jsonObject["results"]?.jsonArray.orEmpty().mapNotNull { element ->
+                val o = element.jsonObject
+                val recId = o["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val title = (o["title"] ?: o["name"])?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val poster = o["poster_path"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val rowIsMovie = when (o["media_type"]?.jsonPrimitive?.contentOrNull) {
+                    "movie" -> true
+                    "tv" -> false
+                    else -> isMovie
+                }
+                TmdbKnownForItem(recId, title, poster, rowIsMovie)
+            }.distinctBy { it.id }
+        }.getOrDefault(emptyList())
+    }
+
     private suspend fun resolveIdForTitle(title: String, isMovie: Boolean, key: String): String? {
         val kind = if (isMovie) "movie" else "tv"
         val normalizedTitle = title.trim().lowercase()

@@ -75,6 +75,8 @@ import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
+import com.aeriotv.android.feature.movies.MediaItem
+import com.aeriotv.android.feature.movies.MediaPosterCard
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.delay
@@ -211,6 +213,18 @@ fun MovieDetailScreen(
         tmdbCredits?.let { c -> (c.cast + c.directors).distinctBy { it.id } }.orEmpty()
     }
     var bioPerson by remember { mutableStateOf<TmdbPerson?>(null) }
+    // "Related": TMDB recommendations filtered to the local library. Keyed on
+    // the library size too so it re-matches as the launch sweep publishes.
+    var relatedItems by remember(movieUuid) { mutableStateOf<List<MediaItem>>(emptyList()) }
+    LaunchedEffect(movieUuid, movie?.id, info, state.movies.size) {
+        val m = movie ?: return@LaunchedEffect
+        relatedItems = viewModel.relatedTitles(
+            tmdbId = info?.tmdbId ?: m.tmdbId,
+            title = m.displayName,
+            isMovie = true,
+            selfKey = "m:${m.uuid}",
+        )
+    }
 
     BackHandler(enabled = true) { onBack() }
     val isTv = rememberLiveTvFormFactor().isTv
@@ -341,6 +355,11 @@ fun MovieDetailScreen(
                             profileUrl = viewModel::tmdbProfileImageUrl,
                             onPersonClick = { bioPerson = it },
                         )
+                    }
+                }
+                if (!isTv && relatedItems.isNotEmpty()) {
+                    item {
+                        RelatedSection(items = relatedItems, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries)
                     }
                 }
                 if (!isTv) {
@@ -1043,5 +1062,45 @@ private fun formatDuration(totalSecs: Int): String {
         h > 0 && m > 0 -> "${h}h ${m}m"
         h > 0 -> "${h}h"
         else -> "${m}m"
+    }
+}
+
+/**
+ * Phone/tablet "Related" strip: library titles TMDB recommends for the
+ * opened one (tvOS "Available Related Titles"). Header matches the Cast &
+ * Crew section; tiles are the Movies tab poster cards.
+ */
+@Composable
+internal fun RelatedSection(
+    items: List<MediaItem>,
+    onOpenMovie: (String) -> Unit,
+    onOpenSeries: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+        Text(
+            text = "Related",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        Spacer(Modifier.height(10.dp))
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(items = items, key = { it.key }) { related ->
+                MediaPosterCard(
+                    item = related,
+                    onClick = {
+                        val uuid = related.movieUuid
+                        val id = related.seriesId
+                        if (uuid != null) onOpenMovie(uuid) else if (id != null) onOpenSeries(id)
+                    },
+                    modifier = Modifier.width(110.dp),
+                )
+            }
+        }
     }
 }
