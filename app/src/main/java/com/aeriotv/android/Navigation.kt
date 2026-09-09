@@ -960,6 +960,16 @@ fun AerioTVNavHost(
                     onResumeMovie = { videoId ->
                         navController.navigate(Routes.movieDetail(videoId))
                     },
+                    // Media center hero: Resume / Play go straight to the player
+                    // (Apple parity); the player seeks to the saved position.
+                    onPlayMovie = { videoId ->
+                        if (companionTvName != null) {
+                            companionRemoteNav.playVod(videoId, isEpisode = false)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.vodPlayer(videoId))
+                        }
+                    },
                     onPlayRecording = { playbackUrl, title, recId ->
                         // Only http(s) recordings can play on the TV; a LOCAL
                         // recording (file://, content://) lives on THIS phone and

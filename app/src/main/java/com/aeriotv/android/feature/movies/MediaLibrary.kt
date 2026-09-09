@@ -40,13 +40,20 @@ data class MediaItem(
     val ratingValue: Double? by lazy { rating?.trim()?.toDoubleOrNull() }
 }
 
+/** Provider titles often end in "(2015)"; the year has its own line, so drop it when it matches. */
+private val trailingYear = Regex("""\s*\((\d{4})\)\s*$""")
+fun displayTitle(raw: String, year: Int?): String {
+    val m = trailingYear.find(raw) ?: return raw.trim()
+    return if (year == null || m.groupValues[1] == year.toString()) raw.substring(0, m.range.first).trim() else raw.trim()
+}
+
 fun DispatcharrVODMovie.toMediaItem() = MediaItem(
-    key = "m:$uuid", title = title.ifBlank { name ?: "" }, year = year, rating = rating,
+    key = "m:$uuid", title = displayTitle(title.ifBlank { name ?: "" }, year), year = year, rating = rating,
     posterUrl = posterUrl, category = categoryName, movieUuid = uuid,
 )
 
 fun DispatcharrVODSeries.toMediaItem() = MediaItem(
-    key = "s:$id", title = (name.ifBlank { title ?: "" }), year = year, rating = rating,
+    key = "s:$id", title = displayTitle(name.ifBlank { title ?: "" }, year), year = year, rating = rating,
     posterUrl = posterUrl, category = categoryName, seriesId = id,
 )
 

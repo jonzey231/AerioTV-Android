@@ -192,6 +192,8 @@ fun MainScaffold(
     onSeriesClick: (Int) -> Unit = {},
     onEpisodeResume: (String) -> Unit = {},
     onResumeMovie: (String) -> Unit = {},
+    /** Media center hero: play a movie directly (resumes from saved progress). */
+    onPlayMovie: (String) -> Unit = {},
     /** (playbackUrl, title, dispatcharrRecordingId or -1). */
     onPlayRecording: (String, String, Int) -> Unit = { _, _, _ -> },
     /** Catch-up (task #136): url, title, progStartMillis, progEndMillis, panelTz. */
@@ -672,6 +674,7 @@ fun MainScaffold(
                     onSeriesClick = onSeriesClick,
                     onEpisodeResume = onEpisodeResume,
                     onResumeMovie = onResumeMovie,
+                    onPlayMovie = onPlayMovie,
                     onPlayRecording = onPlayRecording,
                     onPlayCatchup = onPlayCatchup,
                     onLaunchMultiview = onLaunchMultiview,
@@ -887,6 +890,7 @@ fun MainScaffold(
                 onSeriesClick = onSeriesClick,
                 onEpisodeResume = onEpisodeResume,
                 onResumeMovie = onResumeMovie,
+                onPlayMovie = onPlayMovie,
                 onPlayRecording = onPlayRecording,
                 onPlayCatchup = onPlayCatchup,
                 onLaunchMultiview = onLaunchMultiview,
@@ -1332,6 +1336,7 @@ private fun MainTabContent(
     onSeriesClick: (Int) -> Unit,
     onEpisodeResume: (String) -> Unit,
     onResumeMovie: (String) -> Unit,
+    onPlayMovie: (String) -> Unit = {},
     onPlayRecording: (String, String, Int) -> Unit,
     onPlayCatchup: (String, String, String, Long, Long, String, String) -> Unit,
     onLaunchMultiview: () -> Unit,
@@ -1396,6 +1401,7 @@ private fun MainTabContent(
                     onSeriesClick = { id -> onSeriesClick(id) },
                     onEpisodeResume = onEpisodeResume,
                     onResumeMovie = onResumeMovie,
+                    onPlayMovie = onPlayMovie,
                 )
             }
             AppTab.TVShows -> {
@@ -1405,6 +1411,7 @@ private fun MainTabContent(
                     onSeriesClick = { id -> onSeriesClick(id) },
                     onEpisodeResume = onEpisodeResume,
                     onResumeMovie = onResumeMovie,
+                    onPlayMovie = onPlayMovie,
                 )
             }
             AppTab.OnDemand -> {

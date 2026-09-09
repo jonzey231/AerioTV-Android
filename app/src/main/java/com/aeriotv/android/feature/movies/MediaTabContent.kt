@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -48,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -80,10 +82,52 @@ fun MediaTabContent(
     onSeriesClick: (Int) -> Unit,
     onEpisodeResume: (String) -> Unit,
     onResumeMovie: (String) -> Unit,
+    onPlayMovie: (String) -> Unit = onResumeMovie,
     viewModel: OnDemandViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
+    watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Continue Watching (Apple parity, heroPages): unfinished progress rows,
+    // newest first, movies for the Movies tab and one page per series for
+    // TV Shows (the newest episode row wins), at most 12.
+    val recentProgress by watchVm.observeRecent(40).collectAsStateWithLifecycle(initialValue = emptyList())
+    val heroPages: List<MediaHeroPage> = remember(recentProgress, state.movies, state.series, kind) {
+        val rows = recentProgress.filter { r ->
+            r.positionMs > 0L && !r.isFinished && (r.durationMs <= 0L || r.positionMs < r.durationMs - 5 * 60_000L)
+        }
+        if (kind == MediaKind.Movies) {
+            rows.filter { it.vodType == "movie" }.mapNotNull { r ->
+                val m = state.movies.firstOrNull { it.uuid == r.videoId }
+                // A row the player saved before the title was known reads
+                // "On Demand"; without the movie loaded there is nothing to show.
+                if (m == null && (r.title.isBlank() || r.title == "On Demand")) return@mapNotNull null
+                MediaHeroPage(
+                    key = "cw:" + r.videoId, title = m?.let { displayTitle(it.displayName, it.year) } ?: r.title,
+                    artUrl = m?.posterUrl ?: r.posterUrl, year = m?.year, season = null, episode = null,
+                    durationSecs = m?.durationSecs ?: (r.durationMs / 1000L).toInt().takeIf { it > 0 },
+                    genre = m?.genre, rating = m?.rating, positionMs = r.positionMs, durationMs = r.durationMs,
+                    item = m?.toMediaItem() ?: MediaItem(key = "m:" + r.videoId, title = r.title, year = null, rating = null,
+                        posterUrl = r.posterUrl, category = null, movieUuid = r.videoId),
+                )
+            }.take(12)
+        } else {
+            rows.filter { it.vodType == "episode" && it.seriesId != null }
+                .distinctBy { it.seriesId }
+                .mapNotNull { r ->
+                    val sId = r.seriesId?.toIntOrNull() ?: return@mapNotNull null
+                    val series = state.series.firstOrNull { it.id == sId } ?: return@mapNotNull null
+                    MediaHeroPage(
+                        key = "cw:" + r.videoId, title = displayTitle(series.displayName, series.year),
+                        artUrl = series.posterUrl ?: r.posterUrl, year = series.year,
+                        season = r.seasonNumber, episode = r.episodeNumber,
+                        durationSecs = (r.durationMs / 1000L).toInt().takeIf { it > 0 },
+                        genre = series.genre, rating = series.rating, positionMs = r.positionMs, durationMs = r.durationMs,
+                        item = series.toMediaItem(),
+                    )
+                }.take(12)
+        }
+    }
     LaunchedEffect(Unit) { viewModel.ensureLoaded() }
     val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact
     val hiddenGroups by (if (kind == MediaKind.Movies) settingsVm.hiddenMovieGroups else settingsVm.hiddenSeriesGroups)
@@ -132,7 +176,12 @@ fun MediaTabContent(
         if (kind == MediaKind.Movies) viewModel.setSearchQuery(v) else viewModel.setSeriesSearchQuery(v)
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding(),
+    ) {
         PullToRefreshBox(
             isRefreshing = isLoading && gridItems.isNotEmpty(),
             onRefresh = { if (kind == MediaKind.Movies) viewModel.refresh() else viewModel.refreshSeries() },
@@ -149,7 +198,53 @@ fun MediaTabContent(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                item(key = "room", span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(6.dp)) }
+                item(key = "room", span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(22.dp)) }
+                if (heroPages.isNotEmpty()) {
+                    item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
+                            Text(
+                                "Continue Watching", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.padding(bottom = 10.dp),
+                            )
+                            val heroCard: @Composable (MediaHeroPage) -> Unit = { page ->
+                                val videoId = page.key.removePrefix("cw:")
+                                val play: () -> Unit = {
+                                    if (kind == MediaKind.Movies) onPlayMovie(videoId) else onEpisodeResume(videoId)
+                                }
+                                MediaHeroCard(
+                                    page = page,
+                                    onPrimary = play,
+                                    onPlayFromStart = { watchVm.delete(videoId); play() },
+                                    onDetails = { page.item?.movieUuid?.let(onMovieClick) ?: page.item?.seriesId?.let(onSeriesClick) },
+                                    onRemove = { watchVm.delete(videoId) },
+                                )
+                            }
+                            if (compact) {
+                                // Card deck spans the grid's own 16 dp gutter, so pull it back out.
+                                // The grid pads 16 dp start and 34 dp end (rail lane); the
+                                // deck wants the full window width, so widen by both.
+                                Box(modifier = Modifier.layout { measurable, constraints ->
+                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
+                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+                                }) {
+                                    PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }) { page, _ -> heroCard(page) }
+                                }
+                            } else {
+                                val pagerState = androidx.compose.foundation.pager.rememberPagerState { heroPages.size }
+                                androidx.compose.foundation.pager.HorizontalPager(
+                                    state = pagerState,
+                                    pageSize = androidx.compose.foundation.pager.PageSize.Fill,
+                                    pageSpacing = 8.dp,
+                                    contentPadding = PaddingValues(end = 0.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { heroCard(heroPages[i]) } },
+                                )
+                            }
+                        }
+                    }
+                }
                 item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
                     LibraryHeader(
                         title = if (isSearching) "Results" else kind.libraryTitle,
@@ -310,18 +405,19 @@ fun MediaPosterCard(item: MediaItem, onClick: () -> Unit, modifier: Modifier = M
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surface),
         ) {
+            // Title placeholder sits under the image so a poster that never
+            // loads (or has no URL) still names the item.
+            Text(
+                item.title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 4,
+                modifier = Modifier.align(Alignment.Center).padding(8.dp),
+            )
             if (!item.posterUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = item.posterUrl,
                     contentDescription = item.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Text(
-                    item.title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 4,
-                    modifier = Modifier.align(Alignment.Center).padding(8.dp),
                 )
             }
             val rating = item.rating?.trim().orEmpty()
