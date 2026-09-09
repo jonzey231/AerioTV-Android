@@ -200,11 +200,9 @@ fun AddToMultiviewSheet(
             com.aeriotv.android.feature.livetv.GroupSortMode.from(groupSortModeRaw),
             groupOrderPref,
         )
-        listOf(PlaylistViewModel.ALL_GROUPS) +
-            ordered.filter {
-                it !in hiddenGroups &&
-                    !it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
-            }
+        // All Channels always offered here, at its ordered position.
+        val kept = ordered.filter { it == PlaylistViewModel.ALL_GROUPS || it !in hiddenGroups }
+        if (PlaylistViewModel.ALL_GROUPS in kept) kept else listOf(PlaylistViewModel.ALL_GROUPS) + kept
     }
 
     // Recent rows: resolve LRU ids against the current playlist, capped to a

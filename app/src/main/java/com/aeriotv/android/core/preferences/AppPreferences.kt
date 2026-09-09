@@ -369,6 +369,18 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * How old the saved Movies / TV Shows library may be before a launch
+     * re-sweeps the provider: 0 = every launch, 24 = daily (default),
+     * 168 = weekly. Pull to refresh always sweeps. Apple parity:
+     * "vodLibraryRefreshHours".
+     */
+    val vodLibraryRefreshHours: Flow<Int> =
+        store.data.map { it[KEY_VOD_LIBRARY_REFRESH_HOURS] ?: 24 }
+    suspend fun setVodLibraryRefreshHours(hours: Int) {
+        store.edit { it[KEY_VOD_LIBRARY_REFRESH_HOURS] = hours }
+    }
+
+    /**
      * GH #40: opt-in output-resolution passthrough (TV boxes). When true,
      * playback switches the display mode to the content's resolution class
      * (1080p stream on a 4K panel -> 1080p output) so the TV does the
@@ -1489,6 +1501,7 @@ class AppPreferences @Inject constructor(
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
+        val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")
         val KEY_MATCH_CONTENT_RESOLUTION = booleanPreferencesKey("match_content_resolution")
         val KEY_AUTO_RECOVER_FROZEN_STREAMS =
             booleanPreferencesKey("app_behaviors_auto_recover_frozen_streams")

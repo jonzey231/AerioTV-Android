@@ -235,6 +235,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setStartupRefreshRate(value) }
     }
 
+    val vodLibraryRefreshHours: Flow<Int> = prefs.vodLibraryRefreshHours
+    fun setVodLibraryRefreshHours(hours: Int) {
+        viewModelScope.launch { prefs.setVodLibraryRefreshHours(hours) }
+    }
+
     /** GH #40: opt-in output-resolution matching on TV boxes. */
     val matchContentResolution: Flow<Boolean> = prefs.matchContentResolution
     fun setMatchContentResolution(value: Boolean) {

@@ -697,10 +697,7 @@ fun PlayerScreen(
             groupOrderPref,
         )
         com.aeriotv.android.feature.livetv.groupTokens(
-            ordered.filter {
-                it !in hiddenGroups &&
-                    !it.equals(com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
-            },
+            ordered.filter { it !in hiddenGroups },
             hiddenGroups,
         )
     }

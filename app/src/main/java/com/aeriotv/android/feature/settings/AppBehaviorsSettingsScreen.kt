@@ -98,6 +98,7 @@ fun AppBehaviorsSettingsScreen(
     val castTapStaysOnList by viewModel.castTapStaysOnList.collectAsStateWithLifecycle(initialValue = true)
     // GH #38/#40: TV-only display-mode controls.
     val startupRefreshRate by viewModel.startupRefreshRate.collectAsStateWithLifecycle(initialValue = "off")
+    val vodRefreshHours by viewModel.vodLibraryRefreshHours.collectAsStateWithLifecycle(initialValue = 24)
     val matchContentResolution by viewModel.matchContentResolution.collectAsStateWithLifecycle(initialValue = false)
     TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -339,6 +340,25 @@ fun AppBehaviorsSettingsScreen(
                         subtitle = "Output 1080p streams at 1080p and let the TV upscale. Off keeps the display at its native mode.",
                         checked = matchContentResolution,
                         onCheckedChange = viewModel::setMatchContentResolution,
+                    )
+                }
+                SettingsSection(header = "Refresh Movies and TV Shows") {
+                    listOf(
+                        0 to "Every Launch",
+                        24 to "Daily",
+                        168 to "Weekly",
+                    ).forEach { (hours, label) ->
+                        SettingsSelectionRow(
+                            label = label,
+                            selected = vodRefreshHours == hours,
+                            onClick = { viewModel.setVodLibraryRefreshHours(hours) },
+                        )
+                    }
+                    Text(
+                        text = "Live TV channels refresh on every launch. Movies and TV Shows open from the saved library and re-sweep the provider on this schedule. Pull down on either tab to refresh right away.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
                 SettingsSection(header = "Startup Refresh Rate") {

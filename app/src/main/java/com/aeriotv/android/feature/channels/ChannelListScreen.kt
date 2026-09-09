@@ -243,9 +243,7 @@ fun ChannelListScreen(
             // Drop any provider group literally named "All" -- it collides with
             // the ALL_GROUPS sentinel and crashes the pill LazyRow on a
             // duplicate key (#45 review).
-            val visible = allGroupsRaw.filterNot {
-                it in hiddenGroups || it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
-            }
+            val visible = allGroupsRaw.filterNot { it in hiddenGroups }
             com.aeriotv.android.feature.livetv.groupTokens(visible, hiddenGroups)
         }
     }

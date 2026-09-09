@@ -24,6 +24,8 @@ import com.aeriotv.android.core.network.TmdbPersonBio
 import com.aeriotv.android.core.network.XtreamCodesApi
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.preferences.VodLearnedStreamStore
+import com.aeriotv.android.core.preferences.VodLibrarySnapshotStore
+import kotlinx.coroutines.flow.first
 import com.aeriotv.android.core.preferences.VodVersionItemType
 import com.aeriotv.android.core.preferences.VodVersionSelectionStore
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
@@ -64,6 +66,7 @@ class OnDemandViewModel @Inject constructor(
     private val vodResetBus: VodResetBus,
     private val learnedStreamStore: VodLearnedStreamStore,
     private val versionSelectionStore: VodVersionSelectionStore,
+    private val snapshotStore: VodLibrarySnapshotStore,
 ) : ViewModel() {
 
     data class UiState(
@@ -185,8 +188,56 @@ class OnDemandViewModel @Inject constructor(
         initialLoadsStarted = true
         deferredStart?.cancel()
         deferredStart = null
-        refresh()
-        refreshSeries()
+        viewModelScope.launch {
+            // Open from the saved library at once; re-sweep the provider only
+            // when the snapshot is older than the user's cadence (tester ask,
+            // Freyguy1975 2026-09-07: a large XC library was re-pulled on every
+            // open). Playlist switches, Refresh Everything and pull to refresh
+            // still sweep unconditionally through refresh()/refreshSeries().
+            val playlist = playlistRepository.activePlaylist()
+            val snap = playlist?.let { snapshotStore.load(snapshotStore.identity(it)) }
+            if (snap != null) {
+                _state.update {
+                    it.copy(
+                        movies = snap.movies, totalCount = snap.movies.size,
+                        series = snap.series, seriesTotalCount = snap.series.size,
+                        movieGroupNames = snap.movieGroupNames.ifEmpty { it.movieGroupNames },
+                        seriesGroupNames = snap.seriesGroupNames.ifEmpty { it.seriesGroupNames },
+                        unsupportedSource = false, isLoading = false, isLoadingSeries = false,
+                    )
+                }
+                val ageMs = System.currentTimeMillis() - snap.savedAtMs
+                val limitMs = appPreferences.vodLibraryRefreshHours.first() * 3_600_000L
+                Log.i(TAG, "[VOD-CACHE] restored ${snap.movies.size} movies, ${snap.series.size} series from ${ageMs / 60_000} min ago")
+                if (limitMs > 0 && ageMs in 0 until limitMs) {
+                    Log.i(TAG, "[VOD-CACHE] snapshot younger than ${limitMs / 3_600_000} h; skipping launch sweep")
+                    restoredFromSnapshot = true
+                    return@launch
+                }
+            }
+            refresh()
+            refreshSeries()
+        }
+    }
+
+    /** True when the launch served the saved library and skipped the sweep. */
+    private var restoredFromSnapshot = false
+
+    /** Write the current lists as the playlist's library snapshot. */
+    private fun persistSnapshot() {
+        viewModelScope.launch {
+            val playlist = playlistRepository.activePlaylist() ?: return@launch
+            val st = _state.value
+            if (st.movies.isEmpty() && st.series.isEmpty()) return@launch
+            snapshotStore.save(
+                VodLibrarySnapshotStore.Snapshot(
+                    identity = snapshotStore.identity(playlist),
+                    savedAtMs = System.currentTimeMillis(),
+                    movies = st.movies, series = st.series,
+                    movieGroupNames = st.movieGroupNames, seriesGroupNames = st.seriesGroupNames,
+                ),
+            )
+        }
     }
 
     /** On Demand tab shown: load now instead of waiting out the startup deferral. */
@@ -592,6 +643,7 @@ class OnDemandViewModel @Inject constructor(
                         else groupsWithContent.toList().sorted(),
                 )
             }
+            if (merged.isNotEmpty()) persistSnapshot()
         }
     }
 
@@ -765,6 +817,7 @@ class OnDemandViewModel @Inject constructor(
                         else groupsWithContent.toList().sorted(),
                 )
             }
+            if (merged.isNotEmpty()) persistSnapshot()
         }
     }
 
@@ -1804,6 +1857,7 @@ class OnDemandViewModel @Inject constructor(
                 hasDeferredXtreamContent = pendingMovieCats.isNotEmpty() || pendingSeriesCats.isNotEmpty(),
             )
         }
+        if (xtreamItemsLoaded) persistSnapshot()
     }
 
     /**
@@ -1868,6 +1922,7 @@ class OnDemandViewModel @Inject constructor(
             flush()
             _state.update { it.copy(isLoading = false, isLoadingSeries = false) }
             xtreamItemsLoaded = true
+            persistSnapshot()
         }
     }
 

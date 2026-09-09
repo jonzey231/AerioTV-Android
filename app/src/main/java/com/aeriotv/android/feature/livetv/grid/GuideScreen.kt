@@ -205,9 +205,7 @@ fun GuideScreen(
     }
     val groups = remember(allGroupNames, hiddenGroups) {
         com.aeriotv.android.feature.livetv.groupTokens(
-            allGroupNames.filter {
-                it !in hiddenGroups && !it.equals(PlaylistViewModel.ALL_GROUPS, ignoreCase = true)
-            },
+            allGroupNames.filter { it !in hiddenGroups },
             hiddenGroups,
         )
     }
