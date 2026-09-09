@@ -68,6 +68,8 @@ import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 /**
  * Movies / TV Shows tab, phone and tablet (media-center redesign, Apple
@@ -171,20 +173,35 @@ fun MediaTabContent(
     val isLoading = if (kind == MediaKind.Movies) state.isLoading else state.isLoadingSeries
     val isSearching = query.isNotBlank()
 
-    val library: List<MediaItem> = remember(state.movies, state.series, kind, hiddenGroups, selectedGenre, sortOrder) {
-        val all = if (kind == MediaKind.Movies) state.movies.map { it.toMediaItem() } else state.series.map { it.toMediaItem() }
-        all.asSequence()
-            .filter { it.category == null || it.category !in hiddenGroups }
-            .filter { selectedGenre == null || it.category == selectedGenre }
-            .toList()
-            .sortedBy(sortOrder)
+    // The library build (title cleanup, diacritic folding and the sort over
+    // tens of thousands of rows) runs off the main thread; the previous list
+    // stays on screen until the new one lands. Built inline it stalled the
+    // first open of Movies for ~3 s and TV Shows for ~1 s on the Nothing
+    // Phone (Logan 2026-09-09, "switching tabs freezes for a couple seconds").
+    var libraryBuilt by remember { mutableStateOf<Pair<List<MediaItem>, Set<Char>>>(emptyList<MediaItem>() to emptySet()) }
+    val sourceMovies = state.movies
+    val sourceSeries = state.series
+    var libraryPending by remember { mutableStateOf(true) }
+    LaunchedEffect(sourceMovies, sourceSeries, kind, hiddenGroups, selectedGenre, sortOrder) {
+        libraryPending = true
+        libraryBuilt = withContext(Dispatchers.Default) {
+            val all = if (kind == MediaKind.Movies) sourceMovies.map { it.toMediaItem() } else sourceSeries.map { it.toMediaItem() }
+            val list = all.asSequence()
+                .filter { it.category == null || it.category !in hiddenGroups }
+                .filter { selectedGenre == null || it.category == selectedGenre }
+                .toList()
+                .sortedBy(sortOrder)
+            list to list.mapTo(HashSet()) { it.bucket }
+        }
+        libraryPending = false
     }
+    val library: List<MediaItem> = libraryBuilt.first
     val results: List<MediaItem> = remember(state.searchResults, state.seriesSearchResults, kind, sortOrder) {
         (if (kind == MediaKind.Movies) state.searchResults.map { it.toMediaItem() } else state.seriesSearchResults.map { it.toMediaItem() })
             .sortedBy(sortOrder)
     }
     val gridItems = if (isSearching) results else library
-    val available = remember(library) { library.map { it.bucket }.toSet() }
+    val available: Set<Char> = libraryBuilt.second
 
     // Hero backdrops (Apple parity: TMDB backdrop per hero page when a key is
     // set); the cropped poster shows until one arrives. Cached per page key.
@@ -377,7 +394,7 @@ fun MediaTabContent(
                 if (gridItems.isEmpty()) {
                     item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
-                            if (isLoading || (isSearching && (state.isSearching || state.isSearchingSeries))) CircularProgressIndicator()
+                            if (isLoading || (!isSearching && libraryPending) || (isSearching && (state.isSearching || state.isSearchingSeries))) CircularProgressIndicator()
                             else Text(if (isSearching) "No results" else kind.emptyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }

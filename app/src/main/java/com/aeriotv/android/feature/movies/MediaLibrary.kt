@@ -83,8 +83,9 @@ fun stripQualityPrefix(title: String): String {
     return t.trim()
 }
 
+private val combiningMarks = Regex("\\p{Mn}+")
 private fun foldTitle(t: String): String =
-    Normalizer.normalize(t, Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "").lowercase()
+    Normalizer.normalize(t, Normalizer.Form.NFD).replace(combiningMarks, "").lowercase()
 
 private fun bucketFor(sortKey: String): Char {
     val c = sortKey.firstOrNull { !it.isWhitespace() } ?: return '#'
