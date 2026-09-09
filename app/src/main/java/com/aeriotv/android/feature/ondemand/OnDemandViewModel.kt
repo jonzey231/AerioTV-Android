@@ -2053,7 +2053,10 @@ class OnDemandViewModel @Inject constructor(
      *  session, 2026-09-01). Cancellation is not a failure: stay silent. */
     private fun warnUnlessCancelled(message: String, t: Throwable) {
         if (t is kotlinx.coroutines.CancellationException) return
-        Log.w(TAG, message, t)
+        // Class and message inline: Android prints no stack for some network
+        // exceptions, which hid the cause of a whole class of category
+        // failures (2026-09-08).
+        Log.w(TAG, "$message: ${t::class.java.simpleName}: ${t.message}", t)
     }
 
 }
