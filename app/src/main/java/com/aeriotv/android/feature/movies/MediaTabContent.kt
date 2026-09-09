@@ -237,7 +237,19 @@ fun MediaTabContent(
         derivedStateOf { compact && !isSearching && library.size >= 9 && gridState.firstVisibleItemIndex >= 1 }
     }
     val bottomInset = LocalTabBarBottomInset.current
-    val searchRoom = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.85f).dp
+    // Bottom room while searching: only what is needed to let the header
+    // reach the top given the rows the results fill, so the list stops at
+    // the last result instead of scrolling into blank space (Logan
+    // 2026-09-09). Estimated from the 3-column poster geometry.
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val searchRoom: androidx.compose.ui.unit.Dp = run {
+        val viewport = configuration.screenHeightDp.dp
+        val cellW = (configuration.screenWidthDp.dp - 16.dp - 34.dp - 20.dp) / 3
+        val rowH = cellW * 1.5f + 62.dp + 16.dp
+        val rows = (gridItems.size + 2) / 3
+        val content = 56.dp + 72.dp + rowH * rows + bottomInset + 16.dp
+        (viewport - content).coerceAtLeast(0.dp)
+    }
 
     fun submitQuery(v: String) {
         query = v
