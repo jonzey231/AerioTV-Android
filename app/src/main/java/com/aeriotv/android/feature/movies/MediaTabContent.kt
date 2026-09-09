@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
@@ -49,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.layout
@@ -218,10 +220,23 @@ fun MediaTabContent(
     // Full-span leading items: room, header, (search), (pills).
     val leadingCount = 2 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0) +
         (if (searchActive) 1 else 0) + (if (!isSearching && genrePills.isNotEmpty()) 1 else 0)
+    // Index of the library header in the grid: room, (hero), (watchlist), header.
+    val headerIndex = 1 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0)
+    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    // Opening search scrolls the header (and the field under it) to the top
+    // so the results land in view, then focuses the field for the keyboard
+    // (Logan 2026-09-09).
+    LaunchedEffect(searchActive) {
+        if (searchActive) {
+            gridState.animateScrollToItem(headerIndex)
+            runCatching { searchFocus.requestFocus() }
+        }
+    }
     val railVisible by remember(leadingCount, library.size) {
         derivedStateOf { compact && !isSearching && library.size >= 9 && gridState.firstVisibleItemIndex >= 1 }
     }
     val bottomInset = LocalTabBarBottomInset.current
+    val searchRoom = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.85f).dp
 
     fun submitQuery(v: String) {
         query = v
@@ -245,7 +260,10 @@ fun MediaTabContent(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     start = 16.dp, end = if (compact) 16.dp + 18.dp else 16.dp,
-                    top = 0.dp, bottom = bottomInset + 16.dp,
+                    // While searching, extra bottom room keeps the header (and
+                    // the field) pinned at the top as the results narrow; the
+                    // grid shrank and the header drifted back down otherwise.
+                    top = 0.dp, bottom = bottomInset + 16.dp + (if (searchActive) searchRoom else 0.dp),
                 ),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -374,12 +392,24 @@ fun MediaTabContent(
                 }
                 if (searchActive) {
                     item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
+                        // Pill field, like every other control in the app.
                         OutlinedTextField(
                             value = query,
                             onValueChange = { submitQuery(it) },
                             placeholder = { Text(if (kind == MediaKind.Movies) "Search movies" else "Search TV shows") },
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp)
+                                .focusRequester(searchFocus),
                         )
                     }
                 }
