@@ -46,9 +46,9 @@ import kotlin.math.roundToInt
  * Stacked card deck for compact widths (Apple parity: Components.swift
  * PhoneCardDeck). The front card fills the width less a 10 dp margin and a
  * 9 dp peek per side; the next cards sit behind it stepped 9 dp right,
- * scaled 3% and faded 20% per step; the previous card parks as a 14 dp
- * sliver on the left. A horizontal drag past 60 dp commits to the next or
- * previous card and the deck wraps around. Dots below when there is more
+ * scaled 3% and faded 20% per step; nothing parks to the side. A drag
+ * left past 60 dp sends the front card to the back of the stack, a drag
+ * right brings the back card to the front; the deck wraps around. Dots below when there is more
  * than one card. Only the front card takes taps.
  */
 @Composable
@@ -68,7 +68,6 @@ fun <T> PhoneCardDeck(
     val density = LocalDensity.current
     val margin = 10.dp
     val peek = 9.dp
-    val sliver = 14.dp
     LaunchedEffect(index, count) { items.getOrNull(index)?.let(onCurrentChange) }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -78,11 +77,16 @@ fun <T> PhoneCardDeck(
             val cardWPx = with(density) { cardW.toPx() }
             val commitPx = with(density) { 60.dp.toPx() }
             val p = index - drag.value / cardWPx
+            // Positions live in [0, count): the front card at 0, the rest
+            // stacked behind it to the right. Nothing parks to the side at rest
+            // (Logan 2026-09-09). Only while a drag is in motion does a card go
+            // negative: the outgoing front card sliding off to the left (it lands
+            // at the back of the stack), or the back card sliding in from the
+            // left on a drag to the right.
             fun wrapped(rel: Float): Float {
-                var r = rel
-                while (r > count / 2f) r -= count
-                while (r <= -count / 2f) r += count
-                return r
+                var r = rel % count
+                if (r < 0f) r += count
+                return if (r > count - 1f + 0.0001f) r - count else r
             }
             val gesture = Modifier.pointerInput(count) {
                 detectHorizontalDragGestures(
@@ -114,9 +118,9 @@ fun <T> PhoneCardDeck(
                     val front = abs(rel) < 0.02f
                     val clamped = rel.coerceAtMost(3f)
                     val xDp: Dp = if (rel >= 0f) peek * clamped
-                        else -(cardW + margin - sliver) * (-rel).coerceAtMost(1f)
+                        else -(cardW + peek) * (-rel).coerceAtMost(1f)
                     val scale = if (rel >= 0f) 1f - clamped * 0.03f else 1f
-                    val alpha = if (rel >= 0f) 1f - clamped * 0.2f else 0.9f + rel.coerceAtLeast(-1f) * 0.3f
+                    val alpha = if (rel >= 0f) 1f - clamped * 0.2f else 1f
                     Box(
                         modifier = Modifier
                             .width(cardW)
