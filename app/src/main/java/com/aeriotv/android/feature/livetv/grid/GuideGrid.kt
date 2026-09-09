@@ -80,6 +80,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.History
 import com.aeriotv.android.core.remote.GuideRemoteAction
 import com.aeriotv.android.core.remote.RemoteSlot
@@ -463,6 +464,7 @@ private fun GridRow(
     val rail = com.aeriotv.android.core.ui.LocalGuideRailPrefs.current
     val shortFmt = remember(clockMode) { ClockFormat.guideShort(clockMode) }
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
+    val starPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Filled.Star)
     val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     val seam = 2f
     val padH = 8f
@@ -478,7 +480,6 @@ private fun GridRow(
     val railNumberStyle = TextStyle(color = tertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     val railNameStyle = TextStyle(color = onSurface, fontSize = 10.sp)
     val railUnderNumberStyle = TextStyle(color = tertiary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-    val railStarStyle = TextStyle(color = Color(0xFFFFA502), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     // TalkBack: one node per row (channel + what is on now). Read in
     // composition on the 30 s tick only, never per press.
     val rowDescription = remember(channel.id, nowMs / 60_000L) {
@@ -567,11 +568,13 @@ private fun GridRow(
             drawNameStack((size.height - nameH) / 2f)
         }
         if (phoneRail && isFavorite) {
-            val star = textCache.getOrPut(RAIL_STAR_KEY) {
-                CellText(textMeasurer.measure("\u2605", style = railStarStyle, maxLines = 1), null)
+            // Same 12 dp box and 4 dp top as the catch-up clock so the two sit
+            // on one line (a text glyph sat lower, Logan 2026-09-09).
+            val iconPx = 12.dp.toPx()
+            val left = railWidthPx - iconPx - 4.dp.toPx() - (if (channel.hasCatchup) iconPx + 4.dp.toPx() else 0f)
+            translate(left = left, top = 4.dp.toPx()) {
+                with(starPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color(0xFFFFA502))) }
             }
-            val right = railWidthPx - 6.dp.toPx() - (if (channel.hasCatchup) 12.dp.toPx() + 4.dp.toPx() else 0f)
-            drawText(star.title, topLeft = Offset(right - star.title.size.width, 4.dp.toPx()))
         }
         if (channel.hasCatchup) {
             val iconPx = 12.dp.toPx()
@@ -746,7 +749,6 @@ private const val MIN_CELL_PX = 6f
 private const val RAIL_NUMBER_KEY = Long.MIN_VALUE + 1
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
 private const val RAIL_UNDER_NUMBER_KEY = Long.MIN_VALUE + 3
-private const val RAIL_STAR_KEY = Long.MIN_VALUE + 4
 private val NOW_RED = Color(0xFFFF4757)
 
 private class CellText(
