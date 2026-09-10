@@ -180,6 +180,14 @@ val LocalTvChromeCollapsed =
     staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>?> { null }
 
 /**
+ * TV full-screen overlay slot: a tab sets a composable here to draw ABOVE
+ * the whole shell (tab bar included) without a Dialog window. The guide's
+ * Jump To sheet uses it so its scrim covers the bar (Logan 2026-09-10).
+ */
+val LocalTvFullScreenOverlay =
+    staticCompositionLocalOf<androidx.compose.runtime.MutableState<(@Composable () -> Unit)?>?> { null }
+
+/**
  * Top-level scaffold once a playlist is loaded. Mirrors iOS MainTabView with the
  * caveat that tabs are CONDITIONAL on content (see [visibleTabs]) - matching
  * iOS, the test-server screenshots show only 4 tabs not 5.
@@ -591,6 +599,7 @@ fun MainScaffold(
         // set this true while scrolled down so the tab bar shrinks away. See
         // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
         val chromeCollapsed = remember { mutableStateOf(false) }
+        val fullScreenOverlay = remember { mutableStateOf<(@Composable () -> Unit)?>(null) }
         val topNavHasFocusState: androidx.compose.runtime.MutableState<Boolean> = remember { mutableStateOf(false) }
         val tabEntryFocus: androidx.compose.runtime.MutableState<FocusRequester?> = remember { mutableStateOf(null) }
         CompositionLocalProvider(
@@ -598,6 +607,7 @@ fun MainScaffold(
             LocalTvTopNavHasFocus provides topNavHasFocusState,
             LocalTvTabEntryFocus provides tabEntryFocus,
             LocalTvChromeCollapsed provides chromeCollapsed,
+            LocalTvFullScreenOverlay provides fullScreenOverlay,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
             // Left edge the nav bar actually occupies. Declared at BOX scope,
@@ -788,6 +798,7 @@ fun MainScaffold(
                     }
                 }
             }
+                        fullScreenOverlay.value?.invoke()
             }
         }
         return

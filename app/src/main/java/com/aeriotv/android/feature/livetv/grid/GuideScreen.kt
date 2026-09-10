@@ -651,7 +651,10 @@ fun GuideScreen(
             hiddenGroupCount = hiddenGroups.size,
         )
     }
-    if (showJumpSheet && isTv) {
+    // TV Jump To: drawn in the shell's full-screen slot so the scrim covers
+    // the tab bar too; drawn here when no shell provides one.
+    val fullScreenSlot = com.aeriotv.android.feature.main.LocalTvFullScreenOverlay.current
+    val jumpOverlay: @Composable () -> Unit = {
         com.aeriotv.android.feature.livetv.GuideJumpTvOverlay(
             daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
             daysAhead = epgDaysAhead.coerceIn(1, 14),
@@ -659,6 +662,25 @@ fun GuideScreen(
             onBackToNow = snapToNow,
             onDismiss = { showJumpSheet = false; runCatching { gridFocus.requestFocus() } },
         )
+    }
+    if (isTv && fullScreenSlot != null) {
+        androidx.compose.runtime.DisposableEffect(showJumpSheet) {
+            fullScreenSlot.value = if (showJumpSheet) jumpOverlay else null
+            onDispose { if (fullScreenSlot.value === jumpOverlay) fullScreenSlot.value = null }
+        }
+        // The slot's teardown drops focus onto the shell's first focusable
+        // (the Refresh circle) AFTER onDismiss asked for the grid; ask again
+        // once the overlay is gone.
+        var jumpWasOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(showJumpSheet) {
+            if (showJumpSheet) { jumpWasOpen = true; return@LaunchedEffect }
+            if (!jumpWasOpen) return@LaunchedEffect
+            jumpWasOpen = false
+            repeat(3) { androidx.compose.runtime.withFrameNanos { } }
+            runCatching { gridFocus.requestFocus() }
+        }
+    } else if (showJumpSheet && isTv) {
+        jumpOverlay()
     }
     if (!isTv) {
         val drawerTokens = remember(groups, collections) {
