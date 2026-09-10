@@ -45,6 +45,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -406,6 +408,12 @@ internal fun GuideGroupSidebarPane(
                 // and 4 pt on top, halved.
                 .then(if (tv) Modifier.width(180.dp).padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 12.dp)
                       else Modifier.padding(start = 20.dp, end = 12.dp, bottom = 12.dp))
+                // tvOS lands on the ACTIVE group (defaultFocus). Route the
+                // pane's first focus entry straight to that row so focus
+                // never rests on Favorites for a frame before the
+                // LaunchedEffect moves it (Logan 2026-09-10, visible jump).
+                .focusGroup()
+                .focusProperties { @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class) run { enter = { focus } } }
                 .onPreviewKeyEvent { event ->
                     if (event.key == androidx.compose.ui.input.key.Key.DirectionRight &&
                         event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
