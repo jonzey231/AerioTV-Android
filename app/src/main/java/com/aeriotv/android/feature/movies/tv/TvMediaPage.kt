@@ -673,13 +673,21 @@ private fun TvHeroCard(
             ) {
                 // The hero menu is the right-most options circle, not a
                 // long press on Resume (Logan 2026-09-10, all platforms).
-                val buttons = if (page.longPressActions.isEmpty()) page.buttons
-                else page.buttons + TvHeroButton("", Icons.Filled.MoreHoriz, onClick = { menuOpen = true })
-                buttons.forEachIndexed { i, b ->
+                page.buttons.forEachIndexed { i, b ->
                     TvHeroButtonView(
                         button = b,
                         modifier = Modifier
                             .then(if (b.primary && primaryRequester != null) Modifier.focusRequester(primaryRequester) else Modifier)
+                            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
+                            .onFocusChanged { if (it.isFocused) onButtonFocused() },
+                    )
+                }
+                if (page.longPressActions.isNotEmpty()) {
+                    // Same 30 dp circle as the nav bar's Refresh and Search.
+                    com.aeriotv.android.ui.tv.TvActionCircle(
+                        icon = Icons.Filled.MoreHoriz, contentDescription = "Options",
+                        onClick = { menuOpen = true },
+                        modifier = Modifier
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
                             .onFocusChanged { if (it.isFocused) onButtonFocused() },
                     )
