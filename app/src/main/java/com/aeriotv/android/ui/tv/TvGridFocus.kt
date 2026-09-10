@@ -82,6 +82,12 @@ class VodReturnFocusState(
     val requester = FocusRequester()
     private val pendingKey: String? get() = pendingKeyState.value
 
+    /** The armed key, for pages that restore scroll + focus themselves (TvMediaPage). */
+    val pendingKeyOrNull: String? get() = pendingKey
+
+    /** Forget the armed key once a page has restored focus its own way. */
+    fun clear() { pendingKeyState.value = null }
+
     /** Record the item being opened so focus can return to it after BACK.
      *  Call right before the navigation callback. */
     fun arm(key: String) {
@@ -112,12 +118,16 @@ class VodReturnFocusState(
 }
 
 @Composable
-fun rememberVodReturnFocus(isTv: Boolean): VodReturnFocusState {
+fun rememberVodReturnFocus(
+    isTv: Boolean,
+    /** false for pages that restore scroll + focus themselves off [VodReturnFocusState.pendingKeyOrNull]. */
+    autoRestore: Boolean = true,
+): VodReturnFocusState {
     // The key lives in rememberSaveable so it survives the tab's disposal
     // while a detail route sits on top of MAIN. arm() writes it
     // synchronously in the click handler, before navigation saves state.
     val pendingKey = rememberSaveable { mutableStateOf<String?>(null) }
     val state = remember { VodReturnFocusState(isTv, pendingKey) }
-    LaunchedEffect(Unit) { state.restoreIfPending() }
+    if (autoRestore) LaunchedEffect(Unit) { state.restoreIfPending() }
     return state
 }

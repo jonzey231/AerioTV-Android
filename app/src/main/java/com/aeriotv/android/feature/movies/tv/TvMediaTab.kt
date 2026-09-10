@@ -26,7 +26,6 @@ import com.aeriotv.android.feature.movies.MediaKind
 import com.aeriotv.android.feature.movies.MediaSortOrder
 import com.aeriotv.android.feature.movies.formatRating
 import com.aeriotv.android.ui.tv.TvPill
-import com.aeriotv.android.ui.tv.rememberVodReturnFocus
 
 /** Poster column width on the 960 dp Streamer canvas: (880 - 30 - 8 - 6 * 12) / 7. */
 internal val TV_POSTER_WIDTH = 110.dp
@@ -78,8 +77,8 @@ internal fun TvMediaTab(
     libraryPending: Boolean,
     isSearchBusy: Boolean,
 ) {
-    val returnFocus = rememberVodReturnFocus(true)
-    val open: (MediaItem) -> Unit = { item -> returnFocus.arm(item.key); onOpen(item) }
+    val pageId = kind.name
+    val open: (MediaItem) -> Unit = { item -> TvReturnMemory.pending[pageId] = item.key; onOpen(item) }
 
     fun heroFor(page: MediaHeroPage, watchlist: Boolean): TvHeroPage {
         val item = page.item
@@ -140,7 +139,6 @@ internal fun TvMediaTab(
         TvPosterCard(
             title = page.title, year = page.year, posterUrl = page.artUrl, rating = formatRating(page.rating),
             onClick = { item?.let(open) }, modifier = modifier,
-            focusRequester = item?.let { returnFocus.requesterFor(it.key) },
             longPressActions = listOfNotNull(
                 item?.let { TvMenuAction("Details") { open(it) } },
                 item?.let { TvMenuAction("Remove from Watchlist", destructive = true) { onRemoveWatchlist(it.key) } },
@@ -196,7 +194,7 @@ internal fun TvMediaTab(
         cell = { item, scope ->
             TvPosterCard(
                 title = item.title, year = item.year, posterUrl = item.posterUrl, rating = formatRating(item.rating),
-                onClick = { open(item) }, modifier = scope.modifier, focusRequester = scope.focusRequester,
+                onClick = { open(item) }, modifier = scope.modifier,
                 longPressActions = listOf(
                     TvMenuAction("Details") { open(item) },
                     TvMenuAction(if (item.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") { onToggleWatchlist(item) },
@@ -210,6 +208,10 @@ internal fun TvMediaTab(
         isLoading = isLoading,
         railLetters = available,
         railIndexOf = { letter -> library.indexOfFirst { it.bucket == letter } },
-        cellReturnRequester = { returnFocus.requesterFor(it.key) },
+        // Snapshot at composition start: the click that ARMS the key must not
+        // restart the restore while the page is still up (it would clear the
+        // key before the detail even opened).
+        returnKey = remember { TvReturnMemory.pending[pageId] },
+        onReturnHandled = { TvReturnMemory.pending.remove(pageId) },
     )
 }

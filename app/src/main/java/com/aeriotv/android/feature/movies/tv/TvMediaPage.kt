@@ -124,6 +124,16 @@ import kotlinx.coroutines.launch
  * reaches it. BACK while scrolled snaps to the top and refocuses the hero.
  */
 
+/**
+ * Which cell opened the detail (or player) now on top of a TV page, per
+ * page. In-process only: the tab is disposed while the route sits on top,
+ * and its rememberSaveable slot did not come back on the Streamer, so the
+ * key lives here and TvMediaPage restores scroll + focus from it.
+ */
+object TvReturnMemory {
+    val pending = androidx.compose.runtime.mutableStateMapOf<String, Any>()
+}
+
 object TvPage {
     val overscan: Dp = 40.dp
     val heroInset: Dp = 8.dp
@@ -209,6 +219,12 @@ fun <T> TvMediaPage(
     railMinimumCount: Int = 1,
     /** Return-focus requester for the grid cell opened last (BACK from a detail). */
     cellReturnRequester: (T) -> FocusRequester? = { null },
+    /** BACK from a detail: the key of the cell that opened it. The page scrolls
+     *  that row in once the library is rebuilt (the list arrives empty on the
+     *  first frame after a return, which clamps the saved scroll to the top)
+     *  and refocuses the cell, then calls [onReturnHandled]. */
+    returnKey: Any? = null,
+    onReturnHandled: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -256,9 +272,14 @@ fun <T> TvMediaPage(
         LaunchedEffect(scrolled) { chromeCollapsed.value = scrolled }
         DisposableEffect(Unit) { onDispose { chromeCollapsed.value = false } }
     }
-    // BACK while scrolled: snap to the top and refocus the hero (the guide's
-    // ladder); at the top this handler stands down so BACK reaches the shell.
-    androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && scrolled) {
+    // BACK closes an open search first (tvOS: Menu closes the field before
+    // anything else), then, while scrolled, snaps to the top and refocuses
+    // the hero (the guide's ladder); at the top the handlers stand down so
+    // BACK reaches the shell.
+    androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && searchEnabled && searchActive) {
+        onSearchToggle()
+    }
+    androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && scrolled && !(searchEnabled && searchActive)) {
         scope.launch {
             gridState.animateScrollToItem(0)
             repeat(10) {
@@ -266,6 +287,28 @@ fun <T> TvMediaPage(
                 withFrameNanos { }
             }
         }
+    }
+
+    // Return from a detail: scroll the opened cell's row in and refocus it
+    // once the items exist; the initial-focus fallback (tab pill) lands
+    // first, this takes focus back when the cell composes. Bounded at ~5 s.
+    val hasItems = gridItems.isNotEmpty()
+    val restoreGapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 24.dp.roundToPx() }
+    LaunchedEffect(returnKey, hasItems) {
+        val key = returnKey ?: return@LaunchedEffect
+        if (!hasItems) return@LaunchedEffect
+        val idx = gridItems.indexOfFirst { gridKey(it) == key }
+        if (idx < 0) { onReturnHandled(); return@LaunchedEffect }
+        // tvOS parks the row 24 pt under the top edge, not flush with it.
+        runCatching { gridState.scrollToItem(leadingCount + (idx / columns) * columns, -restoreGapPx) }
+        repeat(150) {
+            withFrameNanos { }
+            if (runCatching { cellRequesters[key]?.requestFocus() }.getOrNull() == true) {
+                onReturnHandled()
+                return@LaunchedEffect
+            }
+        }
+        onReturnHandled()
     }
 
     // Rail: shown while the grid or the rail itself holds focus, once the
@@ -348,10 +391,17 @@ fun <T> TvMediaPage(
                             color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.padding(end = 5.dp),
                         )
                         if (searchEnabled && searchActive) {
+                            val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
                             TvSearchCapsule(
                                 query = query,
                                 onQueryChange = onQueryChange,
                                 placeholder = searchPlaceholder,
+                                // The IME's search key closes the keyboard and
+                                // drops focus onto the results.
+                                onSearch = {
+                                    keyboard?.hide()
+                                    focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
+                                },
                             )
                         }
                         if (searchEnabled) {

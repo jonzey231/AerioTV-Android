@@ -699,7 +699,7 @@ private fun TvDvrPage(
         onPill = { label -> onKind(kindPills.firstOrNull { it.label == label }) },
         gridItems = filteredLibrary,
         gridKey = { it.id },
-        cell = { rec, cellScope -> card(rec, cellScope.modifier) { onPlay(rec) } },
+        cell = { rec, cellScope -> card(rec, cellScope.modifier) { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] = rec.id; onPlay(rec) } },
         emptyContent = {
             if (isLoading) CircularProgressIndicator()
             else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -708,5 +708,7 @@ private fun TvDvrPage(
         railLetters = available,
         railIndexOf = { letter -> filteredLibrary.indexOfFirst { bucket(it.title) == letter } },
         railMinimumCount = 16,
+        returnKey = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] },
+        onReturnHandled = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending.remove("dvr") },
     )
 }
