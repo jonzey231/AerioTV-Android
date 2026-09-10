@@ -356,6 +356,13 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** TV Live TV layout (tvOS parity 2026-09-10): "basic" or "preview". Per device. */
+    val liveTvLayout: StateFlow<String> = prefs.liveTvLayout
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "basic")
+    fun setLiveTvLayout(value: String) {
+        viewModelScope.launch { prefs.setLiveTvLayout(value) }
+    }
+
     // Network (Phase 8c)
     val networkTimeoutSecs: Flow<Double> = prefs.networkTimeoutSecs
     fun setNetworkTimeoutSecs(value: Double) {

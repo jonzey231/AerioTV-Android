@@ -86,6 +86,7 @@ fun AppBehaviorsSettingsScreen(
     val autoResumeLastChannel by viewModel.autoResumeLastChannel.collectAsStateWithLifecycle(initialValue = false)
     val defaultTab by viewModel.defaultTab.collectAsStateWithLifecycle(initialValue = "")
     val defaultLiveTVView by viewModel.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
+    val liveTvLayout by viewModel.liveTvLayout.collectAsStateWithLifecycle(initialValue = "basic")
     val programPostersTmdb by viewModel.programPostersTmdbEnabled.collectAsStateWithLifecycle(initialValue = false)
     val audioPassthrough by viewModel.audioPassthroughEnabled.collectAsStateWithLifecycle(initialValue = false)
     val savedTmdbKey by viewModel.tmdbApiKey.collectAsStateWithLifecycle(initialValue = "")
@@ -168,13 +169,10 @@ fun AppBehaviorsSettingsScreen(
                 footer = "The tab shown when the app first launches.",
             ) {
                 // Search is a TV-only nav tab and not a sensible launch tab;
-                // on phones it does not exist at all.
-                // TV still hosts On Demand; phone and tablet have Movies + TV Shows.
-                val tabIsTv = rememberIsTvDevice()
+                // on phones it does not exist at all. On Demand and Favorites
+                // are no longer tabs on any form factor (media center 2026-09-10).
                 AppTab.entries.filter {
-                    it != AppTab.Search &&
-                        (if (tabIsTv) it != AppTab.Movies && it != AppTab.TVShows
-                         else it != AppTab.OnDemand && it != AppTab.Favorites)
+                    it != AppTab.Search && it != AppTab.OnDemand && it != AppTab.Favorites
                 }.forEach { tab ->
                     val selected = (defaultTab.isEmpty() && tab == AppTab.LiveTV) ||
                         defaultTab == tab.name
@@ -199,6 +197,27 @@ fun AppBehaviorsSettingsScreen(
                         label = label,
                         selected = current == value,
                         onClick = { viewModel.setDefaultLiveTVView(value) },
+                    )
+                }
+            }
+
+            // TV Live TV layout (tvOS AppBehaviorsSettingsView "Live TV
+            // Layout", Logan 2026-09-05): Basic keeps full details in every
+            // cell; Channel Preview shows the highlighted program in a banner
+            // above the guide and the cells keep the title and tags.
+            if (isTv) {
+                SettingsSection(header = "Live TV Layout") {
+                    SettingsSelectionRow(
+                        label = "Basic",
+                        subtitle = "Full program details in every guide cell",
+                        selected = liveTvLayout != "preview",
+                        onClick = { viewModel.setLiveTvLayout("basic") },
+                    )
+                    SettingsSelectionRow(
+                        label = "Channel Preview",
+                        subtitle = "A banner shows the highlighted program; cells keep the title and tags",
+                        selected = liveTvLayout == "preview",
+                        onClick = { viewModel.setLiveTvLayout("preview") },
                     )
                 }
             }

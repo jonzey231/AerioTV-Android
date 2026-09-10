@@ -265,6 +265,15 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_DEFAULT_LIVE_TV_VIEW] = value }
     }
 
+    /** TV Live TV layout: "basic" (full details in every cell) or "preview"
+     *  (Channel Preview banner above the guide, cells keep title and tags).
+     *  Mirrors tvOS `@AppStorage("liveTVLayout")`; per device. */
+    val liveTvLayout: Flow<String> = store.data.map { prefs -> prefs[KEY_LIVE_TV_LAYOUT] ?: "basic" }
+
+    suspend fun setLiveTvLayout(value: String) {
+        store.edit { it[KEY_LIVE_TV_LAYOUT] = value }
+    }
+
     // ── App Behaviors ────────────────────────────────────────────────────
 
     /**
@@ -1514,6 +1523,7 @@ class AppPreferences @Inject constructor(
         val KEY_PLAYER_ASPECT_MODE = stringPreferencesKey("player_aspect_mode")
         val KEY_CUSTOM_ACCENT_HEX = stringPreferencesKey("custom_accent_hex")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")
+        val KEY_LIVE_TV_LAYOUT = stringPreferencesKey("live_tv_layout")
         val KEY_SKIP_LOADING_SCREEN = booleanPreferencesKey("app_behaviors_skip_loading_screen")
         val KEY_AUTO_ROTATE = booleanPreferencesKey("app_behaviors_auto_rotate")
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")

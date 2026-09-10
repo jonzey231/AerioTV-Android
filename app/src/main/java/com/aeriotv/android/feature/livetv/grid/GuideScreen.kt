@@ -210,7 +210,12 @@ fun GuideScreen(
     // the iPad), so they are taller. Phone = smallest width under 600dp,
     // so a rotated phone keeps the tall rows like the iPhone does.
     val isPhoneIdiom = !isTv && LocalConfiguration.current.smallestScreenWidthDp < 600
-    val rowHeight = if (isTv) 55.dp * tvComfortScale * fontScale else if (isPhoneIdiom) 98.dp else 72.dp
+    // Channel Preview (tvOS "Live TV Layout", Logan 2026-09-05): a banner
+    // above the guide carries the focused program; rows keep title + tags
+    // and are shorter (tvOS 96 vs 110 pt).
+    val liveTvLayout by settingsVm.liveTvLayout.collectAsStateWithLifecycle()
+    val previewMode = isTv && liveTvLayout == "preview"
+    val rowHeight = if (isTv) (if (previewMode) 48.dp else 55.dp) * tvComfortScale * fontScale else if (isPhoneIdiom) 98.dp else 72.dp
     val headerHeight = if (isTv) 25.dp * tvComfortScale * fontScale else 32.dp
 
     // Clock: 30 s tick for the now-line and the airing tint.
@@ -339,6 +344,14 @@ fun GuideScreen(
 
     val gridFocus = remember { FocusRequester() }
     val pillsFocus = remember { FocusRequester() }
+    val bannerFocus = remember { FocusRequester() }
+    val previewProgram: EPGProgramme? = if (previewMode) grid.focusedCell() else null
+    val previewChannel: M3UChannel? = if (previewMode && grid.focusRow in 0 until grid.rows.size) grid.rows.channel(grid.focusRow) else null
+    if (previewMode) {
+        val pl = state.playlist
+        com.aeriotv.android.feature.livetv.grid.ActivePlaylistBase.baseUrl = pl?.urlString
+        com.aeriotv.android.feature.livetv.grid.ActivePlaylistBase.playlistId = pl?.id
+    }
     var programInfoTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var recordTarget by remember { mutableStateOf<ProgramInfoTarget?>(null) }
     var menuFor by remember { mutableStateOf<Pair<M3UChannel, EPGProgramme>?>(null) }
@@ -515,6 +528,23 @@ fun GuideScreen(
                 )
             }
         }
+        if (previewMode) {
+            val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
+            val pillsShown = !sidebarGroupMode && !favoritesOnly
+            GuidePreviewBanner(
+                program = previewProgram,
+                channel = previewChannel,
+                nowMs = nowMs,
+                onOpenInfo = {
+                    previewProgram?.let { cell ->
+                        programInfoTarget = cell.toInfoTarget(previewChannel?.name ?: "", previewChannel?.dispatcharrChannelId)
+                    }
+                },
+                descriptionFocus = bannerFocus,
+                downTarget = if (pillsShown) pillsFocus else gridFocus,
+                upTarget = topNav,
+            )
+        }
         if (isTv && !sidebarGroupMode && !favoritesOnly) GroupPills(
             onManageGroups = { showManageGroups = true },
             hiddenGroupCount = hiddenGroups.size,
@@ -563,11 +593,16 @@ fun GuideScreen(
                 // selection-follows-focus, switched to Live TV.
                 onLeaveTop = {
                     when {
+                        // Channel Preview with no pill row: the banner's
+                        // description is the next stop above the clock.
+                        previewMode && (favoritesOnly || sidebarGroupMode) && previewProgram?.description?.isNotBlank() == true ->
+                            runCatching { bannerFocus.requestFocus() }.getOrDefault(false)
                         favoritesOnly -> guideFocusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
                         sidebarGroupMode -> false
                         else -> runCatching { pillsFocus.requestFocus() }.isSuccess
                     }
                 },
+                compact = previewMode,
                 remoteAction = { slot -> remoteMap.guideAction(slot) },
                 holdLeftOpensGroups = sidebarGroupMode,
                 onHostAction = hostAction,

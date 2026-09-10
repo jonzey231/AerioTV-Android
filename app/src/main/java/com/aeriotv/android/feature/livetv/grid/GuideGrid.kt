@@ -130,6 +130,8 @@ fun GuideGrid(
     onClockTap: () -> Unit = {},
     /** Clock cell long press: open Jump To. */
     onClockLongPress: () -> Unit = {},
+    /** Channel Preview layout: cells keep the title and tags (the banner carries the rest). */
+    compact: Boolean = false,
 ) {
     val density = LocalDensity.current
     val hourWidthPx = with(density) { hourWidth.toPx() }
@@ -357,6 +359,7 @@ fun GuideGrid(
                     railWidth = railWidth,
                     pxPerMs = pxPerMs,
                     gridFocused = gridFocused && !clockSelected,
+                    compact = compact,
                     isFavorite = rows.channel(row).id in favoriteIds,
                     recordingWindows = rows.channel(row).dispatcharrChannelId?.let { recordingWindows[it] } ?: emptyList(),
                     textMeasurer = textMeasurer,
@@ -478,6 +481,7 @@ private fun GridRow(
     onPlay: (M3UChannel, EPGProgramme) -> Unit,
     onOpenMenu: (M3UChannel, EPGProgramme) -> Unit,
     onTapFocus: (Int, EPGProgramme) -> Unit,
+    compact: Boolean = false,
 ) {
     val channel = state.rows.channel(row)
     val colors = MaterialTheme.colorScheme
@@ -675,7 +679,7 @@ private fun GridRow(
                     // have room for TWO description lines under the title and
                     // subtitle; the 72dp / TV rows keep one.
                     val descLines = if (size.height >= 90.dp.toPx()) 2 else 1
-                    val key = (cell.startMillis * 31 + textW) * 4 + descLines
+                    val key = ((cell.startMillis * 31 + textW) * 4 + descLines) * 2 + (if (compact) 1 else 0)
                     val text = textCache.getOrPut(key) {
                         fun measure(t: String, st: TextStyle, maxH: Float, ellipsis: Boolean = true, lines: Int = 1) = textMeasurer.measure(
                             text = t, style = st, maxLines = lines,
@@ -683,7 +687,15 @@ private fun GridRow(
                             constraints = Constraints(maxWidth = textW, maxHeight = maxH.toInt().coerceAtLeast(1)),
                         )
                         val title = measure(cell.title, if (cell.isPlaceholder) titleDimStyle else titleStyle, 20.sp.toPx())
-                        if (cell.isPlaceholder || !tall) CellText(title, null) else {
+                        if (cell.isPlaceholder || !tall) CellText(title, null) else if (compact) {
+                            // Channel Preview: title, then the S/E pill and
+                            // flag badges on the bottom line; the banner
+                            // carries the time and the description.
+                            val pill = if (showBadges) cell.seasonEpisodeLabel()?.let { measure(it, pillStyle, 12.sp.toPx(), ellipsis = false) } else null
+                            val badges = if (showBadges) cell.epgFlags().filter { it.label !in hiddenBadges }
+                                .map { measure(it.label, badgeStyle, 12.sp.toPx(), ellipsis = false) to it.color } else emptyList()
+                            CellText(title, null, null, null, pill, badges)
+                        } else {
                             // Apple parity: the sub-title never double-prints
                             // the title or the description (feeds that promote
                             // sub-title into <desc>), and the Appearance
@@ -726,6 +738,27 @@ private fun GridRow(
                         drawText(text.title, topLeft = Offset(titleX, y)); y += text.title.size.height - 1.dp.toPx()
                         text.sub?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
                         text.desc?.let { drawText(it, topLeft = Offset(x, y)); y += it.size.height - 1.dp.toPx() }
+                        if (text.range == null && (text.pill != null || text.badges.isNotEmpty())) {
+                            // Compact cell: chips alone on the row floor.
+                            val chipH = text.title.size.height - 4.dp.toPx()
+                            val chipY = size.height - 3.dp.toPx() - chipH
+                            var bx = x
+                            text.pill?.let { pill ->
+                                val cw = pill.size.width + 5.dp.toPx()
+                                if (bx + cw <= x0 + w) {
+                                    drawRoundRect(outline, topLeft = Offset(bx, chipY), size = Size(cw, chipH), cornerRadius = CornerRadius(3.dp.toPx()), style = Stroke(width = 1.dp.toPx()))
+                                    drawText(pill, topLeft = Offset(bx + 2.5.dp.toPx(), chipY + (chipH - pill.size.height) / 2f))
+                                }
+                                bx += cw + 4.dp.toPx()
+                            }
+                            for ((badge, color) in text.badges) {
+                                val cw = badge.size.width + 5.dp.toPx()
+                                if (bx + cw > x0 + w) break
+                                drawRoundRect(color, topLeft = Offset(bx, chipY), size = Size(cw, chipH), cornerRadius = CornerRadius(3.dp.toPx()))
+                                drawText(badge, topLeft = Offset(bx + 2.5.dp.toPx(), chipY + (chipH - badge.size.height) / 2f))
+                                bx += cw + 3.dp.toPx()
+                            }
+                        }
                         text.range?.let { time ->
                             // Bottom line sits on the row floor; the lines above stack from the top.
                             // Phone rows (iPhone): time on its own line, the S/E pill and
