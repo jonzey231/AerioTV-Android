@@ -711,12 +711,16 @@ fun TvHeroButtonView(
                 shape = CircleShape,
             )
             .combinedClickable(interactionSource = interaction, indication = null, onClick = button.onClick, onLongClick = onLongClick)
-            .padding(horizontal = 13.dp),
+            // Measured against the Apple TV (Logan 2026-09-10): the tvOS
+            // label renders a ~20 pt cap height in the 60 pt pill, so the
+            // Roboto label is 13.5 sp (not the nominal 22 pt halved) with a
+            // 13 dp glyph and 11 dp sides to keep the pill width equal.
+            .padding(horizontal = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(button.icon, contentDescription = null, tint = ink, modifier = Modifier.size(11.dp))
-        Text(button.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
+        Icon(button.icon, contentDescription = null, tint = ink, modifier = Modifier.size(13.dp))
+        Text(button.label, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
     }
 }
 
