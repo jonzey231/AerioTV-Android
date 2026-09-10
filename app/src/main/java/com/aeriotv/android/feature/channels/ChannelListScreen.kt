@@ -1618,8 +1618,8 @@ private fun UpcomingProgrammeRow(
                 color = MaterialTheme.colorScheme.tertiary,
             )
         }
-        // One source of truth for the long-press actions; rendered as an
-        // anchored DropdownMenu on phone and as the shared centered
+        // One source of truth for the long-press actions; rendered as the
+        // Material bottom sheet on phone and as the shared centered
         // TvActionMenuDialog on TV (reachable via the Favorites tab).
         val menuActions = buildList {
             // Catch-up (task #137): a replayable aired programme leads with
@@ -1659,24 +1659,15 @@ private fun UpcomingProgrammeRow(
                     onDismiss = { menuOpen = false },
                 )
             }
-        } else {
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-            ) {
-                // Phone menu stays text-only, exactly as it was before the
-                // actions list was hoisted; the icons are TV-dialog chrome.
-                menuActions.forEach { action ->
-                    DropdownMenuItem(
-                        text = { Text(action.label) },
-                        onClick = menuGuard.wrap {
-                            menuOpen = false
-                            action.onClick()
-                        },
-                    )
-                }
-            }
+        } else if (menuOpen) {
+            // Phone and tablet: the same Material 3 modal bottom sheet the
+            // guide cell and the channel row use (Logan 2026-09-09).
+            com.aeriotv.android.feature.livetv.LiveTvActionSheet(
+                title = programme.title.ifBlank { channelName },
+                subtitle = channelName,
+                actions = menuActions,
+                onDismiss = { menuOpen = false },
+            )
         }
     }
 }
