@@ -49,7 +49,9 @@ fun AlphabetRail(
     }
     Column(
         modifier = modifier
-            .width(34.dp)
+            // Narrow lane at the screen edge: only needs to be tappable
+            // (Logan 2026-09-09); the grid no longer reserves room for it.
+            .width(20.dp)
             .height(cell * railLetters.size)
             .pointerInput(Unit) {
                 detectTapGestures(onPress = { lastChosen = null; choose(it.y) })
