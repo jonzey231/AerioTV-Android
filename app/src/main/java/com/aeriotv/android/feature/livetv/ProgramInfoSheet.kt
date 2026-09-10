@@ -300,11 +300,17 @@ private fun TvProgramInfoCard(
                 target.seasonEpisodeLabel()?.let { TvInfoColumn("Episode", it) }
             }
             target.recording?.let { facts ->
-                androidx.compose.foundation.layout.FlowRow(
+                // tvOS: one row, Status included; the Window value wraps
+                // after "to" so the row holds every column.
+                Row(
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top,
                     modifier = Modifier.padding(top = 5.dp),
-                ) { facts.rows().forEach { (label, value) -> TvInfoColumn(label, value) } }
+                ) {
+                    facts.rows().forEach { (label, value) ->
+                        TvInfoColumn(label, if (label == "Window") value.replace(" to ", " to\n") else value)
+                    }
+                }
             }
         }
     }
@@ -318,8 +324,9 @@ private fun TvProgramInfoCard(
         fontSize = 12.sp, lineHeight = 16.sp,
         fontStyle = if (target.description.isBlank()) FontStyle.Italic else FontStyle.Normal,
         color = if (target.description.isBlank()) colors.tertiary else colors.onBackground,
+        // tvOS TVFocusableBlock: the platter hugs the text, it is not a
+        // full-width bar (Logan 2026-09-10).
         modifier = Modifier
-            .fillMaxWidth()
             .offset(x = (-8).dp)
             .focusRequester(descFocus)
             .onFocusChanged { descFocused = it.isFocused }

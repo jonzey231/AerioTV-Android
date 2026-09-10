@@ -279,15 +279,17 @@ fun DvrMediaTabContent(
         val ext = (rec.fileName ?: rec.playbackUrl ?: "").substringAfterLast('.', "").takeIf { it.length in 2..5 && !it.contains('/') }
         infoTarget = ProgramInfoTarget(
             channelName = channelName(rec), title = rec.title.ifBlank { "Recording" },
-            startMillis = rec.startMillis, endMillis = rec.endMillis,
+            // tvOS: "Airs" is the guide programme's airing, the recording
+            // window sits in the facts row below.
+            startMillis = rec.programStartMillis ?: rec.startMillis, endMillis = rec.programEndMillis ?: rec.endMillis,
             description = rec.description, category = rec.category,
             channelDispatcharrId = rec.dispatcharrChannelId, dispatcharrProgramId = rec.programId,
-            subTitle = rec.subTitle, season = rec.season, episode = rec.episode,
+            subTitle = rec.subTitle, season = rec.season, episode = rec.episode, isNew = rec.isNew,
             recording = RecordingFacts(
                 recordedOnMillis = rec.startMillis, windowStartMillis = rec.startMillis, windowEndMillis = rec.endMillis,
                 fileSizeBytes = rec.fileSizeBytes,
                 format = if (ext.equals("m3u8", true)) "HLS" else ext,
-                location = if (rec.source == DvrViewModel.Source.Local) "This device" else (playlistState.playlist?.name ?: "Dispatcharr"),
+                location = if (rec.source == DvrViewModel.Source.Local) "This device" else (playlistState.playlist?.name?.takeIf { it.isNotBlank() } ?: "Dispatcharr"),
                 status = statusLabel,
                 videoCodec = rec.videoCodec, resolution = rec.resolution, frameRate = rec.frameRate,
                 videoBitrateKbps = rec.videoBitrateKbps, audioCodec = rec.audioCodec, audioChannels = rec.audioChannels,

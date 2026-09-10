@@ -123,6 +123,10 @@ class DvrViewModel @Inject constructor(
         /** Dispatcharr "interrupted": a partial file. tvOS badges only this, never a user stop. */
         val partial: Boolean = false,
         val subTitle: String? = null,
+        /** The guide programme's own airing (tvOS Program Info "Airs"); the recording window is startMillis/endMillis. */
+        val programStartMillis: Long? = null,
+        val programEndMillis: Long? = null,
+        val isNew: Boolean = false,
         val season: Int? = null,
         val episode: Int? = null,
         val fileName: String? = null,
@@ -257,7 +261,11 @@ class DvrViewModel @Inject constructor(
     private val artMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val backdropCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val backdropMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
-    private data class Identity(val subTitle: String?, val season: Int?, val episode: Int?)
+    private data class Identity(
+        val subTitle: String?, val season: Int?, val episode: Int?,
+        val programStartMillis: Long, val programEndMillis: Long,
+        val isNew: Boolean, val category: String,
+    )
     private val identityCache = java.util.concurrent.ConcurrentHashMap<String, Identity>()
     private val identityMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     /** One TMDB details call per title and kind for the session (tvOS tmdbEntries). */
@@ -295,14 +303,18 @@ class DvrViewModel @Inject constructor(
                 val clean = rec.title.replace(Regex("""\s*\((\d{4})\)\s*$"""), "").trim()
                 val isMovie = isMovieLike(rec)
                 // Episode identity from the guide (local rows never carry it).
-                val needsIdentity = (rec.subTitle.isNullOrBlank() || rec.season == null) &&
+                val needsIdentity = (rec.subTitle.isNullOrBlank() || rec.season == null || rec.programStartMillis == null) &&
                     rec.id !in identityMisses && !identityCache.containsKey(rec.id)
                 if (needsIdentity) {
                     val hit = runCatching {
                         epgProgrammeDao.forPlaylistInWindow(playlist.id, rec.startMillis, rec.endMillis)
-                            .firstOrNull { it.title == rec.title && (it.subTitle != null || it.season != null) }
+                            .filter { it.title == rec.title }
+                            .let { m -> m.firstOrNull { it.subTitle != null || it.season != null } ?: m.firstOrNull() }
                     }.getOrNull()
-                    if (hit != null) { identityCache[rec.id] = Identity(hit.subTitle, hit.season, hit.episode); changed = true }
+                    if (hit != null) {
+                        identityCache[rec.id] = Identity(hit.subTitle, hit.season, hit.episode, hit.startMillis, hit.endMillis, hit.isNew, hit.category)
+                        changed = true
+                    }
                     else identityMisses += rec.id
                 }
                 if (rec.posterUrl.isNullOrBlank() && rec.id !in artMisses && !artCache.containsKey(rec.id)) {
@@ -343,6 +355,10 @@ class DvrViewModel @Inject constructor(
                 subTitle = out.subTitle?.takeIf { it.isNotBlank() } ?: id.subTitle,
                 season = out.season ?: id.season,
                 episode = out.episode ?: id.episode,
+                programStartMillis = out.programStartMillis ?: id.programStartMillis,
+                programEndMillis = out.programEndMillis ?: id.programEndMillis,
+                isNew = out.isNew || id.isNew,
+                category = out.category.ifBlank { id.category },
             )
         }
         return out
