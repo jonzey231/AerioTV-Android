@@ -64,6 +64,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -569,6 +570,13 @@ fun GuideScreen(
                 // tvOS: Down from the description lands on the clock when
                 // there is no pill row between them.
                 onDown = if (pillsShown) null else ({ clockSelectTrigger += 1; true }),
+                // tvOS pulls the banner 28 pt up under the tab bar so eight
+                // rows still fit (ChannelListView, Logan 2026-09-05); halved.
+                modifier = Modifier.layout { measurable, constraints ->
+                    val lift = 14.dp.roundToPx()
+                    val placeable = measurable.measure(constraints)
+                    layout(placeable.width, (placeable.height - lift).coerceAtLeast(0)) { placeable.placeRelative(0, -lift) }
+                },
             )
         }
         if (isTv && !sidebarGroupMode && !favoritesOnly) GroupPills(
