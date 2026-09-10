@@ -89,14 +89,23 @@ fun GuideJumpSheet(
         FormFactorModal(onDismiss = onDismiss, tvWidthFraction = 0.62f, sheetMaxWidth = 600.dp) {
             Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                 Text("Jump To", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                // Days in three groups (Logan 2026-09-10): Today, Upcoming, Previous.
+                // Days in three groups (Logan 2026-09-10): Today, Upcoming,
+                // Previous. Labels are formatted once; each group is a single
+                // horizontally scrolling row like the tvOS pill rows.
+                val dayLabels = remember(dayOffsets) { dayOffsets.associateWith { dayLabel(it) } }
                 @Composable
                 fun dayGroup(title: String, offsets: List<Int>) {
                     if (offsets.isEmpty()) return
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            offsets.forEach { offset -> com.aeriotv.android.ui.tv.TvPill(dayLabel(offset), dayOffset == offset, onClick = { dayOffset = offset }) }
+                        androidx.compose.foundation.lazy.LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 3.dp),
+                        ) {
+                            items(offsets.size, key = { offsets[it] }) { i ->
+                                val offset = offsets[i]
+                                com.aeriotv.android.ui.tv.TvPill(dayLabels[offset] ?: dayLabel(offset), dayOffset == offset, onClick = { dayOffset = offset })
+                            }
                         }
                     }
                 }
@@ -105,9 +114,13 @@ fun GuideJumpSheet(
                 dayGroup("Previous", dayOffsets.filter { it < 0 }.reversed())
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Time", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    androidx.compose.foundation.lazy.LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 3.dp),
+                    ) {
                         // tvOS labels carry no hour; the summary line shows the time.
-                        slots.forEach { (label, hour) ->
+                        items(slots.size, key = { slots[it].second }) { i ->
+                            val (label, hour) = slots[i]
                             com.aeriotv.android.ui.tv.TvPill(label, slotHour == hour, onClick = { slotHour = hour })
                         }
                     }
