@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -636,7 +637,7 @@ private fun TvHeroCard(
                 val c = if (page.eyebrowColor == Color.Unspecified) MaterialTheme.colorScheme.primary else page.eyebrowColor
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (page.eyebrowDot) Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(c))
-                    Text(eyebrow, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = c)
+                    Text(eyebrow, fontSize = 9.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold, color = c)
                 }
             }
             Text(
@@ -644,17 +645,17 @@ private fun TvHeroCard(
                 color = MaterialTheme.colorScheme.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
             page.subtitle?.takeIf { it.isNotBlank() }?.let {
-                Text(it, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(it, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (page.meta.isNotEmpty() || !page.rating.isNullOrBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        page.meta.joinToString(" · "), fontSize = 10.sp, fontWeight = FontWeight.Medium,
+                        page.meta.joinToString(" · "), fontSize = 10.sp, lineHeight = 13.sp, fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                     page.rating?.takeIf { it.isNotBlank() }?.let { r ->
                         Text(
-                            (if (page.meta.isEmpty()) "" else " · ") + "★ $r", fontSize = 10.sp, fontWeight = FontWeight.Medium,
+                            (if (page.meta.isEmpty()) "" else " · ") + "★ $r", fontSize = 10.sp, lineHeight = 13.sp, fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.primary, maxLines = 1,
                         )
                     }
