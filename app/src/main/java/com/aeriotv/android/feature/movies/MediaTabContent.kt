@@ -625,7 +625,7 @@ private fun GenrePills(pills: List<String>, selected: String?, onSelect: (String
  * padding restores the 16 dp lead.
  */
 @Composable
-private fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+internal fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact
     val endLane = if (compact) 16.dp + 18.dp else 16.dp
     Box(modifier = Modifier.layout { measurable, constraints ->
@@ -642,7 +642,7 @@ private fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyList
 }
 
 @Composable
-private fun GenrePill(label: String, selected: Boolean, onClick: () -> Unit) {
+internal fun GenrePill(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .clip(CircleShape)

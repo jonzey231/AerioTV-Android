@@ -417,10 +417,11 @@ fun DvrMediaTabContent(
                         }
                         if (kindsPresent.size > 1) {
                             item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    item { KindPill("All", selectedKind == null) { selectedKind = null } }
+                                // Same pill and edge-to-edge row as Movies (Logan 2026-09-09).
+                                com.aeriotv.android.feature.movies.EdgeToEdgePillRow {
+                                    item { com.aeriotv.android.feature.movies.GenrePill("All", selectedKind == null) { selectedKind = null } }
                                     DvrKind.entries.filter { it in kindsPresent }.forEach { k ->
-                                        item(key = k.name) { KindPill(k.label, selectedKind == k) { selectedKind = if (selectedKind == k) null else k } }
+                                        item(key = k.name) { com.aeriotv.android.feature.movies.GenrePill(k.label, selectedKind == k) { selectedKind = if (selectedKind == k) null else k } }
                                     }
                                 }
                             }
@@ -505,18 +506,6 @@ private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, car
                 pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { card(items[i]) } },
             )
         }
-    }
-}
-
-@Composable
-private fun KindPill(label: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier.clip(CircleShape)
-            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 8.dp),
-    ) {
-        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-             color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
