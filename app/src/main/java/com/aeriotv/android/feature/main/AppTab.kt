@@ -8,12 +8,14 @@ import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.OndemandVideo
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.RadioButtonChecked
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -55,8 +57,10 @@ enum class AppTab(
     DVR(
         id = "dvr",
         label = "DVR",
-        iconSelected = Icons.Filled.Tv,
-        iconUnselected = Icons.Outlined.Tv,
+        // iOS parity (record.circle): the Tv glyph doubled as the
+        // Control-a-TV button once the bar minimized (Logan 2026-09-09).
+        iconSelected = Icons.Filled.RadioButtonChecked,
+        iconUnselected = Icons.Outlined.RadioButtonChecked,
     ),
     OnDemand(
         id = "ondemand",

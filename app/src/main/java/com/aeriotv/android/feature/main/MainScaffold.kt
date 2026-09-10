@@ -991,12 +991,14 @@ fun MainScaffold(
                 // first (task #255: this used to be companion-only while the
                 // player's picker also listed cast devices). Hidden while
                 // already controlling / casting (their cards take over).
-                if ((companionDevices.isNotEmpty() ||
+                val showControlFab = (companionDevices.isNotEmpty() ||
                         castState !is com.aeriotv.android.core.cast.AerioCastSender.State.Unavailable) &&
                     companionConn !is com.aeriotv.android.core.cast.companion
                         .CompanionRemoteController.Conn.Connected &&
                     !casting && !isTv
-                ) {
+                // While the bar is minimized the button drops level with the
+                // pill in the bottom-left corner instead (below).
+                if (showControlFab && (bottomBarVisible || topTabBar)) {
                     Box(
                         Modifier.fillMaxWidth().padding(end = 16.dp),
                         contentAlignment = Alignment.CenterEnd,
@@ -1121,11 +1123,21 @@ fun MainScaffold(
                                 modifier = Modifier.padding(bottom = 8.dp),
                             )
                         } else {
-                            MinimizedTabPill(
-                                tab = selectedTab,
-                                onClick = { bottomBarVisible = true },
-                                modifier = Modifier.padding(start = 20.dp, bottom = 8.dp),
-                            )
+                            // Minimized: pill bottom-left, Control-a-TV button
+                            // bottom-right at the same height so the two
+                            // corners match (Logan 2026-09-09, both platforms).
+                            Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                MinimizedTabPill(
+                                    tab = selectedTab,
+                                    onClick = { bottomBarVisible = true },
+                                    modifier = Modifier.padding(start = 20.dp),
+                                )
+                                if (showControlFab) {
+                                    Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)) {
+                                        CompanionControlFab(onClick = { showCompanionPicker = true })
+                                    }
+                                }
+                            }
                         }
                     }
                 }
