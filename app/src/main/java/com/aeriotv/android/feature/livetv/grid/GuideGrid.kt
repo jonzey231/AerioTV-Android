@@ -688,13 +688,16 @@ private fun GridRow(
                         )
                         val title = measure(cell.title, if (cell.isPlaceholder) titleDimStyle else titleStyle, 20.sp.toPx())
                         if (cell.isPlaceholder || !tall) CellText(title, null) else if (compact) {
-                            // Channel Preview: title, then the S/E pill and
-                            // flag badges on the bottom line; the banner
-                            // carries the time and the description.
+                            // Channel Preview (tvOS): title, the subtitle
+                            // line, then the S/E pill and flag badges on the
+                            // bottom line; the banner carries the time and
+                            // the description.
+                            val sub = cell.subTitle?.takeIf { showSubtitles && !subtitleIsRedundant(it, cell.title, cell.description) }
+                                ?.let { measure(it, subStyle, 15.sp.toPx()) }
                             val pill = if (showBadges) cell.seasonEpisodeLabel()?.let { measure(it, pillStyle, 12.sp.toPx(), ellipsis = false) } else null
                             val badges = if (showBadges) cell.epgFlags().filter { it.label !in hiddenBadges }
                                 .map { measure(it.label, badgeStyle, 12.sp.toPx(), ellipsis = false) to it.color } else emptyList()
-                            CellText(title, null, null, null, pill, badges)
+                            CellText(title, null, null, sub, pill, badges)
                         } else {
                             // Apple parity: the sub-title never double-prints
                             // the title or the description (feeds that promote

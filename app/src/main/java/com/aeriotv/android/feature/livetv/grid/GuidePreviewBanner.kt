@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -194,6 +195,10 @@ fun GuidePreviewBanner(
                         program.description, fontSize = 11.sp, lineHeight = 14.sp,
                         color = colors.onBackground.copy(alpha = 0.85f), maxLines = 3, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
+                            // tvOS BannerTextButtonStyle: the platter's inset
+                            // is cancelled so the text stays flush with the
+                            // time line above it.
+                            .offset(x = (-6).dp)
                             .focusRequester(descriptionFocus)
                             .focusProperties {
                                 if (downTarget != null) down = downTarget
