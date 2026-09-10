@@ -530,7 +530,8 @@ private fun GridRow(
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
     val starPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Filled.Star)
     val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
-    val seam = 2f
+    // tvOS: a 1 pt hairline gap between cells and rows, nothing wider.
+    val seam = 1f
     val padH = 8f
     // Text layouts are measured once per (cell, width) and drawn many times:
     // measuring through TextMeasurer on every draw was ~1 ms per row.
@@ -680,15 +681,15 @@ private fun GridRow(
                 }
                 // Logan 2026-09-02: the ring follows the cell's own square shape.
                 val radius = CornerRadius.Zero
-                drawRoundRect(fill, topLeft = Offset(x0, 2f), size = Size(w, size.height - 4f), cornerRadius = radius)
+                drawRoundRect(fill, topLeft = Offset(x0, 0f), size = Size(w, size.height - 1f), cornerRadius = radius)
                 if (focused) {
                     // Apple TV draws a 4pt ring at 1080p (about 4px); Android TV
                     // density is 2x, so 2dp is the same visual weight (Logan 2026-09-01).
                     val bw = 2.dp.toPx()
                     drawRoundRect(
                         Color.White,
-                        topLeft = Offset(x0 + bw / 2, 2f + bw / 2),
-                        size = Size(w - bw, size.height - 4f - bw),
+                        topLeft = Offset(x0 + bw / 2, bw / 2),
+                        size = Size(w - bw, size.height - 1f - bw),
                         cornerRadius = radius,
                         style = Stroke(width = bw),
                     )
