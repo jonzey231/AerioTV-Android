@@ -114,6 +114,9 @@ fun <T> PhoneCardDeck(
                                 dx > commitPx && count > 1 -> { index = (index - 1 + count) % count; drag.snapTo(dx - cardWPx) }
                             }
                             drag.animateTo(0f, spring(dampingRatio = 0.85f, stiffness = 300f))
+                            // Let the leaving card finish its trip to the rear
+                            // slot before positions go back to snapping.
+                            kotlinx.coroutines.delay(350)
                             settling = false
                         }
                     },
@@ -132,7 +135,10 @@ fun <T> PhoneCardDeck(
                     val relRaw = if (single) 0f else wrapped(i - p)
                     // Decks of any size behave like a four-card deck: the last
                     // card at rest takes the rear slot (iPhone parity).
-                    val rel = if (count > 4 && abs(relRaw - (count - 1f)) < 0.0001f) 3f else relRaw
+                    // Anything inside the last slot counts (the settle leaves
+                    // the card at 11.0001 for a few frames on a 12-card deck,
+                    // which an exact match missed and left it unbuilt).
+                    val rel = if (count > 4 && relRaw > count - 1.5f) 3f else relRaw
                     // One hidden card is built behind the visible three so its
                     // art is loaded before it shows.
                     if (rel <= -1.5f || rel >= 4.5f) return@forEachIndexed
