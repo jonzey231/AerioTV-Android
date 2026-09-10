@@ -149,9 +149,11 @@ fun <T> PhoneCardDeck(
                 }
             }
         }
-        if (count > 1) {
-            Spacer(Modifier.height(10.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        // The dot row's height is always reserved (iPhone parity, Logan
+        // 2026-09-09): a single-card deck must not shift the page.
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(6.dp), horizontalArrangement = Arrangement.Center) {
+            if (count > 1) {
                 repeat(count) { i ->
                     Box(
                         modifier = Modifier
@@ -165,7 +167,7 @@ fun <T> PhoneCardDeck(
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
         }
+        Spacer(Modifier.height(8.dp))
     }
 }
