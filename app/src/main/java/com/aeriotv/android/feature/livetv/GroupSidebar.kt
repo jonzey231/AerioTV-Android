@@ -119,7 +119,14 @@ internal fun GroupSidebarPanel(
     LaunchedEffect(Unit) {
         // Land with the active group visible + focused, like the common
         // IPTV-client sidebars (and unlike starting at the top of 100 groups).
-        runCatching { listState.scrollToItem(selectedIndex) }
+        // tvOS: proxy.scrollTo(target, anchor: .center). Centering clamps at
+        // the top for the first rows, so the list never lands scrolled by one
+        // row and then snaps back (Logan 2026-09-10: a visible hop from
+        // Favorites down to All Channels on open).
+        androidx.compose.runtime.withFrameNanos { }
+        val viewport = listState.layoutInfo.viewportSize.height
+        val rowPx = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
+        runCatching { listState.scrollToItem(selectedIndex, scrollOffset = -((viewport - rowPx) / 2).coerceAtLeast(0)) }
         initialFocus?.let { runCatching { it.requestFocus() } }
     }
     val isTv = rememberIsTvDevice()
