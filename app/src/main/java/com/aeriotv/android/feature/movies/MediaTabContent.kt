@@ -271,7 +271,7 @@ fun MediaTabContent(
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val searchRoom: androidx.compose.ui.unit.Dp = run {
         val viewport = configuration.screenHeightDp.dp
-        val cellW = (configuration.screenWidthDp.dp - 16.dp - 16.dp - 20.dp) / 3
+        val cellW = (configuration.screenWidthDp.dp - 18.dp - 18.dp - 16.dp) / 3
         val rowH = cellW * 1.5f + 62.dp + 16.dp
         val rows = (gridItems.size + 2) / 3
         val content = 56.dp + 72.dp + rowH * rows + bottomInset + 16.dp
@@ -301,13 +301,13 @@ fun MediaTabContent(
                 contentPadding = PaddingValues(
                     // Symmetric margins so the posters sit centered (Logan
                     // 2026-09-09); the alphabet rail overlays the right edge.
-                    start = 16.dp, end = 16.dp,
+                    start = 18.dp, end = 18.dp,
                     // While searching, extra bottom room keeps the header (and
                     // the field) pinned at the top as the results narrow; the
                     // grid shrank and the header drifted back down otherwise.
                     top = 0.dp, bottom = bottomInset + 16.dp + (if (searchActive) searchRoom else 0.dp),
                 ),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item(key = "room", span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(22.dp)) }
@@ -342,11 +342,11 @@ fun MediaTabContent(
                                 // peek out to the right inside the content margin.
                                 Box(modifier = Modifier.layout { measurable, constraints ->
                                     // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over both 16 dp margins; the
-                                    // deck clips itself at the front card's edge.
-                                    val extra = 16.dp.roundToPx() + 16.dp.roundToPx()
+                                    // RIGHT SCREEN EDGE, so widen over both 18 dp grid margins;
+                                    // the deck clips itself at the front card's edge.
+                                    val extra = 18.dp.roundToPx() + 18.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
                                 }) {
                                     PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }, leadInset = 16.dp) { page, _ -> heroCard(page) }
                                 }
@@ -388,11 +388,11 @@ fun MediaTabContent(
                             if (compact) {
                                 Box(modifier = Modifier.layout { measurable, constraints ->
                                     // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over both 16 dp margins; the
-                                    // deck clips itself at the front card's edge.
-                                    val extra = 16.dp.roundToPx() + 16.dp.roundToPx()
+                                    // RIGHT SCREEN EDGE, so widen over both 18 dp grid margins;
+                                    // the deck clips itself at the front card's edge.
+                                    val extra = 18.dp.roundToPx() + 18.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
                                 }) {
                                     PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }, leadInset = 16.dp) { page, _ -> wlCard(page) }
                                 }
@@ -629,11 +629,12 @@ private fun GenrePills(pills: List<String>, selected: String?, onSelect: (String
 @Composable
 internal fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact
-    val endLane = 16.dp
+    // The grid pads 18 dp each side; widen over both so the pills reach the
+    // screen edges, and the row's own 16 dp lead keeps the first pill at 16.
     Box(modifier = Modifier.layout { measurable, constraints ->
-        val extra = 16.dp.roundToPx() + endLane.roundToPx()
+        val extra = 18.dp.roundToPx() + 18.dp.roundToPx()
         val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-        layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
+        layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
     }) {
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
