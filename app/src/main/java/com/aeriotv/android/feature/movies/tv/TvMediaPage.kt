@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -670,7 +671,10 @@ private fun TvHeroCard(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(top = 2.dp),
+                // requiredHeight: an overflowing copy column once squeezed
+                // this row (pills at 23 dp, the options circle an oval);
+                // the row can never be squeezed again.
+                modifier = Modifier.padding(top = 2.dp).requiredHeight(30.dp),
             ) {
                 // The hero menu is the right-most options circle, not a
                 // long press on Resume (Logan 2026-09-10, all platforms).
@@ -684,10 +688,10 @@ private fun TvHeroCard(
                     )
                 }
                 if (page.longPressActions.isNotEmpty()) {
-                    // Same 30 dp circle as the nav bar's Refresh and Search.
-                    com.aeriotv.android.ui.tv.TvActionCircle(
-                        icon = Icons.Filled.MoreHoriz, contentDescription = "Options",
-                        onClick = { menuOpen = true },
+                    // The nav circles' size and shape (30 dp), the hero
+                    // pills' colour and ring (Logan 2026-09-10).
+                    TvHeroButtonView(
+                        button = TvHeroButton("", Icons.Filled.MoreHoriz, onClick = { menuOpen = true }),
                         modifier = Modifier
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
                             .onFocusChanged { if (it.isFocused) onButtonFocused() },
@@ -716,7 +720,8 @@ fun TvHeroButtonView(
     Row(
         modifier = modifier
             .tvFocusScale(focused, focusedScale = 1.04f)
-            .height(30.dp)
+            // required: a squeezed parent must not flatten the capsule.
+            .then(if (button.label.isEmpty()) Modifier.requiredSize(30.dp) else Modifier.requiredHeight(30.dp))
             .clip(CircleShape)
             .background(fill)
             .border(
@@ -730,9 +735,9 @@ fun TvHeroButtonView(
             )
             .combinedClickable(interactionSource = interaction, indication = null, onClick = button.onClick, onLongClick = onLongClick)
             // tvOS MoviesHeroButton: an icon-only button is a 30 dp circle (14 pt sides halved).
-            .padding(horizontal = if (button.label.isEmpty()) 9.dp else 13.dp),
+            .padding(horizontal = if (button.label.isEmpty()) 0.dp else 13.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = if (button.label.isEmpty()) Arrangement.Center else Arrangement.spacedBy(4.dp),
     ) {
         Icon(button.icon, contentDescription = if (button.label.isEmpty()) "Options" else null, tint = ink, modifier = Modifier.size(if (button.label.isEmpty()) 12.dp else 11.dp))
         if (button.label.isNotEmpty()) Text(button.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
