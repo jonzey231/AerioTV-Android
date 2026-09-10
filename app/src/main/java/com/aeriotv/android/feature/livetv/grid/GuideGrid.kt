@@ -431,7 +431,7 @@ private fun TimeHeader(
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
     )
-    val rule = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+    val rule = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
     val clockMode = rememberClockMode()
     val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     Row(modifier = Modifier.fillMaxWidth().height(headerHeight)) {
@@ -648,7 +648,9 @@ private fun GridRow(
                 with(catchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tertiary.copy(alpha = 0.8f))) }
             }
         }
-        drawLine(colors.primary.copy(alpha = 0.2f), Offset(railWidthPx - 0.5f, 0f), Offset(railWidthPx - 0.5f, size.height), strokeWidth = 1.dp.toPx())
+        // Neutral hairlines (tvOS: the app background shows through a 1 pt
+        // gap; accent-tinted rules read as heavy borders, Logan 2026-09-10).
+        drawLine(Color.White.copy(alpha = 0.08f), Offset(railWidthPx - 0.5f, 0f), Offset(railWidthPx - 0.5f, size.height), strokeWidth = 1.dp.toPx())
 
         // Programme strip.
         clipRect(railWidthPx, 0f, size.width, size.height) {
@@ -821,7 +823,7 @@ private fun GridRow(
             }
         }
         }
-        drawLine(colors.primary.copy(alpha = 0.25f), Offset(0f, size.height - 0.75f), Offset(size.width, size.height - 0.75f), strokeWidth = 0.75f.dp.toPx())
+        drawLine(Color.White.copy(alpha = 0.07f), Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), strokeWidth = 1f)
         Trace.endSection()
     }
 }
