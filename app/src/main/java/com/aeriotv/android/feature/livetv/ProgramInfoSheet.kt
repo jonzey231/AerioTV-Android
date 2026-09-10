@@ -190,7 +190,7 @@ fun ProgramInfoSheet(
             // target, then the metadata and category pills.
             Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
                 tonalElevation = 6.dp,
                 modifier = Modifier
                     .width(700.dp)

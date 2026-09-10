@@ -453,7 +453,7 @@ fun TvGroupPicker(
     Dialog(onDismissRequest = commitAndDismiss) {
         Surface(
             shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
+            color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
             tonalElevation = 8.dp,
             modifier = Modifier
                 .width(640.dp)

@@ -81,7 +81,7 @@ fun TvActionMenuDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
             modifier = Modifier.width(250.dp),
         ) {

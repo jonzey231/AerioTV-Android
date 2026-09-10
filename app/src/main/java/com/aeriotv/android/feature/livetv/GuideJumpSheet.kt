@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aeriotv.android.ui.FormFactorModal
 import java.util.Calendar
 import java.util.Locale
@@ -76,6 +77,42 @@ fun GuideJumpSheet(
         return c.timeInMillis
     }
 
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    if (isTv) {
+        // tvOS GuideJumpSheet (halved): 38 pt bold title, Day and Time pill
+        // rows (MoviesPillStyle = TvPill), the target as a summary line, then
+        // Go as a selected pill and Back to Now as an unselected one.
+        FormFactorModal(onDismiss = onDismiss, tvWidthFraction = 0.62f, sheetMaxWidth = 600.dp) {
+            Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+                Text("Jump To", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Day", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        dayOffsets.forEach { offset -> com.aeriotv.android.ui.tv.TvPill(dayLabel(offset), dayOffset == offset, onClick = { dayOffset = offset }) }
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Time", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        slots.forEach { (label, hour) ->
+                            val text = if (hour == -1) label else "$label " + java.text.SimpleDateFormat("h a", Locale.getDefault())
+                                .format((today.clone() as Calendar).apply { set(Calendar.HOUR_OF_DAY, hour) }.time)
+                            com.aeriotv.android.ui.tv.TvPill(text, slotHour == hour, onClick = { slotHour = hour })
+                        }
+                    }
+                }
+                Text(
+                    java.text.SimpleDateFormat("EEEE, MMMM d, yyyy 'at' h:mm a", Locale.getDefault()).format(java.util.Date(target())),
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    com.aeriotv.android.ui.tv.TvPill("Go", selected = true, onClick = { onJump(target()); onDismiss() })
+                    com.aeriotv.android.ui.tv.TvPill("Back to Now", selected = false, onClick = { onBackToNow(); onDismiss() })
+                }
+            }
+        }
+        return
+    }
     FormFactorModal(onDismiss = onDismiss, tvWidthFraction = 0.6f, sheetMaxWidth = 560.dp) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
             Text("Jump To", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)

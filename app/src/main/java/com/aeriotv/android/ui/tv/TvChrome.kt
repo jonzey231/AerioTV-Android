@@ -65,6 +65,10 @@ import androidx.compose.ui.unit.sp
  * draws these instead of its own variant so the tabs read as one app.
  */
 object TvChrome {
+    /** Every TV pop-up sheet paints this (Logan 2026-09-10: one translucency everywhere). */
+    @Composable
+    fun dialogSurface(): Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+
     val circleSize: Dp = 30.dp
     val pillHorizontalPadding: Dp = 13.dp
     val pillVerticalPadding: Dp = 6.dp

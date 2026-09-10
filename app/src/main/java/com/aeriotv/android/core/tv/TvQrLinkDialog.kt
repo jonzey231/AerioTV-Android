@@ -84,7 +84,7 @@ fun TvQrLinkDialog(
         Surface(
             modifier = Modifier.fillMaxWidth(0.55f),
             shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.background,
+            color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,

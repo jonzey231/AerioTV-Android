@@ -73,7 +73,7 @@ fun FormFactorModal(
                     .fillMaxWidth(tvWidthFraction)
                     .heightIn(max = tvMaxHeight),
                 shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.background,
+                color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
             ) {
                 Column(
                     modifier = Modifier.padding(vertical = 12.dp),
