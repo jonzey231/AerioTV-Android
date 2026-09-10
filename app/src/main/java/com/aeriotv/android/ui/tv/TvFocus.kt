@@ -380,6 +380,14 @@ class TvEdgeMarginBringIntoViewSpec(
     /** True while the page runs its own scroll (snap to top): no competing request. */
     private val suppressed: () -> Boolean = { false },
 ) : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    /**
+     * Apple TV recording 2026-09-10 (DVR tab): each focus scroll is a short
+     * ease-out, fast first frames then a tail, done in roughly 250 to 330
+     * ms. The default spring here settled slower with a soft start.
+     */
+    override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float> =
+        androidx.compose.animation.core.tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut)
+
     override fun calculateScrollDistance(
         offset: Float,
         size: Float,
