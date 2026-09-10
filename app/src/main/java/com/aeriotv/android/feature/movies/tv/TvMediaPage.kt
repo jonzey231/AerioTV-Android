@@ -50,6 +50,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -252,12 +255,31 @@ fun <T> TvMediaPage(
     // while it runs (its own request otherwise raced the snap and left the
     // hero a third off screen, Logan 2026-09-10) and a hard snap ends it.
     val snappingToTop = remember { mutableStateOf(false) }
+    // Item tops at scroll zero, recorded whenever the page rests at the
+    // top: the snap back up is then one animateScrollBy over the exact
+    // distance (tvOS .smooth 0.45 s). animateScrollToItem jumps in
+    // viewport-sized chunks over that distance, which read as chunky
+    // (Logan 2026-09-10).
+    val restTops = remember { HashMap<Int, Int>() }
+    LaunchedEffect(gridState) {
+        snapshotFlow { gridState.layoutInfo }.collect { info ->
+            if (gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0) {
+                info.visibleItemsInfo.forEach { restTops[it.index] = it.offset.y }
+            }
+        }
+    }
     val scrollToTop: () -> Unit = {
         if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
             scope.launch {
                 snappingToTop.value = true
                 try {
-                    gridState.animateScrollToItem(0)
+                    val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
+                    if (anchor != null) {
+                        val distance = (restTops.getValue(anchor.index) - anchor.offset.y).toFloat()
+                        gridState.animateScrollBy(-distance, tween(durationMillis = 450, easing = FastOutSlowInEasing))
+                    } else {
+                        gridState.animateScrollToItem(0)
+                    }
                     withFrameNanos { }
                     gridState.scrollToItem(0)
                 } finally {
