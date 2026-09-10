@@ -1191,15 +1191,17 @@ fun MainScaffold(
  */
 @Composable
 private fun CompanionControlFab(onClick: () -> Unit) {
+    // Same shape and chrome as MinimizedTabPill, which it sits opposite
+    // once the bar minimizes (Logan 2026-09-09).
     Box(
         modifier = Modifier
-            .size(52.dp)
-            .clip(androidx.compose.foundation.shape.CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f))
+            .size(width = 64.dp, height = 52.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
             .border(
                 1.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
-                androidx.compose.foundation.shape.CircleShape,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                RoundedCornerShape(26.dp),
             )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -1208,6 +1210,7 @@ private fun CompanionControlFab(onClick: () -> Unit) {
             imageVector = Icons.Filled.Tv,
             contentDescription = "Control a TV",
             tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(22.dp),
         )
     }
 }
