@@ -496,7 +496,7 @@ private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, car
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
                                     layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
                                 }) {
-                PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }, leadInset = 16.dp) { item, _ -> card(item) }
+                PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }, leadInset = 8.dp) { item, _ -> card(item) }
             }
         } else {
             val pagerState = androidx.compose.foundation.pager.rememberPagerState { items.size }

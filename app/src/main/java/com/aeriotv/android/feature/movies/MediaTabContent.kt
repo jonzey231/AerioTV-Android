@@ -348,7 +348,7 @@ fun MediaTabContent(
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
                                     layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
                                 }) {
-                                    PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }, leadInset = 16.dp) { page, _ -> heroCard(page) }
+                                    PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }, leadInset = 8.dp) { page, _ -> heroCard(page) }
                                 }
                             } else {
                                 val pagerState = androidx.compose.foundation.pager.rememberPagerState { heroPages.size }
@@ -394,7 +394,7 @@ fun MediaTabContent(
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
                                     layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
                                 }) {
-                                    PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }, leadInset = 16.dp) { page, _ -> wlCard(page) }
+                                    PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }, leadInset = 8.dp) { page, _ -> wlCard(page) }
                                 }
                             } else {
                                 val pagerState = androidx.compose.foundation.pager.rememberPagerState { watchlistPages.size }
