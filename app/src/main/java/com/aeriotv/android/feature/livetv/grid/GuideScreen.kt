@@ -751,11 +751,8 @@ fun GuideScreen(
         val actions = buildList {
             add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites") { favoritesVm.toggle(channel) })
             add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
-            add(TvMenuAction("Add to Collection...") { collectionPickerFor = channel.id to channel.name })
-            // Guide jump (TV): the clock cell is not on the D-pad path, so the
-            // cell menu carries Jump To and Back to Now.
-            add(TvMenuAction("Jump to a Day and Time") { showJumpSheet = true })
-            if (jumpTargetMs != null) add(TvMenuAction("Back to Now") { snapToNow() })
+            add(TvMenuAction("Add Channel to Collection") { collectionPickerFor = channel.id to channel.name })
+            // Jump To and Back to Now live on the clock cell now (tvOS parity).
             if (!cell.isPlaceholder) {
                 add(TvMenuAction("Program Info") { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
                 if (canRecord) add(TvMenuAction(if (isLive) "Record from Now" else "Record") { recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })

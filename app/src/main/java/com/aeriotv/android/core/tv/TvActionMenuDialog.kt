@@ -160,14 +160,12 @@ private fun TvMenuCapsule(
                     else -> false
                 }
             }
-            // Logan 2026-09-02: no bright white fill on focus; the app's ring
-            // (2dp white border) marks the focused capsule like everywhere else.
+            // tvOS confirmationDialog look (Logan 2026-09-10, supersedes the
+            // 2026-09-02 ring): the focused capsule is a solid white platter
+            // with the accent text on it, the rest a quiet translucent fill.
             .background(
-                color = Color.White.copy(alpha = if (focused) 0.14f else 0.08f),
+                color = if (focused) Color.White else Color.White.copy(alpha = 0.08f),
                 shape = RoundedCornerShape(19.dp),
-            )
-            .then(
-                if (focused) Modifier.border(2.dp, Color.White, RoundedCornerShape(19.dp)) else Modifier,
             )
             .clickable(enabled = enabled, onClick = onActivate),
         verticalAlignment = Alignment.CenterVertically,
