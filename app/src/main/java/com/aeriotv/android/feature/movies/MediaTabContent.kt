@@ -466,15 +466,18 @@ fun MediaPosterCard(
                 )
             }
         }
+        // Centered under the poster (Logan 2026-09-10, all platforms).
         Text(
             item.title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground,
             maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp,
-            modifier = Modifier.height(30.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().height(30.dp),
         )
         Text(
             item.year?.toString() ?: " ", fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
         )
     }
 }

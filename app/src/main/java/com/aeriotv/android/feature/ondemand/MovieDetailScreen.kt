@@ -940,6 +940,7 @@ private fun PersonCard(
             }
         }
         Spacer(Modifier.height(6.dp))
+        // Name and role centered under the photo (Logan 2026-09-10, all platforms).
         Text(
             text = person.name,
             style = MaterialTheme.typography.labelLarge,
@@ -947,6 +948,8 @@ private fun PersonCard(
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
         )
         person.role?.takeIf { it.isNotBlank() }?.let { role ->
             Text(
@@ -955,6 +958,8 @@ private fun PersonCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }
