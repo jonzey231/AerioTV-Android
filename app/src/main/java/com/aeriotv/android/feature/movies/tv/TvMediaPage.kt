@@ -590,17 +590,23 @@ private fun TvHeroCard(
         modifier = Modifier
             .width(width)
             .height(TvPage.heroHeight)
-            .padding(horizontal = TvPage.heroInset)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface),
+            .padding(horizontal = TvPage.heroInset),
     ) {
-        if (!page.artUrl.isNullOrBlank()) {
-            AsyncImage(model = page.artUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-        } else if (!page.logoUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = page.logoUrl, contentDescription = null, contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth(0.28f).fillMaxHeight().align(Alignment.CenterEnd).padding(14.dp).alpha(0.9f),
-            )
+        // Only the ART is clipped to the rounded shape; the fades and copy
+        // draw unclipped over it. Clipping the whole stack left a faint
+        // seam along the corner where the art showed through the
+        // anti-aliased edge (tvOS b3cd364; Logan 2026-09-10 on the Streamer).
+        Box(
+            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface),
+        ) {
+            if (!page.artUrl.isNullOrBlank()) {
+                AsyncImage(model = page.artUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else if (!page.logoUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = page.logoUrl, contentDescription = null, contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth(0.28f).fillMaxHeight().align(Alignment.CenterEnd).padding(14.dp).alpha(0.9f),
+                )
+            }
         }
         // tvOS fades the art with two masks; the same stops painted as
         // background-colored gradients.

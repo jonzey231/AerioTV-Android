@@ -1746,9 +1746,11 @@ private fun TvTopTabBar(
                     // and only flips false when focus leaves the bar entirely, so it
                     // is the reliable "is the user in the bar" signal for [armed].
                     .onFocusChanged { navHasFocus = it.hasFocus }
-                    .clip(RoundedCornerShape(22.dp))
+                    // tvOS system tab bar, halved: a 68 pt capsule holding
+                    // 44 pt pills (Logan 2026-09-10, Streamer vs Apple TV).
+                    .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
                 // 6dp still leaves headroom for the focused pill's 1.04x paint-only
                 // grow (graphicsLayer does not relayout); at 3dp the widest pill
                 // visually collided. Trimmed from 8dp to narrow the bar.
@@ -1766,7 +1768,7 @@ private fun TvTopTabBar(
             }
             if (showActionCircles) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // Refresh (TV's pull-to-refresh stand-in), then Search -
@@ -1845,7 +1847,7 @@ private fun TvBarCircleButton(
         modifier = modifier,
         selected = selected,
         spinning = spinning,
-        size = 34.dp,
+        size = com.aeriotv.android.ui.tv.TvChrome.circleSize,
     )
 }
 
@@ -1896,21 +1898,24 @@ private fun TvTab(
             // Trimmed (13->10 h / 20->18 icon) to narrow the whole centered nav
             // bar so its right edge clears the enlarged corner mini-player.
             // Vertical 8 = the old 6 plus the 2dp ring the platter replaced.
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            // tvOS system tab bar pill: 44 pt tall, ~20 pt sides, 26 pt
+            // glyph, 28 pt semibold label, halved.
+            .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Icon(
             imageVector = if (selected) tab.iconSelected else tab.iconUnselected,
             contentDescription = null,
             tint = foreground,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(14.dp),
         )
         Text(
             text = tab.label,
             color = foreground,
-            // Bumped from titleSmall to match the tvOS nav-bar scale.
-            style = MaterialTheme.typography.titleMedium,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
         )
     }
 }
