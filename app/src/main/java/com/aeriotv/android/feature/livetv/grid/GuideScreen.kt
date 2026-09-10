@@ -367,6 +367,7 @@ fun GuideScreen(
     val gridFocus = remember { FocusRequester() }
     val pillsFocus = remember { FocusRequester() }
     val bannerFocus = remember { FocusRequester() }
+    var clockSelectTrigger by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val previewProgram: EPGProgramme? = if (previewMode) grid.focusedCell() else null
     val previewChannel: M3UChannel? = if (previewMode && grid.focusRow in 0 until grid.rows.size) grid.rows.channel(grid.focusRow) else null
     if (previewMode) {
@@ -565,6 +566,9 @@ fun GuideScreen(
                 descriptionFocus = bannerFocus,
                 downTarget = if (pillsShown) pillsFocus else gridFocus,
                 upTarget = topNav,
+                // tvOS: Down from the description lands on the clock when
+                // there is no pill row between them.
+                onDown = if (pillsShown) null else ({ clockSelectTrigger += 1; true }),
             )
         }
         if (isTv && !sidebarGroupMode && !favoritesOnly) GroupPills(
@@ -625,6 +629,7 @@ fun GuideScreen(
                     }
                 },
                 compact = previewMode,
+                clockSelectTrigger = clockSelectTrigger,
                 remoteAction = { slot -> remoteMap.guideAction(slot) },
                 holdLeftOpensGroups = sidebarGroupMode,
                 onHostAction = hostAction,

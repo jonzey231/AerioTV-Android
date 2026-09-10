@@ -30,6 +30,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -81,6 +84,8 @@ fun GuidePreviewBanner(
     downTarget: FocusRequester?,
     upTarget: FocusRequester?,
     onDescriptionFocusChanged: (Boolean) -> Unit = {},
+    /** Down handled by the host (tvOS: lands on the clock when no pill row). Return true when consumed. */
+    onDown: (() -> Boolean)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -159,13 +164,15 @@ fun GuidePreviewBanner(
             Text("Select a program", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colors.tertiary)
         } else {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                // tvOS: title and channel name share the first text baseline.
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text(
                         program.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
                     )
                     if (channel != null) {
-                        Text(channel.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.primary, maxLines = 1, modifier = Modifier.padding(bottom = 2.dp))
+                        Text(channel.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.primary, maxLines = 1, modifier = Modifier.alignByBaseline())
                     }
                 }
                 val sub = program.subTitle?.takeIf { !subtitleIsRedundant(it, program.title, program.description) }
@@ -203,6 +210,11 @@ fun GuidePreviewBanner(
                             .focusProperties {
                                 if (downTarget != null) down = downTarget
                                 if (upTarget != null) up = upTarget
+                            }
+                            .onPreviewKeyEvent { e ->
+                                onDown != null &&
+                                    e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                                    e.key == androidx.compose.ui.input.key.Key.DirectionDown && onDown()
                             }
                             .onFocusChanged { focused = it.isFocused; onDescriptionFocusChanged(it.isFocused) }
                             .clip(RoundedCornerShape(5.dp))

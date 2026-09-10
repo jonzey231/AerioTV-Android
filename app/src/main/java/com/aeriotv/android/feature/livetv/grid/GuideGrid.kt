@@ -132,6 +132,8 @@ fun GuideGrid(
     onClockLongPress: () -> Unit = {},
     /** Channel Preview layout: cells keep the title and tags (the banner carries the rest). */
     compact: Boolean = false,
+    /** Bumped by the host to park the cursor on the clock (Down from the banner, tvOS). */
+    clockSelectTrigger: Int = 0,
 ) {
     val density = LocalDensity.current
     val hourWidthPx = with(density) { hourWidth.toPx() }
@@ -215,6 +217,9 @@ fun GuideGrid(
     // focus node (and the host's launch-focus settling) is untouched.
     var clockSelected by remember { mutableStateOf(false) }
     var clockOkHeld by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(clockSelectTrigger) {
+        if (clockSelectTrigger > 0) { clockSelected = true; runCatching { focusRequester.requestFocus() } }
+    }
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
         if (clockSelected) {
             val native = event.nativeKeyEvent as? AndroidKeyEvent
