@@ -850,7 +850,7 @@ fun MainScaffold(
         // content padding, so their last rows scroll clear of the pill.
     ) { padding ->
       androidx.compose.runtime.CompositionLocalProvider(
-          LocalTabBarBottomInset provides if (topTabBar) 16.dp else 104.dp,
+          LocalTabBarBottomInset provides if (topTabBar) 16.dp else 96.dp,
       ) {
       androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
         if (topTabBar) {
@@ -1099,10 +1099,14 @@ fun MainScaffold(
                         exit = androidx.compose.animation.slideOutVertically { it } +
                             androidx.compose.animation.fadeOut(),
                     ) {
+                        // The floating pill, iPhone-sized, lifted 8 dp (Logan
+                        // 2026-09-09; the Material NavigationBar was tried and
+                        // turned down).
                         FloatingTabBar(
                             tabs = tabs,
                             selected = selectedTab,
                             onSelect = { selectedTab = it; initialTabApplied = true },
+                            modifier = Modifier.padding(bottom = 8.dp),
                         )
                     }
                 }
@@ -1267,7 +1271,9 @@ private fun FloatingTabBar(
                 MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
                 RoundedCornerShape(36.dp),
             )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            // iPhone bar height (~53 pt): the Android pill measured ~69 dp
+            // (Logan 2026-09-09). Outer 6 + item 5 + icon 22 + label 12 + 5 + 6.
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1277,24 +1283,26 @@ private fun FloatingTabBar(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(20.dp))
                     .background(
                         if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                         else Color.Transparent,
                     )
                     .clickable { onSelect(tab) }
-                    .padding(vertical = 9.dp),
+                    .padding(vertical = 5.dp),
             ) {
                 Icon(
                     imageVector = if (isSel) tab.iconSelected else tab.iconUnselected,
                     contentDescription = tab.label,
                     tint = if (isSel) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(22.dp),
                 )
                 Text(
                     text = tab.label,
-                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
+                    fontWeight = FontWeight.Medium,
                     color = if (isSel) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
