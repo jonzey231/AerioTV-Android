@@ -356,12 +356,14 @@ private fun TvProgramInfoCard(
 /** tvOS infoColumn: uppercase tracked label over the value. */
 @Composable
 private fun TvInfoColumn(title: String, value: String) {
+    // Explicit line heights: the theme's 24 sp body line height otherwise
+    // pushed the value a full line below its header (Logan 2026-09-10).
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
-            title.uppercase(Locale.getDefault()), fontSize = 8.sp, fontWeight = FontWeight.Medium,
+            title.uppercase(Locale.getDefault()), fontSize = 8.sp, lineHeight = 10.sp, fontWeight = FontWeight.Medium,
             letterSpacing = 1.2.sp, color = MaterialTheme.colorScheme.tertiary,
         )
-        Text(value, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onBackground)
+        Text(value, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onBackground)
     }
 }
 
