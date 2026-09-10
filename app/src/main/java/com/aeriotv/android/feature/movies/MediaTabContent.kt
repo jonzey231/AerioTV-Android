@@ -236,328 +236,128 @@ fun MediaTabContent(
         }
     }
     val gridState = rememberLazyGridState()
-    val scope = rememberCoroutineScope()
-    // Full-span leading items: room, header, (search), (person line),
-    // (provider pills), (genre pills).
-    val leadingCount = 2 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0) +
-        (if (searchActive) 1 else 0) + (if (isSearching && personMatchName != null) 1 else 0) +
-        (if (showProviderPills) 1 else 0) + (if (!isSearching && genrePills.isNotEmpty()) 1 else 0)
-    // Index of the library header in the grid: room, (hero), (watchlist), header.
-    val headerIndex = 1 + (if (heroPages.isNotEmpty()) 1 else 0) + (if (watchlistPages.isNotEmpty()) 1 else 0)
-    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-    // Opening search scrolls the header (and the field under it) to the top
-    // so the results land in view, then focuses the field for the keyboard
-    // (Logan 2026-09-09).
-    LaunchedEffect(searchActive) {
-        if (searchActive) {
-            gridState.animateScrollToItem(headerIndex)
-            runCatching { searchFocus.requestFocus() }
-        }
-    }
-    // Rail only once the library owns the display: the header and pill
-    // rows have scrolled off (iPhone rule; Logan 2026-09-09: it faded in
-    // over the pills).
-    val railVisible by remember(leadingCount, library.size, headerIndex) {
-        derivedStateOf {
-            compact && !isSearching && library.size >= 9 &&
-                gridState.firstVisibleItemIndex >= headerIndex + 2
-        }
-    }
-    val bottomInset = LocalTabBarBottomInset.current
-    // Bottom room while searching: only what is needed to let the header
-    // reach the top given the rows the results fill, so the list stops at
-    // the last result instead of scrolling into blank space (Logan
-    // 2026-09-09). Estimated from the 3-column poster geometry.
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val searchRoom: androidx.compose.ui.unit.Dp = run {
-        val viewport = configuration.screenHeightDp.dp
-        val cellW = (configuration.screenWidthDp.dp - 18.dp - 18.dp - 16.dp) / 3
-        val rowH = cellW * 1.5f + 62.dp + 16.dp
-        val rows = (gridItems.size + 2) / 3
-        val content = 56.dp + 72.dp + rowH * rows + bottomInset + 16.dp
-        (viewport - content).coerceAtLeast(0.dp)
-    }
 
     fun submitQuery(v: String) {
         query = v
         if (kind == MediaKind.Movies) viewModel.setSearchQuery(v) else viewModel.setSeriesSearchQuery(v)
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .statusBarsPadding(),
-    ) {
-        PullToRefreshBox(
-            isRefreshing = isLoading && gridItems.isNotEmpty(),
-            onRefresh = { if (kind == MediaKind.Movies) viewModel.refresh() else viewModel.refreshSeries() },
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            LazyVerticalGrid(
-                columns = if (compact) GridCells.Fixed(3) else GridCells.Adaptive(minSize = 120.dp),
-                state = gridState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    // Symmetric margins so the posters sit centered (Logan
-                    // 2026-09-09); the alphabet rail overlays the right edge.
-                    start = 18.dp, end = 18.dp,
-                    // While searching, extra bottom room keeps the header (and
-                    // the field) pinned at the top as the results narrow; the
-                    // grid shrank and the header drifted back down otherwise.
-                    top = 0.dp, bottom = bottomInset + 16.dp + (if (searchActive) searchRoom else 0.dp),
-                ),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                item(key = "room", span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(22.dp)) }
-                if (heroPages.isNotEmpty()) {
-                    item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
-                            Text(
-                                "Continue Watching", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.padding(bottom = 10.dp),
-                            )
-                            val heroCard: @Composable (MediaHeroPage) -> Unit = { page ->
-                                val videoId = page.key.removePrefix("cw:")
-                                val play: () -> Unit = {
-                                    if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, page.title); onPlayMovie(videoId) }
-                                    else onEpisodeResume(videoId)
-                                }
-                                MediaHeroCard(
-                                    page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
-                                    onPrimary = play,
-                                    onPlayFromStart = { watchVm.delete(videoId); play() },
-                                    onDetails = { page.item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: page.item?.seriesId?.let(onSeriesClick) },
-                                    onRemove = { watchVm.delete(videoId) },
-                                    isOnWatchlist = page.item?.key in watchlistKeys,
-                                    onToggleWatchlist = page.item?.let { item -> { watchlistVm.toggle(item) } },
-                                )
-                            }
-                            if (compact) {
-                                // iPhone parity (Logan 2026-09-09): the deck is the plain
-                                // content width and clips at its bounds, so nothing shows
-                                // left of the front card at rest and the trailing cards
-                                // peek out to the right inside the content margin.
-                                Box(modifier = Modifier.layout { measurable, constraints ->
-                                    // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over both 18 dp grid margins;
-                                    // the deck clips itself at the front card's edge.
-                                    val extra = 18.dp.roundToPx() + 18.dp.roundToPx()
-                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
-                                }) {
-                                    PhoneCardDeck(items = heroPages, cardHeight = 220.dp, key = { it.key }, leadInset = 8.dp) { page, _ -> heroCard(page) }
-                                }
-                            } else {
-                                val pagerState = androidx.compose.foundation.pager.rememberPagerState { heroPages.size }
-                                androidx.compose.foundation.pager.HorizontalPager(
-                                    state = pagerState,
-                                    pageSize = androidx.compose.foundation.pager.PageSize.Fill,
-                                    pageSpacing = 8.dp,
-                                    contentPadding = PaddingValues(end = 0.dp),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { heroCard(heroPages[i]) } },
-                                )
-                            }
-                        }
+    val heroCard: @Composable (MediaHeroPage) -> Unit = { page ->
+        val videoId = page.key.removePrefix("cw:")
+        val play: () -> Unit = {
+            if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, page.title); onPlayMovie(videoId) }
+            else onEpisodeResume(videoId)
+        }
+        MediaHeroCard(
+            page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
+            onPrimary = play,
+            onPlayFromStart = { watchVm.delete(videoId); play() },
+            onDetails = { page.item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: page.item?.seriesId?.let(onSeriesClick) },
+            onRemove = { watchVm.delete(videoId) },
+            isOnWatchlist = page.item?.key in watchlistKeys,
+            onToggleWatchlist = page.item?.let { item -> { watchlistVm.toggle(item) } },
+        )
+    }
+    val wlCard: @Composable (MediaHeroPage) -> Unit = { page ->
+        val item = page.item
+        MediaHeroCard(
+            page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
+            onPrimary = {
+                item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onPlayMovie(u) } ?: item?.seriesId?.let(onSeriesClick)
+            },
+            onPlayFromStart = {},
+            onDetails = { item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: item?.seriesId?.let(onSeriesClick) },
+            onRemove = { item?.let { watchlistVm.remove(it.key) } },
+            removeLabel = "Remove from Watchlist",
+        )
+    }
+    val searchExtras = buildList {
+        if (personMatchName != null) add(PageRow("person") {
+            Text(
+                "Includes titles with $personMatchName",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        })
+        if (showProviderPills) add(PageRow("providers") {
+            EdgeToEdgePillRow {
+                item(key = "all") {
+                    GenrePill("All Providers", selectedProviderId == null) { viewModel.selectProvider(null, kind == MediaKind.Movies) }
+                }
+                items(providerIds.size, key = { providerIds[it] }) { i ->
+                    val pid = providerIds[i]
+                    GenrePill(state.providerNames[pid] ?: "Provider $pid", selectedProviderId == pid) {
+                        viewModel.selectProvider(if (selectedProviderId == pid) null else pid, kind == MediaKind.Movies)
                     }
                 }
-                if (watchlistPages.isNotEmpty()) {
-                    item(key = "watchlist", span = { GridItemSpan(maxLineSpan) }) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
-                            Text(
-                                "Watchlist", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.padding(bottom = 10.dp),
-                            )
-                            val wlCard: @Composable (MediaHeroPage) -> Unit = { page ->
-                                val item = page.item
-                                MediaHeroCard(
-                                    page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
-                                    onPrimary = {
-                                        item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onPlayMovie(u) } ?: item?.seriesId?.let(onSeriesClick)
-                                    },
-                                    onPlayFromStart = {},
-                                    onDetails = { item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: item?.seriesId?.let(onSeriesClick) },
-                                    onRemove = { item?.let { watchlistVm.remove(it.key) } },
-                                    removeLabel = "Remove from Watchlist",
-                                )
-                            }
-                            if (compact) {
-                                Box(modifier = Modifier.layout { measurable, constraints ->
-                                    // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over both 18 dp grid margins;
-                                    // the deck clips itself at the front card's edge.
-                                    val extra = 18.dp.roundToPx() + 18.dp.roundToPx()
-                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
-                                }) {
-                                    PhoneCardDeck(items = watchlistPages, cardHeight = 220.dp, key = { it.key }, leadInset = 8.dp) { page, _ -> wlCard(page) }
-                                }
-                            } else {
-                                val pagerState = androidx.compose.foundation.pager.rememberPagerState { watchlistPages.size }
-                                androidx.compose.foundation.pager.HorizontalPager(
-                                    state = pagerState, pageSize = androidx.compose.foundation.pager.PageSize.Fill, pageSpacing = 8.dp,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { wlCard(watchlistPages[i]) } },
-                                )
-                            }
-                        }
-                    }
-                }
-                item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-                    LibraryHeader(
-                        title = if (isSearching) "Results" else kind.libraryTitle,
-                        count = gridItems.size,
-                        onTitleTap = { scope.launch { gridState.animateScrollToItem(1) } },
-                        onSearch = { searchActive = !searchActive; if (!searchActive) submitQuery("") },
-                        onSort = { showSort = true },
-                        onFilter = { showManageGroups = true },
-                        sortMenu = {
-                            DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
-                                MediaSortOrder.entries.forEach { order ->
-                                    DropdownMenuItem(
-                                        text = { Text(order.label) },
-                                        trailingIcon = { if (order == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
-                                        onClick = {
-                                            showSort = false
-                                            if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(order.wire)
-                                            else settingsVm.setSeriesSortOrder(order.wire)
-                                        },
-                                    )
-                                }
-                            }
-                        },
-                    )
-                }
-                if (searchActive) {
-                    item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
-                        // Pill field like the iPhone search bar: filled
-                        // surfaceVariant, no outline in either state, search
-                        // glyph leading, filled-circle X trailing, 44 dp tall.
-                        // BasicTextField because OutlinedTextField enforces a
-                        // 56 dp minimum height.
-                        val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                        androidx.compose.foundation.text.BasicTextField(
-                            value = query,
-                            onValueChange = { submitQuery(it) },
-                            singleLine = true,
-                            interactionSource = interaction,
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp)
-                                .padding(bottom = 0.dp)
-                                .focusRequester(searchFocus),
-                            decorationBox = { inner ->
-                                androidx.compose.material3.OutlinedTextFieldDefaults.DecorationBox(
-                                    value = query,
-                                    innerTextField = inner,
-                                    enabled = true,
-                                    singleLine = true,
-                                    visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
-                                    interactionSource = interaction,
-                                    placeholder = { Text(if (kind == MediaKind.Movies) "Search movies" else "Search TV shows", maxLines = 1) },
-                                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    // Clears the query and closes the field (Logan 2026-09-09).
-                                    trailingIcon = {
-                                        androidx.compose.material3.IconButton(onClick = { submitQuery(""); searchActive = false }) {
-                                            Icon(Icons.Filled.Cancel, contentDescription = "Clear and close search", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                    },
-                                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        focusedBorderColor = Color.Transparent,
-                                        unfocusedBorderColor = Color.Transparent,
-                                    ),
-                                    contentPadding = androidx.compose.material3.OutlinedTextFieldDefaults.contentPadding(top = 0.dp, bottom = 0.dp),
-                                    container = {
-                                        Box(
-                                            Modifier
-                                                .fillMaxSize()
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                                        )
-                                    },
-                                )
-                            },
-                        )
-                    }
-                }
-                if (isSearching && personMatchName != null) {
-                    item(key = "person", span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            "Includes titles with $personMatchName",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.tertiary,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-                if (showProviderPills) {
-                    item(key = "providers", span = { GridItemSpan(maxLineSpan) }) {
-                        EdgeToEdgePillRow {
-                            item(key = "all") {
-                                GenrePill("All Providers", selectedProviderId == null) { viewModel.selectProvider(null, kind == MediaKind.Movies) }
-                            }
-                            items(providerIds.size, key = { providerIds[it] }) { i ->
-                                val pid = providerIds[i]
-                                GenrePill(state.providerNames[pid] ?: "Provider $pid", selectedProviderId == pid) {
-                                    viewModel.selectProvider(if (selectedProviderId == pid) null else pid, kind == MediaKind.Movies)
-                                }
-                            }
-                        }
-                    }
-                }
-                if (!isSearching && genrePills.isNotEmpty()) {
-                    item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
-                        GenrePills(
-                            pills = genrePills,
-                            selected = selectedGenre,
-                            onSelect = { selectedGenre = if (selectedGenre == it) null else it },
-                        )
-                    }
-                }
-                if (gridItems.isEmpty()) {
-                    item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
-                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
-                            if (isLoading || (!isSearching && libraryPending) || (isSearching && (state.isSearching || state.isSearchingSeries))) CircularProgressIndicator()
-                            else Text(if (isSearching) "No results" else kind.emptyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                items(gridItems, key = { it.key }) { item ->
-                    val open = { item.movieUuid?.let(onMovieClick) ?: item.seriesId?.let(onSeriesClick); Unit }
-                    MediaPosterCard(
-                        item = item,
-                        onClick = open,
-                        menu = { close ->
-                            DropdownMenuItem(text = { Text("Details") }, onClick = { close(); open() })
-                            DropdownMenuItem(
-                                text = { Text(if (item.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") },
-                                onClick = { close(); watchlistVm.toggle(item) },
-                            )
+            }
+        })
+    }
+
+    MediaPageScaffold(
+        gridState = gridState,
+        compact = compact,
+        decks = listOf(
+            PageDeck("Continue Watching", heroPages, { it.key }, heroCard),
+            PageDeck("Watchlist", watchlistPages, { it.key }, wlCard),
+        ),
+        headerTitle = if (isSearching) "Results" else kind.libraryTitle,
+        headerCount = gridItems.size,
+        sortMenu = {
+            DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
+                MediaSortOrder.entries.forEach { order ->
+                    DropdownMenuItem(
+                        text = { Text(order.label) },
+                        trailingIcon = { if (order == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
+                        onClick = {
+                            showSort = false
+                            if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(order.wire)
+                            else settingsVm.setSeriesSortOrder(order.wire)
                         },
                     )
                 }
             }
-        }
-        if (railVisible) {
-            AlphabetRail(
-                available = available,
-                onLetter = { letter ->
-                    val idx = library.indexOfFirst { it.bucket == letter }
-                    if (idx >= 0) scope.launch { gridState.scrollToItem(leadingCount + idx) }
+        },
+        onSort = { showSort = true },
+        onFilter = { showManageGroups = true },
+        searchEnabled = true,
+        searchActive = searchActive,
+        query = query,
+        onQueryChange = { submitQuery(it) },
+        onSearchToggle = { searchActive = !searchActive; if (!searchActive) submitQuery("") },
+        searchPlaceholder = if (kind == MediaKind.Movies) "Search movies" else "Search TV shows",
+        isSearching = isSearching,
+        searchExtras = searchExtras,
+        pills = genrePills,
+        selectedPill = selectedGenre,
+        onPill = { selectedGenre = it },
+        gridItems = gridItems,
+        gridKey = { it.key },
+        cell = { item ->
+            val open = { item.movieUuid?.let(onMovieClick) ?: item.seriesId?.let(onSeriesClick); Unit }
+            MediaPosterCard(
+                item = item,
+                onClick = open,
+                menu = { close ->
+                    DropdownMenuItem(text = { Text("Details") }, onClick = { close(); open() })
+                    DropdownMenuItem(
+                        text = { Text(if (item.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") },
+                        onClick = { close(); watchlistVm.toggle(item) },
+                    )
                 },
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 2.dp),
             )
-        }
-    }
+        },
+        emptyContent = {
+            if (isLoading || (!isSearching && libraryPending) || (isSearching && (state.isSearching || state.isSearchingSeries))) CircularProgressIndicator()
+            else Text(if (isSearching) "No results" else kind.emptyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        railLetters = available,
+        railIndexOf = { letter -> library.indexOfFirst { it.bucket == letter } },
+        isRefreshing = isLoading && gridItems.isNotEmpty(),
+        onRefresh = { if (kind == MediaKind.Movies) viewModel.refresh() else viewModel.refreshSeries() },
+    )
 
     if (showManageGroups && groupNames.isNotEmpty()) {
         ManageGroupsSheet(
@@ -569,63 +369,6 @@ fun MediaTabContent(
     }
 }
 
-@Composable
-private fun LibraryHeader(
-    title: String,
-    count: Int,
-    onTitleTap: () -> Unit,
-    onSearch: () -> Unit,
-    onSort: () -> Unit,
-    onFilter: () -> Unit,
-    sortMenu: @Composable () -> Unit,
-) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Row(
-            modifier = Modifier.clickable(onClick = onTitleTap),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-            Text(count.toString(), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                 modifier = Modifier.padding(bottom = 1.dp))
-        }
-        Spacer(Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HeaderCircle(Icons.Filled.Search, "Search", onSearch)
-            Box { HeaderCircle(Icons.Filled.SwapVert, "Sort", onSort); sortMenu() }
-            HeaderCircle(Icons.Filled.FilterList, "Filter", onFilter)
-        }
-    }
-}
-
-@Composable
-private fun HeaderCircle(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(38.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp))
-    }
-}
-
-@Composable
-private fun GenrePills(pills: List<String>, selected: String?, onSelect: (String?) -> Unit) {
-    EdgeToEdgePillRow {
-        item(key = "all") { GenrePill("All", selected == null) { onSelect(null) } }
-        items(pills.size, key = { pills[it] }) { i -> GenrePill(pills[i], selected == pills[i]) { onSelect(pills[i]) } }
-    }
-}
-
-/**
- * Pill row that runs to both screen edges so pills scroll off screen like
- * the iPhone's (Logan 2026-09-09): the grid pads 16 dp start and the rail
- * lane on the end, so the row is widened over both and its own content
- * padding restores the 16 dp lead.
- */
 @Composable
 internal fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact

@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -75,6 +76,10 @@ import com.aeriotv.android.feature.livetv.ProgramInfoSheet
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.movies.AlphabetRail
 import com.aeriotv.android.feature.movies.PhoneCardDeck
+import com.aeriotv.android.feature.movies.PageSectionTitle
+import com.aeriotv.android.feature.movies.PageRow
+import com.aeriotv.android.feature.movies.PageDeck
+import com.aeriotv.android.feature.movies.MediaPageScaffold
 import com.aeriotv.android.feature.movies.nearestAvailable
 import com.aeriotv.android.feature.movies.railLetters
 import com.aeriotv.android.feature.movies.stripQualityPrefix
@@ -320,129 +325,82 @@ fun DvrMediaTabContent(
         }
     }
 
-    val leadingCount = remember(continueWatching.isEmpty(), scheduled.isEmpty(), recentRecordings.size, kindsPresent.size) {
-        1 + (if (continueWatching.isNotEmpty()) 1 else 0) + (if (scheduled.isNotEmpty()) 1 else 0) +
-            (if (recentRecordings.size > 1) 1 else 0) + 1 + (if (kindsPresent.size > 1) 1 else 0)
-    }
-    val headerIndex = leadingCount - 1 - (if (kindsPresent.size > 1) 1 else 0)
-    val railVisible by remember(headerIndex, filteredLibrary.size) {
-        derivedStateOf { compact && filteredLibrary.size >= 9 && gridState.firstVisibleItemIndex >= headerIndex }
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
-        if (recordings.isEmpty() && !state.isLoading) {
+    if (recordings.isEmpty() && !state.isLoading) {
+        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
             Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No Recordings", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
                 Spacer(Modifier.height(6.dp))
                 Text("Record a program from the guide or Live TV.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        } else {
-            PullToRefreshBox(isRefreshing = state.isLoading && recordings.isNotEmpty(), onRefresh = { viewModel.refresh() }, modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    columns = if (compact) GridCells.Fixed(3) else GridCells.Adaptive(minSize = 120.dp),
-                    state = gridState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 0.dp, bottom = bottomInset + 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    item(key = "room", span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(22.dp)) }
-                    if (continueWatching.isNotEmpty()) {
-                        item(key = "cw", span = { GridItemSpan(maxLineSpan) }) {
-                            DeckSection(
-                                title = if (continueWatching.all { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording }) "Recording Now" else "Continue Watching",
-                                items = continueWatching, compact = compact,
-                            ) { rec ->
-                                DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
-                                    onPrimary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) playFromStart(rec) else play(rec) },
-                                    onSecondary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) jumpToLive(rec) else playFromStart(rec) },
-                                    onStop = { scope.launch { viewModel.stopRecording(rec) } },
-                                    onInfo = { showInfo(rec) })
+        }
+    } else {
+        // Same page as Movies and TV Shows (Logan 2026-09-09): the only
+        // difference is the second deck's title, Recently Recorded.
+        val heroCard: @Composable (Rec) -> Unit = { rec ->
+            DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
+                onPrimary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) playFromStart(rec) else play(rec) },
+                onSecondary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) jumpToLive(rec) else playFromStart(rec) },
+                onStop = { scope.launch { viewModel.stopRecording(rec) } },
+                onInfo = { showInfo(rec) })
+        }
+        val recentCard: @Composable (Rec) -> Unit = { rec ->
+            DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
+                onPrimary = { play(rec) }, onSecondary = { playFromStart(rec) },
+                onStop = {}, onInfo = { showInfo(rec) })
+        }
+        val kindPills = DvrKind.entries.filter { it in kindsPresent }
+        MediaPageScaffold(
+            gridState = gridState,
+            compact = compact,
+            decks = listOf(
+                PageDeck(
+                    if (continueWatching.isNotEmpty() && continueWatching.all { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording }) "Recording Now" else "Continue Watching",
+                    continueWatching, { it.id }, heroCard,
+                ),
+                PageDeck("Recently Recorded", if (recentRecordings.size > 1) recentRecordings else emptyList(), { it.id }, recentCard),
+            ),
+            rows = if (scheduled.isEmpty()) emptyList() else listOf(PageRow("scheduled") {
+                Column {
+                    PageSectionTitle("Scheduled")
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(scheduled.size, key = { scheduled[it].id }) { i ->
+                            val rec = scheduled[i]
+                            Box(modifier = Modifier.width(150.dp)) {
+                                DvrPosterCard(rec, channelLogo(rec), 0f, now, onClick = { showInfo(rec) }, menu = { close -> menuItems(rec, close) })
                             }
-                        }
-                    }
-                    if (scheduled.isNotEmpty()) {
-                        item(key = "scheduled", span = { GridItemSpan(maxLineSpan) }) {
-                            Column {
-                                SectionTitle("Scheduled")
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    items(scheduled.size, key = { scheduled[it].id }) { i ->
-                                        val rec = scheduled[i]
-                                        Box(modifier = Modifier.width(150.dp)) {
-                                            DvrPosterCard(rec, channelLogo(rec), 0f, now, onClick = { showInfo(rec) }, menu = { close -> menuItems(rec, close) })
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (recentRecordings.size > 1) {
-                        item(key = "recent", span = { GridItemSpan(maxLineSpan) }) {
-                            DeckSection(title = "Recent Recordings", items = recentRecordings, compact = compact) { rec ->
-                                DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
-                                    onPrimary = { play(rec) }, onSecondary = { playFromStart(rec) },
-                                    onStop = {}, onInfo = { showInfo(rec) })
-                            }
-                        }
-                    }
-                    if (library.isNotEmpty()) {
-                        item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Row(
-                                    modifier = Modifier.clickable { scope.launch { gridState.animateScrollToItem(headerIndex) } },
-                                    verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    Text("All Recordings", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(filteredLibrary.size.toString(), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.padding(bottom = 1.dp))
-                                }
-                                Spacer(Modifier.weight(1f))
-                                Box {
-                                    Box(
-                                        modifier = Modifier.size(38.dp).clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
-                                            .clickable { showSort = true },
-                                        contentAlignment = Alignment.Center,
-                                    ) { Icon(Icons.Filled.SwapVert, contentDescription = "Sort", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp)) }
-                                    DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
-                                        DvrSortOrder.entries.forEach { o ->
-                                            DropdownMenuItem(
-                                                text = { Text(o.label) },
-                                                trailingIcon = { if (o == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
-                                                onClick = { showSort = false; settingsVm.setDvrSortOrder(o.wire) },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if (kindsPresent.size > 1) {
-                            item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
-                                // Same pill and edge-to-edge row as Movies (Logan 2026-09-09).
-                                com.aeriotv.android.feature.movies.EdgeToEdgePillRow {
-                                    item { com.aeriotv.android.feature.movies.GenrePill("All", selectedKind == null) { selectedKind = null } }
-                                    DvrKind.entries.filter { it in kindsPresent }.forEach { k ->
-                                        item(key = k.name) { com.aeriotv.android.feature.movies.GenrePill(k.label, selectedKind == k) { selectedKind = if (selectedKind == k) null else k } }
-                                    }
-                                }
-                            }
-                        }
-                        items(filteredLibrary, key = { it.id }) { rec ->
-                            DvrPosterCard(rec, channelLogo(rec), progressOf(rec), now, onClick = { play(rec) }, menu = { close -> menuItems(rec, close) })
                         }
                     }
                 }
-            }
-            if (railVisible) {
-                AlphabetRail(
-                    available = available,
-                    onLetter = { letter ->
-                        val idx = filteredLibrary.indexOfFirst { bucket(it.title) == letter }
-                        if (idx >= 0) scope.launch { gridState.scrollToItem(leadingCount + idx) }
-                    },
-                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 2.dp),
-                )
-            }
-        }
+            }),
+            headerTitle = "All Recordings",
+            headerCount = filteredLibrary.size,
+            sortMenu = {
+                DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
+                    DvrSortOrder.entries.forEach { o ->
+                        DropdownMenuItem(
+                            text = { Text(o.label) },
+                            trailingIcon = { if (o == sortOrder) Icon(Icons.Filled.Check, contentDescription = null) },
+                            onClick = { showSort = false; settingsVm.setDvrSortOrder(o.wire) },
+                        )
+                    }
+                }
+            },
+            onSort = { showSort = true },
+            pills = if (kindPills.size > 1) kindPills.map { it.label } else emptyList(),
+            selectedPill = selectedKind?.label,
+            onPill = { label -> selectedKind = kindPills.firstOrNull { it.label == label } },
+            gridItems = filteredLibrary,
+            gridKey = { it.id },
+            cell = { rec -> DvrPosterCard(rec, channelLogo(rec), progressOf(rec), now, onClick = { play(rec) }, menu = { close -> menuItems(rec, close) }) },
+            emptyContent = {
+                if (state.isLoading) CircularProgressIndicator()
+                else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            },
+            railLetters = available,
+            railIndexOf = { letter -> filteredLibrary.indexOfFirst { bucket(it.title) == letter } },
+            isRefreshing = state.isLoading && recordings.isNotEmpty(),
+            onRefresh = { viewModel.refresh() },
+        )
     }
 
     infoTarget?.let { ProgramInfoSheet(target = it, onDismiss = { infoTarget = null }) }
@@ -475,37 +433,6 @@ fun DvrMediaTabContent(
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Keep") } },
         )
-    }
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 10.dp))
-}
-
-@Composable
-private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, card: @Composable (T) -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        SectionTitle(title)
-        if (compact) {
-            Box(modifier = Modifier.layout { measurable, constraints ->
-                                    // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over both 18 dp grid margins;
-                                    // the deck clips itself at the front card's edge.
-                                    val extra = 18.dp.roundToPx() + 18.dp.roundToPx()
-                                    val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
-                                    layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-18.dp.roundToPx(), 0) }
-                                }) {
-                PhoneCardDeck(items = items, cardHeight = 220.dp, key = { (it as Rec).id }, leadInset = 8.dp) { item, _ -> card(item) }
-            }
-        } else {
-            val pagerState = androidx.compose.foundation.pager.rememberPagerState { items.size }
-            androidx.compose.foundation.pager.HorizontalPager(
-                state = pagerState, pageSize = androidx.compose.foundation.pager.PageSize.Fill, pageSpacing = 8.dp,
-                modifier = Modifier.fillMaxWidth(),
-                pageContent = { i -> Box(modifier = Modifier.fillMaxWidth(0.62f)) { card(items[i]) } },
-            )
-        }
     }
 }
 
