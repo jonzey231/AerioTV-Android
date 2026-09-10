@@ -57,14 +57,17 @@ fun GuideJumpSheet(
     var dayOffset by remember { mutableStateOf(0) }
     var slotHour by remember { mutableStateOf(-1) }
 
-    fun dayLabel(offset: Int): String = when (offset) {
-        -1 -> "Yesterday"
-        0 -> "Today"
-        1 -> "Tomorrow"
-        else -> {
-            val c = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, offset) }
-            java.text.SimpleDateFormat("EEEE", Locale.getDefault()).format(c.time)
+    // "Today, Sep 10" / "Tomorrow, Sep 11" / "Sat, Sep 12" (Logan 2026-09-10:
+    // every day pill carries its date; tvOS GuideJumpSheet.dayLabel).
+    fun dayLabel(offset: Int): String {
+        val c = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, offset) }
+        val name = when (offset) {
+            -1 -> "Yesterday"
+            0 -> "Today"
+            1 -> "Tomorrow"
+            else -> java.text.SimpleDateFormat("EEE", Locale.getDefault()).format(c.time)
         }
+        return name + ", " + java.text.SimpleDateFormat("MMM d", Locale.getDefault()).format(c.time)
     }
     fun target(): Long {
         val c = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, dayOffset) }
