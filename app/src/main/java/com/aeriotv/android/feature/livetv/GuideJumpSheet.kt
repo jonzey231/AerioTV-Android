@@ -87,14 +87,22 @@ fun GuideJumpSheet(
         // rows (MoviesPillStyle = TvPill), the target as a summary line, then
         // Go as a selected pill and Back to Now as an unselected one.
         FormFactorModal(onDismiss = onDismiss, tvWidthFraction = 0.62f, sheetMaxWidth = 600.dp) {
-            Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                 Text("Jump To", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Day", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        dayOffsets.forEach { offset -> com.aeriotv.android.ui.tv.TvPill(dayLabel(offset), dayOffset == offset, onClick = { dayOffset = offset }) }
+                // Days in three groups (Logan 2026-09-10): Today, Upcoming, Previous.
+                @Composable
+                fun dayGroup(title: String, offsets: List<Int>) {
+                    if (offsets.isEmpty()) return
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            offsets.forEach { offset -> com.aeriotv.android.ui.tv.TvPill(dayLabel(offset), dayOffset == offset, onClick = { dayOffset = offset }) }
+                        }
                     }
                 }
+                dayGroup("Today", listOf(0))
+                dayGroup("Upcoming", dayOffsets.filter { it > 0 })
+                dayGroup("Previous", dayOffsets.filter { it < 0 }.reversed())
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Time", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
