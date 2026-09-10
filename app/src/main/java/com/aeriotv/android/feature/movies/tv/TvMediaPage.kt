@@ -246,6 +246,8 @@ fun <T> TvMediaPage(
 
     val heroPrimary = remember { FocusRequester() }
     val firstCell = remember { FocusRequester() }
+    /** The All pill: where the pill row is entered from above or below (Logan 2026-09-10). */
+    val allPill = remember { FocusRequester() }
     // A focus-driven scroll to the top: the bring-into-view spec stands down
     // while it runs (its own request otherwise raced the snap and left the
     // hero a third off screen, Logan 2026-09-10) and a hard snap ends it.
@@ -469,7 +471,6 @@ fun <T> TvMediaPage(
                 item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
                     // Entering the row from the sort circle above or the grid
                     // below always lands on All (Logan 2026-09-10).
-                    val allPill = remember { FocusRequester() }
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         contentPadding = PaddingValues(start = TvPage.contentInset, end = TvPage.heroInset),
@@ -505,6 +506,10 @@ fun <T> TvMediaPage(
                     )
                     .focusRequester(requester)
                     .then(if (index == 0) Modifier.focusRequester(firstCell) else Modifier)
+                    // Top row: Up lands on the All pill, not whatever the
+                    // geometric search picks above the row (it skipped the
+                    // pill group and reached the sort circle, Logan 2026-09-10).
+                    .then(if (pillRow && index < columns) Modifier.focusProperties { up = allPill } else Modifier)
                     .onFocusChanged { if (it.isFocused) focusedCellKey = k else if (focusedCellKey == k) focusedCellKey = null }
                     .onPreviewKeyEvent { ev ->
                         vodGridDpadFallback(ev, index, gridItems.size, gridState, focusManager, scope) { i ->
