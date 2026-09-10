@@ -34,6 +34,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -91,7 +92,10 @@ fun TvPill(
     // Unselected fill is a white wash rather than the card colour: on the
     // translucent sheets the card colour vanished into the surface (Logan
     // 2026-09-10), a wash reads on the guide and on every dialog alike.
-    val fill = if (selected) colors.primary else colors.onSurface.copy(alpha = 0.12f)
+    // Solid, not see-through (Logan 2026-09-10): the wash is pre-composited
+    // over the card colour so nothing behind the sheet shows through a pill.
+    val fill = if (selected) colors.primary
+    else colors.onSurface.copy(alpha = 0.12f).compositeOver(colors.surface)
     val ink = when {
         selected -> colors.onPrimary
         focused -> colors.onSurface
@@ -99,7 +103,6 @@ fun TvPill(
     }
     Row(
         modifier = modifier
-            .alpha(if (focused || selected) 1f else 0.85f)
             .tvFocusScale(focused, focusedScale = 1.05f)
             .clip(CircleShape)
             .background(fill)
