@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -82,25 +85,39 @@ fun GuideJumpSheet(
     }
 
     val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val clockMode = com.aeriotv.android.core.ui.rememberClockMode()
     if (isTv) {
         // tvOS GuideJumpSheet (halved): 38 pt bold title, Day and Time pill
         // rows (MoviesPillStyle = TvPill), the target as a summary line, then
         // Go as a selected pill and Back to Now as an unselected one.
         FormFactorModal(onDismiss = onDismiss, tvWidthFraction = 0.62f, sheetMaxWidth = 600.dp) {
-            Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            // Scrolls so focus pulls the last rows in when every group is
+            // populated; the modal caps its height below the 540 dp canvas.
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text("Jump To", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
                 // Days in three groups (Logan 2026-09-10): Today, Upcoming,
                 // Previous. Labels are formatted once; each group is a single
                 // horizontally scrolling row like the tvOS pill rows.
                 val dayLabels = remember(dayOffsets) { dayOffsets.associateWith { dayLabel(it) } }
+                val timeLabels = remember(clockMode) {
+                    val f = com.aeriotv.android.core.ui.ClockFormat.short(clockMode)
+                    slots.filter { it.second >= 0 }.associate { (_, h) -> h to f.format((today.clone() as Calendar).apply { set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, 0) }.time) }
+                }
                 @Composable
                 fun dayGroup(title: String, offsets: List<Int>) {
                     if (offsets.isEmpty()) return
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // 5 dp of slack all round so the focused pill's 1.05
+                        // scale and ring are not clipped by the row; the row
+                        // is shifted left by the same amount to stay flush.
                         androidx.compose.foundation.lazy.LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 3.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 5.dp, vertical = 5.dp),
+                            modifier = Modifier.fillMaxWidth().offset(x = (-5).dp),
                         ) {
                             items(offsets.size, key = { offsets[it] }) { i ->
                                 val offset = offsets[i]
@@ -112,16 +129,18 @@ fun GuideJumpSheet(
                 dayGroup("Today", listOf(0))
                 dayGroup("Upcoming", dayOffsets.filter { it > 0 })
                 dayGroup("Previous", dayOffsets.filter { it < 0 }.reversed())
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Time", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     androidx.compose.foundation.lazy.LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 3.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 5.dp, vertical = 5.dp),
+                        modifier = Modifier.fillMaxWidth().offset(x = (-5).dp),
                     ) {
-                        // tvOS labels carry no hour; the summary line shows the time.
+                        // Clock times, not descriptions (Logan 2026-09-10).
                         items(slots.size, key = { slots[it].second }) { i ->
                             val (label, hour) = slots[i]
-                            com.aeriotv.android.ui.tv.TvPill(label, slotHour == hour, onClick = { slotHour = hour })
+                            val text = if (hour == -1) label else timeLabels[hour] ?: label
+                            com.aeriotv.android.ui.tv.TvPill(text, slotHour == hour, onClick = { slotHour = hour })
                         }
                     }
                 }
@@ -129,7 +148,7 @@ fun GuideJumpSheet(
                     java.text.SimpleDateFormat("EEEE, MMMM d, yyyy 'at' h:mm a", Locale.getDefault()).format(java.util.Date(target())),
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 4.dp)) {
                     com.aeriotv.android.ui.tv.TvPill("Go", selected = true, onClick = { onJump(target()); onDismiss() })
                     com.aeriotv.android.ui.tv.TvPill("Back to Now", selected = false, onClick = { onBackToNow(); onDismiss() })
                 }
