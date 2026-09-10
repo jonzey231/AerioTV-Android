@@ -40,6 +40,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.aeriotv.android.ui.tv.tvFocusScale
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
@@ -75,27 +77,41 @@ internal fun TvManageGroupsCircle(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    com.aeriotv.android.ui.tv.TvActionCircle(
-        icon = Icons.Outlined.Tune,
-        contentDescription = if (hiddenGroupsCount == 0) "Manage groups"
-        else "Manage groups ($hiddenGroupsCount hidden)",
-        onClick = onClick,
-        modifier = modifier,
-        badge = if (hiddenGroupsCount > 0) {
-            {
-                // iOS parity (ManageGroupsButton): warning dot when groups are
-                // hidden, so a user who cannot find a group has a visible reason.
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 3.dp, end = 3.dp)
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFFFA502)),
-                )
-            }
-        } else null,
-    )
+    // tvOS TVManageGroupsButtonStyle (ManageGroupsSheet.swift): a 30 pt
+    // accent glyph with 7 pt padding on the elevated fill, white glyph +
+    // accent 2 pt ring + 1.05 scale on focus, 0.85 alpha at rest. Halved.
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val colors = MaterialTheme.colorScheme
+    Box(
+        modifier = modifier
+            .alpha(if (focused) 1f else 0.85f)
+            .tvFocusScale(focused, focusedScale = 1.05f)
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(colors.surfaceVariant)
+            .border(2.dp, if (focused) colors.primary else Color.Transparent, CircleShape)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Tune,
+            contentDescription = if (hiddenGroupsCount == 0) "Manage groups"
+            else "Manage groups ($hiddenGroupsCount hidden)",
+            tint = if (focused) Color.White else colors.primary,
+            modifier = Modifier.size(14.dp),
+        )
+        if (hiddenGroupsCount > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 1.dp, end = 1.dp)
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFFA502)),
+            )
+        }
+    }
 }
 
 /**

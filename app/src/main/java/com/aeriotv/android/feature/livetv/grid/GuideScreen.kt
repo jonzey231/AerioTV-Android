@@ -658,11 +658,15 @@ fun GuideScreen(
     // under the time header, the rest of the tab dims 45%, the grid does not
     // shift. Right or OK commit, Back reverts (handlers unchanged).
     if (groupSidebarOpen && isTv) {
-        Box(modifier = Modifier.fillMaxSize().padding(top = headerHeight).background(Color.Black.copy(alpha = 0.45f)))
+        // Under the time header wherever it sits: below the Channel Preview
+        // banner (lifted 14 dp under the bar) when that layout is on.
+        val drawerTop = headerHeight + (if (previewMode) GuidePreviewBanner.height - 14.dp else 0.dp)
+        // tvOS dims the whole tab (banner included); only the nav bar stays lit.
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
         GuideGroupSidebarPane(
             groups = groups,
             selectedToken = state.selectedGroup,
-            topOffset = headerHeight,
+            topOffset = drawerTop,
             onPreview = { token -> viewModel.onGroupSelected(token) },
             onCommit = { token ->
                 if (token != state.selectedGroup) viewModel.onGroupSelected(token)
