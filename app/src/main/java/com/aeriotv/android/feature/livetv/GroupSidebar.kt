@@ -420,7 +420,15 @@ internal fun GuideGroupSidebarPane(
                 // never rests on Favorites for a frame before the
                 // LaunchedEffect moves it (Logan 2026-09-10, visible jump).
                 .focusGroup()
-                .focusProperties { @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class) run { enter = { focus } } }
+                .focusProperties {
+                    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+                    run {
+                        enter = { focus }
+                        // Focus stays inside the drawer while it is open
+                        // (Logan 2026-09-10); Right commits, Back closes.
+                        exit = { androidx.compose.ui.focus.FocusRequester.Cancel }
+                    }
+                }
                 .onPreviewKeyEvent { event ->
                     if (event.key == androidx.compose.ui.input.key.Key.DirectionRight &&
                         event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown

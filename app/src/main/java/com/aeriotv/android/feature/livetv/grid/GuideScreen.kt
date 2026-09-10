@@ -686,6 +686,16 @@ fun GuideScreen(
             )
         }
         if (drawerSlot != null) {
+            // As with Jump To: the shell reseats focus (Refresh circle) once
+            // the overlay is gone, after the commit asked for the grid.
+            var drawerWasOpen by remember { mutableStateOf(false) }
+            LaunchedEffect(groupSidebarOpen) {
+                if (groupSidebarOpen) { drawerWasOpen = true; return@LaunchedEffect }
+                if (!drawerWasOpen) return@LaunchedEffect
+                drawerWasOpen = false
+                repeat(3) { androidx.compose.runtime.withFrameNanos { } }
+                runCatching { gridFocus.requestFocus() }
+            }
             androidx.compose.runtime.DisposableEffect(groupSidebarOpen) {
                 if (groupSidebarOpen) drawerSlot.value = drawerOverlay
                 else if (drawerSlot.value === drawerOverlay) drawerSlot.value = null
