@@ -112,6 +112,8 @@ internal fun GroupSidebarPanel(
     onManageGroups: (() -> Unit)? = null,
     /** Warning dot on that button when groups are currently hidden. */
     hiddenGroupCount: Int = 0,
+    /** TV drawer: hold focus inside the panel at every edge. */
+    trapFocus: Boolean = false,
 ) {
     val listState = rememberLazyListState()
     val manageFocus = remember { FocusRequester() }
@@ -177,15 +179,27 @@ internal fun GroupSidebarPanel(
         modifier = modifier
             .then(if (isTv) Modifier.fillMaxWidth() else Modifier.width(panelWidth))
             .onPreviewKeyEvent { event ->
-                if (onManageGroups == null ||
-                    manageFocused ||
-                    focusedRowIndex != 0 ||
-                    event.key != androidx.compose.ui.input.key.Key.DirectionUp ||
-                    event.type != androidx.compose.ui.input.key.KeyEventType.KeyDown
-                ) {
-                    false
-                } else {
-                    runCatching { manageFocus.requestFocus() }.isSuccess
+                val down = event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
+                val key = event.key
+                when {
+                    // TV: focus never leaves the open drawer (Logan
+                    // 2026-09-10). A focusProperties exit = Cancel trap also
+                    // cancelled the in-pane hop from the list to the Manage
+                    // Groups circle, so the edges are held by key instead:
+                    // Left always, Up on the circle (or the top row when
+                    // there is no circle), Down on the last row. Right
+                    // commits in the pane, Back closes.
+                    isTv && trapFocus && down && key == androidx.compose.ui.input.key.Key.DirectionLeft -> true
+                    isTv && trapFocus && key == androidx.compose.ui.input.key.Key.DirectionUp &&
+                        (manageFocused || (onManageGroups == null && focusedRowIndex == 0)) -> true
+                    isTv && trapFocus && key == androidx.compose.ui.input.key.Key.DirectionDown &&
+                        focusedRowIndex == groups.lastIndex -> true
+                    onManageGroups == null ||
+                        manageFocused ||
+                        focusedRowIndex != 0 ||
+                        key != androidx.compose.ui.input.key.Key.DirectionUp ||
+                        !down -> false
+                    else -> runCatching { manageFocus.requestFocus() }.isSuccess
                 }
             },
     ) {
@@ -219,8 +233,12 @@ internal fun GroupSidebarPanel(
         }
         LazyColumn(
             state = listState,
+            // The pane's exit = Cancel is inherited by the list's own focus
+            // group, which blocked Up from the top row into the Manage
+            // Groups circle (Logan 2026-09-10). Restore the default here so
+            // only leaving the PANE is cancelled.
             verticalArrangement = Arrangement.spacedBy(if (isTv) 2.dp else 3.dp),
-            modifier = Modifier.fillMaxHeight(),
+            modifier = Modifier.fillMaxHeight().focusProperties { @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class) run { exit = { FocusRequester.Default } } },
         ) {
             itemsIndexed(groups, key = { _, token -> token }) { index, token ->
                 GroupSidebarRow(
@@ -233,11 +251,15 @@ internal fun GroupSidebarPanel(
                         focusedRowIndex = index
                         onRowFocused(token)
                     },
-                    modifier = if (index == selectedIndex && initialFocus != null) {
+                    modifier = (if (index == selectedIndex && initialFocus != null) {
                         Modifier.focusRequester(initialFocus)
                     } else {
                         Modifier
-                    },
+                    })
+                        // Up from the top row reaches Manage Groups by
+                        // focus property as well as the key intercept above:
+                        // the pane's exit=Cancel trap otherwise swallows it.
+                        .then(if (index == 0 && onManageGroups != null) Modifier.focusProperties { up = manageFocus } else Modifier),
                 )
             }
         }
@@ -424,9 +446,6 @@ internal fun GuideGroupSidebarPane(
                     @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
                     run {
                         enter = { focus }
-                        // Focus stays inside the drawer while it is open
-                        // (Logan 2026-09-10); Right commits, Back closes.
-                        exit = { androidx.compose.ui.focus.FocusRequester.Cancel }
                     }
                 }
                 .onPreviewKeyEvent { event ->
@@ -448,6 +467,7 @@ internal fun GuideGroupSidebarPane(
                 onRowFocused = { focusedToken = it },
                 onManageGroups = onManageGroups,
                 hiddenGroupCount = hiddenGroupCount,
+                trapFocus = true,
             )
         }
         // Hairline separating the menu from the shifted guide; same token as
