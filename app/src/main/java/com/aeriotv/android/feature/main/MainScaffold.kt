@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberSmartRecord
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -1207,7 +1208,9 @@ private fun CompanionControlFab(onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = Icons.Filled.Tv,
+            // Google's Cast glyph (Logan 2026-09-09): the Tv glyph doubled
+            // as the TV Shows tab icon.
+            imageVector = Icons.Filled.Cast,
             contentDescription = "Control a TV",
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(22.dp),
