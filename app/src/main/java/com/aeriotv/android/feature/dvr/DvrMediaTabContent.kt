@@ -342,7 +342,7 @@ fun DvrMediaTabContent(
                     columns = if (compact) GridCells.Fixed(3) else GridCells.Adaptive(minSize = 120.dp),
                     state = gridState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = if (compact) 34.dp else 16.dp, top = 0.dp, bottom = bottomInset + 16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = bottomInset + 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
@@ -490,9 +490,9 @@ private fun <T> DeckSection(title: String, items: List<T>, compact: Boolean, car
         if (compact) {
             Box(modifier = Modifier.layout { measurable, constraints ->
                                     // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
-                                    // end side only; the deck clips itself at the front card's edge.
-                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
+                                    // RIGHT SCREEN EDGE, so widen over both 16 dp margins; the
+                                    // deck clips itself at the front card's edge.
+                                    val extra = 16.dp.roundToPx() + 16.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
                                     layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
                                 }) {

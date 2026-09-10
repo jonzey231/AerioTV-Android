@@ -271,7 +271,7 @@ fun MediaTabContent(
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val searchRoom: androidx.compose.ui.unit.Dp = run {
         val viewport = configuration.screenHeightDp.dp
-        val cellW = (configuration.screenWidthDp.dp - 16.dp - 34.dp - 20.dp) / 3
+        val cellW = (configuration.screenWidthDp.dp - 16.dp - 16.dp - 20.dp) / 3
         val rowH = cellW * 1.5f + 62.dp + 16.dp
         val rows = (gridItems.size + 2) / 3
         val content = 56.dp + 72.dp + rowH * rows + bottomInset + 16.dp
@@ -299,7 +299,9 @@ fun MediaTabContent(
                 state = gridState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    start = 16.dp, end = if (compact) 16.dp + 18.dp else 16.dp,
+                    // Symmetric margins so the posters sit centered (Logan
+                    // 2026-09-09); the alphabet rail overlays the right edge.
+                    start = 16.dp, end = 16.dp,
                     // While searching, extra bottom room keeps the header (and
                     // the field) pinned at the top as the results narrow; the
                     // grid shrank and the header drifted back down otherwise.
@@ -340,9 +342,9 @@ fun MediaTabContent(
                                 // peek out to the right inside the content margin.
                                 Box(modifier = Modifier.layout { measurable, constraints ->
                                     // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
-                                    // end side only; the deck clips itself at the front card's edge.
-                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
+                                    // RIGHT SCREEN EDGE, so widen over both 16 dp margins; the
+                                    // deck clips itself at the front card's edge.
+                                    val extra = 16.dp.roundToPx() + 16.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
                                     layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
                                 }) {
@@ -386,9 +388,9 @@ fun MediaTabContent(
                             if (compact) {
                                 Box(modifier = Modifier.layout { measurable, constraints ->
                                     // iPhone: the deck runs from the 16 dp content margin to the
-                                    // RIGHT SCREEN EDGE, so widen over the 34 dp rail lane on the
-                                    // end side only; the deck clips itself at the front card's edge.
-                                    val extra = 16.dp.roundToPx() + 34.dp.roundToPx()
+                                    // RIGHT SCREEN EDGE, so widen over both 16 dp margins; the
+                                    // deck clips itself at the front card's edge.
+                                    val extra = 16.dp.roundToPx() + 16.dp.roundToPx()
                                     val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
                                     layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-16.dp.roundToPx(), 0) }
                                 }) {
@@ -627,7 +629,7 @@ private fun GenrePills(pills: List<String>, selected: String?, onSelect: (String
 @Composable
 internal fun EdgeToEdgePillRow(content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val compact = rememberLiveTvFormFactor().widthClass == WindowWidthSizeClass.Compact
-    val endLane = if (compact) 16.dp + 18.dp else 16.dp
+    val endLane = 16.dp
     Box(modifier = Modifier.layout { measurable, constraints ->
         val extra = 16.dp.roundToPx() + endLane.roundToPx()
         val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = 0))
