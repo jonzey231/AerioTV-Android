@@ -1,6 +1,9 @@
 package com.aeriotv.android.feature.movies
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -68,6 +71,10 @@ fun <T> PhoneCardDeck(
     val count = items.size
     var index by remember(count) { mutableIntStateOf(0) }
     val drag = remember { Animatable(0f) }
+    // True from finger-up until the deck has settled: card positions animate
+    // then (the swiped card travels round to the back of the stack, iPhone
+    // parity, Logan 2026-09-09) and snap while the finger drives them.
+    var settling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val margin = 10.dp
@@ -101,14 +108,16 @@ fun <T> PhoneCardDeck(
                     onDragEnd = {
                         val dx = drag.value
                         scope.launch {
+                            settling = true
                             when {
                                 dx < -commitPx && count > 1 -> { index = (index + 1) % count; drag.snapTo(dx + cardWPx) }
                                 dx > commitPx && count > 1 -> { index = (index - 1 + count) % count; drag.snapTo(dx - cardWPx) }
                             }
                             drag.animateTo(0f, spring(dampingRatio = 0.85f, stiffness = 300f))
+                            settling = false
                         }
                     },
-                    onDragCancel = { scope.launch { drag.animateTo(0f) } },
+                    onDragCancel = { scope.launch { settling = true; drag.animateTo(0f); settling = false } },
                 )
             }
             // Clipped at the deck's own edge, which the callers put at the
@@ -120,31 +129,45 @@ fun <T> PhoneCardDeck(
                 // as the outgoing card, which read as the image reloading).
                 val single = count == 1
                 items.forEachIndexed { i, item ->
-                    val rel = if (single) 0f else wrapped(i - p)
-                    if (rel <= -1.5f || rel >= 3.5f) return@forEachIndexed
+                    val relRaw = if (single) 0f else wrapped(i - p)
+                    // Decks of any size behave like a four-card deck: the last
+                    // card at rest takes the rear slot (iPhone parity).
+                    val rel = if (count > 4 && abs(relRaw - (count - 1f)) < 0.0001f) 3f else relRaw
+                    // One hidden card is built behind the visible three so its
+                    // art is loaded before it shows.
+                    if (rel <= -1.5f || rel >= 4.5f) return@forEachIndexed
                     val front = abs(rel) < 0.02f
                     val clamped = rel.coerceAtMost(3f)
                     val front0 = leadInset + margin
-                    val xDp: Dp = when {
+                    val xTarget: Dp = when {
                         single -> front0 + with(density) { (drag.value * 0.35f).toDp() }
                         rel >= 0f -> front0 + peek * clamped
                         else -> front0 - (cardW + front0) * (-rel).coerceAtMost(1f)
                     }
-                    val scale = if (rel >= 0f) 1f - clamped * 0.03f else 1f
-                    val alpha = if (rel >= 0f) 1f - clamped * 0.2f else 1f
-                    Box(
-                        modifier = Modifier
-                            .width(cardW)
-                            .height(cardHeight)
-                            .offset { IntOffset(with(density) { xDp.roundToPx() }, 0) }
-                            .zIndex(10f - rel)
-                            .graphicsLayer {
-                                scaleX = scale; scaleY = scale
-                                transformOrigin = TransformOrigin(1f, 0.5f)
-                            }
-                            .alpha(alpha.coerceIn(0f, 1f)),
-                    ) {
-                        androidx.compose.runtime.key(key(item)) { card(item, front) }
+                    val scaleTarget = if (rel >= 0f) 1f - clamped * 0.03f else 1f
+                    val alphaTarget = if (rel >= 0f) 1f - clamped * 0.2f else 1f
+                    androidx.compose.runtime.key(key(item)) {
+                        // Snap under the finger; animate while settling so the
+                        // jump from off-screen to the rear slot is a visible trip.
+                        val spec: androidx.compose.animation.core.AnimationSpec<Float> =
+                            if (settling) spring(dampingRatio = 0.85f, stiffness = 300f) else snap()
+                        val xPx by animateFloatAsState(with(density) { xTarget.toPx() }, spec, label = "deckX")
+                        val scale by animateFloatAsState(scaleTarget, spec, label = "deckScale")
+                        val alpha by animateFloatAsState(alphaTarget, spec, label = "deckAlpha")
+                        Box(
+                            modifier = Modifier
+                                .width(cardW)
+                                .height(cardHeight)
+                                .offset { IntOffset(xPx.roundToInt(), 0) }
+                                .zIndex(10f - rel)
+                                .graphicsLayer {
+                                    scaleX = scale; scaleY = scale
+                                    transformOrigin = TransformOrigin(1f, 0.5f)
+                                }
+                                .alpha(alpha.coerceIn(0f, 1f)),
+                        ) {
+                            card(item, front)
+                        }
                     }
                 }
             }
