@@ -75,44 +75,27 @@ internal fun TvManageGroupsCircle(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    Box(
-        modifier = modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            .then(
-                if (focused) Modifier.border(2.dp, Color.White, CircleShape) else Modifier,
-            )
-            // clickable() already contributes the focus target. Chaining a
-            // second focusable() on the same interaction source nests two focus
-            // nodes, and on the Streamer the D-pad walked straight past this
-            // button to the top nav bar. The guide's own TV pills use the bare
-            // clickable form and focus correctly, so match them exactly.
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Tune,
-            contentDescription = if (hiddenGroupsCount == 0) "Manage groups"
-            else "Manage groups ($hiddenGroupsCount hidden)",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
-        )
-        // iOS parity (ManageGroupsButton): warning dot when groups are hidden,
-        // so a user who cannot find a group has a visible reason to open this.
-        if (hiddenGroupsCount > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 3.dp, end = 3.dp)
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFFFA502)),
-            )
-        }
-    }
+    com.aeriotv.android.ui.tv.TvActionCircle(
+        icon = Icons.Outlined.Tune,
+        contentDescription = if (hiddenGroupsCount == 0) "Manage groups"
+        else "Manage groups ($hiddenGroupsCount hidden)",
+        onClick = onClick,
+        modifier = modifier,
+        badge = if (hiddenGroupsCount > 0) {
+            {
+                // iOS parity (ManageGroupsButton): warning dot when groups are
+                // hidden, so a user who cannot find a group has a visible reason.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 3.dp, end = 3.dp)
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFFFA502)),
+                )
+            }
+        } else null,
+    )
 }
 
 /**
@@ -126,26 +109,13 @@ internal fun TvRetainedChannelsCircle(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    Box(
-        modifier = modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            .then(
-                if (focused) Modifier.border(2.dp, Color.White, CircleShape) else Modifier,
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = Icons.Filled.FiberSmartRecord,
-            contentDescription = "$count channels kept live",
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp),
-        )
-    }
+    com.aeriotv.android.ui.tv.TvActionCircle(
+        icon = Icons.Filled.FiberSmartRecord,
+        contentDescription = "$count channels kept live",
+        onClick = onClick,
+        modifier = modifier,
+        accentGlyph = true,
+    )
 }
 
 /**

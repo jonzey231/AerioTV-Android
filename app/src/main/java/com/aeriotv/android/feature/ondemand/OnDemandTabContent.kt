@@ -103,6 +103,8 @@ import com.aeriotv.android.core.network.DispatcharrVODMovie
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.main.LocalTvChromeCollapsed
+import com.aeriotv.android.ui.tv.rememberVodReturnFocus
+import com.aeriotv.android.ui.tv.vodGridDpadFallback
 import com.aeriotv.android.feature.main.collapsibleChrome
 import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
 import com.aeriotv.android.feature.miniplayer.MiniPlayerViewModel
@@ -1083,99 +1085,6 @@ private const val UNCATEGORIZED = "Uncategorized"
  * otherwise the window's initial-focus assignment parks focus on the top nav
  * pills (user report).
  */
-/**
- * TV poster grids: Compose's own focus search cannot see a row that is not
- * composed yet, so Down at the last visible row either did nothing or
- * hopped sideways (Logan 2026-09-02, Streamer). Scroll the target row in
- * and focus it directly; consume a Down with no row below so the sideways
- * hop never happens. Up at the top row falls through to the header.
- */
-private fun vodGridDpadFallback(
-    event: androidx.compose.ui.input.key.KeyEvent,
-    index: Int,
-    count: Int,
-    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
-    focusManager: androidx.compose.ui.focus.FocusManager,
-    scope: kotlinx.coroutines.CoroutineScope,
-    requesterAt: (Int) -> FocusRequester,
-): Boolean {
-    if (event.type != KeyEventType.KeyDown) return false
-    val dir = when (event.key) {
-        Key.DirectionDown -> 1
-        Key.DirectionUp -> -1
-        else -> return false
-    }
-    val cols = (gridState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.column } ?: -1) + 1
-    if (cols <= 0) return false
-    val lastRow = (count - 1) / cols
-    val row = index / cols
-    val targetRow = row + dir
-    if (targetRow < 0) return false
-    if (targetRow > lastRow) return true
-    val target = minOf(index + dir * cols, count - 1)
-    if (focusManager.moveFocus(
-            if (dir > 0) androidx.compose.ui.focus.FocusDirection.Down
-            else androidx.compose.ui.focus.FocusDirection.Up,
-        )
-    ) return true
-    scope.launch {
-        runCatching { gridState.scrollToItem(target) }
-        repeat(6) {
-            androidx.compose.runtime.withFrameNanos { }
-            if (runCatching { requesterAt(target).requestFocus() }.isSuccess) return@launch
-        }
-    }
-    return true
-}
-
-private class VodReturnFocusState(
-    private val isTv: Boolean,
-    private val pendingKeyState: MutableState<String?>,
-) {
-    val requester = FocusRequester()
-    private val pendingKey: String? get() = pendingKeyState.value
-
-    /** Record the item being opened so focus can return to it after BACK.
-     *  Call right before the navigation callback. */
-    fun arm(key: String) {
-        if (isTv) pendingKeyState.value = key
-    }
-
-    /** The [FocusRequester] for [key]'s item, or null for every other item. */
-    fun requesterFor(key: String): FocusRequester? =
-        if (isTv && key == pendingKey) requester else null
-
-    /** One-shot on the return composition: focus the armed item. The item
-     *  composes a frame or two after the grid restores its scroll position,
-     *  so retry until the requester is attached, then re-assert once more a
-     *  few frames later in case the initial-focus fallback (nav pills) lands
-     *  after the first success. Gives up quietly if the item is gone (e.g. a
-     *  Continue Watching row that completed while watching). */
-    suspend fun restoreIfPending() {
-        if (!isTv || pendingKey == null) return
-        repeat(20) {
-            if (runCatching { requester.requestFocus() }.isSuccess) {
-                kotlinx.coroutines.delay(48L)
-                runCatching { requester.requestFocus() }
-                pendingKeyState.value = null
-                return
-            }
-            kotlinx.coroutines.delay(16L)
-        }
-        pendingKeyState.value = null
-    }
-}
-
-@Composable
-private fun rememberVodReturnFocus(isTv: Boolean): VodReturnFocusState {
-    // The key lives in rememberSaveable so it survives the tab's disposal
-    // while a detail route sits on top of MAIN. arm() writes it
-    // synchronously in the click handler, before navigation saves state.
-    val pendingKey = rememberSaveable { mutableStateOf<String?>(null) }
-    val state = remember { VodReturnFocusState(isTv, pendingKey) }
-    LaunchedEffect(Unit) { state.restoreIfPending() }
-    return state
-}
 
 @Composable
 private fun SeriesPoster(

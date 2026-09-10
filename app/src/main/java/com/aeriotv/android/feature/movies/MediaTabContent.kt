@@ -112,6 +112,7 @@ fun MediaTabContent(
                 key = "wl:" + e.key, title = item.title, artUrl = item.posterUrl, year = item.year, season = null, episode = null,
                 durationSecs = m?.durationSecs, genre = m?.genre ?: sr?.genre, rating = item.rating,
                 positionMs = 0L, durationMs = 0L, item = item, tmdbId = m?.tmdbId ?: sr?.tmdbId, isMovie = e.isMovie,
+                plot = m?.plot ?: sr?.plot,
             )
         }
     }
@@ -136,7 +137,7 @@ fun MediaTabContent(
                     genre = m?.genre, rating = m?.rating, positionMs = r.positionMs, durationMs = r.durationMs,
                     item = m?.toMediaItem() ?: MediaItem(key = "m:" + r.videoId, title = r.title, year = null, rating = null,
                         posterUrl = r.posterUrl, category = null, movieUuid = r.videoId),
-                    tmdbId = m?.tmdbId, isMovie = true,
+                    tmdbId = m?.tmdbId, isMovie = true, plot = m?.plot,
                 )
             }.take(12)
         } else {
@@ -151,7 +152,7 @@ fun MediaTabContent(
                         season = r.seasonNumber, episode = r.episodeNumber,
                         durationSecs = (r.durationMs / 1000L).toInt().takeIf { it > 0 },
                         genre = series.genre, rating = series.rating, positionMs = r.positionMs, durationMs = r.durationMs,
-                        item = series.toMediaItem(), tmdbId = series.tmdbId, isMovie = false,
+                        item = series.toMediaItem(), tmdbId = series.tmdbId, isMovie = false, plot = series.plot,
                     )
                 }.take(12)
         }
@@ -294,6 +295,42 @@ fun MediaTabContent(
                 }
             }
         })
+    }
+
+    val isTv = rememberLiveTvFormFactor().isTv
+    if (isTv) {
+        com.aeriotv.android.feature.movies.tv.TvMediaTab(
+            kind = kind, gridState = gridState, heroPages = heroPages, watchlistPages = watchlistPages,
+            backdrops = backdrops, library = library, gridItems = gridItems, available = available,
+            isSearching = isSearching, searchActive = searchActive, query = query,
+            onQueryChange = { submitQuery(it) },
+            onSearchToggle = { searchActive = !searchActive; if (!searchActive) submitQuery("") },
+            onClearSearch = { submitQuery("") },
+            personMatchName = personMatchName, showProviderPills = showProviderPills, providerIds = providerIds,
+            providerNames = state.providerNames, selectedProviderId = selectedProviderId,
+            onSelectProvider = { viewModel.selectProvider(it, kind == MediaKind.Movies) },
+            genrePills = genrePills, selectedGenre = selectedGenre, onGenre = { selectedGenre = it },
+            sortOrder = sortOrder,
+            onSort = { if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(it.wire) else settingsVm.setSeriesSortOrder(it.wire) },
+            onFilter = { showManageGroups = true }, filterActive = hiddenGroups.isNotEmpty(),
+            watchlistKeys = watchlistKeys, onToggleWatchlist = { watchlistVm.toggle(it) }, onRemoveWatchlist = { watchlistVm.remove(it) },
+            onRemoveProgress = { watchVm.delete(it) },
+            onPlay = { videoId, title ->
+                if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, title); onPlayMovie(videoId) } else onEpisodeResume(videoId)
+            },
+            onOpen = { item -> item.movieUuid?.let { u -> viewModel.noteMovieTitle(u, item.title); onMovieClick(u) } ?: item.seriesId?.let(onSeriesClick) },
+            isLoading = isLoading, libraryPending = libraryPending,
+            isSearchBusy = state.isSearching || state.isSearchingSeries,
+        )
+        if (showManageGroups && groupNames.isNotEmpty()) {
+            ManageGroupsSheet(
+                allGroups = groupNames,
+                hiddenGroups = hiddenGroups,
+                onSave = { if (kind == MediaKind.Movies) settingsVm.setHiddenMovieGroups(it) else settingsVm.setHiddenSeriesGroups(it) },
+                onDismiss = { showManageGroups = false },
+            )
+        }
+        return
     }
 
     MediaPageScaffold(

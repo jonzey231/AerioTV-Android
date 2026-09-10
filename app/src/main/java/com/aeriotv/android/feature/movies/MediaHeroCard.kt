@@ -58,6 +58,8 @@ data class MediaHeroPage(
     val item: MediaItem?,
     val tmdbId: String? = null,
     val isMovie: Boolean = true,
+    /** Plot for the TV hero (tvOS shows three lines under the meta row). */
+    val plot: String? = null,
 ) {
     val hasProgress: Boolean get() = positionMs > 0L
     val remainingLabel: String? get() {

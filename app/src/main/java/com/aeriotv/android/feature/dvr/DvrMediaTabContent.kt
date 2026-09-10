@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -294,33 +295,43 @@ fun DvrMediaTabContent(
         )
     }
 
-    @Composable
-    fun menuItems(rec: Rec, close: () -> Unit) {
+    // One action list per row status; the phone renders it as DropdownMenu
+    // items, the TV as the centered TvActionMenuDialog.
+    fun menuActions(rec: Rec): List<com.aeriotv.android.core.tv.TvMenuAction> {
         val s = rec.effectiveStatus(now)
         val isServer = rec.source == DvrViewModel.Source.Server
-        DropdownMenuItem(text = { Text("Program Info") }, onClick = { close(); showInfo(rec) })
-        if (s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped) {
-            DropdownMenuItem(text = { Text("Play") }, onClick = { close(); play(rec) })
-            if (isServer) {
-                DropdownMenuItem(text = { Text("Watch from Beginning") }, onClick = { close(); playFromStart(rec) })
-                DropdownMenuItem(text = { Text("Save to Device") }, onClick = { close(); scope.launch { viewModel.saveToDevice(rec).onFailure { toast("Save failed: ${it.message}") }.onSuccess { toast("Saving to device") } } })
-                DropdownMenuItem(text = { Text("Remove Commercials") }, onClick = { close(); scope.launch { viewModel.applyComskip(rec).onFailure { toast("Comskip failed: ${it.message}") }.onSuccess { toast("Comskip started") } } })
+        return buildList {
+            add(com.aeriotv.android.core.tv.TvMenuAction("Program Info") { showInfo(rec) })
+            if (s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped) {
+                add(com.aeriotv.android.core.tv.TvMenuAction("Play") { play(rec) })
+                if (isServer) {
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Watch from Beginning") { playFromStart(rec) })
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Save to Device") { scope.launch { viewModel.saveToDevice(rec).onFailure { toast("Save failed: ${it.message}") }.onSuccess { toast("Saving to device") } } })
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Remove Commercials") { scope.launch { viewModel.applyComskip(rec).onFailure { toast("Comskip failed: ${it.message}") }.onSuccess { toast("Comskip started") } } })
+                }
+            }
+            if (s == DvrViewModel.Recording.Status.Recording) {
+                if (rec.inProgressUrl != null) {
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Start at Live") { jumpToLive(rec) })
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Watch from Beginning") { playFromStart(rec) })
+                }
+                add(com.aeriotv.android.core.tv.TvMenuAction("Stop Recording") { scope.launch { viewModel.stopRecording(rec).onFailure { toast("Stop failed: ${it.message}") } } })
+            }
+            if (s == DvrViewModel.Recording.Status.Scheduled) {
+                if (isServer) add(com.aeriotv.android.core.tv.TvMenuAction("Edit Recording") { pendingEdit = rec })
+                add(com.aeriotv.android.core.tv.TvMenuAction("Cancel Recording", destructive = true) { pendingDelete = rec })
+            } else {
+                add(com.aeriotv.android.core.tv.TvMenuAction(if (isServer) "Delete from Server" else "Delete", destructive = true) { pendingDelete = rec })
             }
         }
-        if (s == DvrViewModel.Recording.Status.Recording) {
-            if (rec.inProgressUrl != null) {
-                DropdownMenuItem(text = { Text("Start at Live") }, onClick = { close(); jumpToLive(rec) })
-                DropdownMenuItem(text = { Text("Watch from Beginning") }, onClick = { close(); playFromStart(rec) })
-            }
-            DropdownMenuItem(text = { Text("Stop Recording") }, onClick = { close(); scope.launch { viewModel.stopRecording(rec).onFailure { toast("Stop failed: ${it.message}") } } })
-        }
-        if (s == DvrViewModel.Recording.Status.Scheduled) {
-            if (isServer) DropdownMenuItem(text = { Text("Edit Recording") }, onClick = { close(); pendingEdit = rec })
-            DropdownMenuItem(text = { Text("Cancel Recording", color = MaterialTheme.colorScheme.error) }, onClick = { close(); pendingDelete = rec })
-        } else {
+    }
+
+    @Composable
+    fun menuItems(rec: Rec, close: () -> Unit) {
+        menuActions(rec).forEach { action ->
             DropdownMenuItem(
-                text = { Text(if (isServer) "Delete from Server" else "Delete", color = MaterialTheme.colorScheme.error) },
-                onClick = { close(); pendingDelete = rec },
+                text = { Text(action.label, color = if (action.destructive) MaterialTheme.colorScheme.error else Color.Unspecified) },
+                onClick = { close(); action.onClick() },
             )
         }
     }
@@ -349,6 +360,20 @@ fun DvrMediaTabContent(
                 onStop = {}, onInfo = { showInfo(rec) })
         }
         val kindPills = DvrKind.entries.filter { it in kindsPresent }
+        if (rememberLiveTvFormFactor().isTv) {
+            TvDvrPage(
+                gridState = gridState, now = now,
+                continueWatching = continueWatching, recordingNow = recordingNow, scheduled = scheduled,
+                recentRecordings = recentRecordings, filteredLibrary = filteredLibrary, available = available,
+                channelName = channelName, channelLogo = channelLogo, progressOf = progressOf,
+                kindPills = kindPills, selectedKind = selectedKind, onKind = { selectedKind = it },
+                sortOrder = sortOrder, onSort = { settingsVm.setDvrSortOrder(it.wire) },
+                menuActions = ::menuActions,
+                onPlay = ::play, onPlayFromStart = ::playFromStart, onJumpToLive = ::jumpToLive,
+                onStop = { rec -> scope.launch { viewModel.stopRecording(rec) } }, onInfo = ::showInfo,
+                isLoading = state.isLoading,
+            )
+        } else
         MediaPageScaffold(
             gridState = gridState,
             compact = compact,
@@ -554,4 +579,134 @@ private fun HeroRound(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
         modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp)) }
+}
+
+
+/**
+ * DVR on Android TV: the shared [com.aeriotv.android.feature.movies.tv.TvMediaPage]
+ * with tvOS DVRView's content: hero pages for every started-but-unfinished
+ * recording (in progress first), Recording Now / Scheduled / Recent
+ * Recordings shelves of 16:9 cards, the All Recordings header with Sort,
+ * kind pills, a five-column 16:9 grid and the rail once more than 15 rows.
+ */
+@Composable
+private fun TvDvrPage(
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    now: Long,
+    continueWatching: List<Rec>,
+    recordingNow: List<Rec>,
+    scheduled: List<Rec>,
+    recentRecordings: List<Rec>,
+    filteredLibrary: List<Rec>,
+    available: Set<Char>,
+    channelName: (Rec) -> String,
+    channelLogo: (Rec) -> String?,
+    progressOf: (Rec) -> Float,
+    kindPills: List<DvrKind>,
+    selectedKind: DvrKind?,
+    onKind: (DvrKind?) -> Unit,
+    sortOrder: DvrSortOrder,
+    onSort: (DvrSortOrder) -> Unit,
+    menuActions: (Rec) -> List<com.aeriotv.android.core.tv.TvMenuAction>,
+    onPlay: (Rec) -> Unit,
+    onPlayFromStart: (Rec) -> Unit,
+    onJumpToLive: (Rec) -> Unit,
+    onStop: (Rec) -> Unit,
+    onInfo: (Rec) -> Unit,
+    isLoading: Boolean,
+) {
+    val red = Color(0xFFFF4757)
+    val timeFmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
+    fun timeRange(rec: Rec): String = timeFmt.format(Date(rec.startMillis)) + " to " + timeFmt.format(Date(rec.endMillis))
+    fun durationLabel(rec: Rec): String {
+        val m = ((rec.endMillis - rec.startMillis) / 60_000L).toInt()
+        return if (m >= 60) "${m / 60} h ${m % 60} min" else "$m min"
+    }
+    fun hero(rec: Rec): com.aeriotv.android.feature.movies.tv.TvHeroPage {
+        val recording = rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording
+        val progress = progressOf(rec)
+        val canPlay = recording && rec.inProgressUrl != null || !recording && rec.playbackUrl != null
+        val se = if ((rec.season ?: 0) > 0) "S${rec.season} E${rec.episode ?: 0}" else null
+        val meta = listOfNotNull(channelName(rec).takeIf { it.isNotBlank() }, timeRange(rec), se ?: durationLabel(rec))
+        val buttons = buildList {
+            if (recording) {
+                if (canPlay) {
+                    add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Watch from Start", Icons.Filled.PlayArrow, primary = true) { onPlayFromStart(rec) })
+                    add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Jump to Live", Icons.Filled.Sensors) { onJumpToLive(rec) })
+                }
+                add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Stop Recording", Icons.Filled.Stop) { onStop(rec) })
+            } else {
+                add(com.aeriotv.android.feature.movies.tv.TvHeroButton(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true) { onPlay(rec) })
+                if (progress > 0f) add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Play from Beginning", Icons.Filled.Replay) { onPlayFromStart(rec) })
+                add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Details", Icons.Outlined.Info) { onInfo(rec) })
+            }
+        }
+        return com.aeriotv.android.feature.movies.tv.TvHeroPage(
+            key = rec.id, title = rec.title.ifBlank { "Recording" }, artUrl = rec.posterUrl, logoUrl = channelLogo(rec),
+            subtitle = rec.subTitle, meta = meta, plot = rec.description.takeIf { it.isNotBlank() },
+            eyebrow = when { recording -> "Recording now"; progress > 0f -> "Continue watching"; else -> null },
+            eyebrowColor = if (recording) red else Color.Unspecified,
+            buttons = buttons, longPressActions = menuActions(rec),
+        )
+    }
+    val card: @Composable (Rec, Modifier, () -> Unit) -> Unit = { rec, modifier, onClick ->
+        val s = rec.effectiveStatus(now)
+        val se = if ((rec.season ?: 0) > 0) "S${rec.season} E${rec.episode ?: 0}" else null
+        val sub = rec.subTitle?.takeIf { it.isNotBlank() }
+        val day = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(rec.startMillis))
+        val meta = when {
+            s == DvrViewModel.Recording.Status.Scheduled -> "$day · " + timeRange(rec)
+            se != null && sub != null -> "$se · $sub"
+            sub != null -> sub
+            se != null -> se
+            else -> day
+        }
+        com.aeriotv.android.feature.movies.tv.TvRecordingCard(
+            title = rec.title.ifBlank { "Recording" }, meta = meta, artUrl = rec.posterUrl, logoUrl = channelLogo(rec),
+            channelName = channelName(rec),
+            trailing = if (s == DvrViewModel.Recording.Status.Scheduled) timeFmt.format(Date(rec.startMillis)) else durationLabel(rec),
+            progress = progressOf(rec),
+            badge = when (s) {
+                DvrViewModel.Recording.Status.Recording -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("REC", red, dot = true)
+                DvrViewModel.Recording.Status.Scheduled -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge(day, Color.Black.copy(alpha = 0.6f), icon = Icons.Outlined.Schedule)
+                DvrViewModel.Recording.Status.Stopped -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Partial", Color(0xFFFF9F43).copy(alpha = 0.85f))
+                else -> null
+            },
+            onClick = onClick, modifier = modifier, longPressActions = menuActions(rec),
+        )
+    }
+    fun shelf(title: String, items: List<Rec>, onClick: (Rec) -> Unit) = com.aeriotv.android.feature.movies.tv.TvShelf(
+        title = title, items = items, key = { it.id }, cardWidth = 170.dp,
+    ) { rec, modifier -> card(rec, modifier) { onClick(rec) } }
+    val heroPages = remember(continueWatching, now) { continueWatching.map(::hero) }
+    com.aeriotv.android.feature.movies.tv.TvMediaPage(
+        gridState = gridState,
+        heroPages = heroPages,
+        shelves = listOf(
+            shelf("Recording Now", recordingNow) { onPlayFromStart(it) },
+            shelf("Scheduled", scheduled) { onInfo(it) },
+            shelf("Recent Recordings", if (recentRecordings.size > 1) recentRecordings else emptyList()) { onPlay(it) },
+        ),
+        headerTitle = "All Recordings",
+        headerCount = filteredLibrary.size,
+        columns = 5,
+        gridRowSpacing = 22.dp,
+        sortActions = DvrSortOrder.entries.map { o ->
+            com.aeriotv.android.core.tv.TvMenuAction(if (o == sortOrder) o.label + "  \u2713" else o.label) { onSort(o) }
+        },
+        pills = if (kindPills.size > 1) kindPills.map { it.label } else emptyList(),
+        selectedPill = selectedKind?.label,
+        onPill = { label -> onKind(kindPills.firstOrNull { it.label == label }) },
+        gridItems = filteredLibrary,
+        gridKey = { it.id },
+        cell = { rec, cellScope -> card(rec, cellScope.modifier) { onPlay(rec) } },
+        emptyContent = {
+            if (isLoading) CircularProgressIndicator()
+            else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        isLoading = isLoading,
+        railLetters = available,
+        railIndexOf = { letter -> filteredLibrary.indexOfFirst { bucket(it.title) == letter } },
+        railMinimumCount = 16,
+    )
 }

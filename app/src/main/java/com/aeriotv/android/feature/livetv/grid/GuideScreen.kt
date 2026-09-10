@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.TravelExplore
@@ -244,7 +245,9 @@ fun GuideScreen(
         val begin = collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING }
         val end = collections.filter { it.placement != ChannelCollection.PLACEMENT_BEGINNING }
         begin.map { ChannelCollection.token(it.id) to it.name } +
-            groups.map { it to it } +
+            // Tokens (Favorites, All) read through the shared label map; the
+            // raw "__favorites__" token showed on the Streamer (2026-09-10).
+            groups.map { it to (if (it == com.aeriotv.android.feature.playlist.PlaylistViewModel.FAVORITES_GROUP) "Favorites" else it) } +
             end.map { ChannelCollection.token(it.id) to it.name }
     }
     val groupedChannels by produceState(
@@ -761,36 +764,23 @@ private fun GroupPills(
             )
         }
         items(items, key = { it.first }) { (group, label) ->
-            // One focus target only: clickable() already contributes it, and a
-            // separate focusable() nested a second one (first OK moved focus
-            // inward and drew the default square ripple, the second OK
-            // selected). Same pattern as the phone LiveTvTopBar pills. The
-            // clip keeps the focus/pressed drawing inside the capsule.
+            // TV chrome canon (ui/tv/TvChrome.kt): capsule, accent fill when
+            // selected, white ring focused+selected / accent ring focused+
+            // unselected. One focus target only (clickable() inside TvPill).
             val interaction = remember { MutableInteractionSource() }
-            val focused by interaction.collectIsFocusedAsState()
-            val isSelected = group == selected
-            val colors = MaterialTheme.colorScheme
-            Box(
+            com.aeriotv.android.ui.tv.TvPill(
+                label = label,
+                selected = group == selected,
+                onClick = { onSelect(group) },
+                icon = if (group == com.aeriotv.android.feature.playlist.PlaylistViewModel.FAVORITES_GROUP) Icons.Filled.Favorite else null,
+                interactionSource = interaction,
                 modifier = Modifier
                     .padding(end = 8.dp)
                     .then(if (group == items.firstOrNull()?.first) Modifier.focusRequester(firstPillFocus) else Modifier)
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
-                    }
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(
-                        when {
-                            isSelected -> colors.primary.copy(alpha = 0.35f)
-                            else -> colors.surfaceVariant.copy(alpha = 0.5f)
-                        },
-                        RoundedCornerShape(15.dp),
-                    )
-                    .border(if (focused) 2.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(15.dp))
-                    .clickable(interactionSource = interaction, indication = null) { onSelect(group) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            }
+                    },
+            )
         }
     }
 }

@@ -1138,24 +1138,21 @@ private fun SeasonPicker(
     ) {
         items(items = seasons) { season ->
             val isSelected = season == selected
-            var focused by remember { mutableStateOf(false) }
+            if (isTv) {
+                // TV chrome canon (ui/tv/TvChrome.kt): same capsule + ring rules
+                // as the library group pills (tvOS MoviesPillStyle).
+                com.aeriotv.android.ui.tv.TvPill(
+                    label = if (season == 0) "Specials" else "Season $season",
+                    selected = isSelected,
+                    onClick = { onSelect(season) },
+                )
+                return@items
+            }
             Row(
                 modifier = Modifier
-                    .onFocusChanged { focused = it.isFocused }
                     .clip(RoundedCornerShape(50))
-                    .background(
-                        when {
-                            isSelected -> MaterialTheme.colorScheme.primary
-                            // Phone: iOS unselected pill sits on the elevated background.
-                            !isTv -> MaterialTheme.colorScheme.surfaceVariant
-                            else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
-                        },
-                    )
-                    .border(
-                        width = 2.dp,
-                        color = if (focused) Color.White else Color.Transparent,
-                        shape = RoundedCornerShape(50),
-                    )
+                    // Phone: iOS unselected pill sits on the elevated background.
+                    .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
                     .clickable { onSelect(season) }
                     .padding(horizontal = 14.dp, vertical = 7.dp),
             ) {
@@ -1163,15 +1160,10 @@ private fun SeasonPicker(
                 // reads in the app background over the accent fill, unselected
                 // in secondary text (1552).
                 Text(
-                    text = if (season == 0 && isTv) "Specials" else "Season $season",
+                    text = "Season $season",
                     style = MaterialTheme.typography.labelMedium,
-                    color = when {
-                        isSelected && isTv -> MaterialTheme.colorScheme.onPrimary
-                        isSelected -> MaterialTheme.colorScheme.background
-                        isTv -> MaterialTheme.colorScheme.primary
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    fontWeight = if (isTv) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isSelected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium,
                 )
             }
         }

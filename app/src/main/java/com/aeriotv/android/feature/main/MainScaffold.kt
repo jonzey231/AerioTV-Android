@@ -312,7 +312,9 @@ fun MainScaffold(
     // switched off for the playlist, or an unsupported source).
     // Media center (phone/tablet): Movies and TV Shows tabs, each shown while
     // its library has content or is still loading. TV keeps On Demand.
-    val splitVod = !rememberLiveTvFormFactor().isTv
+    // Every form factor now (Android TV joined 2026-09-10 with TvMediaPage).
+    val isTvShell = rememberLiveTvFormFactor().isTv
+    val splitVod = true
     val vodSourceOk = activePlaylistVodEnabled && !onDemandState.unsupportedSource
     val hasMoviesContent = vodSourceOk &&
         (onDemandState.hasMovies || onDemandState.isLoading || onDemandState.hasDeferredXtreamContent)
@@ -322,7 +324,7 @@ fun MainScaffold(
     val tabs = run {
         val live = visibleTabs(
             // Phone/tablet: Favorites is a pinned Live TV group, not a tab (Apple parity).
-            hasFavorites = hasRenderableFavorites && !splitVod,
+            hasFavorites = hasRenderableFavorites && isTvShell,
             hasVod = hasVodContent,
             hasRecordings = hasRecordings,
             splitVod = splitVod,
@@ -330,7 +332,7 @@ fun MainScaffold(
             hasSeries = hasSeriesContent,
         )
         stickyTabs += live
-        if (favoritesOrNull?.isEmpty() == true || splitVod) stickyTabs -= AppTab.Favorites
+        if (favoritesOrNull?.isEmpty() == true || !isTvShell) stickyTabs -= AppTab.Favorites
         if (!vodSourceOk) { stickyTabs -= AppTab.OnDemand; stickyTabs -= AppTab.Movies; stickyTabs -= AppTab.TVShows }
         visibleTabs(
             hasFavorites = AppTab.Favorites in stickyTabs,
@@ -1489,20 +1491,12 @@ private fun MainTabContent(
     FavoritesTabContent(onChannelClick = onChannelClick)
             }
             AppTab.DVR -> {
-                // Media center (phone/tablet); TV keeps its list until its own phase.
-                if (!rememberLiveTvFormFactor().isTv) {
-                    com.aeriotv.android.feature.dvr.DvrMediaTabContent(
-                        onPlayRecording = onPlayRecording,
-                        onWatchLive = onWatchLive,
-                        onWatchFromBeginning = onWatchFromBeginning,
-                    )
-                } else {
-    DvrTabContent(
+                // Media center on every form factor (TV joined 2026-09-10).
+                com.aeriotv.android.feature.dvr.DvrMediaTabContent(
                     onPlayRecording = onPlayRecording,
                     onWatchLive = onWatchLive,
                     onWatchFromBeginning = onWatchFromBeginning,
                 )
-                }
             }
             AppTab.Movies -> {
     com.aeriotv.android.feature.movies.MediaTabContent(
@@ -1828,73 +1822,19 @@ private fun TvBarCircleButton(
     selected: Boolean = false,
     spinning: Boolean = false,
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    val background by animateColorAsState(
-        targetValue = when {
-            selected -> MaterialTheme.colorScheme.primary
-            focused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-            else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
-        },
-        label = "tvBarCircleBackground",
+    // TV chrome canon (ui/tv/TvChrome.kt, tvOS TVNavCircleButtonStyle):
+    // quiet translucent circle at rest, white platter with a dark glyph
+    // while focused, accent fill while its screen (Search) is up. Sized to
+    // the tab capsule beside it so the row centres cleanly.
+    com.aeriotv.android.ui.tv.TvActionCircle(
+        icon = icon,
+        contentDescription = contentDescription,
+        onClick = onClick,
+        modifier = modifier,
+        selected = selected,
+        spinning = spinning,
+        size = 34.dp,
     )
-    val foreground by animateColorAsState(
-        targetValue = when {
-            selected -> MaterialTheme.colorScheme.onPrimary
-            focused -> MaterialTheme.colorScheme.onSurface
-            else -> MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        label = "tvBarCircleForeground",
-    )
-    // Spin only while asked: the infinite transition exists (and ticks
-    // frames) solely inside this branch, so an idle bar animates nothing.
-    val rotation = if (spinning) {
-        val transition = androidx.compose.animation.core.rememberInfiniteTransition(
-            label = "tvBarCircleSpin",
-        )
-        transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                animation = androidx.compose.animation.core.tween(
-                    durationMillis = 1000,
-                    easing = androidx.compose.animation.core.LinearEasing,
-                ),
-            ),
-            label = "tvBarCircleSpinAngle",
-        ).value
-    } else {
-        0f
-    }
-    Box(
-        modifier = modifier
-            .tvFocusScale(focused, focusedScale = 1.04f)
-            .clip(CircleShape)
-            .background(background)
-            .border(
-                width = 2.dp,
-                color = if (focused) Color.White else Color.Transparent,
-                shape = CircleShape,
-            )
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            // Matches the pill height (18dp icon + 6dp vertical pad + the
-            // capsule's own 4dp) so the circle centers cleanly beside it.
-            .padding(10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = foreground,
-            modifier = Modifier
-                .size(18.dp)
-                .graphicsLayer { rotationZ = rotation },
-        )
-    }
 }
 
 @Composable
@@ -1909,18 +1849,22 @@ private fun TvTab(
     // guide-pill convention). The old scheme gave focused-not-selected a
     // solid fill brighter than the selected tab, so re-entering the bar lit
     // two pills as "active" at once.
+    // tvOS system tab bar look (TV chrome canon, ui/tv/TvChrome.kt): the
+    // FOCUSED pill is a white platter with dark ink, the SELECTED pill keeps
+    // the accent fill, everything else is bare text. No ring: the platter
+    // is the focus visual, exactly as on the Apple TV.
     val background by animateColorAsState(
         targetValue = when {
+            focused -> Color.White
             selected -> MaterialTheme.colorScheme.primary
-            focused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
             else -> Color.Transparent
         },
         label = "tvTabBackground",
     )
     val foreground by animateColorAsState(
         targetValue = when {
+            focused -> Color.Black
             selected -> MaterialTheme.colorScheme.onPrimary
-            focused -> MaterialTheme.colorScheme.onSurface
             else -> MaterialTheme.colorScheme.onSurfaceVariant
         },
         label = "tvTabForeground",
@@ -1934,19 +1878,13 @@ private fun TvTab(
             // 1.04x (not the 1.08x default): the pills sit 8dp apart and the
             // paint-only grow must stay inside that gap.
             .tvFocusScale(focused, focusedScale = 1.04f)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(CircleShape)
             .background(background)
-            // Transparent (not absent) border at rest keeps the measured pill
-            // size constant so nothing shifts when focus arrives.
-            .border(
-                width = 2.dp,
-                color = if (focused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(18.dp),
-            )
             .focusable()
             // Trimmed (13->10 h / 20->18 icon) to narrow the whole centered nav
             // bar so its right edge clears the enlarged corner mini-player.
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            // Vertical 8 = the old 6 plus the 2dp ring the platter replaced.
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
