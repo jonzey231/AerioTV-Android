@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FiberManualRecord
@@ -1479,12 +1480,32 @@ private fun ChannelGuidePanel(
                                 modifier = Modifier.weight(1f),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                             )
-                            Text(
-                                text = "Previously aired",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary,
+                            // Up arrows on both sides of the label say
+                            // "everything above already aired" (Logan
+                            // 2026-09-09, both platforms).
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 modifier = Modifier.padding(horizontal = 8.dp),
-                            )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ArrowUpward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(11.dp),
+                                )
+                                Text(
+                                    text = "Previously aired",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                                Icon(
+                                    imageVector = Icons.Outlined.ArrowUpward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(11.dp),
+                                )
+                            }
                             HorizontalDivider(
                                 modifier = Modifier.weight(1f),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
