@@ -88,7 +88,10 @@ fun TvPill(
 ) {
     val focused by interactionSource.collectIsFocusedAsState()
     val colors = MaterialTheme.colorScheme
-    val fill = if (selected) colors.primary else colors.surfaceVariant
+    // Unselected fill is a white wash rather than the card colour: on the
+    // translucent sheets the card colour vanished into the surface (Logan
+    // 2026-09-10), a wash reads on the guide and on every dialog alike.
+    val fill = if (selected) colors.primary else colors.onSurface.copy(alpha = 0.12f)
     val ink = when {
         selected -> colors.onPrimary
         focused -> colors.onSurface
