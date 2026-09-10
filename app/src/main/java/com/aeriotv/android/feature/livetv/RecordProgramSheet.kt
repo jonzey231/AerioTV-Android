@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.outlined.FiberManualRecord
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.sp
-import com.aeriotv.android.ui.tv.TvPill
 import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -653,8 +653,8 @@ private fun TvRecordForm(
             modifier = Modifier.width(520.dp).heightIn(max = 530.dp),
         ) {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (art != null) {
@@ -675,24 +675,24 @@ private fun TvRecordForm(
                     TvSectionTitle("Record")
                     TvPillRow {
                         listOf(RuleMode.Once, RuleMode.All, RuleMode.NewOnly).forEach { m ->
-                            TvPill(m.label, selected = ruleMode == m, onClick = { onRuleMode(m) })
+                            SheetPill(m.label, selected = ruleMode == m, onClick = { onRuleMode(m) })
                         }
                         if (ruleMode != RuleMode.Once) {
-                            TvPill(if (showCustomRule) "Hide Options" else "Customize", selected = showCustomRule, onClick = { showCustomRule = !showCustomRule })
+                            SheetPill(if (showCustomRule) "Hide Options" else "Customize", selected = showCustomRule, onClick = { showCustomRule = !showCustomRule })
                         }
                     }
                     if (ruleMode != RuleMode.Once && showCustomRule) {
                         Text("Title Match", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp))
                         TvPillRow {
                             listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex").forEach { (wire, label) ->
-                                TvPill(label, selected = ruleTitleMode == wire, onClick = { onRuleTitleMode(wire) })
+                                SheetPill(label, selected = ruleTitleMode == wire, onClick = { onRuleTitleMode(wire) })
                             }
                         }
                         TvPillRow {
                             if (ruleMode == RuleMode.NewOnly) {
-                                TvPill("Untagged Counts as New", selected = ruleUntaggedIsNew, onClick = { onRuleUntaggedIsNew(!ruleUntaggedIsNew) })
+                                SheetPill("Untagged Counts as New", selected = ruleUntaggedIsNew, onClick = { onRuleUntaggedIsNew(!ruleUntaggedIsNew) })
                             }
-                            TvPill("Every Channel", selected = ruleAllChannels, onClick = { onRuleAllChannels(!ruleAllChannels) })
+                            SheetPill("Every Channel", selected = ruleAllChannels, onClick = { onRuleAllChannels(!ruleAllChannels) })
                         }
                     }
                 }
@@ -708,8 +708,8 @@ private fun TvRecordForm(
                 if (isDispatcharr && isLive && canRecordToServer && !usingRule) {
                     TvSectionTitle("Destination")
                     TvPillRow {
-                        TvPill("Dispatcharr server", selected = destinationServer, onClick = { onDestinationServer(true) })
-                        TvPill("This device", selected = !destinationServer, onClick = { onDestinationServer(false) })
+                        SheetPill("Dispatcharr server", selected = destinationServer, onClick = { onDestinationServer(true) })
+                        SheetPill("This device", selected = !destinationServer, onClick = { onDestinationServer(false) })
                     }
                 }
                 if (isDispatcharr && !usingRule) {
@@ -718,8 +718,8 @@ private fun TvRecordForm(
                         TvSectionTitle("Remove Commercials (Comskip)", dim = disabled)
                         Spacer(Modifier.height(3.dp))
                         TvPillRow(alpha = if (disabled) 0.45f else 1f) {
-                            TvPill("Off", selected = !removeCommercials, onClick = { if (!disabled) onRemoveCommercials(false) })
-                            TvPill("On", selected = removeCommercials, onClick = { if (!disabled) onRemoveCommercials(true) })
+                            SheetPill("Off", selected = !removeCommercials, onClick = { if (!disabled) onRemoveCommercials(false) })
+                            SheetPill("On", selected = removeCommercials, onClick = { if (!disabled) onRemoveCommercials(true) })
                         }
                         Text(
                             if (disabled) "Comskip runs server-side. Switch the destination to Dispatcharr server to enable."
@@ -736,7 +736,7 @@ private fun TvRecordForm(
                 }
 
                 if (!hasNoRecordingPath) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(top = 3.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 3.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             if (usingRule) tvSeriesRuleSummary(target, ruleMode, ruleAllChannels) else tvRecordingWindowSummary(target, isLive, preRoll, postRoll),
                             fontSize = 11.sp, color = colors.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -752,9 +752,29 @@ private fun TvRecordForm(
     }
 }
 
+/** The sheet's pills: TvPill at a compact 10/4 padding so every row fits without scrolling (Logan 2026-09-10). */
+@Composable
+private fun SheetPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val colors = MaterialTheme.colorScheme
+    val fill = if (selected) colors.primary else colors.onSurface.copy(alpha = 0.12f).compositeOver(colors.surface)
+    Text(
+        label, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        color = when { selected -> colors.onPrimary; focused -> colors.onSurface; else -> colors.onSurfaceVariant },
+        modifier = Modifier
+            .tvFocusScale(focused, focusedScale = 1.05f)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(fill)
+            .border(2.dp, when { !focused -> Color.Transparent; selected -> Color.White; else -> colors.primary }, androidx.compose.foundation.shape.CircleShape)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 4.dp),
+    )
+}
+
 @Composable
 private fun TvSectionTitle(text: String, dim: Boolean = false) {
-    Text(text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+    Text(text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
         color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(start = 2.dp))
 }
@@ -763,9 +783,9 @@ private fun TvSectionTitle(text: String, dim: Boolean = false) {
 @Composable
 private fun TvPillRow(alpha: Float = 1f, content: @Composable () -> Unit) {
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).alpha(alpha),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 3.dp).alpha(alpha),
     ) { content() }
 }
 
@@ -773,8 +793,8 @@ private fun TvPillRow(alpha: Float = 1f, content: @Composable () -> Unit) {
 private fun TvMinutePills(options: List<Int>, selected: Int, onSelect: (Int) -> Unit, onCustom: () -> Unit) {
     val custom = selected !in options
     TvPillRow {
-        options.forEach { m -> TvPill(if (m == 0) "None" else "$m min", selected = selected == m, onClick = { onSelect(m) }) }
-        TvPill(
+        options.forEach { m -> SheetPill(if (m == 0) "None" else "$m min", selected = selected == m, onClick = { onSelect(m) }) }
+        SheetPill(
             when {
                 custom && selected < 0 -> "Custom (${-selected} min after start)"
                 custom -> "Custom ($selected min)"
@@ -808,7 +828,7 @@ private fun TvRecordPill(label: String, enabled: Boolean, onClick: () -> Unit) {
             .background(if (focused) LIVE_RED else MaterialTheme.colorScheme.surfaceVariant)
             .border(2.dp, if (focused) Color.Transparent else LIVE_RED, androidx.compose.foundation.shape.CircleShape)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 9.dp),
+            .padding(horizontal = 18.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
