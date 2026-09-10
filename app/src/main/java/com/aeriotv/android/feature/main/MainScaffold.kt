@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1092,22 +1093,40 @@ fun MainScaffold(
                     Spacer(Modifier.height(8.dp))
                 }
                 if (!topTabBar) {
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = bottomBarVisible,
-                        enter = androidx.compose.animation.slideInVertically { it } +
-                            androidx.compose.animation.fadeIn(),
-                        exit = androidx.compose.animation.slideOutVertically { it } +
-                            androidx.compose.animation.fadeOut(),
-                    ) {
-                        // The floating pill, iPhone-sized, lifted 8 dp (Logan
-                        // 2026-09-09; the Material NavigationBar was tried and
-                        // turned down).
-                        FloatingTabBar(
-                            tabs = tabs,
-                            selected = selectedTab,
-                            onSelect = { selectedTab = it; initialTabApplied = true },
-                            modifier = Modifier.padding(bottom = 8.dp),
-                        )
+                    // iOS 26 parity (Logan 2026-09-09): scrolling down does not
+                    // hide the bar, it MINIMIZES it to a small pill in the
+                    // bottom-left corner showing the active tab's icon. Tapping
+                    // the pill or scrolling up brings the full bar back.
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = bottomBarVisible,
+                        transitionSpec = {
+                            (androidx.compose.animation.fadeIn(tween(180)) +
+                                androidx.compose.animation.scaleIn(tween(180), initialScale = 0.85f))
+                                .togetherWith(
+                                    androidx.compose.animation.fadeOut(tween(120)) +
+                                        androidx.compose.animation.scaleOut(tween(120), targetScale = 0.85f),
+                                )
+                        },
+                        contentAlignment = Alignment.BottomStart,
+                        label = "tabBarMinimize",
+                    ) { expanded ->
+                        if (expanded) {
+                            // The floating pill, iPhone-sized, lifted 8 dp (Logan
+                            // 2026-09-09; the Material NavigationBar was tried and
+                            // turned down).
+                            FloatingTabBar(
+                                tabs = tabs,
+                                selected = selectedTab,
+                                onSelect = { selectedTab = it; initialTabApplied = true },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                        } else {
+                            MinimizedTabPill(
+                                tab = selectedTab,
+                                onClick = { bottomBarVisible = true },
+                                modifier = Modifier.padding(start = 20.dp, bottom = 8.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -1309,6 +1328,39 @@ private fun FloatingTabBar(
             }
         }
     }
+    }
+}
+
+/** The minimized tab bar: one capsule in the bottom-left corner carrying the
+ *  active tab's icon, the way the iOS 26 bar collapses when the content
+ *  scrolls down. Same height as the full pill so nothing shifts. */
+@Composable
+private fun MinimizedTabPill(
+    tab: AppTab,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
+        androidx.compose.foundation.layout.Box(
+            contentAlignment = Alignment.Center,
+            modifier = modifier
+                .size(width = 64.dp, height = 52.dp)
+                .clip(RoundedCornerShape(26.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    RoundedCornerShape(26.dp),
+                )
+                .clickable(onClick = onClick),
+        ) {
+            Icon(
+                imageVector = tab.iconSelected,
+                contentDescription = "Show tab bar, ${tab.label}",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+        }
     }
 }
 
