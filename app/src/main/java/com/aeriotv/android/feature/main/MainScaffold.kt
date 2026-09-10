@@ -324,7 +324,8 @@ fun MainScaffold(
     val tabs = run {
         val live = visibleTabs(
             // Phone/tablet: Favorites is a pinned Live TV group, not a tab (Apple parity).
-            hasFavorites = hasRenderableFavorites && isTvShell,
+            // Favorites is the pinned Live TV pill on every form factor (tvOS dropped the tab 2026-09-05).
+            hasFavorites = false,
             hasVod = hasVodContent,
             hasRecordings = hasRecordings,
             splitVod = splitVod,
@@ -332,7 +333,7 @@ fun MainScaffold(
             hasSeries = hasSeriesContent,
         )
         stickyTabs += live
-        if (favoritesOrNull?.isEmpty() == true || !isTvShell) stickyTabs -= AppTab.Favorites
+        stickyTabs -= AppTab.Favorites
         if (!vodSourceOk) { stickyTabs -= AppTab.OnDemand; stickyTabs -= AppTab.Movies; stickyTabs -= AppTab.TVShows }
         visibleTabs(
             hasFavorites = AppTab.Favorites in stickyTabs,
