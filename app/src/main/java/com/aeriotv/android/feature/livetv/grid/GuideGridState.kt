@@ -118,6 +118,73 @@ class GuideGridState(
         return true
     }
 
+    /**
+     * A short Left, tvOS rule (Logan 2026-09-10, "the entire EPG shifts"):
+     * step the ring onto the previous cell when that cell's start is
+     * already on screen, with no pan; landing on the LIVE programme
+     * re-anchors the timeline to now instead (nothing moves when it is
+     * already there); only when the previous cell starts off screen, or
+     * there is none, does the timeline pan a step and the ring ride it.
+     */
+    fun stepLeft(nowMs: Long): Boolean {
+        if (rows.isEmpty) return false
+        val row = focusRow.coerceAtLeast(0)
+        val cells = rows.cells(row)
+        val idx = cells.indexOfFirst { it.startMillis == focusCellStartMs }
+        val prev = if (idx > 0) cells[idx - 1] else null
+        if (prev != null) {
+            if (prev.startMillis <= nowMs && nowMs < prev.endMillis) {
+                focusRow = row
+                focusChannelId = rows.channel(row).id
+                focusCellStartMs = prev.startMillis
+                // Exact like tvOS (3 min), not the half-hour Back slop.
+                if (abs(viewportStartMs - (nowMs - leadMs)) > 3 * 60_000L) {
+                    viewportChangeAnimated = true
+                    viewportStartMs = (nowMs - leadMs).coerceIn(minViewportStart(), maxViewportStart())
+                }
+                return true
+            }
+            // The edge sits a few minutes past the half hour (now minus the
+            // lead), so a cell starting ON the half hour counts as on screen
+            // when its start is within the lead of the edge.
+            if (prev.startMillis >= viewportStartMs - leadMs) {
+                focusRow = row
+                focusChannelId = rows.channel(row).id
+                focusCellStartMs = prev.startMillis
+                return true
+            }
+        }
+        return pan(-1)
+    }
+
+    /**
+     * A short Right, tvOS rule: the timeline pans a step and the ring moves
+     * onto the NEXT cell (the tvOS focus engine steps while the grid pans),
+     * so a long live programme is left in one press instead of the ring
+     * sitting still while the grid slides under it.
+     */
+    fun stepRight(): Boolean {
+        if (rows.isEmpty) return false
+        val row = focusRow.coerceAtLeast(0)
+        val cells = rows.cells(row)
+        val idx = cells.indexOfFirst { it.startMillis == focusCellStartMs }
+        val next = if (idx >= 0 && idx + 1 < cells.size) cells[idx + 1] else null
+        val nextStart = (viewportStartMs + panStepMs).coerceIn(minViewportStart(), maxViewportStart())
+        if (nextStart != viewportStartMs) {
+            viewportChangeAnimated = true
+            viewportStartMs = nextStart
+        }
+        if (next != null && next.startMillis < viewportStartMs + viewportDurationMs) {
+            focusRow = row
+            focusChannelId = rows.channel(row).id
+            focusCellStartMs = next.startMillis
+            return true
+        }
+        if (nextStart == viewportStartMs && next == null) return false
+        land(row)
+        return true
+    }
+
     /** Timeline jump by [ms] (remote-mapped page). */
     fun panBy(ms: Long): Boolean {
         if (rows.isEmpty) return false

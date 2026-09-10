@@ -274,7 +274,7 @@ fun GuideGrid(
                             runAction(remoteAction(RemoteSlot.RIGHT_LONG))
                         }
                     } else if (up) {
-                        if (rightDownSeen && !rightHoldLatched) state.pan(+1)
+                        if (rightDownSeen && !rightHoldLatched) state.stepRight()
                         rightDownSeen = false
                     }
                     true
@@ -289,7 +289,7 @@ fun GuideGrid(
                             runAction(if (mapped == GuideRemoteAction.NONE) GuideRemoteAction.FOCUS_GROUP_PILLS else mapped)
                         }
                     } else if (up) {
-                        if (leftDownSeen && !leftHoldLatched) state.pan(-1)
+                        if (leftDownSeen && !leftHoldLatched) state.stepLeft(nowMs)
                         leftDownSeen = false
                     }
                     true
