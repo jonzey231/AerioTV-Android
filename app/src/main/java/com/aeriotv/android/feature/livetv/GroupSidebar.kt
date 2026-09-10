@@ -166,7 +166,7 @@ internal fun GroupSidebarPanel(
     var focusedRowIndex by remember { mutableStateOf(-1) }
     Column(
         modifier = modifier
-            .width(panelWidth)
+            .then(if (isTv) Modifier.fillMaxWidth() else Modifier.width(panelWidth))
             .onPreviewKeyEvent { event ->
                 if (onManageGroups == null ||
                     manageFocused ||
@@ -185,11 +185,12 @@ internal fun GroupSidebarPanel(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(start = 10.dp, bottom = if (isTv) 8.dp else 10.dp),
         ) {
+            // tvOS: 22 pt semibold in the secondary text colour (halved).
             Text(
                 text = "Groups",
-                style = settingsTitleStyle(),
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
+                style = if (isTv) MaterialTheme.typography.bodyMedium.copy(fontSize = 11.sp) else settingsTitleStyle(),
+                fontWeight = if (isTv) FontWeight.SemiBold else FontWeight.Bold,
+                color = if (isTv) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
             )
             // GH #57: the sidebar's own entry into hide/reorder. It sits in
             // the header rather than the list so a D-pad Right out of a row
@@ -209,13 +210,15 @@ internal fun GroupSidebarPanel(
         }
         LazyColumn(
             state = listState,
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isTv) 2.dp else 3.dp),
             modifier = Modifier.fillMaxHeight(),
         ) {
             itemsIndexed(groups, key = { _, token -> token }) { index, token ->
                 GroupSidebarRow(
                     label = groupSidebarLabel(token),
                     isActive = token == selectedToken,
+                    leadingStar = token == PlaylistViewModel.FAVORITES_GROUP,
+                    trailingPin = token == PlaylistViewModel.ALL_GROUPS,
                     onClick = { onSelect(token) },
                     onFocused = {
                         focusedRowIndex = index
@@ -253,11 +256,44 @@ private fun GroupSidebarRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onFocused: () -> Unit = {},
+    /** tvOS: star.fill before Favorites, pin.fill after the default group. */
+    leadingStar: Boolean = false,
+    trailingPin: Boolean = false,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     LaunchedEffect(focused) { if (focused) onFocused() }
     val isTv = rememberIsTvDevice()
+    if (isTv) {
+        // tvOS GroupSidebarRowButtonStyle (halved): 30 pt text, 20/12 padding,
+        // corner 10, focused = white 16% wash + inset accent ring + white
+        // text, active = accent text, semibold, accent 12% tint.
+        val colors = MaterialTheme.colorScheme
+        val fg = when { focused -> Color.White; isActive -> colors.primary; else -> colors.onBackground }
+        val bg = when { focused -> Color.White.copy(alpha = 0.16f); isActive -> colors.primary.copy(alpha = 0.12f); else -> Color.Transparent }
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(5.dp))
+                .background(bg)
+                .border(2.dp, if (focused) colors.primary else Color.Transparent, RoundedCornerShape(5.dp))
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .focusable(interactionSource = interaction)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (leadingStar) Icon(Icons.Filled.Star, contentDescription = null, tint = fg, modifier = Modifier.size(11.dp))
+            Text(
+                text = label, fontSize = 15.sp, lineHeight = 18.sp,
+                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (trailingPin) Icon(Icons.Filled.PushPin, contentDescription = "Default group", tint = fg.copy(alpha = 0.7f), modifier = Modifier.size(7.dp))
+        }
+        return
+    }
     // No icon column here, so the row needs its own vertical padding where
     // SettingsNavRow's icon box sets the height; the resulting pitch matches
     // the Settings rail's on the same panel.
@@ -361,11 +397,15 @@ internal fun GuideGroupSidebarPane(
             onPreview(focusedToken)
         }
     }
-    Row(modifier = Modifier.fillMaxHeight().padding(top = topOffset)) {
+    val tv = rememberIsTvDevice()
+    Row(modifier = Modifier.fillMaxHeight().padding(top = topOffset).then(if (tv) Modifier.background(MaterialTheme.colorScheme.background) else Modifier)) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .padding(start = 20.dp, end = 12.dp, bottom = 12.dp)
+                // tvOS GuideGroupSidebarPane: 360 pt with 20 pt side padding
+                // and 4 pt on top, halved.
+                .then(if (tv) Modifier.width(180.dp).padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 12.dp)
+                      else Modifier.padding(start = 20.dp, end = 12.dp, bottom = 12.dp))
                 .onPreviewKeyEvent { event ->
                     if (event.key == androidx.compose.ui.input.key.Key.DirectionRight &&
                         event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown

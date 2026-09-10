@@ -21,7 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.TravelExplore
@@ -64,6 +64,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -450,7 +451,7 @@ fun GuideScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
     Row(modifier = Modifier.fillMaxSize()) {
-    if (groupSidebarOpen) {
+    if (groupSidebarOpen && !isTv) {
         GuideGroupSidebarPane(
             groups = groups,
             selectedToken = state.selectedGroup,
@@ -522,6 +523,7 @@ fun GuideScreen(
             onSelect = { viewModel.onGroupSelected(it) },
             firstPillFocus = pillsFocus,
             onDown = { runCatching { gridFocus.requestFocus() }.isSuccess },
+            leadInset = railWidth,
         )
         if (rows.isEmpty && favoritesOnly && favoritesOrNull == null) {
             // Favorites not loaded yet: draw nothing rather than flash the
@@ -581,6 +583,25 @@ fun GuideScreen(
             ) { gridContent() }
         }
     }
+    }
+    // tvOS drawer (ChannelListView 2026-09-05): the rail overlays the guide
+    // under the time header, the rest of the tab dims 45%, the grid does not
+    // shift. Right or OK commit, Back reverts (handlers unchanged).
+    if (groupSidebarOpen && isTv) {
+        Box(modifier = Modifier.fillMaxSize().padding(top = headerHeight).background(Color.Black.copy(alpha = 0.45f)))
+        GuideGroupSidebarPane(
+            groups = groups,
+            selectedToken = state.selectedGroup,
+            topOffset = headerHeight,
+            onPreview = { token -> viewModel.onGroupSelected(token) },
+            onCommit = { token ->
+                if (token != state.selectedGroup) viewModel.onGroupSelected(token)
+                groupSidebarOpen = false
+                runCatching { gridFocus.requestFocus() }
+            },
+            onManageGroups = { showManageGroups = true },
+            hiddenGroupCount = hiddenGroups.size,
+        )
     }
     if (!isTv) {
         val drawerTokens = remember(groups, collections) {
@@ -740,29 +761,16 @@ private fun GroupPills(
      *  sidebar has its Manage button, the pill row had none). Trailing pill. */
     onManageGroups: () -> Unit = {},
     hiddenGroupCount: Int = 0,
+    /** tvOS: the first pill's left edge sits on the program column. */
+    leadInset: androidx.compose.ui.unit.Dp = 12.dp,
 ) {
     val listState = rememberLazyListState()
     val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
     LazyRow(
         state = listState,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        contentPadding = PaddingValues(start = leadInset, end = 12.dp, top = 6.dp, bottom = 6.dp),
         modifier = Modifier.fillMaxWidth().height(44.dp).focusProperties { if (topNav != null) up = topNav },
     ) {
-        // Logan 2026-09-03: the same round Manage Groups button the sidebar
-        // header uses, placed BEFORE the first group pill. Focus from the
-        // grid still lands on the first group (firstPillFocus), and Left
-        // reaches the circle.
-        item(key = "__manage__") {
-            com.aeriotv.android.feature.livetv.TvManageGroupsCircle(
-                hiddenGroupsCount = hiddenGroupCount,
-                onClick = onManageGroups,
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
-                    },
-            )
-        }
         items(items, key = { it.first }) { (group, label) ->
             // TV chrome canon (ui/tv/TvChrome.kt): capsule, accent fill when
             // selected, white ring focused+selected / accent ring focused+
@@ -772,11 +780,24 @@ private fun GroupPills(
                 label = label,
                 selected = group == selected,
                 onClick = { onSelect(group) },
-                icon = if (group == com.aeriotv.android.feature.playlist.PlaylistViewModel.FAVORITES_GROUP) Icons.Filled.Favorite else null,
+                icon = if (group == com.aeriotv.android.feature.playlist.PlaylistViewModel.FAVORITES_GROUP) Icons.Filled.Star else null,
                 interactionSource = interaction,
                 modifier = Modifier
                     .padding(end = 8.dp)
                     .then(if (group == items.firstOrNull()?.first) Modifier.focusRequester(firstPillFocus) else Modifier)
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
+                    },
+            )
+        }
+        // tvOS (GH #57): the round Manage Groups button sits AFTER the last
+        // group so it reads as an action on the row, not another chip.
+        item(key = "__manage__") {
+            com.aeriotv.android.feature.livetv.TvManageGroupsCircle(
+                hiddenGroupsCount = hiddenGroupCount,
+                onClick = onManageGroups,
+                modifier = Modifier
+                    .padding(start = 0.dp)
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
                     },

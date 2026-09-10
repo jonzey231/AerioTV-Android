@@ -9,6 +9,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -204,7 +206,36 @@ fun GuideGrid(
         val target = com.aeriotv.android.feature.livetv.resolveChannelNumber(entry, state.rows.channels)
         target != null && state.focusChannel(target.id)
     }
+    // TV: the clock cell is a focus target above row 1 (tvOS GuideCornerClock):
+    // UP from the top row lands on it, OK snaps to now, a held OK opens Jump
+    // To, UP again leaves to the pills, DOWN returns to the grid.
+    // Virtual, like the grid's own cursor: no real focus move, so the grid's
+    // focus node (and the host's launch-focus settling) is untouched.
+    var clockSelected by remember { mutableStateOf(false) }
+    var clockOkHeld by remember { mutableStateOf(false) }
     val keyHandler: (KeyEvent) -> Boolean = handler@{ event ->
+        if (clockSelected) {
+            val native = event.nativeKeyEvent as? AndroidKeyEvent
+            val down = event.type == KeyEventType.KeyDown
+            return@handler when (event.key) {
+                Key.DirectionDown -> { if (down) clockSelected = false; true }
+                Key.DirectionUp -> { if (down) { clockSelected = false; if (!onLeaveTop()) topNav?.let { runCatching { it.requestFocus() } } }; true }
+                Key.DirectionLeft, Key.DirectionRight -> true
+                Key.DirectionCenter, Key.Enter -> {
+                    if (down) {
+                        val rc = native?.repeatCount ?: 0
+                        if (rc == 0) clockOkHeld = false
+                        else if (!clockOkHeld && (rc >= HOLD_LEFT_REPEATS || native?.isLongPress == true)) { clockOkHeld = true; onClockLongPress() }
+                    } else {
+                        if (!clockOkHeld) { clockSelected = false; onClockTap() }
+                        clockOkHeld = false
+                    }
+                    true
+                }
+                Key.Back -> { if (down) clockSelected = false; true }
+                else -> false
+            }
+        }
         if (isTv && channelNumberEntry.onKeyEvent(event)) return@handler true
         val native = event.nativeKeyEvent as? AndroidKeyEvent
         val repeat = native?.repeatCount ?: 0
@@ -218,6 +249,7 @@ fun GuideGrid(
                 Key.DirectionUp -> {
                     if (!down) return@handler true
                     if (!state.moveRows(-1)) {
+                        if (isTv) { clockSelected = true; return@handler true }
                         if (onLeaveTop()) return@handler true
                         return@handler topNav?.let { runCatching { it.requestFocus() }.isSuccess } ?: false
                     }
@@ -303,7 +335,8 @@ fun GuideGrid(
             .onPreviewKeyEvent(keyHandler),
     ) {
         TimeHeader(state, nowMs, railWidth, headerHeight, pxPerMs, textMeasurer,
-                   jumpLabel = jumpLabel, onClockTap = onClockTap, onClockLongPress = onClockLongPress)
+                   jumpLabel = jumpLabel, onClockTap = onClockTap, onClockLongPress = onClockLongPress,
+                   clockSelected = clockSelected)
         val railPx = with(density) { railWidth.toPx() }
         LazyColumn(
             state = listState,
@@ -323,7 +356,7 @@ fun GuideGrid(
                     rowHeight = rowHeight,
                     railWidth = railWidth,
                     pxPerMs = pxPerMs,
-                    gridFocused = gridFocused,
+                    gridFocused = gridFocused && !clockSelected,
                     isFavorite = rows.channel(row).id in favoriteIds,
                     recordingWindows = rows.channel(row).dispatcharrChannelId?.let { recordingWindows[it] } ?: emptyList(),
                     textMeasurer = textMeasurer,
@@ -367,6 +400,8 @@ private fun TimeHeader(
     jumpLabel: String? = null,
     onClockTap: () -> Unit = {},
     onClockLongPress: () -> Unit = {},
+    /** TV: the grid's virtual cursor sits on the clock (accent ring). */
+    clockSelected: Boolean = false,
 ) {
     // Apple TV: time labels in the accent colour.
     val labelStyle = TextStyle(
@@ -381,10 +416,16 @@ private fun TimeHeader(
         // Clock cell: tap snaps to now, long press opens Jump To (Roman via
         // Discord 2026-09-06). While a jump is active it shows the target in
         // the accent colour.
+        val focused = clockSelected
         Box(
             modifier = Modifier
                 .width(railWidth)
                 .fillMaxSize()
+                .padding(4.dp)
+                // tvOS: the clock draws its own accent ring when focused.
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                .then(if (focused) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)) else Modifier)
+                .border(2.dp, if (focused) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                 .combinedClickable(onClick = onClockTap, onLongClick = onClockLongPress),
             contentAlignment = Alignment.Center,
         ) {
