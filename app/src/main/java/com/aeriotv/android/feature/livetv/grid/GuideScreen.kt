@@ -85,6 +85,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
 import com.aeriotv.android.core.data.canReplay
+import com.aeriotv.android.core.data.db.entity.dispatcharrVersionAtLeast
 import com.aeriotv.android.core.data.db.entity.reminderKey
 import com.aeriotv.android.core.data.toInfoTarget
 import com.aeriotv.android.core.guide.GuideCatalog
@@ -294,6 +295,14 @@ fun GuideScreen(
         val ahead = if (maxEnd == Long.MIN_VALUE) 1 else ((maxEnd - nowMs0 + day - 1) / day).toInt().coerceAtLeast(1)
         back to ahead
     }
+    // A Dispatcharr 0.30+ server keeps many days and ensureGuideForward
+    // fetches the jumped day on demand, so Jump To offers two weeks there
+    // (Logan 2026-09-10); other sources are limited to what is loaded.
+    val epgDaysAheadOffered = state.playlist?.let { pl ->
+        val dispatcharr = pl.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrApiKey.name ||
+            pl.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrUserPass.name
+        if (dispatcharr && pl.dispatcharrVersionAtLeast("0.30.0")) 14 else null
+    } ?: epgDaysAhead
     val forwardHours = if (windowHours <= 0) 48 else windowHours.coerceAtLeast(3)
     // Quantized to 15 min so re-entering the tab within that window reuses
     // the memoized rows instead of rebuilding them for a new "now".
@@ -657,7 +666,7 @@ fun GuideScreen(
     val jumpOverlay: @Composable () -> Unit = {
         com.aeriotv.android.feature.livetv.GuideJumpTvOverlay(
             daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
-            daysAhead = epgDaysAhead.coerceIn(1, 14),
+            daysAhead = epgDaysAheadOffered.coerceIn(1, 14),
             onJump = startJump,
             onBackToNow = snapToNow,
             onDismiss = { showJumpSheet = false; runCatching { gridFocus.requestFocus() } },
@@ -814,7 +823,7 @@ fun GuideScreen(
             // Days follow the EPG that is actually loaded (Logan 2026-09-10),
             // back no further than the grid's own history window.
             daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
-            daysAhead = epgDaysAhead.coerceIn(1, 14),
+            daysAhead = epgDaysAheadOffered.coerceIn(1, 14),
             onJump = startJump,
             onBackToNow = snapToNow,
             onDismiss = { showJumpSheet = false; runCatching { gridFocus.requestFocus() } },
