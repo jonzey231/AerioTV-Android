@@ -1107,7 +1107,9 @@ fun MainScaffold(
                     // pill grows in; restore plays it back.
                     val collapse by animateFloatAsState(
                         targetValue = if (bottomBarVisible) 0f else 1f,
-                        animationSpec = tween(320),
+                        // A touch slower than the iPhone's 320 ms so the
+                        // collapse reads (Logan 2026-09-09).
+                        animationSpec = tween(420),
                         label = "tabBarCollapse",
                     )
                     val density = LocalDensity.current
