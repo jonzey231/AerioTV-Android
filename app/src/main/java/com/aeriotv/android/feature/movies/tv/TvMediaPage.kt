@@ -246,6 +246,24 @@ fun <T> TvMediaPage(
 
     val heroPrimary = remember { FocusRequester() }
     val firstCell = remember { FocusRequester() }
+    // A focus-driven scroll to the top: the bring-into-view spec stands down
+    // while it runs (its own request otherwise raced the snap and left the
+    // hero a third off screen, Logan 2026-09-10) and a hard snap ends it.
+    val snappingToTop = remember { mutableStateOf(false) }
+    val scrollToTop: () -> Unit = {
+        if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
+            scope.launch {
+                snappingToTop.value = true
+                try {
+                    gridState.animateScrollToItem(0)
+                    withFrameNanos { }
+                    gridState.scrollToItem(0)
+                } finally {
+                    snappingToTop.value = false
+                }
+            }
+        }
+    }
     val cellRequesters = remember { HashMap<Any, FocusRequester>() }
     var sortOpen by remember { mutableStateOf(false) }
     val menuGuard = rememberTvMenuGuard()
@@ -330,7 +348,7 @@ fun <T> TvMediaPage(
     Box(modifier = Modifier.fillMaxSize()) {
         // tvOS focus scrolling (measured 2026-09-10): 100 dp clear of both edges.
         val edgeSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
-            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(100.dp.toPx()) }
+            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(100.dp.toPx()) { snappingToTop.value } }
         }
         CompositionLocalProvider(LocalBringIntoViewSpec provides edgeSpec) {
         LazyVerticalGrid(
@@ -369,11 +387,7 @@ fun <T> TvMediaPage(
                         upTarget = topNav,
                         // tvOS: any hero button gaining focus while the page
                         // is scrolled snaps the page back to the top.
-                        onButtonFocused = {
-                            if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
-                                scope.launch { gridState.animateScrollToItem(0) }
-                            }
-                        },
+                        onButtonFocused = scrollToTop,
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -386,11 +400,7 @@ fun <T> TvMediaPage(
                         // tvOS: a card of the FIRST shelf gaining focus while
                         // the page is scrolled brings the page to the top so
                         // the hero is fully back (Apple TV Up walk 2026-09-10).
-                        onCardFocused = if (si == 0 && hasHero) ({
-                            if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
-                                scope.launch { gridState.animateScrollToItem(0) }
-                            }
-                        }) else null,
+                        onCardFocused = if (si == 0 && hasHero) scrollToTop else null,
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -457,12 +467,22 @@ fun <T> TvMediaPage(
             }
             if (pillRow) {
                 item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
+                    // Entering the row from the sort circle above or the grid
+                    // below always lands on All (Logan 2026-09-10).
+                    val allPill = remember { FocusRequester() }
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         contentPadding = PaddingValues(start = TvPage.contentInset, end = TvPage.heroInset),
-                        modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth(),
+                        modifier = Modifier
+                            .padding(vertical = 6.dp)
+                            .fillMaxWidth()
+                            .focusProperties {
+                                @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+                                run { enter = { allPill } }
+                            }
+                            .focusGroup(),
                     ) {
-                        item(key = "all") { TvPill("All", selectedPill == null, onClick = { onPill(null) }) }
+                        item(key = "all") { TvPill("All", selectedPill == null, onClick = { onPill(null) }, modifier = Modifier.focusRequester(allPill)) }
                         items(pills.size, key = { pills[it] }) { i ->
                             val p = pills[i]
                             TvPill(p, selectedPill == p, onClick = { onPill(if (selectedPill == p) null else p) })

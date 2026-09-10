@@ -375,12 +375,17 @@ fun Modifier.tvFormFieldInput(horizontalFocusEscape: Boolean = false): Modifier 
  * Same-row wobble under 24 px is suppressed like [TvLargeCardBringIntoViewSpec].
  */
 @kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-class TvEdgeMarginBringIntoViewSpec(private val marginPx: Float) : androidx.compose.foundation.gestures.BringIntoViewSpec {
+class TvEdgeMarginBringIntoViewSpec(
+    private val marginPx: Float,
+    /** True while the page runs its own scroll (snap to top): no competing request. */
+    private val suppressed: () -> Boolean = { false },
+) : androidx.compose.foundation.gestures.BringIntoViewSpec {
     override fun calculateScrollDistance(
         offset: Float,
         size: Float,
         containerSize: Float,
     ): Float {
+        if (suppressed()) return 0f
         val top = marginPx
         val bottom = containerSize - marginPx
         if (size > bottom - top) {
