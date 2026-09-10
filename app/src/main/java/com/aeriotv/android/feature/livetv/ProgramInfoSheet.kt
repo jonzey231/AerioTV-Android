@@ -24,6 +24,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -180,33 +184,29 @@ fun ProgramInfoSheet(
             onDismissRequest = onDismiss,
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
+            // tvOS ProgramInfoView.tvCard (Logan 2026-09-05), halved from the
+            // 1400x780 pt sheet: art beside the copy, the facts as a row of
+            // labelled columns, the description as the card's one focus
+            // target, then the metadata and category pills.
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 tonalElevation = 6.dp,
                 modifier = Modifier
-                    .widthIn(max = 720.dp)
-                    .fillMaxWidth(0.62f)
-                    // TV canvas is 960x540dp: cap below 540 so the card never
-                    // clips past the top/bottom edges; scroll is the backstop.
-                    .heightIn(max = 500.dp),
+                    .width(700.dp)
+                    .heightIn(max = 420.dp),
             ) {
                 Column(
                     modifier = Modifier
                         .verticalScroll(rememberScrollState())
-                        // focusable so the remote's D-pad up/down scrolls
-                        // a long description instead of doing nothing.
-                        .focusable()
-                        .padding(horizontal = 28.dp, vertical = 20.dp),
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    ProgramInfoBody(
+                    TvProgramInfoCard(
                         target = target,
                         effectiveCategory = effectiveCategory,
                         posterUrl = posterUrl,
-                        posterWidth = 120.dp,
-                    enrichedRepeat = enrichedRepeat,
-                        sectionGap = 12.dp,
-                        metaRowPadding = 2.dp,
+                        enrichedRepeat = enrichedRepeat,
                     )
                 }
             }
@@ -233,6 +233,128 @@ fun ProgramInfoSheet(
                 Spacer(Modifier.height(24.dp))
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TvProgramInfoCard(
+    target: ProgramInfoTarget,
+    effectiveCategory: String,
+    posterUrl: String?,
+    enrichedRepeat: Boolean,
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        if (posterUrl != null) {
+            var posterRatio by remember(posterUrl) { mutableStateOf(2f / 3f) }
+            AsyncImage(
+                model = posterUrl, contentDescription = null, contentScale = ContentScale.Crop,
+                onSuccess = { st ->
+                    val sz = st.painter.intrinsicSize
+                    if (sz.width > 0f && sz.height > 0f) posterRatio = (sz.width / sz.height).coerceIn(0.55f, 1.9f)
+                },
+                modifier = Modifier.width(120.dp).aspectRatio(posterRatio).clip(RoundedCornerShape(7.dp)),
+            )
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                text = target.channelName.uppercase(Locale.getDefault()),
+                fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.5.sp,
+                color = colors.onSurfaceVariant,
+            )
+            Text(
+                text = target.title.ifBlank { "Untitled" },
+                fontSize = 19.sp, lineHeight = 23.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
+            )
+            target.subTitle?.takeIf { !subtitleIsRedundant(it, target.title, target.description) }?.let { sub ->
+                Text(sub, fontSize = 12.sp, fontStyle = FontStyle.Italic, color = colors.onSurfaceVariant)
+            }
+            val showEpgBadges = LocalShowEpgBadges.current
+            val badges = buildList {
+                if (target.isLiveNow() && !target.isLiveBroadcast) add(EpgFlag("ON NOW", EpgLiveRed))
+                if (showEpgBadges) {
+                    val hidden = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
+                    addAll(
+                        com.aeriotv.android.core.ui.epgFlagsOf(
+                            isNew = target.isNew, isLiveBroadcast = target.isLiveBroadcast,
+                            isPremiere = target.isPremiere, isFinale = target.isFinale,
+                            isRepeat = target.isRepeat || enrichedRepeat,
+                        ).filter { it.label !in hidden },
+                    )
+                }
+            }
+            if (badges.isNotEmpty()) {
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) { badges.forEach { com.aeriotv.android.core.ui.EpgFlagBadge(it) } }
+            }
+            val clockMode = rememberClockMode()
+            val timeFormat = remember(clockMode) { ClockFormat.short(clockMode) }
+            val dateFormat = remember { DateFormat.getDateInstance(DateFormat.MEDIUM) }
+            Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.padding(top = 3.dp)) {
+                TvInfoColumn("Airs", "${timeFormat.format(Date(target.startMillis))} \u2013 ${timeFormat.format(Date(target.endMillis))}")
+                TvInfoColumn("Date", dateFormat.format(Date(target.startMillis)))
+                TvInfoColumn("Duration", formatDuration(target.endMillis - target.startMillis))
+                target.seasonEpisodeLabel()?.let { TvInfoColumn("Episode", it) }
+            }
+            target.recording?.let { facts ->
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 5.dp),
+                ) { facts.rows().forEach { (label, value) -> TvInfoColumn(label, value) } }
+            }
+        }
+    }
+    // The card's one focus target (Menu closes the sheet, no Close button):
+    // a faint platter shows where focus sits.
+    val descFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    var descFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { runCatching { descFocus.requestFocus() } }
+    Text(
+        text = if (target.description.isBlank()) "No program description provided in XMLTV." else target.description,
+        fontSize = 12.sp, lineHeight = 16.sp,
+        fontStyle = if (target.description.isBlank()) FontStyle.Italic else FontStyle.Normal,
+        color = if (target.description.isBlank()) colors.tertiary else colors.onBackground,
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset(x = (-8).dp)
+            .focusRequester(descFocus)
+            .onFocusChanged { descFocused = it.isFocused }
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (descFocused) Color.White.copy(alpha = 0.08f) else Color.Transparent)
+            .focusable()
+            .padding(8.dp),
+    )
+    val tokens = effectiveCategory.categoryTokens()
+    if (tokens.isNotEmpty()) {
+        val settingsVm: com.aeriotv.android.feature.settings.SettingsViewModel = androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel()
+        val palette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.category.CategoryPaletteState.Default)
+        val (metadata, genres) = tokens.partition { it.lowercase(Locale.getDefault()) in METADATA_TOKENS }
+        if (metadata.isNotEmpty()) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                metadata.forEach { com.aeriotv.android.core.category.TvCategoryPill(it, palette, forceNeutral = true) }
+            }
+        }
+        if (genres.isNotEmpty()) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                genres.forEach { com.aeriotv.android.core.category.TvCategoryPill(it, palette) }
+            }
+        }
+    }
+}
+
+/** tvOS infoColumn: uppercase tracked label over the value. */
+@Composable
+private fun TvInfoColumn(title: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            title.uppercase(Locale.getDefault()), fontSize = 8.sp, fontWeight = FontWeight.Medium,
+            letterSpacing = 1.2.sp, color = MaterialTheme.colorScheme.tertiary,
+        )
+        Text(value, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onBackground)
     }
 }
 
