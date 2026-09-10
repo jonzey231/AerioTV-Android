@@ -73,6 +73,12 @@ object GuidePreviewBanner {
 /** Session art cache keyed by program id or cleaned title; null = every source missed. */
 private val previewArt = mutableStateMapOf<String, String?>()
 
+/** Art the banner already resolved for this program, for sheets opened from the guide (tvOS artCache). */
+fun cachedPreviewArt(dispatcharrProgramId: Int?, title: String): String? {
+    val key = dispatcharrProgramId?.let { "pid:$it" } ?: ("t:" + cleanPreviewTitle(title))
+    return previewArt[key]
+}
+
 @Composable
 fun GuidePreviewBanner(
     program: EPGProgramme?,

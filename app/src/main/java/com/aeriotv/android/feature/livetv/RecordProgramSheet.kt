@@ -2,6 +2,17 @@ package com.aeriotv.android.feature.livetv
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.outlined.FiberManualRecord
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.sp
+import com.aeriotv.android.ui.tv.TvPill
+import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -138,7 +149,133 @@ fun RecordProgramSheet(
     var ruleAllChannels by remember { mutableStateOf(false) }
     val usingRule = canOfferSeriesRule && ruleMode != RuleMode.Once
 
-    com.aeriotv.android.ui.FormFactorModal(
+    val submit: () -> Unit = submit@{
+                val dispatcharrId = target.channelDispatcharrId
+                if (!destinationServer) {
+                    // Local recording — check the storage cap before
+                    // committing. usedBytes comes from the existing
+                    // local rows in DvrViewModel state.
+                    val usedBytes = dvrState.recordings
+                        .filter { it.source == DvrViewModel.Source.Local }
+                        .sumOf { it.fileSizeBytes }
+                    val usedMB = (usedBytes / (1024L * 1024L)).toInt()
+                    if (usedMB >= storageCapMB) {
+                        Toast.makeText(
+                            context,
+                            "Local storage cap reached. Free space or raise the cap in Settings -> DVR.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        onDismiss()
+                        return@submit
+                    }
+                    val playlistState = playlistViewModel.state.value
+                    val channel = playlistState.channels.firstOrNull {
+                        it.name == target.channelName
+                    }
+                    val streamUrl = channel?.url
+                    val apiKey = playlistState.playlist?.apiKey
+                    if (streamUrl.isNullOrBlank()) {
+                        Toast.makeText(
+                            context,
+                            "Couldn't locate stream URL for ${target.channelName}.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    } else {
+                        val durationMs = (target.endMillis + postRoll * 60_000L) -
+                                System.currentTimeMillis()
+                        LocalRecordingService.start(
+                            context = context,
+                            streamUrl = streamUrl,
+                            title = target.title.ifBlank { target.channelName },
+                            channelName = target.channelName,
+                            apiKey = apiKey.orEmpty(),
+                            durationMs = durationMs.coerceAtLeast(60_000L),
+                        )
+                        Toast.makeText(
+                            context,
+                            "Recording started locally.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    onDismiss()
+                    return@submit
+                }
+                if (dispatcharrId == null) {
+                    Toast.makeText(
+                        context,
+                        "Recording requires a Dispatcharr playlist.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    onDismiss()
+                    return@submit
+                }
+                if (usingRule) {
+                    submitting = true
+                    val channel = playlistViewModel.state.value.channels.firstOrNull {
+                        it.dispatcharrChannelId == dispatcharrId || it.name == target.channelName
+                    }
+                    val tvgId = if (ruleAllChannels) null else channel?.tvgID?.takeIf { it.isNotBlank() }
+                    scope.launch {
+                        val result = dvrViewModel.createSeriesRule(
+                            tvgId = tvgId,
+                            mode = if (ruleMode == RuleMode.NewOnly) "new" else "all",
+                            untaggedIsNew = ruleUntaggedIsNew,
+                            title = target.title,
+                            titleMode = if (ruleMode == RuleMode.Custom) ruleTitleMode else "exact",
+                            description = if (ruleMode == RuleMode.Custom) ruleDescription else "",
+                            descriptionMode = ruleDescriptionMode,
+                            channelDispatcharrId = if (ruleAllChannels) null else dispatcharrId,
+                        )
+                        submitting = false
+                        val msg = result.fold(
+                            onSuccess = { n -> if (n >= 0) "Rule saved: $n recording(s) scheduled" else "Rule saved: ${target.title}" },
+                            onFailure = { t -> "Rule failed: ${t.message ?: t::class.simpleName}" },
+                        )
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        onDismiss()
+                    }
+                    return@submit
+                }
+                submitting = true
+                val effectiveStart = target.startMillis - preRoll * 60_000L
+                val effectiveEnd = target.endMillis + postRoll * 60_000L
+                scope.launch {
+                    val result = dvrViewModel.scheduleServerRecording(
+                        channelDispatcharrId = dispatcharrId,
+                        startMillis = effectiveStart,
+                        endMillis = effectiveEnd,
+                        title = target.title,
+                        description = target.description,
+                        comskip = removeCommercials,
+                    )
+                    submitting = false
+                    val msg = result.fold(
+                        onSuccess = { "Scheduled: ${target.title.ifBlank { "recording" }}" },
+                        onFailure = { t -> "Schedule failed: ${t.message ?: t::class.simpleName}" },
+                    )
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    onDismiss()
+                }
+            }
+
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    if (isTv) {
+        TvRecordForm(
+            target = target, isLive = isLive, onDismiss = onDismiss,
+            canOfferSeriesRule = canOfferSeriesRule, isDispatcharr = isDispatcharr, canRecordToServer = canRecordToServer,
+            ruleMode = ruleMode, onRuleMode = { ruleMode = it },
+            ruleTitleMode = ruleTitleMode, onRuleTitleMode = { ruleTitleMode = it },
+            ruleUntaggedIsNew = ruleUntaggedIsNew, onRuleUntaggedIsNew = { ruleUntaggedIsNew = it },
+            ruleAllChannels = ruleAllChannels, onRuleAllChannels = { ruleAllChannels = it },
+            preRoll = preRoll, onPreRoll = { preRoll = it },
+            postRoll = postRoll, onPostRoll = { postRoll = it },
+            onCustomPreRoll = { customBufferDraft = if (preRoll != 0) preRoll else 5; customBufferTarget = CustomBufferTarget.PreRoll },
+            onCustomPostRoll = { customBufferDraft = if (postRoll > 0) postRoll else 5; customBufferTarget = CustomBufferTarget.PostRoll },
+            destinationServer = destinationServer, onDestinationServer = { destinationServer = it },
+            removeCommercials = removeCommercials, onRemoveCommercials = { removeCommercials = it },
+            submitting = submitting, usingRule = usingRule, onSubmit = submit,
+        )
+    } else com.aeriotv.android.ui.FormFactorModal(
         onDismiss = onDismiss,
         tvWidthFraction = 0.7f,
         tvMaxHeight = 620.dp,
@@ -169,114 +306,7 @@ fun RecordProgramSheet(
                 Spacer(Modifier.weight(1f))
                 TextButton(
                     enabled = !submitting,
-                    onClick = {
-                        val dispatcharrId = target.channelDispatcharrId
-                        if (!destinationServer) {
-                            // Local recording — check the storage cap before
-                            // committing. usedBytes comes from the existing
-                            // local rows in DvrViewModel state.
-                            val usedBytes = dvrState.recordings
-                                .filter { it.source == DvrViewModel.Source.Local }
-                                .sumOf { it.fileSizeBytes }
-                            val usedMB = (usedBytes / (1024L * 1024L)).toInt()
-                            if (usedMB >= storageCapMB) {
-                                Toast.makeText(
-                                    context,
-                                    "Local storage cap reached. Free space or raise the cap in Settings -> DVR.",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                                onDismiss()
-                                return@TextButton
-                            }
-                            val playlistState = playlistViewModel.state.value
-                            val channel = playlistState.channels.firstOrNull {
-                                it.name == target.channelName
-                            }
-                            val streamUrl = channel?.url
-                            val apiKey = playlistState.playlist?.apiKey
-                            if (streamUrl.isNullOrBlank()) {
-                                Toast.makeText(
-                                    context,
-                                    "Couldn't locate stream URL for ${target.channelName}.",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            } else {
-                                val durationMs = (target.endMillis + postRoll * 60_000L) -
-                                        System.currentTimeMillis()
-                                LocalRecordingService.start(
-                                    context = context,
-                                    streamUrl = streamUrl,
-                                    title = target.title.ifBlank { target.channelName },
-                                    channelName = target.channelName,
-                                    apiKey = apiKey.orEmpty(),
-                                    durationMs = durationMs.coerceAtLeast(60_000L),
-                                )
-                                Toast.makeText(
-                                    context,
-                                    "Recording started locally.",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                            onDismiss()
-                            return@TextButton
-                        }
-                        if (dispatcharrId == null) {
-                            Toast.makeText(
-                                context,
-                                "Recording requires a Dispatcharr playlist.",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                            onDismiss()
-                            return@TextButton
-                        }
-                        if (usingRule) {
-                            submitting = true
-                            val channel = playlistViewModel.state.value.channels.firstOrNull {
-                                it.dispatcharrChannelId == dispatcharrId || it.name == target.channelName
-                            }
-                            val tvgId = if (ruleAllChannels) null else channel?.tvgID?.takeIf { it.isNotBlank() }
-                            scope.launch {
-                                val result = dvrViewModel.createSeriesRule(
-                                    tvgId = tvgId,
-                                    mode = if (ruleMode == RuleMode.NewOnly) "new" else "all",
-                                    untaggedIsNew = ruleUntaggedIsNew,
-                                    title = target.title,
-                                    titleMode = if (ruleMode == RuleMode.Custom) ruleTitleMode else "exact",
-                                    description = if (ruleMode == RuleMode.Custom) ruleDescription else "",
-                                    descriptionMode = ruleDescriptionMode,
-                                    channelDispatcharrId = if (ruleAllChannels) null else dispatcharrId,
-                                )
-                                submitting = false
-                                val msg = result.fold(
-                                    onSuccess = { n -> if (n >= 0) "Rule saved: $n recording(s) scheduled" else "Rule saved: ${target.title}" },
-                                    onFailure = { t -> "Rule failed: ${t.message ?: t::class.simpleName}" },
-                                )
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                onDismiss()
-                            }
-                            return@TextButton
-                        }
-                        submitting = true
-                        val effectiveStart = target.startMillis - preRoll * 60_000L
-                        val effectiveEnd = target.endMillis + postRoll * 60_000L
-                        scope.launch {
-                            val result = dvrViewModel.scheduleServerRecording(
-                                channelDispatcharrId = dispatcharrId,
-                                startMillis = effectiveStart,
-                                endMillis = effectiveEnd,
-                                title = target.title,
-                                description = target.description,
-                                comskip = removeCommercials,
-                            )
-                            submitting = false
-                            val msg = result.fold(
-                                onSuccess = { "Scheduled: ${target.title.ifBlank { "recording" }}" },
-                                onFailure = { t -> "Schedule failed: ${t.message ?: t::class.simpleName}" },
-                            )
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                            onDismiss()
-                        }
-                    },
+                    onClick = submit,
                 ) {
                     Text(
                         text = when {
@@ -576,6 +606,231 @@ fun RecordProgramSheet(
             },
         )
     }
+}
+
+/**
+ * tvOS RecordProgramSheet.tvOSForm, halved from the 1080 pt canvas: art
+ * beside the title block, pill rows (Record, Start Early, End Late,
+ * Destination, Comskip), the window summary and a red outlined Record
+ * pill. Menu closes the sheet (no Cancel pill, Logan 2026-09-05). Rows the
+ * tvOS form hides are hidden here too: Start Early for a live program or
+ * a series rule, Destination unless live on Dispatcharr with server
+ * access, Comskip only on Dispatcharr.
+ */
+@Composable
+private fun TvRecordForm(
+    target: ProgramInfoTarget,
+    isLive: Boolean,
+    onDismiss: () -> Unit,
+    canOfferSeriesRule: Boolean,
+    isDispatcharr: Boolean,
+    canRecordToServer: Boolean,
+    ruleMode: RuleMode, onRuleMode: (RuleMode) -> Unit,
+    ruleTitleMode: String, onRuleTitleMode: (String) -> Unit,
+    ruleUntaggedIsNew: Boolean, onRuleUntaggedIsNew: (Boolean) -> Unit,
+    ruleAllChannels: Boolean, onRuleAllChannels: (Boolean) -> Unit,
+    preRoll: Int, onPreRoll: (Int) -> Unit,
+    postRoll: Int, onPostRoll: (Int) -> Unit,
+    onCustomPreRoll: () -> Unit,
+    onCustomPostRoll: () -> Unit,
+    destinationServer: Boolean, onDestinationServer: (Boolean) -> Unit,
+    removeCommercials: Boolean, onRemoveCommercials: (Boolean) -> Unit,
+    submitting: Boolean,
+    usingRule: Boolean,
+    onSubmit: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val art = remember(target.id) { com.aeriotv.android.feature.livetv.grid.cachedPreviewArt(target.dispatcharrProgramId, target.title) }
+    var showCustomRule by remember { mutableStateOf(false) }
+    val hasNoRecordingPath = isDispatcharr && !isLive && !canRecordToServer
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
+            modifier = Modifier.width(520.dp).heightIn(max = 530.dp),
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    if (art != null) {
+                        coil3.compose.AsyncImage(
+                            model = art, contentDescription = null,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.width(100.dp).height(56.dp).clip(RoundedCornerShape(6.dp)),
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(if (isLive) "Record from Now" else "Record Program", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = colors.onSurface)
+                        Text(target.title.ifBlank { "Untitled" }, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text("${target.channelName} · ${formatTimeRange(target)}", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                    }
+                }
+
+                if (canOfferSeriesRule) {
+                    TvSectionTitle("Record")
+                    TvPillRow {
+                        listOf(RuleMode.Once, RuleMode.All, RuleMode.NewOnly).forEach { m ->
+                            TvPill(m.label, selected = ruleMode == m, onClick = { onRuleMode(m) })
+                        }
+                        if (ruleMode != RuleMode.Once) {
+                            TvPill(if (showCustomRule) "Hide Options" else "Customize", selected = showCustomRule, onClick = { showCustomRule = !showCustomRule })
+                        }
+                    }
+                    if (ruleMode != RuleMode.Once && showCustomRule) {
+                        Text("Title Match", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp))
+                        TvPillRow {
+                            listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex").forEach { (wire, label) ->
+                                TvPill(label, selected = ruleTitleMode == wire, onClick = { onRuleTitleMode(wire) })
+                            }
+                        }
+                        TvPillRow {
+                            if (ruleMode == RuleMode.NewOnly) {
+                                TvPill("Untagged Counts as New", selected = ruleUntaggedIsNew, onClick = { onRuleUntaggedIsNew(!ruleUntaggedIsNew) })
+                            }
+                            TvPill("Every Channel", selected = ruleAllChannels, onClick = { onRuleAllChannels(!ruleAllChannels) })
+                        }
+                    }
+                }
+
+                if (!isLive && !usingRule) {
+                    TvSectionTitle("Start Early")
+                    TvMinutePills(options = listOf(0, 5, 10, 15, 30), selected = preRoll, onSelect = onPreRoll, onCustom = onCustomPreRoll)
+                }
+                if (!usingRule) {
+                    TvSectionTitle("End Late")
+                    TvMinutePills(options = ROLL_OPTIONS, selected = postRoll, onSelect = onPostRoll, onCustom = onCustomPostRoll)
+                }
+                if (isDispatcharr && isLive && canRecordToServer && !usingRule) {
+                    TvSectionTitle("Destination")
+                    TvPillRow {
+                        TvPill("Dispatcharr server", selected = destinationServer, onClick = { onDestinationServer(true) })
+                        TvPill("This device", selected = !destinationServer, onClick = { onDestinationServer(false) })
+                    }
+                }
+                if (isDispatcharr && !usingRule) {
+                    val disabled = !destinationServer
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TvSectionTitle("Remove Commercials (Comskip)", dim = disabled)
+                        Spacer(Modifier.height(3.dp))
+                        TvPillRow(alpha = if (disabled) 0.45f else 1f) {
+                            TvPill("Off", selected = !removeCommercials, onClick = { if (!disabled) onRemoveCommercials(false) })
+                            TvPill("On", selected = removeCommercials, onClick = { if (!disabled) onRemoveCommercials(true) })
+                        }
+                        Text(
+                            if (disabled) "Comskip runs server-side. Switch the destination to Dispatcharr server to enable."
+                            else "Server-side: detects and removes commercial breaks after the recording completes, when Comskip is configured on the Dispatcharr server.",
+                            fontSize = 9.sp, lineHeight = 12.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, top = 1.dp),
+                        )
+                    }
+                }
+                if (!destinationServer && !usingRule) {
+                    TvNoteBox("Keep AerioTV open. Closing the app will stop this recording.")
+                }
+                if (hasNoRecordingPath) {
+                    TvNoteBox("Recording requires DVR access on Dispatcharr", "Scheduling a recording on the Dispatcharr server needs an account with DVR access set to Manage. Your account can watch and record live programs to this device, but not schedule server recordings. Ask your Dispatcharr administrator for access, or wait until the program is airing to record it on this device.")
+                }
+
+                if (!hasNoRecordingPath) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 3.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text(
+                            if (usingRule) tvSeriesRuleSummary(target, ruleMode, ruleAllChannels) else tvRecordingWindowSummary(target, isLive, preRoll, postRoll),
+                            fontSize = 11.sp, color = colors.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        TvRecordPill(
+                            label = when { submitting -> "Scheduling…"; usingRule -> "Save Rule"; else -> "Record" },
+                            enabled = !submitting, onClick = onSubmit,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvSectionTitle(text: String, dim: Boolean = false) {
+    Text(text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+        color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(start = 2.dp))
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TvPillRow(alpha: Float = 1f, content: @Composable () -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).alpha(alpha),
+    ) { content() }
+}
+
+@Composable
+private fun TvMinutePills(options: List<Int>, selected: Int, onSelect: (Int) -> Unit, onCustom: () -> Unit) {
+    val custom = selected !in options
+    TvPillRow {
+        options.forEach { m -> TvPill(if (m == 0) "None" else "$m min", selected = selected == m, onClick = { onSelect(m) }) }
+        TvPill(
+            when {
+                custom && selected < 0 -> "Custom (${-selected} min after start)"
+                custom -> "Custom ($selected min)"
+                else -> "Custom"
+            },
+            selected = custom, onClick = onCustom,
+        )
+    }
+}
+
+@Composable
+private fun TvNoteBox(title: String, detail: String? = null) {
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(title, fontSize = 11.sp, fontWeight = if (detail != null) FontWeight.Bold else FontWeight.Normal, color = MaterialTheme.colorScheme.onSurface)
+        if (detail != null) Text(detail, fontSize = 10.sp, lineHeight = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** tvOS RecordActionPill: red outline at rest, red fill with white text when focused, scale 1.08. */
+@Composable
+private fun TvRecordPill(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Row(
+        modifier = Modifier
+            .tvFocusScale(focused, focusedScale = 1.08f)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(if (focused) LIVE_RED else MaterialTheme.colorScheme.surfaceVariant)
+            .border(2.dp, if (focused) Color.Transparent else LIVE_RED, androidx.compose.foundation.shape.CircleShape)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Icon(androidx.compose.material.icons.Icons.Outlined.FiberManualRecord, contentDescription = null, tint = if (focused) Color.White else LIVE_RED, modifier = Modifier.size(12.dp))
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = if (focused) Color.White else LIVE_RED)
+    }
+}
+
+/** "Records 12:00 PM to 3:35 PM · 3 h 35 min" (tvOS recordingWindowSummary). */
+private fun tvRecordingWindowSummary(target: ProgramInfoTarget, isLive: Boolean, preRoll: Int, postRoll: Int): String {
+    val start = if (isLive) System.currentTimeMillis() else target.startMillis - preRoll * 60_000L
+    val end = target.endMillis + postRoll * 60_000L
+    val f = com.aeriotv.android.core.ui.ClockFormat.short()
+    val minutes = ((end - start) / 60_000L).toInt().coerceAtLeast(1)
+    val length = if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "$minutes min"
+    return "Records ${f.format(Date(start))} to ${f.format(Date(end))} · $length"
+}
+
+private fun tvSeriesRuleSummary(target: ProgramInfoTarget, mode: RuleMode, allChannels: Boolean): String {
+    val what = if (mode == RuleMode.NewOnly) "New episodes of" else "Every episode of"
+    val scope = if (allChannels) "on any channel" else "on ${target.channelName}"
+    return "$what \"${target.title}\" $scope, scheduled by the Dispatcharr server"
 }
 
 private enum class CustomBufferTarget { PreRoll, PostRoll }
