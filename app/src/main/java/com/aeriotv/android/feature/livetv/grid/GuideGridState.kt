@@ -38,6 +38,17 @@ class GuideGridState(
     var viewportStartMs: Long by mutableLongStateOf(initialViewportStartMs)
         private set
 
+    /**
+     * What the canvas draws: eases toward [viewportStartMs] after a D-pad
+     * pan or jump (tvOS animates its timeline 0.3 s ease-out), tracks it
+     * directly during a touch drag. Owned by GuideGrid's animation driver.
+     */
+    var drawViewportStartMs: Long by mutableLongStateOf(initialViewportStartMs)
+
+    /** False when the last viewport change came from a touch drag (no easing). */
+    var viewportChangeAnimated: Boolean = true
+        private set
+
     /** Set by layout from the strip width and the hour width. */
     var viewportDurationMs: Long by mutableLongStateOf(3 * 3_600_000L)
 
@@ -101,6 +112,7 @@ class GuideGridState(
         if (rows.isEmpty) return false
         val next = (viewportStartMs + direction * panStepMs).coerceIn(minViewportStart(), maxViewportStart())
         if (next == viewportStartMs) return false
+        viewportChangeAnimated = true
         viewportStartMs = next
         land(focusRow.coerceAtLeast(0))
         return true
@@ -111,18 +123,22 @@ class GuideGridState(
         if (rows.isEmpty) return false
         val next = (viewportStartMs + ms).coerceIn(minViewportStart(), maxViewportStart())
         if (next == viewportStartMs) return false
+        viewportChangeAnimated = true
         viewportStartMs = next
         land(focusRow.coerceAtLeast(0))
         return true
     }
 
-    /** Touch drag: move the viewport without retargeting focus (focus retargets on the next D-pad press). */
-    fun scrollViewportTo(startMs: Long) {
+    /** Move the viewport without retargeting focus (focus retargets on the next D-pad press).
+     *  [animated] = false for a touch drag, which must track the finger. */
+    fun scrollViewportTo(startMs: Long, animated: Boolean = true) {
+        viewportChangeAnimated = animated
         viewportStartMs = startMs.coerceIn(minViewportStart(), maxViewportStart())
     }
 
     /** Put NOW at the lead offset inside the left edge; keep the row. */
     fun anchorToNow(nowMs: Long) {
+        viewportChangeAnimated = true
         viewportStartMs = (nowMs - leadMs).coerceIn(minViewportStart(), maxViewportStart())
         if (!rows.isEmpty) land(focusRow.coerceAtLeast(0))
     }

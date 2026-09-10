@@ -326,6 +326,20 @@ fun GuideGrid(
         }
     }
 
+    // Timeline easing (tvOS parity): the draw offset follows the target
+    // viewport with a 300 ms ease-out after a pan or jump; a drag snaps.
+    val viewportAnim = remember { androidx.compose.animation.core.Animatable(state.viewportStartMs.toFloat()) }
+    androidx.compose.runtime.LaunchedEffect(state.viewportStartMs) {
+        val target = state.viewportStartMs.toFloat()
+        if (!state.viewportChangeAnimated) {
+            viewportAnim.snapTo(target); state.drawViewportStartMs = target.toLong(); return@LaunchedEffect
+        }
+        viewportAnim.animateTo(
+            target,
+            animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+        ) { state.drawViewportStartMs = value.toLong() }
+        state.drawViewportStartMs = state.viewportStartMs
+    }
     androidx.compose.runtime.CompositionLocalProvider(LocalLogoCache provides logoCache) {
     Box(modifier = modifier) {
     Column(
@@ -447,7 +461,7 @@ private fun TimeHeader(
             )
         }
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val vs = state.viewportStartMs
+            val vs = state.drawViewportStartMs
             // Half-hour slots from the first slot boundary at or before the viewport edge.
             val slot = 30 * 60_000L
             var t = (vs / slot) * slot
@@ -549,18 +563,18 @@ private fun GridRow(
                 detectTapGestures(
                     onTap = { pos ->
                         if (pos.x < railWidthPx) { onTapFocus(row, state.rows.cells(row).first()); onPlay(channel, state.rows.cells(row).first()); return@detectTapGestures }
-                        val t = state.viewportStartMs + ((pos.x - railWidthPx) / pxPerMs).toLong()
+                        val t = state.drawViewportStartMs + ((pos.x - railWidthPx) / pxPerMs).toLong()
                         state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onPlay(channel, cell) }
                     },
                     onLongPress = { pos ->
-                        val t = state.viewportStartMs + ((pos.x - railWidthPx).coerceAtLeast(0f) / pxPerMs).toLong()
+                        val t = state.drawViewportStartMs + ((pos.x - railWidthPx).coerceAtLeast(0f) / pxPerMs).toLong()
                         state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onOpenMenu(channel, cell) }
                     },
                 )
             }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures { _, dx ->
-                    state.scrollViewportTo(state.viewportStartMs - (dx / pxPerMs).toLong())
+                    state.scrollViewportTo(state.viewportStartMs - (dx / pxPerMs).toLong(), animated = false)
                 }
             },
     ) {
@@ -640,7 +654,7 @@ private fun GridRow(
         clipRect(railWidthPx, 0f, size.width, size.height) {
         translate(left = railWidthPx) {
             val stripW = size.width - railWidthPx
-            val vs = state.viewportStartMs
+            val vs = state.drawViewportStartMs
             val ve = vs + (stripW / pxPerMs).toLong()
             val focusStart = focusedCellStart
             val focusedHere = gridFocused && focusStart != Long.MIN_VALUE
