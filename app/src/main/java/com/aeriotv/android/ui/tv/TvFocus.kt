@@ -366,6 +366,34 @@ fun Modifier.tvFormFieldInput(horizontalFocusEscape: Boolean = false): Modifier 
  * CompositionLocalProvider(LocalBringIntoViewSpec provides ...) around the
  * scrollable, TV only.
  */
+/**
+ * tvOS page scrolling, measured on the Apple TV DVR tab (2026-09-10): the
+ * focused element is kept about 200 pt (100 dp) clear of BOTH screen edges,
+ * so the page starts moving on the first Down and steps evenly instead of
+ * waiting until a card touches the edge and then jumping. Minimal distance
+ * to satisfy the margin; an element taller than the room aligns its top.
+ * Same-row wobble under 24 px is suppressed like [TvLargeCardBringIntoViewSpec].
+ */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+class TvEdgeMarginBringIntoViewSpec(private val marginPx: Float) : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float {
+        val top = marginPx
+        val bottom = containerSize - marginPx
+        if (size > bottom - top) {
+            // Too tall for the room: keep it anchored to the top margin.
+            val d = offset - top
+            return if (kotlin.math.abs(d) < 24f) 0f else d
+        }
+        if (offset >= top && offset + size <= bottom) return 0f
+        val distance = if (offset < top) offset - top else offset + size - bottom
+        return if (kotlin.math.abs(distance) < 24f) 0f else distance
+    }
+}
+
 @kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 object TvLargeCardBringIntoViewSpec : androidx.compose.foundation.gestures.BringIntoViewSpec {
     override fun calculateScrollDistance(

@@ -97,7 +97,6 @@ import com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester
 import com.aeriotv.android.ui.tv.TvActionCircle
 import com.aeriotv.android.ui.tv.TvChrome
 import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
-import com.aeriotv.android.ui.tv.TvLargeCardBringIntoViewSpec
 import com.aeriotv.android.ui.tv.TvPill
 import com.aeriotv.android.ui.tv.TvSearchCapsule
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -329,7 +328,11 @@ fun <T> TvMediaPage(
 
     TvKeyboardOnOkHost {
     Box(modifier = Modifier.fillMaxSize()) {
-        CompositionLocalProvider(LocalBringIntoViewSpec provides TvLargeCardBringIntoViewSpec) {
+        // tvOS focus scrolling (measured 2026-09-10): 100 dp clear of both edges.
+        val edgeSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
+            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(100.dp.toPx()) }
+        }
+        CompositionLocalProvider(LocalBringIntoViewSpec provides edgeSpec) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             state = gridState,
@@ -380,6 +383,14 @@ fun <T> TvMediaPage(
                     TvShelfRow(
                         shelf = shelf,
                         firstCardRequester = if (si == 0) firstShelfCard else null,
+                        // tvOS: a card of the FIRST shelf gaining focus while
+                        // the page is scrolled brings the page to the top so
+                        // the hero is fully back (Apple TV Up walk 2026-09-10).
+                        onCardFocused = if (si == 0 && hasHero) ({
+                            if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
+                                scope.launch { gridState.animateScrollToItem(0) }
+                            }
+                        }) else null,
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -747,7 +758,12 @@ fun TvHeroButtonView(
 // MARK: shelves
 
 @Composable
-private fun <T> TvShelfRow(shelf: TvShelf<T>, firstCardRequester: FocusRequester?, modifier: Modifier = Modifier) {
+private fun <T> TvShelfRow(
+    shelf: TvShelf<T>,
+    firstCardRequester: FocusRequester?,
+    onCardFocused: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     Column(modifier = modifier) {
         Text(
             shelf.title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
@@ -763,7 +779,8 @@ private fun <T> TvShelfRow(shelf: TvShelf<T>, firstCardRequester: FocusRequester
                     shelf.items[i],
                     Modifier
                         .width(shelf.cardWidth)
-                        .then(if (i == 0 && firstCardRequester != null) Modifier.focusRequester(firstCardRequester) else Modifier),
+                        .then(if (i == 0 && firstCardRequester != null) Modifier.focusRequester(firstCardRequester) else Modifier)
+                        .then(if (onCardFocused != null) Modifier.onFocusChanged { if (it.hasFocus) onCardFocused() } else Modifier),
                 )
             }
         }
