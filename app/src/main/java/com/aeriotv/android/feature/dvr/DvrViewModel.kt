@@ -47,6 +47,7 @@ class DvrViewModel @Inject constructor(
     private val localRecordingDao: LocalRecordingDao,
     private val appPreferences: AppPreferences,
     private val tmdbService: com.aeriotv.android.core.network.TMDBService,
+    private val epgProgrammeDao: com.aeriotv.android.core.data.db.dao.EpgProgrammeDao,
 ) : ViewModel() {
 
     enum class Filter { Scheduled, Recording, Completed }
@@ -117,6 +118,10 @@ class DvrViewModel @Inject constructor(
         val programId: Int? = null,
         // Media-center DVR (Apple parity): art and facts.
         val posterUrl: String? = null,
+        /** Landscape art for the 16:9 hero and cards (tvOS Recording.backdropURL); posterUrl is the fallback. */
+        val backdropUrl: String? = null,
+        /** Dispatcharr "interrupted": a partial file. tvOS badges only this, never a user stop. */
+        val partial: Boolean = false,
         val subTitle: String? = null,
         val season: Int? = null,
         val episode: Int? = null,
@@ -250,8 +255,34 @@ class DvrViewModel @Inject constructor(
      */
     private val artCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val artMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val backdropCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val backdropMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private data class Identity(val subTitle: String?, val season: Int?, val episode: Int?)
+    private val identityCache = java.util.concurrent.ConcurrentHashMap<String, Identity>()
+    private val identityMisses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    /** One TMDB details call per title and kind for the session (tvOS tmdbEntries). */
+    private val tmdbDetails = java.util.concurrent.ConcurrentHashMap<String, com.aeriotv.android.core.network.TmdbDetails>()
     private var artJob: kotlinx.coroutines.Job? = null
 
+    private fun isMovieLike(rec: Recording): Boolean =
+        rec.category.lowercase().let { it.contains("movie") || it.contains("film") }
+
+    private suspend fun tmdbDetailsFor(title: String, isMovie: Boolean, key: String): com.aeriotv.android.core.network.TmdbDetails? {
+        val k = (if (isMovie) "m:" else "t:") + title.lowercase()
+        tmdbDetails[k]?.let { return it }
+        val d = runCatching { tmdbService.detailsForTitle(title, isMovie, key) }.getOrNull() ?: return null
+        tmdbDetails[k] = d
+        return d
+    }
+
+    /**
+     * tvOS DVRArtResolver, reduced: for every server recording fill what the
+     * row lacks. Episode identity (sub_title, season, episode) comes from the
+     * guide programme matched by title and air window; poster art from the
+     * Dispatcharr programme detail icon, then TMDB by cleaned title; the
+     * landscape backdrop (hero and 16:9 cards) from TMDB. Results are cached
+     * per recording id for the session and published into the rows.
+     */
     private fun resolveArtAsync(playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity, rows: List<Recording>) {
         if (artJob?.isActive == true) return
         artJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -260,32 +291,61 @@ class DvrViewModel @Inject constructor(
             val base = playlistRepository.effectiveBaseUrl(playlist)
             var changed = false
             for (rec in rows) {
-                if (!rec.posterUrl.isNullOrBlank() || rec.id in artMisses || artCache.containsKey(rec.id)) continue
-                var url: String? = null
-                if (tmdbOn && key.isNotBlank()) {
-                    val clean = rec.title.replace(Regex("""\s*\((\d{4})\)\s*$"""), "").trim()
-                    url = runCatching { tmdbService.posterUrlForTitle(clean, key) }.getOrNull()
-                }
-                val pid = rec.programId
-                if (url.isNullOrBlank() && pid != null && !playlist.apiKey.isNullOrBlank()) {
-                    url = runCatching {
-                        dispatcharrAuth.withApiKeyRetry(playlist.id) { k ->
-                            val d = dispatcharrClient.getProgramDetail(base, k, pid)
-                            (d.posterUrl ?: d.icon)?.let { resolveRecordingUrl(it, base) ?: it }
-                        }
+                if (rec.title.isBlank()) continue
+                val clean = rec.title.replace(Regex("""\s*\((\d{4})\)\s*$"""), "").trim()
+                val isMovie = isMovieLike(rec)
+                // Episode identity from the guide (local rows never carry it).
+                val needsIdentity = (rec.subTitle.isNullOrBlank() || rec.season == null) &&
+                    rec.id !in identityMisses && !identityCache.containsKey(rec.id)
+                if (needsIdentity) {
+                    val hit = runCatching {
+                        epgProgrammeDao.forPlaylistInWindow(playlist.id, rec.startMillis, rec.endMillis)
+                            .firstOrNull { it.title == rec.title && (it.subTitle != null || it.season != null) }
                     }.getOrNull()
+                    if (hit != null) { identityCache[rec.id] = Identity(hit.subTitle, hit.season, hit.episode); changed = true }
+                    else identityMisses += rec.id
                 }
-                if (url.isNullOrBlank()) { artMisses += rec.id; continue }
-                artCache[rec.id] = url
-                changed = true
-                kotlinx.coroutines.delay(120)
-            }
-            if (changed) {
-                _state.update { st ->
-                    st.copy(recordings = st.recordings.map { r -> artCache[r.id]?.let { u -> if (r.posterUrl.isNullOrBlank()) r.copy(posterUrl = u) else r } ?: r })
+                if (rec.posterUrl.isNullOrBlank() && rec.id !in artMisses && !artCache.containsKey(rec.id)) {
+                    var url: String? = null
+                    val pid = rec.programId
+                    if (pid != null && !playlist.apiKey.isNullOrBlank()) {
+                        url = runCatching {
+                            dispatcharrAuth.withApiKeyRetry(playlist.id) { k ->
+                                val d = dispatcharrClient.getProgramDetail(base, k, pid)
+                                (d.posterUrl ?: d.icon)?.let { resolveRecordingUrl(it, base) ?: it }
+                            }
+                        }.getOrNull()
+                    }
+                    if (url.isNullOrBlank() && tmdbOn && key.isNotBlank()) {
+                        url = tmdbDetailsFor(clean, isMovie, key)?.posterPath?.takeIf { it.isNotBlank() }?.let { tmdbService.imageUrlFor(it, "w500") }
+                            ?: runCatching { tmdbService.posterUrlForTitle(clean, key) }.getOrNull()
+                    }
+                    if (url.isNullOrBlank()) artMisses += rec.id else { artCache[rec.id] = url; changed = true }
                 }
+                if (rec.backdropUrl.isNullOrBlank() && tmdbOn && key.isNotBlank() &&
+                    rec.id !in backdropMisses && !backdropCache.containsKey(rec.id)
+                ) {
+                    val b = tmdbDetailsFor(clean, isMovie, key)?.backdropPath?.takeIf { it.isNotBlank() }?.let { tmdbService.imageUrlFor(it, "w1280") }
+                    if (b == null) backdropMisses += rec.id else { backdropCache[rec.id] = b; changed = true }
+                }
+                kotlinx.coroutines.delay(60)
             }
+            if (changed) _state.update { st -> st.copy(recordings = st.recordings.map(::applyResolved)) }
         }
+    }
+
+    private fun applyResolved(r: Recording): Recording {
+        var out = r
+        artCache[r.id]?.let { if (out.posterUrl.isNullOrBlank()) out = out.copy(posterUrl = it) }
+        backdropCache[r.id]?.let { if (out.backdropUrl.isNullOrBlank()) out = out.copy(backdropUrl = it) }
+        identityCache[r.id]?.let { id ->
+            out = out.copy(
+                subTitle = out.subTitle?.takeIf { it.isNotBlank() } ?: id.subTitle,
+                season = out.season ?: id.season,
+                episode = out.episode ?: id.episode,
+            )
+        }
+        return out
     }
 
     /** Set once the first refresh() has produced an authoritative verdict
@@ -1043,6 +1103,7 @@ private fun DispatcharrRecording.toRecording(
         isDvr = dvr,
         programId = programId,
         posterUrl = poster,
+        partial = this.status?.lowercase() == "interrupted",
         subTitle = str(program, "sub_title") ?: str(cp, "sub_title"),
         season = num(cp, "season")?.toInt() ?: num(program, "season")?.toInt(),
         episode = num(cp, "episode")?.toInt() ?: num(program, "episode")?.toInt(),

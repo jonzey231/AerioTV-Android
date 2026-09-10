@@ -627,7 +627,9 @@ private fun TvDvrPage(
         val progress = progressOf(rec)
         val canPlay = recording && rec.inProgressUrl != null || !recording && rec.playbackUrl != null
         val se = if ((rec.season ?: 0) > 0) "S${rec.season} E${rec.episode ?: 0}" else null
-        val meta = listOfNotNull(channelName(rec).takeIf { it.isNotBlank() }, timeRange(rec), se ?: durationLabel(rec))
+        // tvOS DVRHero metaParts: channel, "Sep 5 1:36 AM to 2:00 AM", S/E or duration.
+        val dateRange = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(Date(rec.startMillis)) + " " + timeRange(rec)
+        val meta = listOfNotNull(channelName(rec).takeIf { it.isNotBlank() }, dateRange, se ?: durationLabel(rec))
         val buttons = buildList {
             if (recording) {
                 if (canPlay) {
@@ -642,10 +644,10 @@ private fun TvDvrPage(
             }
         }
         return com.aeriotv.android.feature.movies.tv.TvHeroPage(
-            key = rec.id, title = rec.title.ifBlank { "Recording" }, artUrl = rec.posterUrl, logoUrl = channelLogo(rec),
+            key = rec.id, title = rec.title.ifBlank { "Recording" }, artUrl = rec.backdropUrl ?: rec.posterUrl, logoUrl = channelLogo(rec),
             subtitle = rec.subTitle, meta = meta, plot = rec.description.takeIf { it.isNotBlank() },
             eyebrow = when { recording -> "Recording now"; progress > 0f -> "Continue watching"; else -> null },
-            eyebrowColor = if (recording) red else Color.Unspecified,
+            eyebrowColor = if (recording) red else Color.Unspecified, eyebrowDot = recording,
             buttons = buttons, longPressActions = menuActions(rec),
         )
     }
@@ -662,15 +664,14 @@ private fun TvDvrPage(
             else -> day
         }
         com.aeriotv.android.feature.movies.tv.TvRecordingCard(
-            title = rec.title.ifBlank { "Recording" }, meta = meta, artUrl = rec.posterUrl, logoUrl = channelLogo(rec),
+            title = rec.title.ifBlank { "Recording" }, meta = meta, artUrl = rec.backdropUrl ?: rec.posterUrl, logoUrl = channelLogo(rec),
             channelName = channelName(rec),
             trailing = if (s == DvrViewModel.Recording.Status.Scheduled) timeFmt.format(Date(rec.startMillis)) else durationLabel(rec),
             progress = progressOf(rec),
             badge = when (s) {
                 DvrViewModel.Recording.Status.Recording -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("REC", red, dot = true)
                 DvrViewModel.Recording.Status.Scheduled -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge(day, Color.Black.copy(alpha = 0.6f), icon = Icons.Outlined.Schedule)
-                DvrViewModel.Recording.Status.Stopped -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Partial", Color(0xFFFF9F43).copy(alpha = 0.85f))
-                else -> null
+                else -> if (rec.partial) com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Partial", Color(0xFFFF9F43).copy(alpha = 0.85f)) else null
             },
             onClick = onClick, modifier = modifier, longPressActions = menuActions(rec),
         )

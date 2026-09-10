@@ -160,6 +160,8 @@ data class TvHeroPage(
     /** "Recording now" / "Continue watching" line above the title. */
     val eyebrow: String? = null,
     val eyebrowColor: Color = Color.Unspecified,
+    /** tvOS: only "Recording now" carries the dot; "Continue watching" is plain text. */
+    val eyebrowDot: Boolean = false,
     /** Channel logo shown at the trailing side when there is no art. */
     val logoUrl: String? = null,
     val meta: List<String> = emptyList(),
@@ -621,7 +623,7 @@ private fun TvHeroCard(
             page.eyebrow?.let { eyebrow ->
                 val c = if (page.eyebrowColor == Color.Unspecified) MaterialTheme.colorScheme.primary else page.eyebrowColor
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(c))
+                    if (page.eyebrowDot) Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(c))
                     Text(eyebrow, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = c)
                 }
             }
