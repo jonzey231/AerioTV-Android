@@ -539,7 +539,9 @@ private fun GridRow(
         // inline star and the number in the corner.
         val phoneRail = narrowRail && size.height >= 90.dp.toPx()
         val name = if (rail.names) textCache.getOrPut(RAIL_NAME_KEY) {
-            CellText(textMeasurer.measure((if (isFavorite && !phoneRail) "\u2605 " else "") + channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
+            // The star is always the corner glyph now (Logan 2026-09-10: left
+            // of the catch-up clock on TV too), never inline in the name.
+            CellText(textMeasurer.measure(channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameW)), null)
         } else null
         val logo = if (rail.logos && channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
         val logoH = if (phoneRail) 28.dp.toPx() else 24.dp.toPx(); val logoW = if (phoneRail) 40.dp.toPx() else 36.dp.toPx()
@@ -567,7 +569,7 @@ private fun GridRow(
         } else if (name != null || underNumber != null) {
             drawNameStack((size.height - nameH) / 2f)
         }
-        if (phoneRail && isFavorite) {
+        if (isFavorite) {
             // Same 12 dp box and 4 dp top as the catch-up clock so the two sit
             // on one line (a text glyph sat lower, Logan 2026-09-09).
             val iconPx = 12.dp.toPx()
