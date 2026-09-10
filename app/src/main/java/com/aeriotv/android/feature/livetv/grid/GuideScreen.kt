@@ -651,6 +651,15 @@ fun GuideScreen(
             hiddenGroupCount = hiddenGroups.size,
         )
     }
+    if (showJumpSheet && isTv) {
+        com.aeriotv.android.feature.livetv.GuideJumpTvOverlay(
+            daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
+            daysAhead = epgDaysAhead.coerceIn(1, 14),
+            onJump = startJump,
+            onBackToNow = snapToNow,
+            onDismiss = { showJumpSheet = false; runCatching { gridFocus.requestFocus() } },
+        )
+    }
     if (!isTv) {
         val drawerTokens = remember(groups, collections) {
             collections.filter { it.placement == ChannelCollection.PLACEMENT_BEGINNING }.map { ChannelCollection.token(it.id) } +
@@ -778,7 +787,7 @@ fun GuideScreen(
         TvActionMenuDialog(title = cell.title, actions = actions, guard = menuGuard, onDismiss = { menuFor = null })
         }
     }
-    if (showJumpSheet) {
+    if (showJumpSheet && !isTv) {
         com.aeriotv.android.feature.livetv.GuideJumpSheet(
             // Days follow the EPG that is actually loaded (Logan 2026-09-10),
             // back no further than the grid's own history window.
