@@ -65,6 +65,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -486,7 +488,8 @@ fun GuideScreen(
             ?: com.aeriotv.android.feature.livetv.groupSidebarLabel(token)
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    var guideTopPx by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    Box(modifier = modifier.fillMaxSize().onGloballyPositioned { guideTopPx = it.positionInRoot().y }) {
     Row(modifier = Modifier.fillMaxSize()) {
     if (groupSidebarOpen && !isTv) {
         GuideGroupSidebarPane(
@@ -657,25 +660,40 @@ fun GuideScreen(
     // tvOS drawer (ChannelListView 2026-09-05): the rail overlays the guide
     // under the time header, the rest of the tab dims 45%, the grid does not
     // shift. Right or OK commit, Back reverts (handlers unchanged).
-    if (groupSidebarOpen && isTv) {
+    if (isTv) {
         // Under the time header wherever it sits: below the Channel Preview
-        // banner (lifted 14 dp under the bar) when that layout is on.
+        // banner (lifted 14 dp under the bar) when that layout is on. Drawn
+        // in the shell's full-screen slot so the scrim dims the whole screen,
+        // nav bar included (tvOS); the pane is offset by the guide's own top.
         val drawerTop = headerHeight + (if (previewMode) GuidePreviewBanner.height - 14.dp else 0.dp)
-        // tvOS dims the whole tab (banner included); only the nav bar stays lit.
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
-        GuideGroupSidebarPane(
-            groups = groups,
-            selectedToken = state.selectedGroup,
-            topOffset = drawerTop,
-            onPreview = { token -> viewModel.onGroupSelected(token) },
-            onCommit = { token ->
-                if (token != state.selectedGroup) viewModel.onGroupSelected(token)
-                groupSidebarOpen = false
-                runCatching { gridFocus.requestFocus() }
-            },
-            onManageGroups = { showManageGroups = true },
-            hiddenGroupCount = hiddenGroups.size,
-        )
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val guideTop = with(density) { guideTopPx.toDp() }
+        val drawerSlot = com.aeriotv.android.feature.main.LocalTvFullScreenOverlay.current
+        val drawerOverlay: @Composable () -> Unit = {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+            GuideGroupSidebarPane(
+                groups = groups,
+                selectedToken = state.selectedGroup,
+                topOffset = guideTop + drawerTop,
+                onPreview = { token -> viewModel.onGroupSelected(token) },
+                onCommit = { token ->
+                    if (token != state.selectedGroup) viewModel.onGroupSelected(token)
+                    groupSidebarOpen = false
+                    runCatching { gridFocus.requestFocus() }
+                },
+                onManageGroups = { showManageGroups = true },
+                hiddenGroupCount = hiddenGroups.size,
+            )
+        }
+        if (drawerSlot != null) {
+            androidx.compose.runtime.DisposableEffect(groupSidebarOpen) {
+                if (groupSidebarOpen) drawerSlot.value = drawerOverlay
+                else if (drawerSlot.value === drawerOverlay) drawerSlot.value = null
+                onDispose { if (drawerSlot.value === drawerOverlay) drawerSlot.value = null }
+            }
+        } else if (groupSidebarOpen) {
+            drawerOverlay()
+        }
     }
     // TV Jump To: drawn in the shell's full-screen slot so the scrim covers
     // the tab bar too; drawn here when no shell provides one.
