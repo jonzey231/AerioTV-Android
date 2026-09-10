@@ -655,9 +655,14 @@ private fun TvHeroCard(
                 }
             }
             page.plot?.takeIf { it.isNotBlank() }?.let {
+                // weight(fill = false): when the copy is taller than the
+                // hero (subtitle + three plot lines), the plot gives up
+                // lines instead of the Column squeezing the button row,
+                // which had shrunk the 30 dp pills to 23 dp (Logan
+                // 2026-09-10, measured on the Streamer vs the Apple TV).
                 Text(
                     it, fontSize = 11.sp, lineHeight = 14.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                    maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 280.dp),
+                    maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 280.dp).weight(1f, fill = false),
                 )
             }
             Row(
@@ -711,16 +716,12 @@ fun TvHeroButtonView(
                 shape = CircleShape,
             )
             .combinedClickable(interactionSource = interaction, indication = null, onClick = button.onClick, onLongClick = onLongClick)
-            // Measured against the Apple TV (Logan 2026-09-10): the tvOS
-            // label renders a ~20 pt cap height in the 60 pt pill, so the
-            // Roboto label is 13.5 sp (not the nominal 22 pt halved) with a
-            // 13 dp glyph and 11 dp sides to keep the pill width equal.
-            .padding(horizontal = 11.dp),
+            .padding(horizontal = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(button.icon, contentDescription = null, tint = ink, modifier = Modifier.size(13.dp))
-        Text(button.label, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
+        Icon(button.icon, contentDescription = null, tint = ink, modifier = Modifier.size(11.dp))
+        Text(button.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
     }
 }
 
