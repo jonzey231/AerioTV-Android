@@ -38,6 +38,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
@@ -623,8 +624,13 @@ private fun TvHeroCard(
             ),
         )
         Column(
-            modifier = Modifier.align(Alignment.BottomStart).padding(22.dp).widthIn(max = 360.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            // tvOS copySpacing 12 pt / copyInset 44 pt halved is 6 / 22; the
+            // Roboto line heights run taller than SF, so 4 / 18 keeps the
+            // eyebrow, title, subtitle, meta, three plot lines and the 30 dp
+            // button row inside the 210 dp card without clipping any of
+            // them (Logan 2026-09-10: the plot was cut mid-line).
+            modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 22.dp, vertical = 18.dp).widthIn(max = 360.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             page.eyebrow?.let { eyebrow ->
                 val c = if (page.eyebrowColor == Color.Unspecified) MaterialTheme.colorScheme.primary else page.eyebrowColor
@@ -634,7 +640,7 @@ private fun TvHeroCard(
                 }
             }
             Text(
-                page.title, fontSize = 26.sp, lineHeight = 30.sp, fontWeight = FontWeight.Bold,
+                page.title, fontSize = 26.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
             page.subtitle?.takeIf { it.isNotBlank() }?.let {
@@ -655,14 +661,9 @@ private fun TvHeroCard(
                 }
             }
             page.plot?.takeIf { it.isNotBlank() }?.let {
-                // weight(fill = false): when the copy is taller than the
-                // hero (subtitle + three plot lines), the plot gives up
-                // lines instead of the Column squeezing the button row,
-                // which had shrunk the 30 dp pills to 23 dp (Logan
-                // 2026-09-10, measured on the Streamer vs the Apple TV).
                 Text(
                     it, fontSize = 11.sp, lineHeight = 14.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                    maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 280.dp).weight(1f, fill = false),
+                    maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 280.dp),
                 )
             }
             Row(
@@ -670,14 +671,17 @@ private fun TvHeroCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.padding(top = 2.dp),
             ) {
-                page.buttons.forEachIndexed { i, b ->
+                // The hero menu is the right-most options circle, not a
+                // long press on Resume (Logan 2026-09-10, all platforms).
+                val buttons = if (page.longPressActions.isEmpty()) page.buttons
+                else page.buttons + TvHeroButton("", Icons.Filled.MoreHoriz, onClick = { menuOpen = true })
+                buttons.forEachIndexed { i, b ->
                     TvHeroButtonView(
                         button = b,
                         modifier = Modifier
                             .then(if (b.primary && primaryRequester != null) Modifier.focusRequester(primaryRequester) else Modifier)
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
                             .onFocusChanged { if (it.isFocused) onButtonFocused() },
-                        onLongClick = if (b.primary && page.longPressActions.isNotEmpty()) ({ menuOpen = true }) else null,
                     )
                 }
             }
@@ -716,12 +720,13 @@ fun TvHeroButtonView(
                 shape = CircleShape,
             )
             .combinedClickable(interactionSource = interaction, indication = null, onClick = button.onClick, onLongClick = onLongClick)
-            .padding(horizontal = 13.dp),
+            // tvOS MoviesHeroButton: an icon-only button is a 30 dp circle (14 pt sides halved).
+            .padding(horizontal = if (button.label.isEmpty()) 9.dp else 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(button.icon, contentDescription = null, tint = ink, modifier = Modifier.size(11.dp))
-        Text(button.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
+        Icon(button.icon, contentDescription = if (button.label.isEmpty()) "Options" else null, tint = ink, modifier = Modifier.size(if (button.label.isEmpty()) 12.dp else 11.dp))
+        if (button.label.isNotEmpty()) Text(button.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
     }
 }
 

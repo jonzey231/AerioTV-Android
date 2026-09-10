@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.outlined.Info
@@ -138,21 +139,26 @@ fun MediaHeroCard(
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 4.dp)) {
-                Box {
-                    Row(
-                        modifier = Modifier
-                            .height(40.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                            .combinedClickable(onClick = onPrimary, onLongClick = { if (onRemove != null || onToggleWatchlist != null) menu = true })
-                            .padding(horizontal = 18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
-                        Text(if (page.hasProgress) "Resume" else "Play", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimary)
-                    }
-                    if (onRemove != null || onToggleWatchlist != null) {
+                Row(
+                    modifier = Modifier
+                        .height(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .clickable(onClick = onPrimary)
+                        .padding(horizontal = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+                    Text(if (page.hasProgress) "Resume" else "Play", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimary)
+                }
+                if (page.hasProgress) HeroIconButton(Icons.Filled.Replay, "Play from Beginning", onPlayFromStart)
+                HeroIconButton(Icons.Outlined.Info, "Details", onDetails)
+                // The hero menu is the right-most options circle, not a long
+                // press on Resume (Logan 2026-09-10, all platforms).
+                if (onRemove != null || onToggleWatchlist != null) Box {
+                    HeroIconButton(Icons.Filled.MoreHoriz, "Options") { menu = true }
+                    run {
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             if (onToggleWatchlist != null) {
                                 DropdownMenuItem(
@@ -169,8 +175,6 @@ fun MediaHeroCard(
                         }
                     }
                 }
-                if (page.hasProgress) HeroIconButton(Icons.Filled.Replay, "Play from Beginning", onPlayFromStart)
-                HeroIconButton(Icons.Outlined.Info, "Details", onDetails)
                 page.remainingLabel?.let {
                     Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }

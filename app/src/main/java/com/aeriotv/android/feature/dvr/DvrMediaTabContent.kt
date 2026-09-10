@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -354,12 +355,14 @@ fun DvrMediaTabContent(
                 onPrimary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) playFromStart(rec) else play(rec) },
                 onSecondary = { if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording) jumpToLive(rec) else playFromStart(rec) },
                 onStop = { scope.launch { viewModel.stopRecording(rec) } },
-                onInfo = { showInfo(rec) })
+                onInfo = { showInfo(rec) },
+                menu = { close -> menuItems(rec, close) })
         }
         val recentCard: @Composable (Rec) -> Unit = { rec ->
             DvrHeroCard(rec, channelName(rec), channelLogo(rec), progressOf(rec), now,
                 onPrimary = { play(rec) }, onSecondary = { playFromStart(rec) },
-                onStop = {}, onInfo = { showInfo(rec) })
+                onStop = {}, onInfo = { showInfo(rec) },
+                menu = { close -> menuItems(rec, close) })
         }
         val kindPills = DvrKind.entries.filter { it in kindsPresent }
         if (rememberLiveTvFormFactor().isTv) {
@@ -524,8 +527,11 @@ fun DvrHeroCard(
     rec: Rec, channelName: String, channelLogo: String?, progress: Float, now: Long,
     onPrimary: () -> Unit, onSecondary: () -> Unit, onStop: () -> Unit, onInfo: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The row's menu behind the right-most options circle (Logan 2026-09-10). */
+    menu: (@Composable (close: () -> Unit) -> Unit)? = null,
 ) {
     val bg = MaterialTheme.colorScheme.background
+    var menuOpen by remember { mutableStateOf(false) }
     val recording = rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording
     val canPlay = recording && rec.inProgressUrl != null || !recording && rec.playbackUrl != null
     Box(modifier = modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onInfo)) {
@@ -557,6 +563,12 @@ fun DvrHeroCard(
                     if (progress > 0f) HeroRound(Icons.Filled.Replay, "Play from Beginning", onSecondary)
                 }
                 HeroRound(Icons.Outlined.Info, "Details", onInfo)
+                if (menu != null) Box {
+                    HeroRound(Icons.Filled.MoreHoriz, "Options") { menuOpen = true }
+                    androidx.compose.material3.DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        menu { menuOpen = false }
+                    }
+                }
             }
         }
     }
