@@ -160,13 +160,14 @@ private fun TvMenuCapsule(
                     else -> false
                 }
             }
-            // tvOS confirmationDialog look (Logan 2026-09-10, supersedes the
-            // 2026-09-02 ring): the focused capsule is a solid white platter
-            // with the accent text on it, the rest a quiet translucent fill.
+            // Pill canon (Logan 2026-09-05 / 2026-09-10): a menu action is
+            // never "selected", so focus is the ACCENT ring over a quiet
+            // translucent fill, like every other unselected pill.
             .background(
-                color = if (focused) Color.White else Color.White.copy(alpha = 0.08f),
+                color = Color.White.copy(alpha = if (focused) 0.14f else 0.08f),
                 shape = RoundedCornerShape(19.dp),
             )
+            .border(2.dp, if (focused) accent else Color.Transparent, RoundedCornerShape(19.dp))
             .clickable(enabled = enabled, onClick = onActivate),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
