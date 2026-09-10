@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1100,43 +1101,55 @@ fun MainScaffold(
                     // hide the bar, it MINIMIZES it to a small pill in the
                     // bottom-left corner showing the active tab's icon. Tapping
                     // the pill or scrolling up brings the full bar back.
-                    androidx.compose.animation.AnimatedContent(
-                        targetState = bottomBarVisible,
-                        transitionSpec = {
-                            (androidx.compose.animation.fadeIn(tween(180)) +
-                                androidx.compose.animation.scaleIn(tween(180), initialScale = 0.85f))
-                                .togetherWith(
-                                    androidx.compose.animation.fadeOut(tween(120)) +
-                                        androidx.compose.animation.scaleOut(tween(120), targetScale = 0.85f),
-                                )
-                        },
-                        contentAlignment = Alignment.BottomStart,
-                        label = "tabBarMinimize",
-                    ) { expanded ->
-                        if (expanded) {
-                            // The floating pill, iPhone-sized, lifted 8 dp (Logan
-                            // 2026-09-09; the Material NavigationBar was tried and
-                            // turned down).
+                    // Right-to-left collapse INTO the mini pill (Logan
+                    // 2026-09-09, both platforms): the bar scales toward the
+                    // pill's centre and fades over the last stretch while the
+                    // pill grows in; restore plays it back.
+                    val collapse by animateFloatAsState(
+                        targetValue = if (bottomBarVisible) 0f else 1f,
+                        animationSpec = tween(320),
+                        label = "tabBarCollapse",
+                    )
+                    val density = LocalDensity.current
+                    var barSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+                    Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        if (collapse < 0.999f) {
+                            val pillW = with(density) { 64.dp.toPx() }
+                            val pillH = with(density) { 52.dp.toPx() }
+                            // The bar's left edge sits 20 dp in; the pill's centre
+                            // is 32 dp further along.
+                            val pivotX = with(density) { 32.dp.toPx() } / barSize.width.coerceAtLeast(1)
                             FloatingTabBar(
                                 tabs = tabs,
                                 selected = selectedTab,
                                 onSelect = { selectedTab = it; initialTabApplied = true },
-                                modifier = Modifier.padding(bottom = 8.dp),
+                                modifier = Modifier
+                                    .onSizeChanged { barSize = it }
+                                    .graphicsLayer {
+                                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(pivotX.coerceIn(0f, 1f), 0.5f)
+                                        val sx = 1f - collapse * (1f - pillW / barSize.width.coerceAtLeast(1))
+                                        val sy = 1f - collapse * (1f - pillH / barSize.height.coerceAtLeast(1))
+                                        scaleX = sx; scaleY = sy
+                                        alpha = 1f - ((collapse - 0.5f) / 0.45f).coerceIn(0f, 1f)
+                                    },
                             )
-                        } else {
-                            // Minimized: pill bottom-left, Control-a-TV button
-                            // bottom-right at the same height so the two
-                            // corners match (Logan 2026-09-09, both platforms).
-                            Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                                MinimizedTabPill(
-                                    tab = selectedTab,
-                                    onClick = { bottomBarVisible = true },
-                                    modifier = Modifier.padding(start = 20.dp),
-                                )
-                                if (showControlFab) {
-                                    Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)) {
-                                        CompanionControlFab(onClick = { showCompanionPicker = true })
-                                    }
+                        }
+                        if (collapse > 0.001f) {
+                            val reveal = ((collapse - 0.35f) / 0.65f).coerceIn(0f, 1f)
+                            MinimizedTabPill(
+                                tab = selectedTab,
+                                onClick = { bottomBarVisible = true },
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(start = 20.dp)
+                                    .graphicsLayer { alpha = reveal; scaleX = 0.6f + 0.4f * reveal; scaleY = 0.6f + 0.4f * reveal },
+                            )
+                            if (showControlFab) {
+                                Box(
+                                    Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
+                                        .graphicsLayer { alpha = reveal },
+                                ) {
+                                    CompanionControlFab(onClick = { showCompanionPicker = true })
                                 }
                             }
                         }
