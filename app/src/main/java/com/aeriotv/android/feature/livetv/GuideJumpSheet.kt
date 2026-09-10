@@ -46,9 +46,8 @@ fun GuideJumpSheet(
     val today = remember(now) {
         Calendar.getInstance().apply { timeInMillis = now; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }
     }
-    // tvOS shows Yesterday, Today, Tomorrow, then the week ahead (its guide
-    // keeps a day of history); older days are reachable by scrubbing.
-    val dayOffsets = remember(daysBack, daysAhead) { (-daysBack.coerceIn(0, 1)..daysAhead.coerceIn(1, 7)).toList() }
+    // One pill per day of loaded EPG, past and future (the caller measures it).
+    val dayOffsets = remember(daysBack, daysAhead) { (-daysBack.coerceIn(0, 14)..daysAhead.coerceIn(1, 14)).toList() }
     val slots = remember {
         listOf(
             "Same Time" to -1, "Morning" to 7, "Afternoon" to 13,

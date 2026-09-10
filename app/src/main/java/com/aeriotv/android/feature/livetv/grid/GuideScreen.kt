@@ -281,6 +281,19 @@ fun GuideScreen(
 
     // Grid window: history back to the retention edge, forward to the EPG window.
     val historyHours = state.epgHistoryHours.coerceAtLeast(1)
+    // Loaded EPG span in whole days either side of now, for the Jump To sheet.
+    val (epgDaysBack, epgDaysAhead) = remember(state.epgByChannel) {
+        var minStart = Long.MAX_VALUE; var maxEnd = Long.MIN_VALUE
+        for (list in state.epgByChannel.values) {
+            list.firstOrNull()?.let { if (it.startMillis < minStart) minStart = it.startMillis }
+            list.lastOrNull()?.let { if (it.endMillis > maxEnd) maxEnd = it.endMillis }
+        }
+        val nowMs0 = System.currentTimeMillis()
+        val day = 86_400_000L
+        val back = if (minStart == Long.MAX_VALUE) 0 else ((nowMs0 - minStart + day - 1) / day).toInt().coerceAtLeast(0)
+        val ahead = if (maxEnd == Long.MIN_VALUE) 1 else ((maxEnd - nowMs0 + day - 1) / day).toInt().coerceAtLeast(1)
+        back to ahead
+    }
     val forwardHours = if (windowHours <= 0) 48 else windowHours.coerceAtLeast(3)
     // Quantized to 15 min so re-entering the tab within that window reuses
     // the memoized rows instead of rebuilding them for a new "now".
@@ -767,8 +780,10 @@ fun GuideScreen(
     }
     if (showJumpSheet) {
         com.aeriotv.android.feature.livetv.GuideJumpSheet(
-            daysBack = (historyHours / 24).coerceIn(0, 7),
-            daysAhead = 7,
+            // Days follow the EPG that is actually loaded (Logan 2026-09-10),
+            // back no further than the grid's own history window.
+            daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
+            daysAhead = epgDaysAhead.coerceIn(1, 14),
             onJump = startJump,
             onBackToNow = snapToNow,
             onDismiss = { showJumpSheet = false; runCatching { gridFocus.requestFocus() } },
