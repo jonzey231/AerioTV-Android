@@ -66,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -362,10 +363,13 @@ fun <T> TvMediaPage(
     // The focused cell's key (null when focus is elsewhere). Tracked per key
     // so the old cell's focus-loss callback, which can fire AFTER the new
     // cell's gain, never clears the flag for a move inside the grid.
-    var focusedCellKey by remember { mutableStateOf<Any?>(null) }
-    var railHasFocus by remember { mutableStateOf(false) }
-    val railVisible = !isSearching && railLetters.isNotEmpty() && gridItems.size >= railMinimumCount &&
-        (focusedCellKey != null || railHasFocus)
+    // Read ONLY inside the rail slot below: every grid-cell focus change
+    // writes focusedCellKey, and reading it here recomposed the whole page
+    // (12 to 25 ms Compose spikes at the start of each press in the
+    // Streamer frame stats, 2026-09-10).
+    val focusedCellKeyState = remember { mutableStateOf<Any?>(null) }
+    val railHasFocusState = remember { mutableStateOf(false) }
+    val railAllowed = !isSearching && railLetters.isNotEmpty() && gridItems.size >= railMinimumCount
     val gridTopFor: (Int) -> Int = { row -> leadingCount + row * columns }
 
     TvKeyboardOnOkHost {
@@ -532,7 +536,7 @@ fun <T> TvMediaPage(
                     // geometric search picks above the row (it skipped the
                     // pill group and reached the sort circle, Logan 2026-09-10).
                     .then(if (pillRow && index < columns) Modifier.focusProperties { up = allPill } else Modifier)
-                    .onFocusChanged { if (it.isFocused) focusedCellKey = k else if (focusedCellKey == k) focusedCellKey = null }
+                    .onFocusChanged { if (it.isFocused) focusedCellKeyState.value = k else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null }
                     .onPreviewKeyEvent { ev ->
                         vodGridDpadFallback(ev, index, gridItems.size, gridState, focusManager, scope) { i ->
                             cellRequesters.getOrPut(gridKey(gridItems[i])) { FocusRequester() }
@@ -543,10 +547,13 @@ fun <T> TvMediaPage(
         }
         }
 
-        if (railVisible) {
+        val railVisible by remember(railAllowed) {
+            derivedStateOf { railAllowed && (focusedCellKeyState.value != null || railHasFocusState.value) }
+        }
+        TvRailSlot(visible = { railVisible }) {
             TvAlphabetRail(
                 available = railLetters,
-                onFocusChanged = { railHasFocus = it },
+                onFocusChanged = { railHasFocusState.value = it },
                 onLetter = { letter ->
                     val idx = railIndexOf(letter)
                     if (idx >= 0) scope.launch {
@@ -566,6 +573,12 @@ fun <T> TvMediaPage(
     if (sortOpen) {
         TvActionMenuDialog(title = "Sort", actions = sortActions, guard = menuGuard, onDismiss = { sortOpen = false })
     }
+}
+
+/** Its own recomposition scope: the rail shows and hides without touching the page. */
+@Composable
+private fun TvRailSlot(visible: () -> Boolean, content: @Composable () -> Unit) {
+    if (visible()) content()
 }
 
 // MARK: hero
@@ -656,6 +669,7 @@ private fun TvHeroCard(
     val guard = rememberTvMenuGuard()
     Box(
         modifier = Modifier
+            .semantics(mergeDescendants = true) {}
             .width(width)
             .height(TvPage.heroHeight)
             .padding(horizontal = TvPage.heroInset),
@@ -837,7 +851,14 @@ private fun <T> TvShelfRow(
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.padding(start = TvPage.contentInset, bottom = 4.dp),
         )
+        // All the shelf's on-screen cards are prepared while the shelf is
+        // still below the fold (the default prefetches two).
+        @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+        val rowState = androidx.compose.foundation.lazy.rememberLazyListState(
+            prefetchStrategy = remember { androidx.compose.foundation.lazy.LazyListPrefetchStrategy(nestedPrefetchItemCount = 6) },
+        )
         LazyRow(
+            state = rowState,
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
             contentPadding = PaddingValues(start = TvPage.contentInset, end = TvPage.heroInset, top = 6.dp, bottom = 6.dp),
         ) {
@@ -921,6 +942,11 @@ fun TvPosterCard(
     val guard = rememberTvMenuGuard()
     Column(
         modifier = modifier
+            // One accessibility node per card: with an accessibility service
+            // listening (tvQuickActions on the Streamer subscribes to every
+            // event) Compose diffs the semantics tree every frame; merged
+            // cards keep that tree small (trace 2026-09-10).
+            .semantics(mergeDescendants = true) {}
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .tvFocusScale(focused)
             .combinedClickable(
@@ -1000,6 +1026,11 @@ fun TvRecordingCard(
     val guard = rememberTvMenuGuard()
     Column(
         modifier = modifier
+            // One accessibility node per card: with an accessibility service
+            // listening (tvQuickActions on the Streamer subscribes to every
+            // event) Compose diffs the semantics tree every frame; merged
+            // cards keep that tree small (trace 2026-09-10).
+            .semantics(mergeDescendants = true) {}
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .tvFocusScale(focused)
             .combinedClickable(

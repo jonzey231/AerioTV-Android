@@ -420,3 +420,49 @@ object TvLargeCardBringIntoViewSpec : androidx.compose.foundation.gestures.Bring
         return if (kotlin.math.abs(distance) < 24f) 0f else distance
     }
 }
+
+
+/**
+ * Grid prefetch for the TV media pages: the default strategy prepares one
+ * line ahead, and on the Streamer a shelf or grid row still composed on
+ * the frame it entered (15 to 26 ms Compose spikes in the frame stats,
+ * 2026-09-10). This one also schedules the line after the next in the
+ * scroll direction, and forgets handles for lines that scrolled far away.
+ */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+class TvTwoLinePrefetchStrategy : androidx.compose.foundation.lazy.grid.LazyGridPrefetchStrategy {
+    private val base = androidx.compose.foundation.lazy.grid.LazyGridPrefetchStrategy(nestedPrefetchItemCount = 6)
+    private val extra = HashMap<Int, List<androidx.compose.foundation.lazy.layout.LazyLayoutPrefetchState.PrefetchHandle>>()
+
+    override fun androidx.compose.foundation.lazy.grid.LazyGridPrefetchScope.onScroll(
+        delta: Float,
+        layoutInfo: androidx.compose.foundation.lazy.grid.LazyGridLayoutInfo,
+    ) {
+        with(base) { onScroll(delta, layoutInfo) }
+        val visible = layoutInfo.visibleItemsInfo
+        if (visible.isEmpty()) return
+        val forward = delta < 0
+        val line = if (forward) visible.last().row + 2 else visible.first().row - 2
+        if (line >= 0 && !extra.containsKey(line)) extra[line] = scheduleLinePrefetch(line)
+        val keep = (visible.first().row - 3)..(visible.last().row + 3)
+        extra.keys.filter { it !in keep }.forEach { k -> extra.remove(k)?.forEach { it.cancel() } }
+    }
+
+    override fun androidx.compose.foundation.lazy.grid.LazyGridPrefetchScope.onVisibleItemsUpdated(
+        layoutInfo: androidx.compose.foundation.lazy.grid.LazyGridLayoutInfo,
+    ) {
+        with(base) { onVisibleItemsUpdated(layoutInfo) }
+    }
+
+    override fun androidx.compose.foundation.lazy.layout.NestedPrefetchScope.onNestedPrefetch(firstVisibleItemIndex: Int) {
+        with(base) { onNestedPrefetch(firstVisibleItemIndex) }
+    }
+}
+
+/** LazyGridState for the TV media pages with [TvTwoLinePrefetchStrategy]. */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@androidx.compose.runtime.Composable
+fun rememberTvMediaGridState(): androidx.compose.foundation.lazy.grid.LazyGridState {
+    val strategy = androidx.compose.runtime.remember { TvTwoLinePrefetchStrategy() }
+    return androidx.compose.foundation.lazy.grid.rememberLazyGridState(prefetchStrategy = strategy)
+}

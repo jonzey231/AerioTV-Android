@@ -236,7 +236,7 @@ fun MediaTabContent(
             backdrops = backdrops + (page.key to url)
         }
     }
-    val gridState = rememberLazyGridState()
+    val gridState = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) com.aeriotv.android.ui.tv.rememberTvMediaGridState() else rememberLazyGridState()
 
     fun submitQuery(v: String) {
         query = v

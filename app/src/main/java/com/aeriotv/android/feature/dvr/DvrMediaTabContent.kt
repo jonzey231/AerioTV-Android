@@ -252,7 +252,7 @@ fun DvrMediaTabContent(
     var pendingDelete by remember { mutableStateOf<Rec?>(null) }
     var pendingEdit by remember { mutableStateOf<Rec?>(null) }
     var showSort by remember { mutableStateOf(false) }
-    val gridState = rememberLazyGridState()
+    val gridState = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) com.aeriotv.android.ui.tv.rememberTvMediaGridState() else rememberLazyGridState()
     val bottomInset = LocalTabBarBottomInset.current
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
