@@ -180,6 +180,14 @@ val LocalTvChromeCollapsed =
     staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>?> { null }
 
 /**
+ * How far (px) the active TV page has scrolled while its top section is
+ * still on screen: the tab bar slides off in step with the page (tvOS: the
+ * bar is part of the scroll, Logan 2026-09-10). 0 = fully shown.
+ */
+val LocalTvChromeScroll =
+    staticCompositionLocalOf<androidx.compose.runtime.MutableState<Int>?> { null }
+
+/**
  * TV full-screen overlay slot: a tab sets a composable here to draw ABOVE
  * the whole shell (tab bar included) without a Dialog window. The guide's
  * Jump To sheet uses it so its scrim covers the bar (Logan 2026-09-10).
@@ -599,6 +607,7 @@ fun MainScaffold(
         // set this true while scrolled down so the tab bar shrinks away. See
         // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
         val chromeCollapsed = remember { mutableStateOf(false) }
+        val chromeScroll = remember { mutableStateOf(0) }
         val fullScreenOverlay = remember { mutableStateOf<(@Composable () -> Unit)?>(null) }
         val topNavHasFocusState: androidx.compose.runtime.MutableState<Boolean> = remember { mutableStateOf(false) }
         val tabEntryFocus: androidx.compose.runtime.MutableState<FocusRequester?> = remember { mutableStateOf(null) }
@@ -607,6 +616,7 @@ fun MainScaffold(
             LocalTvTopNavHasFocus provides topNavHasFocusState,
             LocalTvTabEntryFocus provides tabEntryFocus,
             LocalTvChromeCollapsed provides chromeCollapsed,
+            LocalTvChromeScroll provides chromeScroll,
             LocalTvFullScreenOverlay provides fullScreenOverlay,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -637,14 +647,21 @@ fun MainScaffold(
                 // frame of the 250 ms, the chunky Up from Sort to the shelf
                 // (Logan 2026-09-10).
                 val barTarget = if (chromeCollapsed.value && !barHasFocus) 0f else 1f
-                val barFraction by animateFloatAsState(
+                val barCollapse by animateFloatAsState(
                     targetValue = barTarget,
                     animationSpec = if (barTarget == 1f) androidx.compose.animation.core.snap() else tween(durationMillis = 250),
                     label = "tvTopBarCollapse",
                 )
+                // In step with the page: the bar slides off as the page
+                // scrolls its first bar-height of content (tvOS).
+                var barHeightPx by remember { mutableIntStateOf(0) }
+                val barScrolled = if (barHasFocus || barHeightPx == 0) 1f
+                    else (1f - chromeScroll.value.toFloat() / barHeightPx).coerceIn(0f, 1f)
+                val barFraction = minOf(barCollapse, barScrolled)
                 Box(
                     modifier = Modifier
                         .onFocusChanged { barHasFocus = it.hasFocus; topNavHasFocusState.value = it.hasFocus }
+                        .onSizeChanged { if (barFraction >= 1f && it.height > barHeightPx) barHeightPx = it.height }
                         .collapsibleChrome(barFraction),
                 ) {
                     TvTopTabBar(

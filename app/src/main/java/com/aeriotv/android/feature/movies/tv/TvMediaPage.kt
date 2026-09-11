@@ -267,10 +267,55 @@ fun <T> TvMediaPage(
     // viewport-sized chunks over that distance, which read as chunky
     // (Logan 2026-09-10).
     val restTops = remember { HashMap<Int, Int>() }
+    val chromeScroll = com.aeriotv.android.feature.main.LocalTvChromeScroll.current
+    /** Pixels the page has scrolled, from a visible item whose rest position is known; null when none is. */
+    fun scrollOffsetPx(): Int? {
+        val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) } ?: return null
+        return restTops.getValue(anchor.index) - anchor.offset.y
+    }
     LaunchedEffect(gridState) {
         snapshotFlow { gridState.layoutInfo }.collect { info ->
             if (gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0) {
                 info.visibleItemsInfo.forEach { restTops[it.index] = it.offset.y }
+            }
+            chromeScroll?.value = scrollOffsetPx() ?: Int.MAX_VALUE
+        }
+    }
+    DisposableEffect(Unit) { onDispose { chromeScroll?.value = 0 } }
+    // tvOS Down walk, measured on the Apple TV (2026-09-10, points halved):
+    // hero -> shelf 54 dp, shelf -> sort 92 dp, sort -> pills 129 dp, pills
+    // -> first poster row = the header at the top of the screen. Applied on
+    // DOWNWARD zone changes only; further rows use the edge-margin rule.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var zone by remember { mutableIntStateOf(0) }
+    val scrollingToTarget = remember { mutableStateOf(false) }
+    val enterZone: (Int) -> Unit = { next ->
+        val previous = zone
+        zone = next
+        if (next > previous) {
+            val targetPx: Int? = with(density) {
+                when (next) {
+                    1 -> 54.dp.roundToPx()
+                    2 -> 92.dp.roundToPx()
+                    3 -> 129.dp.roundToPx()
+                    4 -> restTops[headerIndex]
+                    else -> null
+                }
+            }
+            val current = scrollOffsetPx()
+            if (targetPx != null && current != null && targetPx > current) {
+                scope.launch {
+                    scrollingToTarget.value = true
+                    try {
+                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
+                            var previousValue = 0f
+                            androidx.compose.animation.core.animate(
+                                initialValue = 0f, targetValue = (targetPx - current).toFloat(),
+                                animationSpec = tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut),
+                            ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
+                        }
+                    } finally { scrollingToTarget.value = false }
+                }
             }
         }
     }
@@ -281,6 +326,7 @@ fun <T> TvMediaPage(
                 // Bring the bar back before the page moves: one relayout,
                 // then a scroll over a page that no longer changes height.
                 chromeCollapsed?.value = false
+                chromeScroll?.value = 0
                 withFrameNanos { }
                 // Warm every line above the viewport first (hero, shelves)
                 // so nothing composes mid-animation: a hair of scroll wakes
@@ -306,7 +352,7 @@ fun <T> TvMediaPage(
                             var previous = 0f
                             androidx.compose.animation.core.animate(
                                 initialValue = 0f, targetValue = -distance,
-                                animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+                                animationSpec = tween(durationMillis = 600, easing = androidx.compose.animation.core.EaseInOut),
                             ) { value, _ ->
                                 scrollBy(value - previous)
                                 previous = value
@@ -413,7 +459,7 @@ fun <T> TvMediaPage(
             remember(this) {
                 com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(
                     marginPx = 100.dp.toPx(),
-                    suppressed = { snappingToTop.value },
+                    suppressed = { snappingToTop.value || scrollingToTarget.value },
                     holdIfVisible = { headerFocused.value || pillsFocused.value },
                 )
             }
@@ -459,7 +505,7 @@ fun <T> TvMediaPage(
                         upTarget = topNav,
                         // tvOS: any hero button gaining focus while the page
                         // is scrolled snaps the page back to the top.
-                        onButtonFocused = scrollToTop,
+                        onButtonFocused = { enterZone(0); scrollToTop() },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -472,7 +518,7 @@ fun <T> TvMediaPage(
                         // tvOS: a card of the FIRST shelf gaining focus while
                         // the page is scrolled brings the page to the top so
                         // the hero is fully back (Apple TV Up walk 2026-09-10).
-                        onCardFocused = if (si == 0 && hasHero) scrollToTop else null,
+                        onCardFocused = { enterZone(1); if (si == 0 && hasHero) scrollToTop() },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -481,7 +527,7 @@ fun <T> TvMediaPage(
                 Column(
                     modifier = Modifier
                         .padding(start = TvPage.contentInset, end = TvPage.heroInset)
-                        .onFocusChanged { headerFocused.value = it.hasFocus },
+                        .onFocusChanged { headerFocused.value = it.hasFocus; if (it.hasFocus) enterZone(2) },
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(
@@ -551,7 +597,7 @@ fun <T> TvMediaPage(
                         modifier = Modifier
                             .padding(vertical = 6.dp)
                             .fillMaxWidth()
-                            .onFocusChanged { pillsFocused.value = it.hasFocus }
+                            .onFocusChanged { pillsFocused.value = it.hasFocus; if (it.hasFocus) enterZone(3) }
                             .focusProperties {
                                 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
                                 run { enter = { allPill } }
@@ -581,7 +627,10 @@ fun <T> TvMediaPage(
                     // geometric search picks above the row (it skipped the
                     // pill group and reached the sort circle, Logan 2026-09-10).
                     .then(if (pillRow && index < columns) Modifier.focusProperties { up = allPill } else Modifier)
-                    .onFocusChanged { if (it.isFocused) focusedCellKeyState.value = k else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null }
+                    .onFocusChanged {
+                        if (it.isFocused) { focusedCellKeyState.value = k; enterZone(4) }
+                        else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null
+                    }
                     .onPreviewKeyEvent { ev ->
                         vodGridDpadFallback(ev, index, gridItems.size, gridState, focusManager, scope) { i ->
                             cellRequesters.getOrPut(gridKey(gridItems[i])) { FocusRequester() }
