@@ -440,10 +440,38 @@ class TvTwoLinePrefetchStrategy : androidx.compose.foundation.lazy.grid.LazyGrid
     private val base = androidx.compose.foundation.lazy.grid.LazyGridPrefetchStrategy(nestedPrefetchItemCount = 6)
     private val extra = HashMap<Int, List<androidx.compose.foundation.lazy.layout.LazyLayoutPrefetchState.PrefetchHandle>>()
 
+    /**
+     * Lines a page wants composed BEFORE it starts a long snap (the hero
+     * and shelves above a scrolled-down viewport, Logan 2026-09-10: the snap
+     * hitched while both hero cards composed mid-animation). Drained on the
+     * next scroll callback; [onDone] fires once every requested line has
+     * finished precomposing and premeasuring.
+     */
+    private var wanted: List<Int> = emptyList()
+    private var wantedDone: (() -> Unit)? = null
+
+    fun requestLines(lines: List<Int>, onDone: () -> Unit) {
+        if (lines.isEmpty()) { onDone(); return }
+        wanted = lines
+        wantedDone = onDone
+    }
+
+    private fun androidx.compose.foundation.lazy.grid.LazyGridPrefetchScope.drainWanted() {
+        val lines = wanted
+        val done = wantedDone ?: return
+        if (lines.isEmpty()) return
+        wanted = emptyList(); wantedDone = null
+        var remaining = lines.size
+        lines.forEach { line ->
+            scheduleLinePrefetch(line) { if (--remaining == 0) done() }
+        }
+    }
+
     override fun androidx.compose.foundation.lazy.grid.LazyGridPrefetchScope.onScroll(
         delta: Float,
         layoutInfo: androidx.compose.foundation.lazy.grid.LazyGridLayoutInfo,
     ) {
+        drainWanted()
         with(base) { onScroll(delta, layoutInfo) }
         val visible = layoutInfo.visibleItemsInfo
         if (visible.isEmpty()) return
@@ -465,10 +493,17 @@ class TvTwoLinePrefetchStrategy : androidx.compose.foundation.lazy.grid.LazyGrid
     }
 }
 
+private val tvGridStrategies = java.util.WeakHashMap<androidx.compose.foundation.lazy.grid.LazyGridState, TvTwoLinePrefetchStrategy>()
+
+/** The strategy behind a [rememberTvMediaGridState] state, for pages that want lines warmed. */
+fun tvPrefetchStrategyFor(state: androidx.compose.foundation.lazy.grid.LazyGridState): TvTwoLinePrefetchStrategy? = tvGridStrategies[state]
+
 /** LazyGridState for the TV media pages with [TvTwoLinePrefetchStrategy]. */
 @kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @androidx.compose.runtime.Composable
 fun rememberTvMediaGridState(): androidx.compose.foundation.lazy.grid.LazyGridState {
     val strategy = androidx.compose.runtime.remember { TvTwoLinePrefetchStrategy() }
-    return androidx.compose.foundation.lazy.grid.rememberLazyGridState(prefetchStrategy = strategy)
+    val state = androidx.compose.foundation.lazy.grid.rememberLazyGridState(prefetchStrategy = strategy)
+    androidx.compose.runtime.remember(state) { tvGridStrategies[state] = strategy; state }
+    return state
 }

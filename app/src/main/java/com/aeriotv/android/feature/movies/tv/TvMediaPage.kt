@@ -282,6 +282,17 @@ fun <T> TvMediaPage(
                 // then a scroll over a page that no longer changes height.
                 chromeCollapsed?.value = false
                 withFrameNanos { }
+                // Warm every line above the viewport first (hero, shelves)
+                // so nothing composes mid-animation: a hair of scroll wakes
+                // the prefetch strategy, then wait for it (150 ms cap).
+                val firstRow = gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.row ?: 0
+                val strategy = com.aeriotv.android.ui.tv.tvPrefetchStrategyFor(gridState)
+                if (strategy != null && firstRow > 0) {
+                    val ready = kotlinx.coroutines.CompletableDeferred<Unit>()
+                    strategy.requestLines((firstRow - 1 downTo 0).toList()) { ready.complete(Unit) }
+                    gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) { scrollBy(1f); scrollBy(-1f) }
+                    kotlinx.coroutines.withTimeoutOrNull(150) { ready.await() }
+                }
                 try {
                     val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
                     if (anchor != null) {
