@@ -257,6 +257,8 @@ fun <T> TvMediaPage(
     // while it runs (its own request otherwise raced the snap and left the
     // hero a third off screen, Logan 2026-09-10) and a hard snap ends it.
     val snappingToTop = remember { mutableStateOf(false) }
+    /** The library header row (title, search, sort, filter) holds focus. */
+    val headerFocused = remember { mutableStateOf(false) }
     // Item tops at scroll zero, recorded whenever the page rests at the
     // top: the snap back up is then one animateScrollBy over the exact
     // distance (tvOS .smooth 0.45 s). animateScrollToItem jumps in
@@ -395,7 +397,13 @@ fun <T> TvMediaPage(
     Box(modifier = Modifier.fillMaxSize()) {
         // tvOS focus scrolling (measured 2026-09-10): 100 dp clear of both edges.
         val edgeSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
-            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(100.dp.toPx()) { snappingToTop.value } }
+            remember(this) {
+                com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(
+                    marginPx = 100.dp.toPx(),
+                    suppressed = { snappingToTop.value },
+                    holdIfVisible = { headerFocused.value },
+                )
+            }
         }
         CompositionLocalProvider(LocalBringIntoViewSpec provides edgeSpec) {
         LazyVerticalGrid(
@@ -457,7 +465,11 @@ fun <T> TvMediaPage(
                 }
             }
             fullSpan("header") {
-                Column(modifier = Modifier.padding(start = TvPage.contentInset, end = TvPage.heroInset)) {
+                Column(
+                    modifier = Modifier
+                        .padding(start = TvPage.contentInset, end = TvPage.heroInset)
+                        .onFocusChanged { headerFocused.value = it.hasFocus },
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(
                             headerTitle, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,

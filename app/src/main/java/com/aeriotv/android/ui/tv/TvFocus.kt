@@ -379,6 +379,8 @@ class TvEdgeMarginBringIntoViewSpec(
     private val marginPx: Float,
     /** True while the page runs its own scroll (snap to top): no competing request. */
     private val suppressed: () -> Boolean = { false },
+    /** True while a target that must not scroll the page holds focus (the library header row). */
+    private val holdIfVisible: () -> Boolean = { false },
 ) : androidx.compose.foundation.gestures.BringIntoViewSpec {
     /**
      * Apple TV recording 2026-09-10 (DVR tab): each focus scroll is a short
@@ -394,6 +396,10 @@ class TvEdgeMarginBringIntoViewSpec(
         containerSize: Float,
     ): Float {
         if (suppressed()) return 0f
+        // Up from the genre pills onto the sort circle must not move the
+        // page (Logan 2026-09-10): while the header row holds focus and any
+        // of it is on screen, no scroll at all.
+        if (holdIfVisible() && offset + size > 0f && offset < containerSize) return 0f
         val top = marginPx
         val bottom = containerSize - marginPx
         if (size > bottom - top) {
