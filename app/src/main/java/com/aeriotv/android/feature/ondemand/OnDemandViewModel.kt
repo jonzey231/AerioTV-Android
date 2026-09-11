@@ -44,12 +44,15 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.aeriotv.android.feature.movies.displayTitle
 import com.aeriotv.android.feature.movies.tmdbArtKey
 import com.aeriotv.android.feature.movies.toMediaItem
+import com.aeriotv.android.feature.movies.sortedBy as sortedByMediaOrder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -194,6 +197,143 @@ class OnDemandViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    // ---- Derived library cache (Logan 2026-09-11: "the libraries for any of
+    // the three tabs are not being cached so they appear to be reloading every
+    // time they're opened"). tvOS never rebuilds on a tab return
+    // (tvos_movies_spec 1.3), so the derived list lives HERE, not in a
+    // composable that is only reached when the tab is first opened.
+    //
+    // Measured on the Streamer before this moved (release build, 40k movies /
+    // 11k series): the first open of Movies spent 5703 ms building the list
+    // and TV Shows 2121 ms, because the build only STARTED when the tab was
+    // opened. Running it from the view model means the answer is already there
+    // on the first open, and a re-open with an unchanged key costs nothing.
+    data class MediaLibrary(
+        val items: List<com.aeriotv.android.feature.movies.MediaItem> = emptyList(),
+        val letters: Set<Char> = emptySet(),
+    )
+
+    /** The inputs a built library depends on. The source list is compared by
+     *  IDENTITY: the sweep republishes an equal list often and a deep equals
+     *  over 40k rows would cost more than the rebuild it avoids. */
+    private data class LibrarySpec(
+        val source: List<Any>,
+        val hidden: Set<String>,
+        val genre: String?,
+        val sort: com.aeriotv.android.feature.movies.MediaSortOrder,
+    ) {
+        fun sameAs(other: LibrarySpec?): Boolean = other != null &&
+            source === other.source && hidden == other.hidden && genre == other.genre && sort == other.sort
+    }
+
+    private val moviesGenre = MutableStateFlow<String?>(null)
+    private val seriesGenre = MutableStateFlow<String?>(null)
+    private val _moviesLibrary = MutableStateFlow(MediaLibrary())
+    private val _seriesLibrary = MutableStateFlow(MediaLibrary())
+    private val _moviesLibraryPending = MutableStateFlow(true)
+    private val _seriesLibraryPending = MutableStateFlow(true)
+
+    /** The filtered + sorted library and its rail letters for a tab. */
+    fun library(isMovie: Boolean): StateFlow<MediaLibrary> =
+        if (isMovie) _moviesLibrary.asStateFlow() else _seriesLibrary.asStateFlow()
+
+    /** True while a rebuild is in flight; the tab keeps the previous list up. */
+    fun libraryPending(isMovie: Boolean): StateFlow<Boolean> =
+        if (isMovie) _moviesLibraryPending.asStateFlow() else _seriesLibraryPending.asStateFlow()
+
+    /** Genre pill selection. Owned here so it survives with the built list. */
+    fun selectedGenre(isMovie: Boolean): StateFlow<String?> =
+        if (isMovie) moviesGenre.asStateFlow() else seriesGenre.asStateFlow()
+
+    fun setSelectedGenre(isMovie: Boolean, genre: String?) {
+        if (isMovie) moviesGenre.value = genre else seriesGenre.value = genre
+    }
+
+    // The MediaItem mapping (title cleanup regexes over every row) is the
+    // expensive half and depends ONLY on the source list, so it is cached
+    // separately: changing a genre pill or the sort order then re-filters and
+    // re-sorts an already-mapped list instead of re-parsing 40k titles.
+    private var movieItemsSource: List<DispatcharrVODMovie>? = null
+    private var movieItems: List<com.aeriotv.android.feature.movies.MediaItem> = emptyList()
+    private var seriesItemsSource: List<DispatcharrVODSeries>? = null
+    private var seriesItems: List<com.aeriotv.android.feature.movies.MediaItem> = emptyList()
+    private var lastMoviesSpec: LibrarySpec? = null
+    private var lastSeriesSpec: LibrarySpec? = null
+
+    // Continue Watching and Watchlist used to find their rows with
+    // state.movies.firstOrNull { ... } per entry, an O(entries x library) scan
+    // that cost 185 ms + 140 ms on the main thread at every Movies open.
+    private var movieIndexSource: List<DispatcharrVODMovie>? = null
+    private var movieIndex: Map<String, DispatcharrVODMovie> = emptyMap()
+    private var seriesIndexSource: List<DispatcharrVODSeries>? = null
+    private var seriesIndex: Map<Int, DispatcharrVODSeries> = emptyMap()
+
+    /** The browse-list movie with this uuid, off an index rebuilt only when
+     *  the list changes; null when the uuid is not in the browse list. */
+    private fun indexedMovie(uuid: String): DispatcharrVODMovie? {
+        val src = _state.value.movies
+        if (src !== movieIndexSource) { movieIndex = src.associateBy { it.uuid }; movieIndexSource = src }
+        return movieIndex[uuid]
+    }
+
+    /** The browse-list series with this id, off the same kind of index. */
+    private fun indexedSeries(id: Int): DispatcharrVODSeries? {
+        val src = _state.value.series
+        if (src !== seriesIndexSource) { seriesIndex = src.associateBy { it.id }; seriesIndexSource = src }
+        return seriesIndex[id]
+    }
+
+    // Resolved hero backdrops, kept here so a tab that is torn down and shown
+    // again does not re-resolve every card (tvOS holds them for the session).
+    private val _heroBackdrops = MutableStateFlow<Map<String, String?>>(emptyMap())
+    val heroBackdrops: StateFlow<Map<String, String?>> = _heroBackdrops.asStateFlow()
+
+    fun putHeroBackdrop(key: String, url: String?) {
+        if (_heroBackdrops.value.containsKey(key) && _heroBackdrops.value[key] == url) return
+        _heroBackdrops.update { it + (key to url) }
+    }
+
+    fun heroBackdropResolved(key: String): Boolean = _heroBackdrops.value.containsKey(key)
+
+    private fun startLibraryPipeline(isMovie: Boolean) {
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                _state.map { st -> if (isMovie) st.movies as List<Any> else st.series as List<Any> },
+                if (isMovie) appPreferences.hiddenMovieGroups else appPreferences.hiddenSeriesGroups,
+                if (isMovie) appPreferences.moviesSortOrder else appPreferences.seriesSortOrder,
+                if (isMovie) moviesGenre else seriesGenre,
+            ) { source, hidden, sortWire, genre ->
+                LibrarySpec(source, hidden, genre, com.aeriotv.android.feature.movies.MediaSortOrder.fromWire(sortWire))
+            }.collectLatest { spec ->
+                if (spec.sameAs(if (isMovie) lastMoviesSpec else lastSeriesSpec)) return@collectLatest
+                val pending = if (isMovie) _moviesLibraryPending else _seriesLibraryPending
+                pending.value = true
+                val built = withContext(Dispatchers.Default) { buildLibrary(isMovie, spec) }
+                if (isMovie) { lastMoviesSpec = spec; _moviesLibrary.value = built }
+                else { lastSeriesSpec = spec; _seriesLibrary.value = built }
+                pending.value = false
+            }
+        }
+    }
+
+    private fun buildLibrary(isMovie: Boolean, spec: LibrarySpec): MediaLibrary {
+        val all = if (isMovie) {
+            @Suppress("UNCHECKED_CAST") val src = spec.source as List<DispatcharrVODMovie>
+            if (src !== movieItemsSource) { movieItems = src.map { it.toMediaItem() }; movieItemsSource = src }
+            movieItems
+        } else {
+            @Suppress("UNCHECKED_CAST") val src = spec.source as List<DispatcharrVODSeries>
+            if (src !== seriesItemsSource) { seriesItems = src.map { it.toMediaItem() }; seriesItemsSource = src }
+            seriesItems
+        }
+        val list = all.asSequence()
+            .filter { it.category == null || it.category !in spec.hidden }
+            .filter { spec.genre == null || it.category == spec.genre }
+            .toList()
+            .sortedByMediaOrder(spec.sort)
+        return MediaLibrary(list, list.mapTo(HashSet()) { it.bucket })
+    }
 
     // Debounced server-side search jobs, cancelled + restarted per keystroke so
     // only the final query in a fast burst of typing hits the network.
@@ -368,6 +508,8 @@ class OnDemandViewModel @Inject constructor(
     fun ensureLoaded() = startInitialLoads()
 
     init {
+        startLibraryPipeline(isMovie = true)
+        startLibraryPipeline(isMovie = false)
         deferredStart = viewModelScope.launch {
             kotlinx.coroutines.delay(STARTUP_DEFER_MS)
             startInitialLoads()
@@ -440,6 +582,14 @@ class OnDemandViewModel @Inject constructor(
         personSeriesJob = null
         providerNamesJob?.cancel()
         providerNamesJob = null
+        movieItemsSource = null; movieItems = emptyList()
+        seriesItemsSource = null; seriesItems = emptyList()
+        movieIndexSource = null; movieIndex = emptyMap()
+        seriesIndexSource = null; seriesIndex = emptyMap()
+        lastMoviesSpec = null; lastSeriesSpec = null
+        _moviesLibrary.value = MediaLibrary(); _seriesLibrary.value = MediaLibrary()
+        _heroBackdrops.value = emptyMap()
+        moviesGenre.value = null; seriesGenre.value = null
         _state.value = UiState()
     }
 
@@ -1293,7 +1443,7 @@ class OnDemandViewModel @Inject constructor(
     // browse list -- so both lookups must check both lists or a search hit
     // opens to "not found".
     fun seriesById(id: Int): DispatcharrVODSeries? =
-        _state.value.series.firstOrNull { it.id == id }
+        indexedSeries(id)
             ?: _state.value.seriesSearchResults.firstOrNull { it.id == id }
             ?: _state.value.resolvedSeries[id]
 
@@ -1302,7 +1452,7 @@ class OnDemandViewModel @Inject constructor(
             ?: _state.value.resolvedMovies.values.firstOrNull { it.id == id }
 
     fun movieByUuid(uuid: String): DispatcharrVODMovie? =
-        _state.value.movies.firstOrNull { it.uuid == uuid }
+        indexedMovie(uuid)
             ?: _state.value.searchResults.firstOrNull { it.uuid == uuid }
             ?: _state.value.resolvedMovies[uuid]
 

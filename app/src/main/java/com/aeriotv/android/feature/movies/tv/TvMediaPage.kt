@@ -927,14 +927,18 @@ fun <T> TvMediaPage(
                     // is showing: the header changing height mid-walk moved
                     // every rest position below it by 26 dp and the owner's
                     // targets went with it (report B item 9).
+                    // 16 dp fits the 10 dp spinner and the 9 sp line; at 12 dp
+                    // the theme's 24 sp default line height clipped both
+                    // (Logan 2026-09-11, "the Updating line is cut off"), so
+                    // the text pins its own line height too.
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(top = 4.dp).height(12.dp),
+                        modifier = Modifier.padding(top = 4.dp).height(16.dp),
                     ) {
                         if (isLoading && gridItems.isNotEmpty()) {
                             CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.tertiary)
                             Spacer(Modifier.width(6.dp))
-                            Text("Updating", fontSize = 9.sp, color = MaterialTheme.colorScheme.tertiary)
+                            Text("Updating", fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1, color = MaterialTheme.colorScheme.tertiary)
                         }
                     }
                 }

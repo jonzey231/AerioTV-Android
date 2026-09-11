@@ -70,8 +70,6 @@ import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
 
 /**
  * Movies / TV Shows tab, phone and tablet (media-center redesign, Apple
@@ -105,8 +103,10 @@ fun MediaTabContent(
     val watchlistKeys = remember(watchlistEntries) { watchlistEntries.map { it.key }.toSet() }
     val watchlistPages: List<MediaHeroPage> = remember(watchlistEntries, state.movies, state.series, kind) {
         watchlistEntries.filter { it.isMovie == (kind == MediaKind.Movies) }.map { e ->
-            val m = if (e.isMovie) state.movies.firstOrNull { "m:" + it.uuid == e.key } else null
-            val sr = if (!e.isMovie) state.series.firstOrNull { "s:" + it.id == e.key } else null
+            // Indexed lookups (Logan 2026-09-11): the per-entry scan over the
+            // whole library cost 185 ms on the main thread at every Movies open.
+            val m = if (e.isMovie) viewModel.movieByUuid(e.key.removePrefix("m:")) else null
+            val sr = if (!e.isMovie) e.key.removePrefix("s:").toIntOrNull()?.let { viewModel.seriesById(it) } else null
             val item = m?.toMediaItem() ?: sr?.toMediaItem() ?: MediaItem(
                 key = e.key, title = e.title, year = e.year, rating = e.rating, posterUrl = e.posterUrl, category = null,
                 movieUuid = if (e.isMovie) e.key.removePrefix("m:") else null,
@@ -130,7 +130,7 @@ fun MediaTabContent(
         }
         if (kind == MediaKind.Movies) {
             rows.filter { it.vodType == "movie" }.mapNotNull { r ->
-                val m = state.movies.firstOrNull { it.uuid == r.videoId }
+                val m = viewModel.movieByUuid(r.videoId)
                 // A row the player saved before the title was known reads
                 // "On Demand"; without the movie loaded there is nothing to show.
                 if (m == null && (r.title.isBlank() || r.title == "On Demand")) return@mapNotNull null
@@ -149,7 +149,7 @@ fun MediaTabContent(
                 .distinctBy { it.seriesId }
                 .mapNotNull { r ->
                     val sId = r.seriesId?.toIntOrNull() ?: return@mapNotNull null
-                    val series = state.series.firstOrNull { it.id == sId } ?: return@mapNotNull null
+                    val series = viewModel.seriesById(sId) ?: return@mapNotNull null
                     MediaHeroPage(
                         key = "cw:" + r.videoId, title = displayTitle(series.displayName, series.year),
                         artUrl = series.posterUrl ?: r.posterUrl, year = series.year,
@@ -169,7 +169,9 @@ fun MediaTabContent(
         .collectAsStateWithLifecycle(initialValue = "titleAZ")
     val sortOrder = MediaSortOrder.fromWire(sortWire)
 
-    var selectedGenre by remember { mutableStateOf<String?>(null) }
+    // Genre pill selection lives in the view model with the built list, so a
+    // tab return finds the same page it left (tvos_movies_spec 1.3).
+    val selectedGenre by viewModel.selectedGenre(kind == MediaKind.Movies).collectAsStateWithLifecycle()
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var showSort by remember { mutableStateOf(false) }
@@ -186,36 +188,24 @@ fun MediaTabContent(
     // first open of Movies for ~3 s and TV Shows for ~1 s on the Nothing
     // Phone (Logan 2026-09-09, "switching tabs freezes for a couple seconds").
     val gridState = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) com.aeriotv.android.ui.tv.rememberTvMediaGridState() else rememberLazyGridState()
-    var libraryBuilt by remember { mutableStateOf<Pair<List<MediaItem>, Set<Char>>>(emptyList<MediaItem>() to emptySet()) }
-    val sourceMovies = state.movies
-    val sourceSeries = state.series
-    var libraryPending by remember { mutableStateOf(true) }
+    // The filtered + sorted list and its rail letters are BUILT AND CACHED in
+    // OnDemandViewModel, keyed by the source list identity plus the hidden
+    // groups, the genre pill and the sort order. It runs in the background
+    // while another tab is showing, so the first open of Movies no longer
+    // waits out the 5.7 s build it used to start here, and a re-open with an
+    // unchanged key is free (tvOS never rebuilds on return).
+    val builtLibrary by viewModel.library(kind == MediaKind.Movies).collectAsStateWithLifecycle()
+    val libraryPending by viewModel.libraryPending(kind == MediaKind.Movies).collectAsStateWithLifecycle()
+    var libraryBuilt by remember { mutableStateOf(builtLibrary) }
     // The provider sweep republishes every few seconds, and applying a
     // multi-thousand-item rebuild mid-scroll reads as stutter, so tvOS HOLDS
     // a recomputed library until the scroll rests (MoviesView.swift:536-551,
     // 1782-1791). The first population publishes at once.
-    var pendingBuilt by remember { mutableStateOf<Pair<List<MediaItem>, Set<Char>>?>(null) }
-    LaunchedEffect(pendingBuilt, gridState.isScrollInProgress) {
-        val next = pendingBuilt ?: return@LaunchedEffect
-        if (libraryBuilt.first.isEmpty() || !gridState.isScrollInProgress) {
-            libraryBuilt = next
-            pendingBuilt = null
-        }
+    LaunchedEffect(builtLibrary, gridState.isScrollInProgress) {
+        if (builtLibrary === libraryBuilt) return@LaunchedEffect
+        if (libraryBuilt.items.isEmpty() || !gridState.isScrollInProgress) libraryBuilt = builtLibrary
     }
-    LaunchedEffect(sourceMovies, sourceSeries, kind, hiddenGroups, selectedGenre, sortOrder) {
-        libraryPending = true
-        pendingBuilt = withContext(Dispatchers.Default) {
-            val all = if (kind == MediaKind.Movies) sourceMovies.map { it.toMediaItem() } else sourceSeries.map { it.toMediaItem() }
-            val list = all.asSequence()
-                .filter { it.category == null || it.category !in hiddenGroups }
-                .filter { selectedGenre == null || it.category == selectedGenre }
-                .toList()
-                .sortedBy(sortOrder)
-            list to list.mapTo(HashSet()) { it.bucket }
-        }
-        libraryPending = false
-    }
-    val library: List<MediaItem> = libraryBuilt.first
+    val library: List<MediaItem> = libraryBuilt.items
     // Search hits (iOS searchHits / filteredMovies): the server results plus
     // the TMDB person's titles found in the library, deduped by key and
     // sorted by the tab's sort order. A provider pick re-runs the server
@@ -241,7 +231,7 @@ fun MediaTabContent(
     val providerIds = remember(state.providerNames) { state.providerNames.keys.sorted() }
     val showProviderPills = isSearching && providerIds.size >= 2
     val gridItems = if (isSearching) results else library
-    val available: Set<Char> = libraryBuilt.second
+    val available: Set<Char> = libraryBuilt.letters
 
     // Persistent TMDB art (Logan 2026-09-04: TMDB first when a key is set,
     // the provider's poster as the fallback). ONE observer per tab: the
@@ -254,13 +244,14 @@ fun MediaTabContent(
 
     // Hero backdrops (Apple parity: TMDB backdrop per hero page when a key is
     // set); the cropped poster shows until one arrives. Cached per page key.
-    var backdrops by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    // Held in the view model, not in a remember that dies with the tab: a
+    // return finds the resolved art already there.
+    val backdrops by viewModel.heroBackdrops.collectAsStateWithLifecycle()
     LaunchedEffect(heroPages.map { it.key } + watchlistPages.map { it.key }) {
         for (page in heroPages + watchlistPages) {
-            if (backdrops.containsKey(page.key)) continue
+            if (viewModel.heroBackdropResolved(page.key)) continue
             val artKey = page.item?.artKey ?: tmdbArtKey(page.title, page.isMovie)
-            val url = viewModel.heroBackdropUrl(artKey, page.tmdbId, searchTitle(page.title), page.isMovie)
-            backdrops = backdrops + (page.key to url)
+            viewModel.putHeroBackdrop(page.key, viewModel.heroBackdropUrl(artKey, page.tmdbId, searchTitle(page.title), page.isMovie))
         }
     }
 
@@ -279,13 +270,11 @@ fun MediaTabContent(
     // re-read the cache on the next version bump so the carousel catches up.
     LaunchedEffect(artVersion) {
         if (artVersion == 0) return@LaunchedEffect
-        var next = backdrops
         for (page in heroPages + watchlistPages) {
-            if (next[page.key] != null) continue
+            if (backdrops[page.key] != null) continue
             val artKey = page.item?.artKey ?: tmdbArtKey(page.title, page.isMovie)
-            viewModel.artBackdropUrl(artKey)?.let { next = next + (page.key to it) }
+            viewModel.artBackdropUrl(artKey)?.let { viewModel.putHeroBackdrop(page.key, it) }
         }
-        if (next !== backdrops) backdrops = next
     }
 
     fun submitQuery(v: String) {
@@ -365,7 +354,7 @@ fun MediaTabContent(
             personMatchName = personMatchName, showProviderPills = showProviderPills, providerIds = providerIds,
             providerNames = state.providerNames, selectedProviderId = selectedProviderId,
             onSelectProvider = { viewModel.selectProvider(it, kind == MediaKind.Movies) },
-            genrePills = genrePills, selectedGenre = selectedGenre, onGenre = { selectedGenre = it },
+            genrePills = genrePills, selectedGenre = selectedGenre, onGenre = { viewModel.setSelectedGenre(kind == MediaKind.Movies, it) },
             sortOrder = sortOrder,
             onSort = { if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(it.wire) else settingsVm.setSeriesSortOrder(it.wire) },
             onFilter = { showManageGroups = true }, filterActive = hiddenGroups.isNotEmpty(),
@@ -391,7 +380,7 @@ fun MediaTabContent(
                 onChange = { next ->
                     if (kind == MediaKind.Movies) settingsVm.setHiddenMovieGroups(next) else settingsVm.setHiddenSeriesGroups(next)
                     // tvOS drops a genre selection once its group is hidden.
-                    selectedGenre?.let { g -> if (g in next) selectedGenre = null }
+                    selectedGenre?.let { g -> if (g in next) viewModel.setSelectedGenre(kind == MediaKind.Movies, null) }
                 },
                 onDismiss = { showManageGroups = false },
             )
@@ -435,7 +424,7 @@ fun MediaTabContent(
         searchExtras = searchExtras,
         pills = genrePills,
         selectedPill = selectedGenre,
-        onPill = { selectedGenre = it },
+        onPill = { viewModel.setSelectedGenre(kind == MediaKind.Movies, it) },
         gridItems = gridItems,
         gridKey = { it.key },
         cell = { item ->

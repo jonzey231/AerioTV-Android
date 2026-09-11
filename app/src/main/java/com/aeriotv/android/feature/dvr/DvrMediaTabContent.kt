@@ -211,16 +211,27 @@ fun DvrMediaTabContent(
     val sortWire by settingsVm.dvrSortOrder.collectAsStateWithLifecycle(initialValue = "title")
     val sortOrder = DvrSortOrder.fromWire(sortWire)
     val recent by watchVm.observeRecent(80).collectAsStateWithLifecycle(initialValue = emptyList())
-    val now = System.currentTimeMillis()
+    // A clock read straight out of the composable made "now" a NEW value on
+    // every recomposition, so every remember(recordings, now) below missed and
+    // the whole library was re-classified, re-filtered and re-sorted each time
+    // the tab redrew - the reload Logan saw on every DVR open (2026-09-11).
+    // A 30 s tick is finer than any status boundary the page shows.
+    val now by androidx.compose.runtime.produceState(System.currentTimeMillis()) {
+        while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(30_000L) }
+    }
 
-    val channelName: (Rec) -> String = { rec ->
-        playlistState.channels.firstOrNull { it.dispatcharrChannelId != null && it.dispatcharrChannelId == rec.dispatcharrChannelId }?.name ?: ""
+    // One map instead of a linear scan of every channel per card, per render.
+    val channelsById = remember(playlistState.channels) {
+        playlistState.channels.asSequence().filter { it.dispatcharrChannelId != null }
+            .associateBy { it.dispatcharrChannelId!! }
     }
+    val channelName: (Rec) -> String = { rec -> channelsById[rec.dispatcharrChannelId]?.name ?: "" }
     val channelLogo: (Rec) -> String? = { rec ->
-        playlistState.channels.firstOrNull { it.dispatcharrChannelId != null && it.dispatcharrChannelId == rec.dispatcharrChannelId }?.tvgLogo?.takeIf { it.isNotBlank() }
+        channelsById[rec.dispatcharrChannelId]?.tvgLogo?.takeIf { it.isNotBlank() }
     }
+    val recentByVideoId = remember(recent) { recent.associateBy { it.videoId } }
     val progressOf: (Rec) -> Float = { rec ->
-        val row = recent.firstOrNull { it.videoId == rec.progressKey() }
+        val row = recentByVideoId[rec.progressKey()]
         val total = (rec.endMillis - rec.startMillis).toDouble()
         if (row == null || row.positionMs <= 0L) 0f
         else (row.positionMs / (if (row.durationMs > 0) row.durationMs.toDouble() else total.coerceAtLeast(1.0))).toFloat().coerceIn(0f, 1f)
@@ -236,19 +247,20 @@ fun DvrMediaTabContent(
     val recentRecordings = remember(completed) { completed.sortedByDescending { it.startMillis }.take(20) }
     val library = remember(recordingNow, completed) { recordingNow + completed }
     var selectedKind by remember { mutableStateOf<DvrKind?>(null) }
-    val kindsPresent = remember(library) { library.map(::classify).toSet() }
+    val kindOf = remember(library) { library.associate { it.id to classify(it) } }
+    val kindsPresent = remember(kindOf) { kindOf.values.toSet() }
     // Search and Filter (Logan 2026-09-10, like Movies and TV Shows):
     // search matches title, subtitle and description; Filter hides channels.
     val hiddenChannels by settingsVm.hiddenDvrChannels.collectAsStateWithLifecycle(initialValue = emptySet())
-    val channelNames = remember(library) { library.map(channelName).filter { it.isNotBlank() }.distinct().sorted() }
+    val channelNames = remember(library, channelsById) { library.map(channelName).filter { it.isNotBlank() }.distinct().sorted() }
     var query by rememberSaveable { mutableStateOf("") }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     val isSearching = query.isNotBlank()
     var showManageChannels by remember { mutableStateOf(false) }
-    val filteredLibrary = remember(library, selectedKind, sortOrder, hiddenChannels, query) {
+    val filteredLibrary = remember(library, kindOf, selectedKind, sortOrder, hiddenChannels, query, channelsById) {
         val q = query.trim()
         library.filter { rec ->
-            (selectedKind == null || classify(rec) == selectedKind) &&
+            (selectedKind == null || kindOf[rec.id] == selectedKind) &&
                 channelName(rec) !in hiddenChannels &&
                 (q.isEmpty() || rec.title.contains(q, ignoreCase = true) ||
                     (rec.subTitle?.contains(q, ignoreCase = true) == true) ||
