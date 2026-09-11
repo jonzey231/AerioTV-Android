@@ -274,6 +274,10 @@ fun <T> TvMediaPage(
         if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
             scope.launch {
                 snappingToTop.value = true
+                // Bring the bar back before the page moves: one relayout,
+                // then a scroll over a page that no longer changes height.
+                chromeCollapsed?.value = false
+                withFrameNanos { }
                 try {
                     val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
                     if (anchor != null) {

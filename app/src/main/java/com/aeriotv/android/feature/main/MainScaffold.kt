@@ -631,9 +631,15 @@ fun MainScaffold(
                 // pill even at 1px, which flips barHasFocus and grows the bar
                 // back so the user can see what they're navigating.
                 var barHasFocus by remember { mutableStateOf(false) }
+                // Collapse eases out; the bar comes back INSTANTLY (tvOS shows
+                // it at once on the way up). Animating its height while the
+                // page snapped to the top relaid out the whole page on every
+                // frame of the 250 ms, the chunky Up from Sort to the shelf
+                // (Logan 2026-09-10).
+                val barTarget = if (chromeCollapsed.value && !barHasFocus) 0f else 1f
                 val barFraction by animateFloatAsState(
-                    targetValue = if (chromeCollapsed.value && !barHasFocus) 0f else 1f,
-                    animationSpec = tween(durationMillis = 250),
+                    targetValue = barTarget,
+                    animationSpec = if (barTarget == 1f) androidx.compose.animation.core.snap() else tween(durationMillis = 250),
                     label = "tvTopBarCollapse",
                 )
                 Box(
