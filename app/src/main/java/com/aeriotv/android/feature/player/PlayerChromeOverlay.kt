@@ -539,7 +539,11 @@ fun PlayerChromeOverlay(
                         text = formatBadge,
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .padding(end = 20.dp),
+                            // Right edge flush with the timeline track, which
+                            // TvRewindTimeline / TvCatchupTimeline inset by
+                            // 56 dp (Logan 2026-09-11: a flat 20 dp sat too
+                            // far right).
+                            .padding(end = TV_TIMELINE_INSET),
                     )
                 }
             }
@@ -936,6 +940,10 @@ private fun CenterAnchoredPillRow(
         }
     }
 }
+
+/** Horizontal inset of the TV timeline track; the format badge lines its right
+ *  edge up with it. */
+private val TV_TIMELINE_INSET = 56.dp
 
 /** Frosted capsule carrying the video format readout ("1080p · 59.94 fps"). */
 @Composable
@@ -1555,7 +1563,7 @@ private fun TvCatchupTimeline(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 56.dp)
+            .padding(horizontal = TV_TIMELINE_INSET)
             .then(focusModifier),
     ) {
         Box(
@@ -1670,7 +1678,7 @@ private fun TvRewindTimeline(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 56.dp)
+            .padding(horizontal = TV_TIMELINE_INSET)
             .then(focusModifier),
     ) {
         Box(

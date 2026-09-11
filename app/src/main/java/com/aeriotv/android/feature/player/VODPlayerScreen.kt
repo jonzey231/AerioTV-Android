@@ -2161,25 +2161,6 @@ private fun BottomChrome(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-            // Resolution / frame rate readout, leading this right-hand group so
-            // it sits at the band's right end without covering the duration or
-            // the Options button that already live there. Plain Text in a
-            // frosted capsule: never focusable.
-            if (formatBadge != null && isTvForm) {
-                Text(
-                    text = formatBadge,
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-                Spacer(Modifier.width(10.dp))
-            }
             if (isDvr) {
                 // LIVE pill (iOS PlayerView): filled red within 15s of the
                 // live edge, hollow/gray when scrubbed back. Tapping it
@@ -2231,6 +2212,24 @@ private fun BottomChrome(
                 focused = isTvForm && tvFocusZone == TvVodFocusZone.Options,
                 isTvForm = isTvForm,
             )
+            // Resolution / frame rate readout, LAST in this right-hand group so
+            // its right edge lines up with the scrubber track's (both end at
+            // this block's own 16 dp inset). Plain Text: never focusable.
+            if (formatBadge != null && isTvForm) {
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = formatBadge,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
             }
             }
             // Remote hint strip: last row of the control block, 8dp under the
