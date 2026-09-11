@@ -282,7 +282,7 @@ fun <T> TvMediaPage(
                     val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
                     if (anchor != null) {
                         val distance = (restTops.getValue(anchor.index) - anchor.offset.y).toFloat()
-                        gridState.animateScrollBy(-distance, tween(durationMillis = 450, easing = FastOutSlowInEasing))
+                        gridState.animateScrollBy(-distance, tween(durationMillis = 600, easing = FastOutSlowInEasing))
                     } else {
                         gridState.animateScrollToItem(0)
                     }
