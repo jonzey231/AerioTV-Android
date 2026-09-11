@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
@@ -384,92 +383,103 @@ fun PlayerChromeOverlay(
                 }
                 Spacer(Modifier.height(16.dp))
             }
-            // Control pill row (Logan 2026-09-11): Record, Rewind, Pause,
-            // Forward, Multiview, Options, with the Pause pill anchored at
-            // the SCREEN center. Laid out as three slots rather than one Row
-            // so the center never shifts when a side pill's label width or
-            // presence changes (Record is hidden on non-Dispatcharr playlists
-            // and during a catch-up replay, Go Live only exists while the
-            // rewind buffer is scrubbed back). Slots are placed left to right,
-            // so geometric D-pad traversal still walks them in reading order.
-            val centerPill: (@Composable () -> Unit)? = if (tvTransport) {
-                {
-                    PlayerPill(
-                        icon = if (isPlayerPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                        label = if (isPlayerPaused) "Play" else "Pause",
-                        onClick = onRewindTogglePause,
-                        modifier = Modifier.focusRequester(pauseFocus),
-                    )
-                }
-            } else {
-                null
+            // tvOS modern player chrome (Logan 2026-09-11): each control is an
+            // icon-only frosted circle and only the FOCUSED one names itself,
+            // in a fixed-height caption slot under the row so nothing jumps as
+            // focus moves. Order is Record, Rewind, Pause, Forward, Multiview,
+            // Options with Pause anchored on the SCREEN center, so the center
+            // never shifts when a side control's presence changes (Record is
+            // hidden on non-Dispatcharr playlists and during a catch-up
+            // replay, Go Live only exists while the buffer is scrubbed back).
+            // Slots are placed left to right, so geometric D-pad traversal
+            // still walks them in reading order.
+            var focusedCaption by remember { mutableStateOf("") }
+            val setCaption: (String?) -> Unit = { focusedCaption = it ?: "" }
+            // Rewind / Forward need a rolling buffer (or a catch-up replay).
+            // Without one they stay in the row, greyed and inert, and say why
+            // when focused, rather than vanishing and reflowing the row.
+            val seekEnabled = tvTransport
+            val seekDisabledCaption = "Enable Live Rewind in Settings"
+            val centerPill: @Composable () -> Unit = {
+                PlayerControlCircle(
+                    icon = if (isPlayerPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    title = if (isPlayerPaused) "Play" else "Pause",
+                    onClick = onRewindTogglePause,
+                    onCaption = setCaption,
+                    modifier = Modifier.focusRequester(pauseFocus),
+                )
             }
             val leftPills: @Composable () -> Unit = {
                 // Connection-issue Retry leads the row and auto-focuses (see
                 // the focus LaunchedEffect) so the remote has a reachable
                 // re-tune while "Channel Unavailable" is showing.
                 if (connectionIssue) {
-                    PlayerPill(
+                    PlayerControlCircle(
                         icon = Icons.Filled.Refresh,
-                        label = "Retry",
+                        title = "Retry",
                         onClick = onRetry,
+                        onCaption = setCaption,
                         modifier = Modifier.focusRequester(retryFocus),
                     )
                 }
                 // Task #148 milestone B: an archive replay can't be recorded
                 // or joined by live tiles (tvOS parity: catch-up gates both).
                 if (canRecord && !catchupMode) {
-                    PlayerPill(
+                    PlayerControlCircle(
                         icon = Icons.Filled.FiberManualRecord,
-                        label = "Record",
+                        title = "Record",
                         iconTint = Color(0xFFFF4757),
                         onClick = { recordCurrent() },
+                        onCaption = setCaption,
                     )
                 }
-                if (tvTransport) {
-                    PlayerPill(
-                        icon = Icons.Filled.Replay30,
-                        label = "Rewind",
-                        onClick = {
-                            if (catchupMode) onCatchupSeekTo(catchupPositionMs - 30_000)
-                            else onRewindSeekWall(tvCurrentWall - 30_000)
-                        },
-                    )
-                }
+                PlayerControlCircle(
+                    icon = Icons.Filled.Replay30,
+                    title = "Rewind",
+                    enabled = seekEnabled,
+                    disabledCaption = seekDisabledCaption,
+                    onClick = {
+                        if (catchupMode) onCatchupSeekTo(catchupPositionMs - 30_000)
+                        else onRewindSeekWall(tvCurrentWall - 30_000)
+                    },
+                    onCaption = setCaption,
+                )
             }
             val rightPills: @Composable () -> Unit = {
-                if (tvTransport) {
-                    PlayerPill(
-                        icon = Icons.Filled.Forward30,
-                        label = "Forward",
-                        onClick = {
-                            if (catchupMode) onCatchupSeekTo(catchupPositionMs + 30_000)
-                            else onRewindSeekWall(tvCurrentWall + 30_000)
-                        },
+                PlayerControlCircle(
+                    icon = Icons.Filled.Forward30,
+                    title = "Forward",
+                    enabled = seekEnabled,
+                    disabledCaption = seekDisabledCaption,
+                    onClick = {
+                        if (catchupMode) onCatchupSeekTo(catchupPositionMs + 30_000)
+                        else onRewindSeekWall(tvCurrentWall + 30_000)
+                    },
+                    onCaption = setCaption,
+                )
+                if (tvTransport && !catchupMode && timeshiftState?.timeshifting == true) {
+                    PlayerControlCircle(
+                        icon = Icons.Filled.PlayArrow,
+                        title = "Go Live",
+                        onClick = onGoLive,
+                        onCaption = setCaption,
                     )
-                    if (!catchupMode && timeshiftState?.timeshifting == true) {
-                        PlayerPill(
-                            icon = Icons.Filled.PlayArrow,
-                            label = "Go Live",
-                            onClick = onGoLive,
-                        )
-                    }
                 }
                 if (!catchupMode) {
-                    // "Add Stream" said nothing about what it does (Logan
-                    // 2026-09-11): it opens a new multiview tile.
-                    PlayerPill(
+                    PlayerControlCircle(
                         icon = Icons.Outlined.GridView,
-                        label = "Multiview",
+                        title = "Multiview",
                         contentDescription = "Add a multiview tile",
                         onClick = onAddToMultiview,
+                        onCaption = setCaption,
                     )
                 }
                 Box {
-                    PlayerPill(
+                    PlayerControlCircle(
                         icon = Icons.Filled.Tune,
-                        label = "Options",
+                        title = "Options",
                         onClick = { moreOpen = true },
+                        onCaption = setCaption,
                         modifier = Modifier.focusRequester(optionsFocus),
                     )
                     PlayerMoreMenu(
@@ -517,25 +527,28 @@ fun PlayerChromeOverlay(
                     )
                 }
             }
-            if (centerPill != null) {
-                CenterAnchoredPillRow(
-                    modifier = Modifier.fillMaxWidth().focusGroup(),
-                    gap = 16.dp,
-                    left = leftPills,
-                    center = centerPill,
-                    right = rightPills,
+            CenterAnchoredPillRow(
+                modifier = Modifier.fillMaxWidth().focusGroup(),
+                gap = 9.dp,
+                left = leftPills,
+                center = centerPill,
+                right = rightPills,
+            )
+            // Fixed-height caption slot: only the focused control names
+            // itself, and the slot keeps its height when nothing is focused so
+            // the row above never moves.
+            Box(
+                modifier = Modifier.fillMaxWidth().height(16.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = focusedCaption,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White,
+                    maxLines = 1,
                 )
-            } else {
-                // No transport (plain live, buffer off): nothing to anchor, so
-                // the remaining pills simply center as a group.
-                Row(
-                    modifier = Modifier.focusGroup(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    leftPills()
-                    rightPills()
-                }
             }
             // Remote hint strip: the LAST row of the block, on the same band.
             // Plain Text, so it can never take focus, and it adds height under
@@ -930,54 +943,66 @@ private fun CenterAnchoredPillRow(
 }
 
 @Composable
-private fun PlayerPill(
+private fun PlayerControlCircle(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
+    title: String,
     onClick: () -> Unit,
+    onCaption: (String?) -> Unit,
     modifier: Modifier = Modifier,
     iconTint: Color = Color.White,
-    /** Spoken label when the visible one does not say what the pill does. */
+    /** Spoken label when the title does not say what the control does. */
     contentDescription: String? = null,
+    /** False = greyed and inert, but still focusable so the caption can say
+     *  why (Logan 2026-09-11: Rewind / Forward with Live Rewind off). */
+    enabled: Boolean = true,
+    /** Caption shown instead of [title] while disabled. */
+    disabledCaption: String? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
-    // Android-native focus treatment: a solid dark chip that fills white when
-    // focused (high-contrast, the Compose-for-TV convention) plus the shared
-    // focus-scale. No translucent "glass" fill or light rim.
-    val contentColor = if (focused) Color.Black else Color.White
-    Row(
+    // tvOS modern chrome: a frosted white 14 percent circle that fills white
+    // with a dark glyph when focused. 30 dp with a 14 dp icon, the same metrics
+    // as the media page hero buttons.
+    val contentColor = when {
+        focused -> Color.Black
+        enabled -> Color.White
+        else -> Color.White.copy(alpha = 0.4f)
+    }
+    Box(
         modifier = modifier
-            .onFocusChanged { focused = it.isFocused }
-            .tvFocusScale(focused)
+            .onFocusChanged {
+                focused = it.isFocused
+                // Compose delivers the loss before the gain, so clearing here
+                // and setting on gain leaves exactly the focused control's
+                // caption up, and an empty slot when focus leaves the row.
+                if (it.isFocused) {
+                    onCaption(if (enabled) title else (disabledCaption ?: title))
+                } else {
+                    onCaption(null)
+                }
+            }
+            .tvFocusScale(focused, focusedScale = 1.04f)
+            .size(30.dp)
             .clip(CircleShape)
-            .background(if (focused) Color.White else Color.Black.copy(alpha = 0.6f))
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            // tvOS player button metrics, halved from the 1080 pt canvas: a
-            // 60 pt capsule with 26 pt side padding and a 22 pt semibold label
-            // -> 30 dp tall, 13 dp padding, 11 sp. Identical to the media page
-            // hero pills (TvMediaPage.TvHeroButtonView). requiredHeight so a
-            // squeezed parent cannot flatten the capsule. These pills are TV
-            // only; the phone chrome uses CircleIconButton.
-            .requiredHeight(30.dp)
-            .padding(horizontal = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .background(if (focused) Color.White else Color.White.copy(alpha = 0.14f))
+            .clickable(interactionSource = interaction, indication = null) {
+                if (enabled) onClick()
+            },
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = contentDescription,
-            tint = if (iconTint == Color.White) contentColor else iconTint,
+            contentDescription = contentDescription ?: title,
+            tint = when {
+                focused -> Color.Black
+                iconTint != Color.White -> if (enabled) iconTint else iconTint.copy(alpha = 0.4f)
+                else -> contentColor
+            },
             modifier = Modifier.size(14.dp),
-        )
-        Text(
-            text = label,
-            color = contentColor,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
         )
     }
 }
+
 
 @Composable
 private fun PlayerMoreMenu(
