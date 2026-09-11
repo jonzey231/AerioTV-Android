@@ -2216,8 +2216,6 @@ private fun BottomChrome(
                 com.aeriotv.android.ui.tv.TvRemoteHintStrip(
                     hints = hintPairs,
                     modifier = Modifier.fillMaxWidth(),
-                    keyColor = Color.White.copy(alpha = 0.45f),
-                    actionColor = Color.White.copy(alpha = 0.72f),
                 )
             }
         }

@@ -538,8 +538,6 @@ fun PlayerChromeOverlay(
                 com.aeriotv.android.ui.tv.TvRemoteHintStrip(
                     hints = hintPairs,
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    keyColor = Color.White.copy(alpha = 0.45f),
-                    actionColor = Color.White.copy(alpha = 0.72f),
                 )
                 Spacer(Modifier.height(8.dp))
             } else {

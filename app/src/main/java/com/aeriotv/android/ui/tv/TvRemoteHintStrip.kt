@@ -18,7 +18,7 @@ import com.aeriotv.android.core.remote.RemoteHint
 /**
  * The remote hint strip (Logan's design, approved 2026-09-11): ONE line of
  * "key  action" pairs separated by a middle dot, no pill backgrounds, 9 sp,
- * key names in a lighter grey and actions in the muted text color. Only the
+ * key names in the theme accent and actions in the same accent muted. Only the
  * pairs that apply right now are passed in; an empty list draws nothing.
  *
  * Replaces the old stack of capsule hint chips, which sat in the tab bar's
@@ -31,14 +31,18 @@ import com.aeriotv.android.core.remote.RemoteHint
 fun TvRemoteHintStrip(
     hints: List<RemoteHint>,
     modifier: Modifier = Modifier,
-    keyColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-    actionColor: Color = MaterialTheme.colorScheme.tertiary,
+    // tvOS theme coloring (Logan 2026-09-11): key names in the theme accent,
+    // actions in the same accent muted, separators fainter still, so changing
+    // the app theme recolors every strip. Same on all three surfaces.
+    keyColor: Color = MaterialTheme.colorScheme.primary,
+    actionColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+    separatorColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
 ) {
     if (hints.isEmpty()) return
     val text = buildAnnotatedString {
         hints.forEachIndexed { index, hint ->
             if (index > 0) {
-                withStyle(SpanStyle(color = keyColor)) { append("  ·  ") }
+                withStyle(SpanStyle(color = separatorColor)) { append("  ·  ") }
             }
             withStyle(SpanStyle(color = keyColor, fontWeight = FontWeight.Medium)) {
                 append(hint.key)
