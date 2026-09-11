@@ -280,6 +280,12 @@ fun VODPlayerScreen(
 
     var chromeVisible by remember { mutableStateOf(true) }
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    // Always-on playback tracer (tag AerioTrace), the same instrument the live
+    // holder uses. The "press" is the play / resume action that opened this
+    // screen, so press->firstFrame here measures the whole on-demand tune.
+    val tracer = remember {
+        com.aeriotv.android.core.playback.PlaybackTracer().also { it.markPress(title) }
+    }
     // Resolution / frame rate readout for the band's right end. Recomputed on
     // video-size / track changes only, never polled.
     val vodFormatBadge = rememberVideoFormatBadge(exoPlayer, streamUrl)
@@ -353,6 +359,12 @@ fun VODPlayerScreen(
     // Task #149: native Dispatcharr catch-up session (vs XC wall-clock URL).
     val isNativeCatchup = isCatchup && catchupChannelUuid.isNotBlank() &&
         streamUrl.contains("/proxy/catchup/")
+    // Tracer url-kind for this screen's tunes: dvr / catchup / vod.
+    val traceKind = when {
+        isDvr -> "dvr"
+        isCatchup -> "catchup"
+        else -> "vod"
+    }
     // The URL the player is CURRENTLY tuned to. For native catch-up every
     // seek re-mint replaces it (new session_id); revoke-on-close and the
     // re-mint's base-host derivation both read this, never the original
@@ -1011,8 +1023,11 @@ fun VODPlayerScreen(
                             base
                         }
                     }
+                // Byte-flow accounting for the [FEED] heartbeat. Pass-through
+                // only; it counts bytes and changes nothing about the transfer.
+                val tracedFactory = tracer.wrapDataSourceFactory(upstreamFactory)
                 val mediaSourceFactory = DefaultMediaSourceFactory(ctx)
-                    .setDataSourceFactory(upstreamFactory)
+                    .setDataSourceFactory(tracedFactory)
 
                 val player = ExoPlayer.Builder(ctx)
                     .setRenderersFactory(renderersFactory)
@@ -1021,7 +1036,17 @@ fun VODPlayerScreen(
                     .setHandleAudioBecomingNoisy(true)
                     .build()
                     .apply {
+                        // Always-on tune/stall/feed tracer (tag AerioTrace).
+                        addAnalyticsListener(tracer.analyticsListener)
+                        tracer.tracedPlayer = this
                         addListener(object : Player.Listener {
+                            // The tracer's AnalyticsListener does not observe
+                            // first frame, so the summary line is emitted here
+                            // (once per tune; the tracer self-guards).
+                            override fun onRenderedFirstFrame() {
+                                tracer.onFirstFrame()
+                            }
+
                             override fun onPlayerError(error: PlaybackException) {
                                 Log.e(TAG, "VOD ExoPlayer error: ${error.errorCodeName}", error)
                                 // Catch-up (task #136): a provider that flags
@@ -1058,6 +1083,8 @@ fun VODPlayerScreen(
                                                 catchupOffsetMs = resumeAt
                                                 positionMs = resumeAt
                                                 p.setMediaItem(MediaItem.fromUri(minted))
+                                                tracer.recover("catch-up session re-mint")
+                                                tracer.markTuneStart(title, traceKind)
                                                 p.prepare()
                                                 p.playWhenReady = true
                                                 Log.i(TAG, "Native catch-up session recovered after 4xx")
@@ -1100,6 +1127,8 @@ fun VODPlayerScreen(
                                         MediaItem.fromUri(completedUrl),
                                         resumeAt,
                                     )
+                                    tracer.recover("DVR finalized; migrating to /file/")
+                                    tracer.markTuneStart(title, "dvr")
                                     this@apply.prepare()
                                     this@apply.playWhenReady = true
                                     return
@@ -1171,6 +1200,7 @@ fun VODPlayerScreen(
                         } else {
                             setMediaItem(MediaItem.fromUri(streamUrl))
                         }
+                        tracer.markTuneStart(title, traceKind)
                         prepare()
                     }
 
@@ -1201,11 +1231,24 @@ fun VODPlayerScreen(
                 // Task #149: free the native catch-up session's provider
                 // slot ahead of its idle TTL. Best-effort, fire-and-forget.
                 if (isNativeCatchup) onRevokeCatchup(currentPlaybackUrl)
+                tracer.tracedPlayer = null
+                exoPlayer?.removeAnalyticsListener(tracer.analyticsListener)
                 exoPlayer?.release()
                 exoPlayer = null
                 view.player = null
             },
         )
+
+        // 1 s heartbeat poll for the tracer (parity with the live holder's
+        // watchdog cadence). The tracer itself rate-limits to one [PERF] +
+        // one [FEED] line per 15 s and is silent while not playing.
+        LaunchedEffect(exoPlayer) {
+            val player = exoPlayer ?: return@LaunchedEffect
+            while (true) {
+                delay(1_000L)
+                tracer.tick(player)
+            }
+        }
 
         // Resume from saved position. Wait until the player reports a
         // sane duration before issuing seekTo -- ExoPlayer accepts

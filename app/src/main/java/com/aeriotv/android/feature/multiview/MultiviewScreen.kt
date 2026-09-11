@@ -1625,6 +1625,17 @@ private fun ExoTile(
     val tileError = remember { mutableStateOf<String?>(null) }
     val tileRetryRef = remember { mutableStateOf<(() -> Unit)?>(null) }
     val tileRetrySerial = remember { mutableIntStateOf(0) }
+    // Always-on playback tracer (tag AerioTrace), one per tile. The "press"
+    // is the tune that opened this tile, so press->firstFrame measures a
+    // multiview tile start the same way the live holder measures a zap.
+    val tracer = remember {
+        com.aeriotv.android.core.playback.PlaybackTracer().also { it.markPress(channelName) }
+    }
+    val traceKind = when (tile.kind) {
+        TileKind.Vod -> "vod"
+        TileKind.Dvr -> "dvr"
+        else -> "live"
+    }
     Box(modifier = Modifier.fillMaxSize()) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -1664,12 +1675,16 @@ private fun ExoTile(
             // resolves through FileDataSource (a bare HTTP factory cannot open
             // file://, cf VODPlayerScreen.kt). LIVE keeps the bare HTTP factory
             // + TsExtractor routing.
+            // Byte-flow accounting for the [FEED] heartbeat. Pass-through
+            // only; it counts bytes and changes nothing about the transfer.
             val dataSourceFactory: androidx.media3.datasource.DataSource.Factory =
-                if (isVod || tile.kind == TileKind.Dvr) {
-                    DefaultDataSource.Factory(ctx, httpFactory)
-                } else {
-                    httpFactory
-                }
+                tracer.wrapDataSourceFactory(
+                    if (isVod || tile.kind == TileKind.Dvr) {
+                        DefaultDataSource.Factory(ctx, httpFactory)
+                    } else {
+                        httpFactory
+                    },
+                )
             // Tiles decode audio to PCM (no passthrough): PCM AudioTracks are
             // mixed by the platform in any number, so every tile can keep its
             // audio track selected and focus changes are a volume flip. The
@@ -1705,6 +1720,9 @@ private fun ExoTile(
                 .experimentalSetDynamicSchedulingEnabled(true)
                 .build()
                 .apply {
+                    // Always-on tune/stall/feed tracer (tag AerioTrace).
+                    addAnalyticsListener(tracer.analyticsListener)
+                    tracer.tracedPlayer = this
                     // Audio focus is a VOLUME flip, never a track toggle
                     // (Logan 2026-09-02: switching the focused tile froze the
                     // stream for a moment). Disabling/enabling the audio track
@@ -1768,6 +1786,13 @@ private fun ExoTile(
                 private var lastRetryAtMs = 0L
                 private var consecutiveRetries = 0
 
+                // The tracer's AnalyticsListener does not observe first frame,
+                // so the summary line is emitted here (once per tune; the
+                // tracer self-guards).
+                override fun onRenderedFirstFrame() {
+                    tracer.onFirstFrame()
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) {
                         consecutiveRetries = 0
@@ -1801,6 +1826,8 @@ private fun ExoTile(
                             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
                             .build()
                         player.setMediaSource(buildTileMediaSource(retryUrl, dataSourceFactory))
+                        tracer.recover("audio sink fallback (${error.errorCodeName})")
+                        tracer.markTuneStart(channelName, traceKind)
                         player.prepare()
                         player.playWhenReady = !paused
                         return
@@ -1838,6 +1865,8 @@ private fun ExoTile(
                     consecutiveRetries++
                     Log.w(TAG, "Tile re-prepare on error: $channelName ${error.errorCodeName} attempt=$consecutiveRetries")
                     player.setMediaSource(buildTileMediaSource(retryUrl, dataSourceFactory))
+                    tracer.recover("tile re-prepare attempt=$consecutiveRetries")
+                    tracer.markTuneStart(channelName, traceKind)
                     player.prepare()
                 }
             })
@@ -1851,6 +1880,8 @@ private fun ExoTile(
                 if (p != null && u.isNotBlank()) {
                     Log.i(TAG, "Tile error-overlay retry: $channelName")
                     p.setMediaSource(buildTileMediaSource(u, dataSourceFactory))
+                    tracer.recover("tile error-overlay retry")
+                    tracer.markTuneStart(channelName, traceKind)
                     p.prepare()
                 }
             }
@@ -1858,6 +1889,7 @@ private fun ExoTile(
             Log.i(TAG, "Tile ExoPlayer loading: $channelName")
             if (url.isNotBlank()) {
                 player.setMediaSource(buildTileMediaSource(url, dataSourceFactory))
+                tracer.markTuneStart(channelName, traceKind)
                 player.prepare()
                 currentUrlRef.value = url
             }
@@ -1902,12 +1934,16 @@ private fun ExoTile(
                 }
                 // Same file://-capable wrap as the factory path for VOD/DVR.
                 val swapFactory: androidx.media3.datasource.DataSource.Factory =
-                    if (isVod || tile.kind == TileKind.Dvr) {
-                        DefaultDataSource.Factory(view.context, swapHttp)
-                    } else {
-                        swapHttp
-                    }
+                    tracer.wrapDataSourceFactory(
+                        if (isVod || tile.kind == TileKind.Dvr) {
+                            DefaultDataSource.Factory(view.context, swapHttp)
+                        } else {
+                            swapHttp
+                        },
+                    )
                 player.setMediaSource(buildTileMediaSource(url, swapFactory))
+                tracer.markPress(channelName)
+                tracer.markTuneStart(channelName, traceKind)
                 player.prepare()
                 currentUrlRef.value = url
             }
@@ -1936,13 +1972,26 @@ private fun ExoTile(
             Log.i(TAG, "Tile ExoPlayer releasing: $channelName")
             statsStopRef.value?.set(true)
             onPlayer(null)
+            tracer.tracedPlayer = null
             playerRef.value?.let {
+                it.removeAnalyticsListener(tracer.analyticsListener)
                 it.release()
                 com.aeriotv.android.core.playback.PlaybackActivityTracker.playerReleased()
             }
             playerRef.value = null
         },
     )
+
+    // 1 s heartbeat poll for the tracer (parity with the live holder's
+    // watchdog cadence). The tracer itself rate-limits to one [PERF] + one
+    // [FEED] line per 15 s and is silent while the tile is not playing.
+    LaunchedEffect(playerRef.value) {
+        val p = playerRef.value ?: return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(1_000L)
+            tracer.tick(p)
+        }
+    }
 
     // Task #150 (iOS parity): tile playback-error overlay. Real error text,
     // a Retry button, and an auto-reconnect loop on an escalating 5s->30s
