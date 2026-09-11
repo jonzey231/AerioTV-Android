@@ -2613,6 +2613,7 @@ private fun LiveRewindChromeSection(
                 catchupMode = isCatchupMode,
                 rewindBuffering = tsState.buffering,
                 channelFlip = appleTVChannelFlip && channels.size >= 2,
+                controlsVisible = true,
             )
         } else {
             emptyList()

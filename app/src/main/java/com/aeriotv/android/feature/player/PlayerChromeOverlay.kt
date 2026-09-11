@@ -494,20 +494,29 @@ fun PlayerChromeOverlay(
                     )
                 }
             }
-            // Remote hint strip: the LAST row of the bottom control block,
-            // 8dp under the pill row, centered on the screen. Added as EXTRA
-            // height under the controls so no control moves, and it is plain
-            // Text inside this Column, so it can never take focus or sit over
-            // anything. It lives inside the chrome's AnimatedVisibility, so it
-            // fades in and out with the rest of the controls.
-            if (hintPairs.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                com.aeriotv.android.ui.tv.TvRemoteHintStrip(
-                    hints = hintPairs,
-                    keyColor = Color.White.copy(alpha = 0.45f),
-                    actionColor = Color.White.copy(alpha = 0.72f),
-                )
             }
+            // Remote hint strip: its own full-width band flush with the bottom
+            // edge of the screen, black at 55 percent so the 9sp text stays
+            // readable over bright video (Logan's Streamer screenshot,
+            // 2026-09-11). Drawn as a SIBLING of the control Column, below its
+            // 28dp bottom padding, so no control moves and nothing overlaps;
+            // plain Text, so it can never take focus. Inside the chrome's
+            // AnimatedVisibility, so it fades with the controls.
+            if (hintPairs.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    com.aeriotv.android.ui.tv.TvRemoteHintStrip(
+                        hints = hintPairs,
+                        keyColor = Color.White.copy(alpha = 0.45f),
+                        actionColor = Color.White.copy(alpha = 0.72f),
+                    )
+                }
             }
             } else {
             // Phone / tablet (iOS PlayerView parity): top bar with Close on the

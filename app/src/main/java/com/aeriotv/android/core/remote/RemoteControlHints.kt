@@ -233,6 +233,7 @@ object RemoteControlHints {
         catchupMode: Boolean,
         rewindBuffering: Boolean,
         channelFlip: Boolean,
+        controlsVisible: Boolean,
     ): List<RemoteHint> = buildList {
         val scrubbing = catchupMode ||
             (
@@ -242,11 +243,17 @@ object RemoteControlHints {
                             map.playerAction(RemoteSlot.RIGHT_SHORT) == PlayerRemoteAction.SEEK_FORWARD
                         )
                 )
-        playerStripAction(map.playerAction(RemoteSlot.OK_SHORT))?.let {
-            add(RemoteHint(slotLabel(RemoteSlot.OK_SHORT), it))
-        }
-        playerStripAction(map.playerAction(RemoteSlot.OK_LONG))?.let {
-            add(RemoteHint(slotLabel(RemoteSlot.OK_LONG), it))
+        // With the controls on screen OK operates the FOCUSED control, not the
+        // mapped chrome toggle, so the OK pairs would be lying; the strip only
+        // ever renders in that state, but the gate is explicit so a future
+        // chrome-hidden caller gets the right copy (Logan 2026-09-11).
+        if (!controlsVisible) {
+            playerStripAction(map.playerAction(RemoteSlot.OK_SHORT))?.let {
+                add(RemoteHint(slotLabel(RemoteSlot.OK_SHORT), it))
+            }
+            playerStripAction(map.playerAction(RemoteSlot.OK_LONG))?.let {
+                add(RemoteHint(slotLabel(RemoteSlot.OK_LONG), it))
+            }
         }
         if (scrubbing) {
             add(RemoteHint("Left/Right", "Scrub"))
@@ -276,6 +283,10 @@ object RemoteControlHints {
                 add(RemoteHint(slotLabel(RemoteSlot.RIGHT_LONG), it))
             }
         }
+        // Back is fixed and identical whether or not the controls are up:
+        // PlayerScreen's BackHandler minimizes straight to the corner mini (the
+        // old reveal-chrome-first rung was removed deliberately), and a
+        // catch-up replay exits to where the user came from.
         add(RemoteHint("Back", if (catchupMode) "Exit" else "Mini player"))
     }.take(MAX_PAIRS)
 
