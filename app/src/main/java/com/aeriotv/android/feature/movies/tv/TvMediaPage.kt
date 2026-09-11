@@ -317,6 +317,25 @@ fun <T> TvMediaPage(
                     } finally { scrollingToTarget.value = false }
                 }
             }
+        } else if (next == 2 && previous > 2) {
+            // Up from the pills onto Sort (Logan 2026-09-10): the library
+            // header lands just under the top of the screen.
+            val targetPx = restTops[headerIndex]?.let { it - with(density) { 24.dp.roundToPx() } }
+            val current = scrollOffsetPx()
+            if (targetPx != null && current != null && targetPx < current) {
+                scope.launch {
+                    scrollingToTarget.value = true
+                    try {
+                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
+                            var previousValue = 0f
+                            androidx.compose.animation.core.animate(
+                                initialValue = 0f, targetValue = (targetPx - current).toFloat(),
+                                animationSpec = tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut),
+                            ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
+                        }
+                    } finally { scrollingToTarget.value = false }
+                }
+            }
         }
     }
     val scrollToTop: () -> Unit = {
