@@ -498,12 +498,19 @@ private val tvGridStrategies = java.util.WeakHashMap<androidx.compose.foundation
 /** The strategy behind a [rememberTvMediaGridState] state, for pages that want lines warmed. */
 fun tvPrefetchStrategyFor(state: androidx.compose.foundation.lazy.grid.LazyGridState): TvTwoLinePrefetchStrategy? = tvGridStrategies[state]
 
-/** LazyGridState for the TV media pages with [TvTwoLinePrefetchStrategy]. */
+/**
+ * LazyGridState for the TV media pages: a cache window keeps items composed
+ * for one viewport ahead and two behind instead of disposing them the
+ * moment they leave. The tvOS DVR tab keeps its hero and shelves in a plain
+ * stack for the same reason (trace 2026-09-05 01:47: a shelf unloaded on
+ * the way up and the page redrew); rapid Up presses from the library to
+ * the hero here composed the hero mid-scroll (Logan 2026-09-10).
+ */
 @kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @androidx.compose.runtime.Composable
 fun rememberTvMediaGridState(): androidx.compose.foundation.lazy.grid.LazyGridState {
-    val strategy = androidx.compose.runtime.remember { TvTwoLinePrefetchStrategy() }
-    val state = androidx.compose.foundation.lazy.grid.rememberLazyGridState(prefetchStrategy = strategy)
-    androidx.compose.runtime.remember(state) { tvGridStrategies[state] = strategy; state }
-    return state
+    val window = androidx.compose.runtime.remember {
+        androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 2f)
+    }
+    return androidx.compose.foundation.lazy.grid.rememberLazyGridState(cacheWindow = window)
 }
