@@ -346,7 +346,7 @@ fun PlayerChromeOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.55f))
+                    .background(PLAYER_CHROME_BAND)
                     .navigationBarsPadding()
                     .padding(top = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -631,7 +631,7 @@ fun PlayerChromeOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.55f))
+                    .background(PLAYER_CHROME_BAND)
                     .navigationBarsPadding()
                     .padding(horizontal = 18.dp, vertical = 24.dp),
             ) {

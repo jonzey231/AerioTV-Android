@@ -2028,6 +2028,11 @@ fun VODPlayerScreen(
     }
 }
 
+/** The player chrome's bottom band (Logan 2026-09-11: darkened from 55 to 75
+ *  percent so the 9sp hint strip stays readable over bright video). One
+ *  constant, shared with the live player chrome. */
+internal val PLAYER_CHROME_BAND = Color.Black.copy(alpha = 0.75f)
+
 @Composable
 private fun BottomChrome(
     positionMs: Long,
@@ -2066,7 +2071,7 @@ private fun BottomChrome(
 
     Box(
         modifier = modifier
-            .background(Color.Black.copy(alpha = 0.55f))
+            .background(PLAYER_CHROME_BAND)
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
