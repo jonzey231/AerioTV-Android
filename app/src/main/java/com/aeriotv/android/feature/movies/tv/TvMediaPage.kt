@@ -12,7 +12,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -67,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -580,7 +580,14 @@ private fun TvHeroCarousel(
 ) {
     var index by rememberSaveable { mutableIntStateOf(0) }
     if (index > pages.lastIndex) index = 0
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+    // Not BoxWithConstraints: that subcomposes BOTH hero cards on every
+    // measure pass, which on a scrolling LazyVerticalGrid meant rebuilding
+    // the hero every frame (11 to 14 ms of Compose per frame in the
+    // Streamer frame stats, 2026-09-10). The width is measured once.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var widthPx by remember { mutableIntStateOf(0) }
+    Box(modifier = modifier.fillMaxWidth().onSizeChanged { if (it.width != widthPx) widthPx = it.width }) {
+        val maxWidth = with(density) { widthPx.toDp() }
         val spacing = 4.dp
         val pageWidth = if (pages.size > 1) maxWidth * 0.62f else maxWidth
         val shift by animateDpAsState(
@@ -661,7 +668,7 @@ private fun TvHeroCard(
             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface),
         ) {
             if (!page.artUrl.isNullOrBlank()) {
-                AsyncImage(model = page.artUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                AsyncImage(model = sizedArt(page.artUrl, width - TvPage.heroInset * 2, TvPage.heroHeight), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             } else if (!page.logoUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = page.logoUrl, contentDescription = null, contentScale = ContentScale.Fit,
@@ -671,17 +678,30 @@ private fun TvHeroCard(
         }
         // tvOS fades the art with two masks; the same stops painted as
         // background-colored gradients.
+        // Fill rate on the Streamer (frame stats 2026-09-10: 10 to 12 ms
+        // of GPU per static frame, 18 to 22 while scrolling): the fades are
+        // drawn only where they are not transparent. The leading fade is
+        // opaque across its first 12 percent, so that band is a plain fill
+        // and the blend runs over the remaining 78 percent up to the 0.9
+        // stop; the bottom fade covers only its lower 45 percent.
+        Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.12f).background(bg))
         Box(
-            modifier = Modifier.fillMaxSize().background(
-                Brush.horizontalGradient(
-                    0.0f to bg, 0.12f to bg, 0.38f to bg.copy(alpha = 0.92f), 0.7f to bg.copy(alpha = 0.35f), 1.0f to bg.copy(alpha = 0.05f),
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(0.9f)
+                .padding(start = 0.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        0.0f to Color.Transparent, 0.133f to bg, 0.42f to bg.copy(alpha = 0.92f), 0.78f to bg.copy(alpha = 0.35f), 1.0f to bg.copy(alpha = 0.08f),
+                    ),
                 ),
-            ),
         )
         Box(
-            modifier = Modifier.fillMaxSize().background(
-                Brush.verticalGradient(0.55f to Color.Transparent, 1.0f to bg),
-            ),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .fillMaxHeight(0.45f)
+                .background(Brush.verticalGradient(0.0f to Color.Transparent, 1.0f to bg)),
         )
         Column(
             // tvOS copySpacing 12 pt / copyInset 44 pt halved is 6 / 22; the
@@ -837,6 +857,47 @@ private fun <T> TvShelfRow(
 // MARK: cards
 
 /**
+ * Art decoded at its DISPLAY size. Coil's default precision keeps a
+ * 1280 or 1920 px backdrop at full size when the target is 1100 px, and
+ * the Streamer's GPU then samples those textures every frame (hero on
+ * screen: 16 ms of GPU per frame vs 5.5 without it, frame stats
+ * 2026-09-10). EXACT precision scales once on decode.
+ */
+/** [AsyncImage] that decodes at the size it is laid out at (see [sizedArt]). */
+@Composable
+private fun SizedArtImage(url: String, contentDescription: String?, contentScale: ContentScale, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var size by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    Box(modifier = modifier.onSizeChanged { if (it != size) size = it }) {
+        if (size.width > 0 && size.height > 0) {
+            val request = remember(url, size) {
+                coil3.request.ImageRequest.Builder(context)
+                    .data(url)
+                    .size(coil3.size.Size(size.width, size.height))
+                    .precision(coil3.size.Precision.EXACT)
+                    .build()
+            }
+            AsyncImage(model = request, contentDescription = contentDescription, contentScale = contentScale, modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun sizedArt(url: String, width: Dp, height: Dp): coil3.request.ImageRequest {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    return remember(url, width, height, density) {
+        val w = with(density) { width.roundToPx() }.coerceAtLeast(1)
+        val h = with(density) { height.roundToPx() }.coerceAtLeast(1)
+        coil3.request.ImageRequest.Builder(context)
+            .data(url)
+            .size(coil3.size.Size(w, h))
+            .precision(coil3.size.Precision.EXACT)
+            .build()
+    }
+}
+
+/**
  * tvOS VODPosterCard: 2:3 art with 4 dp corners, a 2 dp accent ring and a
  * 1.08 scale while focused, rating badge bottom-end, two centered title
  * lines (fixed height) and the year. Long press opens [longPressActions].
@@ -881,7 +942,7 @@ fun TvPosterCard(
                 ),
         ) {
             if (!posterUrl.isNullOrBlank()) {
-                AsyncImage(model = posterUrl, contentDescription = title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                SizedArtImage(posterUrl, contentDescription = title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
             if (rating.isNotEmpty()) {
                 Text(
@@ -956,7 +1017,7 @@ fun TvRecordingCard(
                 .border(2.dp, if (focused) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(6.dp)),
         ) {
             when {
-                !artUrl.isNullOrBlank() -> AsyncImage(model = artUrl, contentDescription = title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                !artUrl.isNullOrBlank() -> SizedArtImage(artUrl, contentDescription = title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 !logoUrl.isNullOrBlank() -> AsyncImage(model = logoUrl, contentDescription = title, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(14.dp).alpha(0.9f))
                 else -> Text(title, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, maxLines = 3, modifier = Modifier.align(Alignment.Center).padding(8.dp))
             }
