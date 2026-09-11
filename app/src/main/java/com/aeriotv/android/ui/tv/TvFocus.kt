@@ -62,12 +62,15 @@ fun Modifier.tvFocusScale(
 ): Modifier {
     val scale by animateFloatAsState(
         targetValue = if (focused) focusedScale else 1f,
-        // A gentle spring (slight overshoot, no visible bounce) reads as
-        // "alive" the way a flat tween does not. StiffnessMediumLow settles in
-        // ~250ms which matches the tvOS focus cadence.
-        animationSpec = spring(
-            dampingRatio = 0.78f,
-            stiffness = Spring.StiffnessMediumLow,
+        // tvOS grows the focused element with easeInOut over 0.15 s and does
+        // NOT overshoot (MoviesView.swift:3840-3856, :3444). The spring this
+        // used to run settled in ~250 ms with a bounce, which read as a
+        // different, softer motion than the Apple TV next to it. No drop
+        // shadow either: tvOS dropped its shadow because it re-rasterized the
+        // card on every frame of the grow.
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 150,
+            easing = androidx.compose.animation.core.EaseInOut,
         ),
         label = "tvFocusScale",
     )
@@ -383,12 +386,18 @@ class TvEdgeMarginBringIntoViewSpec(
     private val holdIfVisible: () -> Boolean = { false },
 ) : androidx.compose.foundation.gestures.BringIntoViewSpec {
     /**
-     * Apple TV recording 2026-09-10 (DVR tab): each focus scroll is a short
-     * ease-out, fast first frames then a tail, done in roughly 250 to 330
-     * ms. The default spring here settled slower with a soft start.
+     * MUST be a spring, never a tween. `UpdatableAnimationState.animateToZero`
+     * restarts this spec from the CURRENT remaining distance on every frame
+     * with playTime equal to one frame, and a tween ignores the carried
+     * velocity, so feeding it a tween turns the scroll into a fixed-ratio
+     * exponential decay: about 70 frames to cover 200 px, with a sub-pixel
+     * tail that renders as frames of no movement at all (Compose 1.11.1,
+     * UpdatableAnimationState.kt:100-137, FloatAnimationSpec.kt:210-219,
+     * LazyGridState.kt:536-541). A spring carries velocity, which is what the
+     * loop is built for.
      */
     override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float> =
-        androidx.compose.animation.core.tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut)
+        spring(stiffness = Spring.StiffnessMediumLow)
 
     override fun calculateScrollDistance(
         offset: Float,
@@ -410,6 +419,37 @@ class TvEdgeMarginBringIntoViewSpec(
         if (offset >= top && offset + size <= bottom) return 0f
         val distance = if (offset < top) offset - top else offset + size - bottom
         return if (kotlin.math.abs(distance) < 24f) 0f else distance
+    }
+}
+
+/**
+ * Horizontal counterpart of [TvEdgeMarginBringIntoViewSpec] for the TV shelf
+ * LazyRows and the genre-pill LazyRow: keep the focused child [marginPx] clear
+ * of the row's START and END edges, and do nothing while it already is. tvOS
+ * scrolls its shelves the same way, keeping the focused poster off both
+ * edges instead of waiting for it to touch one.
+ *
+ * No `scrollAnimationSpec` override on purpose: the framework default is a
+ * spring, and a tween here decays into a crawl (see the note on
+ * [TvEdgeMarginBringIntoViewSpec.scrollAnimationSpec]).
+ */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+class TvHorizontalBringIntoViewSpec(
+    private val marginPx: Float,
+) : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float {
+        val start = marginPx
+        val end = containerSize - marginPx
+        if (size > end - start) {
+            // Wider than the room between the margins: anchor its start edge.
+            return offset - start
+        }
+        if (offset >= start && offset + size <= end) return 0f
+        return if (offset < start) offset - start else offset + size - end
     }
 }
 
@@ -450,8 +490,17 @@ class TvTwoLinePrefetchStrategy : androidx.compose.foundation.lazy.grid.LazyGrid
     private var wanted: List<Int> = emptyList()
     private var wantedDone: (() -> Unit)? = null
 
+    /**
+     * True once the grid has actually driven this strategy. A strategy that is
+     * NOT the grid's own (see [rememberTvMediaGridState], which has to choose
+     * between a cache window and a custom strategy in Compose 1.11.1) never
+     * receives a [LazyGridPrefetchScope], so a queued request would hang its
+     * caller forever; report the lines as ready instead.
+     */
+    private var attached = false
+
     fun requestLines(lines: List<Int>, onDone: () -> Unit) {
-        if (lines.isEmpty()) { onDone(); return }
+        if (lines.isEmpty() || !attached) { onDone(); return }
         wanted = lines
         wantedDone = onDone
     }
@@ -471,6 +520,7 @@ class TvTwoLinePrefetchStrategy : androidx.compose.foundation.lazy.grid.LazyGrid
         delta: Float,
         layoutInfo: androidx.compose.foundation.lazy.grid.LazyGridLayoutInfo,
     ) {
+        attached = true
         drainWanted()
         with(base) { onScroll(delta, layoutInfo) }
         val visible = layoutInfo.visibleItemsInfo
@@ -485,6 +535,8 @@ class TvTwoLinePrefetchStrategy : androidx.compose.foundation.lazy.grid.LazyGrid
     override fun androidx.compose.foundation.lazy.grid.LazyGridPrefetchScope.onVisibleItemsUpdated(
         layoutInfo: androidx.compose.foundation.lazy.grid.LazyGridLayoutInfo,
     ) {
+        attached = true
+        drainWanted()
         with(base) { onVisibleItemsUpdated(layoutInfo) }
     }
 
@@ -512,5 +564,21 @@ fun rememberTvMediaGridState(): androidx.compose.foundation.lazy.grid.LazyGridSt
     val window = androidx.compose.runtime.remember {
         androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 2f)
     }
-    return androidx.compose.foundation.lazy.grid.rememberLazyGridState(cacheWindow = window)
+    val strategy = androidx.compose.runtime.remember { TvTwoLinePrefetchStrategy() }
+    // Compose 1.11.1 offers a cacheWindow overload and a prefetchStrategy
+    // overload, and they are mutually exclusive: the cacheWindow constructor
+    // installs the internal LazyGridCacheWindowPrefetchStrategy itself
+    // (LazyGridState.kt:100-141, :169-178). The cache window is the stronger
+    // of the two here, because it RETAINS items that scrolled out instead of
+    // only precomposing ones that are coming in, so it wins. The strategy is
+    // still registered so [tvPrefetchStrategyFor] resolves and a caller's
+    // requestLines(...) completes (immediately, since the window has already
+    // kept the lines above and below the viewport composed) rather than
+    // silently doing nothing on a null.
+    val state = androidx.compose.foundation.lazy.grid.rememberLazyGridState(cacheWindow = window)
+    androidx.compose.runtime.remember(state, strategy) {
+        tvGridStrategies[state] = strategy
+        true
+    }
+    return state
 }

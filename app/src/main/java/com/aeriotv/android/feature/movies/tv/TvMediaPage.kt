@@ -272,41 +272,85 @@ fun <T> TvMediaPage(
     val firstCell = remember { FocusRequester() }
     /** The All pill: where the pill row is entered from above or below (Logan 2026-09-10). */
     val allPill = remember { FocusRequester() }
-    // A focus-driven scroll to the top: the bring-into-view spec stands down
-    // while it runs (its own request otherwise raced the snap and left the
-    // hero a third off screen, Logan 2026-09-10) and a hard snap ends it.
-    val snappingToTop = remember { mutableStateOf(false) }
-    /** The library header row (title, search, sort, filter) holds focus. */
-    val headerFocused = remember { mutableStateOf(false) }
-    /** The genre pill row holds focus: Up from the top poster row onto All must not scroll either. */
-    val pillsFocused = remember { mutableStateOf(false) }
-    // Item tops at scroll zero, recorded whenever the page rests at the
-    // top: the snap back up is then one animateScrollBy over the exact
-    // distance (tvOS .smooth 0.45 s). animateScrollToItem jumps in
-    // viewport-sized chunks over that distance, which read as chunky
-    // (Logan 2026-09-10).
-    val restTops = remember { HashMap<Int, Int>() }
-    val restHeights = remember { HashMap<Int, Int>() }
-    val restViewport = remember { mutableIntStateOf(0) }
+    // ------------------------------------------------------------------
+    // ONE owner of focus scrolling (Logan 2026-09-11).
+    //
+    // Every focusable on this page does exactly one thing when it gains
+    // focus: it sends a PageAnchor into a CONFLATED channel. A single
+    // coroutine (the owner, below) consumes that channel, cancels whatever
+    // move is running, computes ONE absolute target offset and animates the
+    // grid there with animate() + scrollBy at PreventUserInput. Nothing
+    // else on the page may scroll it: the bring-into-view spec around the
+    // whole grid returns 0 unconditionally, and the shelf and pill LazyRows
+    // carry their own HORIZONTAL specs so they never inherit a vertical one.
+    //
+    // TARGETS ARE ON-SCREEN POSITIONS, NOT PAGE DISTANCES.
+    // The Apple TV numbers Logan measured (points halved) are content
+    // offsets on the tvOS DVR tab: 54 dp with the first shelf card focused,
+    // 92 dp with Sort focused, 129 dp with the All pill focused, and the
+    // library header flush with the top edge with the first grid row
+    // focused. Those distances only reproduce the tvOS picture on tvOS
+    // geometry (the Android leading block is taller), so they are converted
+    // here into WHERE THE FOCUSED ROW'S TOP SITS ON SCREEN, which does port.
+    //
+    // tvOS DVR page, one hero plus one shelf (DVRView.swift, points, at
+    // content offset 0; the ScrollView's own .padding(.top, 190) at :775,
+    // VStack spacing sectionSpacing = 28 at :661/:865):
+    //   catcher top      190   (h 8,   DVRView.swift:704)
+    //   hero top         226   (h 420, :312/:1403)
+    //   shelf top        674   (h 326) = title 24 pt semibold line 29
+    //                          (Typography.swift:13) + VStack spacing 8
+    //                          + row (card 249 + .padding(.vertical, 20)
+    //                          x2 = 289); card = 340 wide 16:9 art 191.25
+    //                          + spacing 8 + title line 26 + 2 + meta line
+    //                          21.5 (:1774-1815, :908, :932)
+    //   header top      1028   (h 60, the 60 pt circles, HomeView.swift:3661)
+    //   pills top       1100   (h 76) = header + 60 + VStack spacing 12
+    //                          (:949); pill 22 pt line 26 + 13 x 2 = 52,
+    //                          plus .padding(.vertical, 12) (:1001)
+    //   grid row 0 top  1204 + .padding(.vertical, 20) = 1224 (:1157-1181)
+    //
+    // Halve to dp and subtract the measured offset:
+    //   Y_shelf  = 674/2  - 54  = 337 - 54  = 283 dp
+    //   Y_header = 1028/2 - 92  = 514 - 92  = 422 dp
+    //   Y_pills  = 1100/2 - 129 = 550 - 129 = 421 dp
+    //   header flush with the top means offset 514 dp, so the first grid
+    //   row sits at 1224/2 - 514 = 612 - 514 = 98 dp.
+    // Cross-check: those four are ONE rule. Shelf block 163 dp tall ends at
+    // 446 (94 dp clear of the 540 dp bottom edge), header 30 dp ends at 452
+    // (88 clear), pill row 38 dp ends at 459 (81 clear), and the first grid
+    // row starts 98 dp under the top. That is the tvOS focus engine keeping
+    // the focused row roughly 100 dp clear of the edge it is moving toward,
+    // which is also the deep-grid rule Logan measured.
+    //
+    // So for any anchor: target = restTopOf(anchorIndex) - Y, clamped to
+    // [0, maxScroll].
+    //
+    // Every DOWNWARD target is additionally at least the bottom-clear target
+    // (Logan 2026-09-11): the minimum offset that leaves the focused row's
+    // BOTTOM 100 dp above the bottom edge of the grid viewport, which is the
+    // same "100 dp clear of the edge it moves toward" rule the cross-check
+    // above found. The Y positions were derived from tvOS ROW HEIGHTS, so an
+    // Android row that is taller than its tvOS counterpart (the Movies
+    // Watchlist shelf is 269 dp against the tvOS DVR shelf's 163 dp) would
+    // otherwise sit with its card text under the bottom edge. For a shelf the
+    // row is the whole shelf block, title plus cards.
+    //
+    // Up and down use the same Y except: Header seats 24 dp
+    // under the top on the way up; Shelf(0) on the way up goes to 0 when the
+    // shelf block fits under the hero at rest, else parks the shelf 86 dp
+    // under the top; Hero is always 0; later shelves and grid rows use the
+    // 100 dp edge clamp on the way up (the minimum move).
+    // ------------------------------------------------------------------
     val density = androidx.compose.ui.platform.LocalDensity.current
     val gridRowSpacingPx = with(density) { gridRowSpacing.roundToPx() }
-    // The rows above the grid change index when a shelf appears later (the
-    // Watchlist loads after the first layout), so positions recorded under
-    // the old indices describe the wrong rows: drop them on any change.
-    LaunchedEffect(leadingCount, visibleShelves.size, hasHero) { restTops.clear(); restHeights.clear() }
-    // Stale grid rest entries: a pill press or a search swaps the grid list
-    // while leadingCount is unchanged, so the recorded poster-row tops
-    // describe rows that no longer exist there (Movies spec D5).
-    LaunchedEffect(gridItems) {
-        restTops.entries.removeIf { it.key >= leadingCount }
-        restHeights.entries.removeIf { it.key >= leadingCount }
-    }
-    // Rest positions WITHOUT being at the top (Movies spec D3/D4): the
-    // leading rows are measured by KEY on every layout, so a rest top can be
-    // derived at any scroll offset even when restTops was dropped. Keys
-    // survive a structure change; heights are never cleared.
-    val leadingHeights = remember { HashMap<Any, Int>() }
-    val gridCellHeight = remember { mutableIntStateOf(0) }
+    val gridBottomPaddingPx = with(density) { 40.dp.roundToPx() }
+    val yShelfPx = with(density) { 283.dp.roundToPx() }
+    val yHeaderPx = with(density) { 422.dp.roundToPx() }
+    val yPillsPx = with(density) { 421.dp.roundToPx() }
+    val headerUpGapPx = with(density) { 24.dp.roundToPx() }
+    val shelfUpGapPx = with(density) { 86.dp.roundToPx() }
+    val edgeMarginPx = with(density) { 100.dp.roundToPx() }
     /** Emission order of the full-span rows (must match the grid below exactly). */
     val leadingKeys: List<Any> = remember(hasHero, visibleShelves.map { it.title }, isSearching, searchExtras.size, pillRow, gridItems.isEmpty()) {
         buildList {
@@ -319,233 +363,282 @@ fun <T> TvMediaPage(
             if (gridItems.isEmpty()) add("empty")
         }
     }
-    /** Rest top of a leading row, summed from the measured heights. */
-    fun leadingTopOf(index: Int): Int? {
-        var top = 0
-        for (i in 0 until index) {
-            val key = leadingKeys.getOrNull(i) ?: return null
-            top += (leadingHeights[key] ?: return null) + gridRowSpacingPx
-        }
-        return top
-    }
-    /** Where item [index] sits with the page at the top; null when unknowable. */
-    fun restTopOf(index: Int): Int? {
-        restTops[index]?.let { return it }
-        if (index < leadingCount) return leadingTopOf(index)
-        val base = restTops[leadingCount] ?: leadingTopOf(leadingCount) ?: return null
-        val cellHeight = restHeights.entries.firstOrNull { it.key >= leadingCount }?.value
-            ?: gridCellHeight.intValue.takeIf { it > 0 } ?: return null
-        return base + ((index - leadingCount) / columns) * (cellHeight + gridRowSpacingPx)
-    }
+    // ONE geometry snapshot, published as a single State so every consumer
+    // sees a consistent set. Heights are keyed by the row's own key and are
+    // never cleared: a key survives a structure change (a shelf arriving
+    // late, search opening). The table is rebuilt whenever a measured height,
+    // the structure or the at-rest viewport changes.
+    val leadingHeightByKey = remember { HashMap<Any, Int>() }
+    val geometry = remember { mutableStateOf<TvPageGeometry?>(null) }
     val chromeScroll = com.aeriotv.android.feature.main.LocalTvChromeScroll.current
-    /** Pixels the page has scrolled, from the first visible item whose rest position is known. */
+    /** Pixels the page has scrolled, from the first visible row whose rest top is known. */
     fun scrollOffsetPx(): Int? {
+        val g = geometry.value ?: return null
         gridState.layoutInfo.visibleItemsInfo.forEach { item ->
-            restTopOf(item.index)?.let { return it - item.offset.y }
+            g.restTopOf(item.index)?.let { return it - item.offset.y }
         }
         return null
     }
-    LaunchedEffect(gridState, leadingCount, leadingKeys) {
+    val inputsState = androidx.compose.runtime.rememberUpdatedState(
+        TvPageInputs(
+            headerIndex = headerIndex,
+            leadingCount = leadingCount,
+            columns = columns,
+            itemCount = gridItems.size,
+            hasHero = hasHero,
+            shelfCount = visibleShelves.size,
+        )
+    )
+    /** Largest legal offset, or null when the content height is not knowable
+     *  yet (at rest on Movies the leading block is taller than the viewport,
+     *  so the pills and the first cells have never been measured). A null
+     *  limit must NOT stop a move: the TvScrollAtBound guard inside the
+     *  animation stops it at the real bound instead. */
+    fun maxScrollPx(): Int? {
+        val g = geometry.value ?: return null
+        val base = g.gridTopPx ?: return null
+        val live = inputsState.value
+        val rows = if (live.itemCount == 0) 0 else (live.itemCount + live.columns - 1) / live.columns
+        if (rows > 0 && g.cellHeight <= 0) return null
+        val content = base + if (rows == 0) 0 else rows * (g.cellHeight + gridRowSpacingPx) - gridRowSpacingPx
+        val viewport = gridState.layoutInfo.viewportSize.height
+        if (viewport <= 0) return null
+        return (content + gridBottomPaddingPx - viewport).coerceAtLeast(0)
+    }
+    LaunchedEffect(gridState, leadingKeys, columns, gridRowSpacingPx) {
+        var cellHeight = 0
+        var viewportAtTop = 0
+        var dirty = true
         snapshotFlow { gridState.layoutInfo }.collect { info ->
-            // Measured on EVERY layout, not only at rest: keyed by the item's
-            // own key so a structure change cannot orphan them.
             info.visibleItemsInfo.forEach { item ->
+                if (item.size.height <= 0) return@forEach
                 if (item.index < leadingCount) {
-                    if (item.size.height > 0) leadingHeights[item.key] = item.size.height
-                } else if (item.size.height > 0 && gridCellHeight.intValue != item.size.height) {
-                    gridCellHeight.intValue = item.size.height
+                    if (leadingHeightByKey.put(item.key, item.size.height) != item.size.height) dirty = true
+                } else if (cellHeight != item.size.height) {
+                    cellHeight = item.size.height
+                    dirty = true
                 }
             }
-            if (gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0) {
-                info.visibleItemsInfo.forEach { restTops[it.index] = it.offset.y; restHeights[it.index] = it.size.height }
-                // The grid's viewport is taller once the tab bar has collapsed;
-                // "fits at the top" must use the room the page has AT the top.
-                restViewport.value = info.viewportSize.height
-            } else {
-                // Rows below the first viewport are never on screen at rest, so
-                // extend the table from any visible row whose rest top is known:
-                // the header, pills and poster rows get exact rest positions as
-                // the page walks down. Without this, Up from the grid found no
-                // anchor and the pills > Sort and Sort > Watchlist scrolls
-                // silently did nothing (logcat 2026-09-10 23:17).
-                val anchor = info.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
-                if (anchor != null) {
-                    val base = restTops.getValue(anchor.index) - anchor.offset.y
-                    info.visibleItemsInfo.forEach {
-                        if (!restTops.containsKey(it.index)) { restTops[it.index] = base + it.offset.y; restHeights[it.index] = it.size.height }
-                    }
+            // The grid's viewport is taller once the tab bar has collapsed;
+            // "fits at the top" must use the room the page has AT the top.
+            if (gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0 &&
+                info.viewportSize.height > 0 && viewportAtTop != info.viewportSize.height
+            ) {
+                viewportAtTop = info.viewportSize.height
+                dirty = true
+            }
+            if (dirty) {
+                dirty = false
+                val tops = IntArray(leadingCount + 1) { -1 }
+                val heights = IntArray(leadingCount + 1) { -1 }
+                var top = 0
+                var i = 0
+                while (i <= leadingCount) {
+                    tops[i] = top
+                    if (i == leadingCount) break
+                    val h = leadingKeys.getOrNull(i)?.let { leadingHeightByKey[it] } ?: break
+                    heights[i] = h
+                    top += h + gridRowSpacingPx
+                    i++
                 }
+                geometry.value = TvPageGeometry(
+                    leadingTops = tops,
+                    leadingHeights = heights,
+                    cellHeight = cellHeight,
+                    viewportAtTop = viewportAtTop,
+                    rowSpacingPx = gridRowSpacingPx,
+                    columns = columns,
+                )
             }
             // No anchor: LEAVE the previous value. Writing Int.MAX_VALUE hid
             // the bar because we lost track of where we are (Movies spec D11).
+            // This is the owner's once-per-frame publish of the live offset.
             scrollOffsetPx()?.let { chromeScroll?.value = it }
         }
     }
     DisposableEffect(Unit) { onDispose { chromeScroll?.value = 0 } }
-    // tvOS Down walk, measured on the Apple TV (2026-09-10, points halved):
-    // hero -> shelf 54 dp, shelf -> sort 92 dp, sort -> pills 129 dp, pills
-    // -> first poster row = the header at the top of the screen. Applied on
-    // DOWNWARD zone changes only; further rows use the edge-margin rule.
-    var zone by remember { mutableIntStateOf(0) }
-    val scrollingToTarget = remember { mutableStateOf(false) }
-    val enterZone: (Int) -> Unit = { next ->
-        val previous = zone
-        zone = next
-        if (next > previous) {
-            val targetPx: Int? = with(density) {
-                when (next) {
-                    1 -> 54.dp.roundToPx()
-                    2 -> 92.dp.roundToPx()
-                    3 -> 129.dp.roundToPx()
-                    4 -> restTopOf(headerIndex)
-                        ?: scrollOffsetPx()?.let { cur ->
-                            gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == headerIndex }?.let { cur + it.offset.y }
-                        }
-                    else -> null
-                }
-            }
-            val current = scrollOffsetPx()
-            if (targetPx != null && current != null && targetPx > current) {
-                scope.launch {
-                    scrollingToTarget.value = true
-                    try {
-                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
-                            var previousValue = 0f
-                            androidx.compose.animation.core.animate(
-                                initialValue = 0f, targetValue = (targetPx - current).toFloat(),
-                                animationSpec = tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut),
-                            ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
-                        }
-                    } finally { scrollingToTarget.value = false }
-                }
-            } else if (targetPx != null && current == null && next in 1..3) {
-                // A slightly wrong scroll beats no scroll (Movies spec D3):
-                // with no anchor, go to the target absolutely.
-                scope.launch {
-                    scrollingToTarget.value = true
-                    try { gridState.animateScrollToItem(0, targetPx) } finally { scrollingToTarget.value = false }
-                }
-            }
-        } else if (next == 1 && previous > 1) {
-            // handled by revealFirstShelf from the shelf's own focus hook
-        } else if (next == 2 && previous > 2) {
-            // Up from the pills onto Sort (Logan 2026-09-10): the library
-            // header lands just under the top of the screen.
-            val headerGapPx = with(density) { 24.dp.roundToPx() }
-            val targetPx = restTopOf(headerIndex)?.let { it - headerGapPx }
-            val current = scrollOffsetPx()
-            if (current == null) {
-                // No anchor: absolute scroll rather than a silent no-op (Movies spec D3).
-                scope.launch {
-                    scrollingToTarget.value = true
-                    try { gridState.animateScrollToItem(headerIndex, -headerGapPx) } finally { scrollingToTarget.value = false }
-                }
-            } else if (targetPx != null && targetPx < current) {
-                scope.launch {
-                    scrollingToTarget.value = true
-                    try {
-                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
-                            var previousValue = 0f
-                            androidx.compose.animation.core.animate(
-                                initialValue = 0f, targetValue = (targetPx - current).toFloat(),
-                                animationSpec = tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut),
-                            ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
-                        }
-                    } finally { scrollingToTarget.value = false }
-                }
+
+    // The anchors every focusable sends, and the one coroutine that moves
+    // the page. CONFLATED: a burst of presses collapses to the newest.
+    val anchors = remember { kotlinx.coroutines.channels.Channel<TvPageAnchor>(kotlinx.coroutines.channels.Channel.CONFLATED) }
+    val sendAnchor: (TvPageAnchor) -> Unit = remember(anchors) { { anchors.trySend(it) } }
+    LaunchedEffect(gridState, density) {
+        /** The smallest offset that leaves a row's BOTTOM 100 dp clear of the
+         *  bottom edge. Every downward target is at least this: the tvOS Y
+         *  positions were derived from tvOS row heights, and an Android row
+         *  that is taller (the 2:3 Watchlist shelf, 269 dp against tvOS's
+         *  163 dp) would otherwise sit with its text under the bottom edge
+         *  (Logan 2026-09-11). */
+        fun bottomClear(top: Int, height: Int, viewport: Int): Int = top + height - viewport + edgeMarginPx
+        /** The minimum move that satisfies a margin at the edge we travel toward. */
+        fun minimumMove(current: Int, top: Int, height: Int, viewport: Int): Int {
+            val upper = top - edgeMarginPx
+            val lower = top + height - viewport + edgeMarginPx
+            return when {
+                current > upper -> upper
+                current < lower -> lower
+                else -> current
             }
         }
-    }
-    val scrollToTopRef = remember { mutableStateOf<() -> Unit>({}) }
-    /**
-     * Up from the header onto the first shelf (Apple TV, 2026-09-10): when
-     * the whole shelf block fits on screen with the page at the top (DVR's
-     * 16:9 cards) the page goes to the top; when it would run off the
-     * bottom (a 2:3 Watchlist) the page stops with the shelf row 86 dp
-     * under the top edge instead, so the poster and its text are in view.
-     */
-    val revealFirstShelf: () -> Unit = {
-        val shelfIndex = 1 + (if (hasHero) 1 else 0)
-        val shelfTop = restTopOf(shelfIndex)
-        val shelfHeight = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
-            ?: restHeights[shelfIndex]
-        val viewport = restViewport.intValue.takeIf { it > 0 } ?: gridState.layoutInfo.viewportSize.height
-        val fitsAtTop = shelfTop == null || shelfHeight == null || shelfTop + shelfHeight <= viewport
-        if (fitsAtTop) {
-            scrollToTopRef.value()
-        } else {
-            val shelfGapPx = with(density) { 86.dp.roundToPx() }
-            val targetPx = shelfTop - shelfGapPx
-            val current = scrollOffsetPx()
-            if (current == null) {
-                // No anchor: absolute scroll rather than a silent no-op (Movies spec D3).
-                scope.launch {
-                    scrollingToTarget.value = true
-                    try { gridState.animateScrollToItem(shelfIndex, -shelfGapPx) } finally { scrollingToTarget.value = false }
-                }
-            } else if (targetPx < current) {
-                scope.launch {
-                    scrollingToTarget.value = true
-                    try {
-                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
-                            var previousValue = 0f
-                            androidx.compose.animation.core.animate(
-                                initialValue = 0f, targetValue = (targetPx - current).toFloat(),
-                                animationSpec = tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut),
-                            ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
-                        }
-                    } finally { scrollingToTarget.value = false }
-                }
+        /** The ONE table: every anchor's absolute target offset, or null when
+         *  the geometry it needs is not measured yet. */
+        fun targetFor(
+            target: TvPageAnchor,
+            g: TvPageGeometry,
+            live: TvPageInputs,
+            current: Int,
+            viewport: Int,
+            down: Boolean,
+            spec: (Int, androidx.compose.animation.core.Easing) -> Unit,
+        ): Int? = when (target) {
+            is TvPageAnchor.Hero -> {
+                // From deeper than one viewport the tvOS snap is the
+                // long curve; from within one viewport it is the hop.
+                if (current > viewport) spec(600, androidx.compose.animation.core.EaseInOut)
+                0
             }
-        }
-    }
-    val scrollToTop: () -> Unit = {
-        // One snap at a time: a rapid Up from the shelf onto the hero while
-        // the shelf's snap was running cancelled it and restarted from a
-        // standstill (two visible jumps, logcat 2026-09-10 22:04). The
-        // running snap is already heading to the top.
-        if (!snappingToTop.value && (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0)) {
-            scope.launch {
-                snappingToTop.value = true
-                // Bring the bar back before the page moves: one relayout,
-                // then a scroll over a page that no longer changes height.
-                chromeCollapsed?.value = false
-                chromeScroll?.value = 0
-                withFrameNanos { }
-                // (The prefetch warm-up that used to sit here was dead:
-                // tvGridStrategies is never written, so the strategy was
-                // always null. Movies spec D12.)
-                try {
-                    val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
-                    if (anchor != null) {
-                        val distance = (restTops.getValue(anchor.index) - anchor.offset.y).toFloat()
-                        // PreventUserInput: the focused card's own bring-into-view
-                        // request (even a zero-distance one) took the scroll
-                        // mutex and cancelled a Default-priority animateScrollBy
-                        // after a few frames, leaving the hard snap to finish
-                        // the move (the "caught" animation, Logan 2026-09-10).
-                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
-                            var previous = 0f
-                            androidx.compose.animation.core.animate(
-                                initialValue = 0f, targetValue = -distance,
-                                animationSpec = tween(durationMillis = 600, easing = androidx.compose.animation.core.EaseInOut),
-                            ) { value, _ ->
-                                scrollBy(value - previous)
-                                previous = value
-                            }
-                        }
-                    } else {
-                        gridState.animateScrollToItem(0)
+            is TvPageAnchor.Shelf -> {
+                val index = 1 + (if (live.hasHero) 1 else 0) + target.ordinal
+                val top = g.restTopOf(index)
+                val height = g.leadingHeightOf(index)
+                when {
+                    top == null -> null
+                    down -> maxOf(top - yShelfPx, bottomClear(top, height ?: 0, viewport))
+                    target.ordinal == 0 -> {
+                        // Up onto the first shelf: the page goes to the
+                        // top when the whole shelf block fits under the
+                        // hero at rest, else the shelf parks 86 dp down.
+                        val room = g.viewportAtTop.takeIf { it > 0 } ?: viewport
+                        if (height == null || top + height <= room) 0 else top - shelfUpGapPx
                     }
-                    withFrameNanos { }
-                    gridState.scrollToItem(0)
-                } finally {
-                    snappingToTop.value = false
+                    else -> minimumMove(current, top, height ?: 0, viewport)
                 }
+            }
+            is TvPageAnchor.Header -> g.restTopOf(live.headerIndex)?.let { top ->
+                if (down) maxOf(top - yHeaderPx, bottomClear(top, g.leadingHeightOf(live.headerIndex) ?: 0, viewport))
+                else top - headerUpGapPx
+            }
+            is TvPageAnchor.Pills -> {
+                val index = live.leadingCount - 1
+                val top = g.restTopOf(index)
+                val height = g.leadingHeightOf(index)
+                when {
+                    top == null -> null
+                    down -> maxOf(top - yPillsPx, bottomClear(top, height ?: 0, viewport))
+                    // Up from row 0 onto the pills: the minimum move
+                    // that leaves the pill row 100 dp clear of the top
+                    // edge, never a snap.
+                    else -> minimumMove(current, top, height ?: 0, viewport)
+                }
+            }
+            is TvPageAnchor.GridRow -> {
+                val index = live.leadingCount + target.row * live.columns
+                val top = g.restTopOf(index)
+                when {
+                    top == null -> null
+                    target.seatAtTop -> {
+                        // Rail letter jump: the row seats at the top
+                        // minus 24 dp, on the tvOS 0.25 s curve.
+                        spec(250, androidx.compose.animation.core.EaseInOut)
+                        top - headerUpGapPx
+                    }
+                    down && target.row == 0 -> maxOf(
+                        g.restTopOf(live.headerIndex) ?: (top - edgeMarginPx),
+                        bottomClear(top, g.cellHeight, viewport),
+                    )
+                    else -> minimumMove(current, top, g.cellHeight, viewport)
+                }
+            }
+            is TvPageAnchor.Restore, is TvPageAnchor.Rail -> null
+        }
+
+        var running: kotlinx.coroutines.Job? = null
+        var currentAnchor: TvPageAnchor? = null
+        for (target in anchors) {
+            // The rail letter jump moves the page AND then focuses the
+            // letter's first cell; that cell's own focus callback sends a
+            // plain GridRow for the same row mid-move. It is the same
+            // destination, so it must not cancel the seat move.
+            val active = currentAnchor
+            if (running?.isActive == true && active is TvPageAnchor.GridRow && active.seatAtTop &&
+                target is TvPageAnchor.GridRow && !target.seatAtTop && target.row == active.row
+            ) continue
+            running?.let { job -> job.cancel(); runCatching { job.join() } }
+            val previous = currentAnchor
+            currentAnchor = target
+            running = launch {
+                if (target is TvPageAnchor.Restore) {
+                    // Return from a detail: put the page back where it was,
+                    // instantly (tvOS never disposed the tab), through the
+                    // owner so nothing else is animating at the same time.
+                    runCatching { gridState.scrollToItem(target.index, target.offsetPx) }
+                    return@launch
+                }
+                val down = target.order() > (previous?.order() ?: -1)
+                var duration = 300
+                var easing: androidx.compose.animation.core.Easing = androidx.compose.animation.core.EaseOut
+                var goal = 0
+                var current = 0
+                var ready = false
+                // ONE null policy: the rows this target depends on may not be
+                // measured yet. Wait a frame for them, up to 10, then give up
+                // silently. Never animateScrollToItem, never scrollToItem.
+                var attempt = 0
+                while (attempt < 10 && !ready) {
+                    attempt++
+                    val g = geometry.value
+                    val live = inputsState.value
+                    val now = if (g == null) null else scrollOffsetPx()
+                    val viewport = gridState.layoutInfo.viewportSize.height
+                    if (g == null || now == null || viewport <= 0) { withFrameNanos { }; continue }
+                    duration = 300
+                    easing = androidx.compose.animation.core.EaseOut
+                    val raw: Int? = targetFor(target, g, live, now, viewport, down) { d, e -> duration = d; easing = e }
+                    if (raw == null) { withFrameNanos { }; continue }
+                    // Clamp only when a real limit is known; otherwise the
+                    // bound guard in the animation does the job.
+                    goal = raw.coerceAtLeast(0).let { g0 -> maxScrollPx()?.let { g0.coerceAtMost(it) } ?: g0 }
+                    current = now
+                    ready = true
+                }
+                if (!ready) return@launch
+                if (goal == current) return@launch
+                if (target is TvPageAnchor.Hero) {
+                    // Bring the bar back before the page moves: one relayout,
+                    // then a scroll over a page that no longer changes height.
+                    chromeCollapsed?.value = false
+                    chromeScroll?.value = 0
+                    withFrameNanos { }
+                }
+                try {
+                gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
+                    var last = 0f
+                    androidx.compose.animation.core.animate(
+                        initialValue = 0f,
+                        targetValue = (goal - current).toFloat(),
+                        animationSpec = tween(durationMillis = duration, easing = easing),
+                    ) { value, _ ->
+                        val delta = value - last
+                        last = value
+                        // A target past the bound would otherwise run the
+                        // whole tween consuming nothing (report D section 7).
+                        if (delta != 0f && scrollBy(delta) == 0f) throw TvScrollAtBound
+                    }
+                }
+                } catch (_: TvScrollAtBound) {
+                    // Reached the end of the content: stop, do not snap.
+                }
+            }
+            // Warm the rows the next hop will need, without blocking it.
+            when (target) {
+                is TvPageAnchor.Pills -> com.aeriotv.android.ui.tv.tvPrefetchStrategyFor(gridState)
+                    ?.requestLines(listOf(inputsState.value.leadingCount, inputsState.value.leadingCount + 1)) { }
+                is TvPageAnchor.GridRow -> com.aeriotv.android.ui.tv.tvPrefetchStrategyFor(gridState)
+                    ?.requestLines(listOf(inputsState.value.leadingCount + target.row + 1, inputsState.value.leadingCount + target.row + 2)) { }
+                else -> Unit
             }
         }
     }
-    scrollToTopRef.value = scrollToTop
     val cellRequesters = remember { HashMap<Any, FocusRequester>() }
     var sortOpen by remember { mutableStateOf(false) }
     val menuGuard = rememberTvMenuGuard()
@@ -619,10 +712,9 @@ fun <T> TvMediaPage(
     }
     androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && scrolled && !(searchEnabled && searchActive)) {
         scope.launch {
-            // The tuned snap, not animateScrollToItem: that walks in
-            // viewport-sized chunks and reads as chunky (Movies spec D2,
-            // DVR spec D8). 40 frames because the snap runs 600 ms.
-            scrollToTopRef.value()
+            // Through the owner like every other move; 40 frames because
+            // the snap from deep in the library runs 600 ms.
+            sendAnchor(TvPageAnchor.Hero)
             repeat(40) {
                 if (runCatching { entry.requestFocus() }.isSuccess) return@launch
                 withFrameNanos { }
@@ -645,10 +737,10 @@ fun <T> TvMediaPage(
         // library change.
         val exact = returnOffset?.takeIf { it.first < leadingCount + gridItems.size }
         if (exact != null) {
-            runCatching { gridState.scrollToItem(exact.first, exact.second) }
+            sendAnchor(TvPageAnchor.Restore(exact.first, exact.second))
         } else {
             // tvOS parks the row 24 pt under the top edge, not flush with it.
-            runCatching { gridState.scrollToItem(leadingCount + (idx / columns) * columns, -restoreGapPx) }
+            sendAnchor(TvPageAnchor.Restore(leadingCount + (idx / columns) * columns, -restoreGapPx))
         }
         repeat(150) {
             withFrameNanos { }
@@ -678,21 +770,15 @@ fun <T> TvMediaPage(
     /** The rail's '#' cell: Left from a first-column grid cell lands here. */
     val railHash = remember { FocusRequester() }
     val railShownState = remember { mutableStateOf(false) }
-    val gridTopFor: (Int) -> Int = { row -> leadingCount + row * columns }
 
     TvKeyboardOnOkHost {
     Box(modifier = Modifier.fillMaxSize()) {
-        // tvOS focus scrolling (measured 2026-09-10): 100 dp clear of both edges.
-        val edgeSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
-            remember(this) {
-                com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(
-                    marginPx = 100.dp.toPx(),
-                    suppressed = { snappingToTop.value || scrollingToTarget.value },
-                    holdIfVisible = { headerFocused.value || pillsFocused.value || zone == 1 },
-                )
-            }
-        }
-        CompositionLocalProvider(LocalBringIntoViewSpec provides edgeSpec) {
+        // The owner moves the page, so the grid's own bring-into-view is off
+        // everywhere: it was the second mover behind every "notchy" hop
+        // (reports C section 6, D section 1a). Deeper grid rows are handled
+        // by the owner's GridRow rule, so it stays off there too. The shelf
+        // and pill LazyRows re-provide their OWN horizontal specs below.
+        CompositionLocalProvider(LocalBringIntoViewSpec provides TvNoBringIntoViewSpec) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             state = gridState,
@@ -744,7 +830,7 @@ fun <T> TvMediaPage(
                         upTarget = topNav,
                         // tvOS: any hero button gaining focus while the page
                         // is scrolled snaps the page back to the top.
-                        onButtonFocused = { enterZone(0); scrollToTop() },
+                        onButtonFocused = { sendAnchor(TvPageAnchor.Hero) },
                         modifier = Modifier.padding(start = TvPage.overscan, end = TvPage.overscan, bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -761,7 +847,7 @@ fun <T> TvMediaPage(
                         // shelf from below; Left and Right inside it must not
                         // move the page (rapid-press recording 2026-09-10:
                         // each press nudged the page down and snapped it up).
-                        onCardFocused = { val from = zone; enterZone(1); if (si == 0 && hasHero && from > 1) revealFirstShelf() },
+                        onCardFocused = { sendAnchor(TvPageAnchor.Shelf(si)) },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -770,7 +856,7 @@ fun <T> TvMediaPage(
                 Column(
                     modifier = Modifier
                         .padding(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset)
-                        .onFocusChanged { headerFocused.value = it.hasFocus; if (it.hasFocus) enterZone(2) },
+                        .onFocusChanged { if (it.hasFocus) sendAnchor(TvPageAnchor.Header) },
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(
@@ -816,8 +902,15 @@ fun <T> TvMediaPage(
                             )
                         }
                     }
-                    if (isLoading && gridItems.isNotEmpty()) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    // The row's space is RESERVED whether or not the spinner
+                    // is showing: the header changing height mid-walk moved
+                    // every rest position below it by 26 dp and the owner's
+                    // targets went with it (report B item 9).
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 4.dp).height(12.dp),
+                    ) {
+                        if (isLoading && gridItems.isNotEmpty()) {
                             CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.tertiary)
                             Spacer(Modifier.width(6.dp))
                             Text("Updating", fontSize = 9.sp, color = MaterialTheme.colorScheme.tertiary)
@@ -834,6 +927,12 @@ fun <T> TvMediaPage(
             }
             if (pillRow) {
                 fullSpan("pills") {
+                    // Its own HORIZONTAL spec: inheriting the page's vertical
+                    // one made an off-screen pill unreachable (report C 4.3).
+                    val pillSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
+                        remember(this) { com.aeriotv.android.ui.tv.TvHorizontalBringIntoViewSpec(marginPx = (TvPage.overscan + TvPage.contentInset).toPx()) }
+                    }
+                    CompositionLocalProvider(LocalBringIntoViewSpec provides pillSpec) {
                     // Entering the row from the sort circle above or the grid
                     // below always lands on All (Logan 2026-09-10).
                     LazyRow(
@@ -842,7 +941,7 @@ fun <T> TvMediaPage(
                         modifier = Modifier
                             .padding(vertical = 6.dp)
                             .fillMaxWidth()
-                            .onFocusChanged { pillsFocused.value = it.hasFocus; if (it.hasFocus) enterZone(3) }
+                            .onFocusChanged { if (it.hasFocus) sendAnchor(TvPageAnchor.Pills) }
                             .focusProperties {
                                 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
                                 run { enter = { allPill } }
@@ -854,6 +953,7 @@ fun <T> TvMediaPage(
                             val p = pills[i]
                             TvPill(p, selectedPill == p, onClick = { onPill(if (selectedPill == p) null else p) })
                         }
+                    }
                     }
                 }
             }
@@ -873,7 +973,7 @@ fun <T> TvMediaPage(
                     // pill group and reached the sort circle, Logan 2026-09-10).
                     .then(if (pillRow && index < columns) Modifier.focusProperties { up = allPill } else Modifier)
                     .onFocusChanged {
-                        if (it.isFocused) { focusedCellKeyState.value = k; enterZone(4) }
+                        if (it.isFocused) { focusedCellKeyState.value = k; sendAnchor(TvPageAnchor.GridRow(index / columns)) }
                         else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null
                     }
                     .onPreviewKeyEvent { ev ->
@@ -930,23 +1030,9 @@ fun <T> TvMediaPage(
                 onLetter = { letter ->
                     val idx = railIndexOf(letter)
                     if (idx >= 0) scope.launch {
-                        val targetIndex = gridTopFor(idx / columns)
-                        val target = restTopOf(targetIndex)?.let { it - restoreGapPx }
-                        val current = scrollOffsetPx()
-                        scrollingToTarget.value = true
-                        try {
-                            if (target != null && current != null) {
-                                gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
-                                    var previousValue = 0f
-                                    androidx.compose.animation.core.animate(
-                                        initialValue = 0f, targetValue = (target - current).toFloat(),
-                                        animationSpec = tween(durationMillis = 250, easing = androidx.compose.animation.core.EaseInOut),
-                                    ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
-                                }
-                            } else {
-                                gridState.animateScrollToItem(targetIndex, -restoreGapPx)
-                            }
-                        } finally { scrollingToTarget.value = false }
+                        // The move goes through the owner (seat the row at the
+                        // top minus 24 dp, 250 ms EaseInOut); focus follows it.
+                        sendAnchor(TvPageAnchor.GridRow(idx / columns, seatAtTop = true))
                         val key = gridItems.getOrNull(idx)?.let(gridKey)
                         if (key != null) repeat(30) {
                             if (runCatching { cellRequesters[key]?.requestFocus() }.getOrNull() == true) return@launch
@@ -1299,7 +1385,7 @@ private fun <T> TvShelfRow(
         // partly visible card in (Logan 2026-09-10). The card is kept a
         // content inset clear of the row's edges, minimal distance.
         val rowSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
-            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(marginPx = (TvPage.overscan + TvPage.contentInset).toPx()) }
+            remember(this) { com.aeriotv.android.ui.tv.TvHorizontalBringIntoViewSpec(marginPx = (TvPage.overscan + TvPage.contentInset).toPx()) }
         }
         CompositionLocalProvider(LocalBringIntoViewSpec provides rowSpec) {
         LazyRow(
@@ -1635,4 +1721,87 @@ private fun TvAlphabetRail(
             }
         }
     }
+}
+
+// MARK: single-owner scrolling types
+
+/**
+ * What the page should be showing. Every focusable sends one of these on
+ * focus gain and does nothing else; the owner coroutine in [TvMediaPage]
+ * turns it into ONE absolute scroll target. [Rail] carries no position: the
+ * alphabet rail is outside the grid and focusing it never scrolls (tvOS
+ * keeps the rail a sibling of the ScrollView).
+ */
+sealed interface TvPageAnchor {
+    data object Hero : TvPageAnchor
+    data class Shelf(val ordinal: Int) : TvPageAnchor
+    data object Header : TvPageAnchor
+    data object Pills : TvPageAnchor
+    /** [seatAtTop]: the rail letter jump, which parks the row 24 dp under the top edge. */
+    data class GridRow(val row: Int, val seatAtTop: Boolean = false) : TvPageAnchor
+    /** Return from a detail: put the page back at an exact (index, offset). */
+    data class Restore(val index: Int, val offsetPx: Int) : TvPageAnchor
+    data object Rail : TvPageAnchor
+}
+
+/** Walk order, so the owner knows whether a hop is going down or up. */
+internal fun TvPageAnchor.order(): Int = when (this) {
+    is TvPageAnchor.Hero -> 0
+    is TvPageAnchor.Shelf -> 1 + ordinal
+    is TvPageAnchor.Header -> 100
+    is TvPageAnchor.Pills -> 101
+    is TvPageAnchor.GridRow -> 200 + row
+    // Past every row: the next hop after a restore or a rail focus counts as
+    // going UP, so it resolves to the minimum move and leaves an exact
+    // restore exactly where it was (no re-seating of the header).
+    is TvPageAnchor.Restore -> Int.MAX_VALUE
+    is TvPageAnchor.Rail -> Int.MAX_VALUE
+}
+
+/** The animation hit the end of the content: stop it, do not snap. */
+internal object TvScrollAtBound : kotlinx.coroutines.CancellationException("scroll bound")
+
+/** Inputs the owner reads that change with the caller's data, not with the grid state. */
+internal data class TvPageInputs(
+    val headerIndex: Int,
+    val leadingCount: Int,
+    val columns: Int,
+    val itemCount: Int,
+    val hasHero: Boolean,
+    val shelfCount: Int,
+)
+
+/**
+ * One immutable measurement of the page, published as a single State: rest
+ * tops of the full-span rows by emission index (-1 = not measured yet), the
+ * grid cell height, and the viewport height with the page at the top. Every
+ * scroll target is a pure function of this, so no consumer can see half a
+ * table.
+ */
+internal class TvPageGeometry(
+    val leadingTops: IntArray,
+    val leadingHeights: IntArray,
+    val cellHeight: Int,
+    val viewportAtTop: Int,
+    val rowSpacingPx: Int,
+    val columns: Int,
+) {
+    /** Rest top of the first grid row, or null while the leading block is unmeasured. */
+    val gridTopPx: Int? get() = leadingTops.lastOrNull()?.takeIf { it >= 0 }
+
+    fun leadingHeightOf(index: Int): Int? = leadingHeights.getOrNull(index)?.takeIf { it >= 0 }
+
+    /** Where item [index] sits with the page at the top; null when unknowable. */
+    fun restTopOf(index: Int): Int? {
+        if (index < leadingTops.size) return leadingTops.getOrNull(index)?.takeIf { it >= 0 }
+        val base = gridTopPx ?: return null
+        if (cellHeight <= 0 || columns <= 0) return null
+        return base + ((index - (leadingTops.size - 1)) / columns) * (cellHeight + rowSpacingPx)
+    }
+}
+
+/** The page owns every vertical move: nothing inside the grid may scroll it. */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+internal object TvNoBringIntoViewSpec : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
 }

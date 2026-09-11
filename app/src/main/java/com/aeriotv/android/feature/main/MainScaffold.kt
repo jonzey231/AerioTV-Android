@@ -74,6 +74,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -628,7 +629,70 @@ fun MainScaffold(
             // not inside the Column: the bar that reports it and the hint
             // overlay that consumes it are siblings of each other here.
             var navLeftEdgePx by remember { mutableIntStateOf(0) }
-            Column(
+            // TV chrome is an OVERLAY, not a sibling above the content
+            // (2026-09-11). The bar used to live in a Column with the tab
+            // content and collapsibleChrome animated its HEIGHT, so the
+            // content's viewport grew over 250 ms while the bar hid and
+            // snapped back the instant it re-expanded: the grid shifted
+            // under a focus scroll that was already running, which is the
+            // "notchy" signature in the device trace. tvOS gives the page a
+            // FIXED top spacer (MoviesView.swift:1397) and slides the system
+            // bar over it. So: content fills the screen and takes a constant
+            // top inset, and the bar animates its own offset and alpha on
+            // top of it. Nothing the bar does resizes the content.
+            var barHeightPx by remember { mutableIntStateOf(0) }
+            val chromeDensity = LocalDensity.current
+            // 62dp is the bar's designed height (16 top + 34 capsule + 12
+            // bottom); it only ever seeds the very first frame, after which
+            // the measured height governs.
+            val barInset = if (barHeightPx > 0) {
+                with(chromeDensity) { barHeightPx.toDp() }
+            } else {
+                62.dp
+            }
+            // Collapse the bar only while the content reports a scrolled
+            // state AND no pill holds focus: the UP-from-content redirect
+            // (focusProperties onExit below) lands focus on the selected
+            // pill, which flips barHasFocus and brings the bar back so the
+            // user can see what they're navigating.
+            var barHasFocus by remember { mutableStateOf(false) }
+            // Collapse slides up and fades over 250 ms; the bar comes back
+            // INSTANTLY (tvOS shows it at once on the way up).
+            val barTarget = if (chromeCollapsed.value && !barHasFocus) 0f else 1f
+            val barCollapse by animateFloatAsState(
+                targetValue = barTarget,
+                animationSpec = if (barTarget == 1f) androidx.compose.animation.core.snap() else tween(durationMillis = 250),
+                label = "tvTopBarCollapse",
+            )
+            // Nothing proportional: tvOS keeps the bar fully present until
+            // the page passes the hide threshold and then hides it, so the
+            // collapse tween is the only channel (Movies spec D10, DVR D9).
+            // The page owns the threshold (TvMediaPage.barHideThreshold).
+            val barFraction = barCollapse
+            // Reserve a band below the nav for the top-left gesture hints so
+            // the group pills / guide grid sit clear of them:
+            //  - Mini active: 78dp -- the right-aligned corner video (~148dp
+            //    tall from y=12) needs it, and all THREE hints fit under it.
+            //  - Idle Live TV: a small gap so the TWO-line hint stack has
+            //    room between the nav bar and the group pills.
+            //  - Other tabs / fullscreen (Pending): none (no hints shown).
+            val miniActive = miniPlayerState is MiniPlayerSession.State.Active
+            val topHintGap = when {
+                miniActive -> 78.dp
+                // Idle Live TV: the two 8sp hint chips float at the nav bar's
+                // height and only need a slim band under it. 40dp over-reserved
+                // and pushed the guide grid down enough to clip the 7th channel
+                // row (tvOS fits 7). 16dp still clears the idle hint stack while
+                // reclaiming a full row. During background work the hints are
+                // pushed DOWN to top=60dp to clear the Syncing pill, so reserve
+                // the larger band then to avoid the pills overlapping them
+                // (transient -- normal idle usage shows all 7 rows).
+                selectedTab == AppTab.LiveTV &&
+                    miniPlayerState !is MiniPlayerSession.State.Pending ->
+                    if (anyBackgroundWork) 40.dp else 16.dp
+                else -> 0.dp
+            }
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
@@ -639,32 +703,21 @@ fun MainScaffold(
                         false
                     },
             ) {
-                // Collapse the bar only while the content reports a scrolled
-                // state AND no pill holds focus: the UP-from-content redirect
-                // (focusProperties onExit below) lands focus on the selected
-                // pill even at 1px, which flips barHasFocus and grows the bar
-                // back so the user can see what they're navigating.
-                var barHasFocus by remember { mutableStateOf(false) }
-                // Collapse eases out; the bar comes back INSTANTLY (tvOS shows
-                // it at once on the way up). Animating its height while the
-                // page snapped to the top relaid out the whole page on every
-                // frame of the 250 ms, the chunky Up from Sort to the shelf
-                // (Logan 2026-09-10).
-                val barTarget = if (chromeCollapsed.value && !barHasFocus) 0f else 1f
-                val barCollapse by animateFloatAsState(
-                    targetValue = barTarget,
-                    animationSpec = if (barTarget == 1f) androidx.compose.animation.core.snap() else tween(durationMillis = 250),
-                    label = "tvTopBarCollapse",
-                )
-                // Nothing proportional: tvOS keeps the bar fully present until
-                // the page passes the hide threshold and then hides it, so the
-                // collapse tween is the only channel (Movies spec D10, DVR D9).
-                // The page owns the threshold (TvMediaPage.barHideThreshold).
-                val barFraction = barCollapse
+                // Declared FIRST so traversal order (and the cold-start
+                // initial focus it decides) is exactly what it was when the
+                // bar was the Column's first child; zIndex keeps it painted
+                // above the content it now overlaps.
                 Box(
                     modifier = Modifier
-                        .onFocusChanged { barHasFocus = it.hasFocus; topNavHasFocusState.value = it.hasFocus }
-                        .collapsibleChrome(barFraction),
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth()
+                        .zIndex(1f)
+                        .onSizeChanged { barHeightPx = it.height }
+                        .graphicsLayer {
+                            alpha = barFraction
+                            translationY = -(1f - barFraction) * barHeightPx.toFloat()
+                        }
+                        .onFocusChanged { barHasFocus = it.hasFocus; topNavHasFocusState.value = it.hasFocus },
                 ) {
                     TvTopTabBar(
                         retainedCount = retainedList.size,
@@ -679,34 +732,6 @@ fun MainScaffold(
                         lastUpKeyMs = lastUpKeyMs,
                         pillRequesters = pillRequesters,
                         onLeftEdgeChanged = { navLeftEdgePx = it },
-                    )
-                }
-                // Reserve a band below the nav for the top-left gesture hints so
-                // the group pills / guide grid sit clear of them:
-                //  - Mini active: 90dp -- the right-aligned corner video (~148dp
-                //    tall from y=12) needs it, and all THREE hints fit under it.
-                //  - Idle Live TV: a small gap so the TWO-line hint stack has
-                //    room between the nav bar and the group pills.
-                //  - Other tabs / fullscreen (Pending): none (no hints shown).
-                val miniActive = miniPlayerState is MiniPlayerSession.State.Active
-                val topHintGap = when {
-                    miniActive -> 78.dp
-                    // Idle Live TV: the two 8sp hint chips float at the nav bar's
-                    // height and only need a slim band under it. 40dp over-reserved
-                    // and pushed the guide grid down enough to clip the 7th channel
-                    // row (tvOS fits 7). 16dp still clears the idle hint stack while
-                    // reclaiming a full row. During background work the hints are
-                    // pushed DOWN to top=60dp to clear the Syncing pill, so reserve
-                    // the larger band then to avoid the pills overlapping them
-                    // (transient -- normal idle usage shows all 7 rows).
-                    selectedTab == AppTab.LiveTV &&
-                        miniPlayerState !is MiniPlayerSession.State.Pending ->
-                        if (anyBackgroundWork) 40.dp else 16.dp
-                    else -> 0.dp
-                }
-                if (topHintGap > 0.dp) {
-                    androidx.compose.foundation.layout.Spacer(
-                        modifier = Modifier.height(topHintGap),
                     )
                 }
                 MainTabContent(
@@ -729,8 +754,12 @@ fun MainScaffold(
                     onSelectTab = { selectedTab = it; initialTabApplied = true },
                     viewModel = viewModel,
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
+                        .fillMaxSize()
+                        // The FIXED inset every tab used to get from the bar's
+                        // measured height plus the hint band. It never changes
+                        // while the bar collapses, so no tab (guide, Settings,
+                        // media pages) sees its viewport resize mid-scroll.
+                        .padding(top = barInset + topHintGap)
                         // UP leaving the tab content must land on the SELECTED
                         // tab's pill. Geometric 2D search used to hit whichever
                         // pill sat above the focused column (On Demand over the
