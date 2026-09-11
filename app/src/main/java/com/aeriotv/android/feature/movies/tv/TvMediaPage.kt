@@ -1147,6 +1147,20 @@ private fun TvHeroCarousel(
     val density = androidx.compose.ui.platform.LocalDensity.current
     var widthPx by remember { mutableIntStateOf(0) }
     Box(modifier = modifier.fillMaxWidth().onSizeChanged { if (it.width != widthPx) widthPx = it.width }) {
+        // The width arrives from onSizeChanged, one layout pass behind the
+        // first composition, so the very first pass has widthPx == 0 and every
+        // page would lay out at zero width: a column of slivers with only the
+        // options circle visible (Logan 2026-09-11, on the pre-warmed tabs).
+        // Reserve the hero's height and draw nothing until a real width lands,
+        // so the page below never moves and no zero-width frame is ever shown.
+        if (widthPx <= 0) {
+            androidx.compose.foundation.layout.Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TvPage.heroHeight + if (pages.size > 1) 11.dp else 0.dp),
+            )
+            return@Box
+        }
         val maxWidth = with(density) { widthPx.toDp() }
         val spacing = 4.dp
         val pageWidth = if (pages.size > 1) maxWidth * 0.62f else maxWidth

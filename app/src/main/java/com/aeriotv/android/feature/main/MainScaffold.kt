@@ -571,13 +571,54 @@ fun MainScaffold(
     // hidden keep-alive slot, one at a time, cheapest first, so the user's
     // first real visit is a warm one. A pre-warmed tab counts as visited, so
     // the settle window never runs for it either. Never pre-warms a tab that
-    // is not present, never while a channel/EPG/VOD sweep is saturating the
+    // is not present, never while the channel or guide load is saturating the
     // main thread, and TV only (the phone keeps one tab at a time).
     val prewarmTabsNow = androidx.compose.runtime.rememberUpdatedState(tabs)
-    val prewarmBusyNow = androidx.compose.runtime.rememberUpdatedState(anyBackgroundWork)
+    // Gate on the CHANNEL and GUIDE load only, not on every sync label. The
+    // VOD labels ("Loading Movies" / "Loading Series") stay up for tens of
+    // seconds and are exactly the work that makes the Movies and TV Shows tabs
+    // appear in the first place, so waiting on them starved the sweep and the
+    // media tabs were still cold after 45 s (measured 2026-09-11).
+    val prewarmBusyNow = androidx.compose.runtime.rememberUpdatedState(
+        state.isLoading || state.isEpgLoading,
+    )
     val prewarmIsTv = rememberLiveTvFormFactor().isTv
-    LaunchedEffect(prewarmIsTv) {
-        if (!prewarmIsTv) return@LaunchedEffect
+    // Memory gate: a laid-out hidden page is worth about 100 MB across the
+    // three media tabs plus Settings (Streamer, 4 GB). That is fine there and
+    // NOT on a 2 GB Onn or a 3 GB Shield, so low-RAM and sub-3 GB boxes skip
+    // the sweep entirely and keep the old behavior: a tab composes on its
+    // first visit. They lose nothing else - hidden slots still measure at the
+    // real size once a tab has been visited, so there are no slivers, and the
+    // hero's own zero-width guard covers the first pass either way.
+    val prewarmAllowed = remember(context) {
+        val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+            as? android.app.ActivityManager
+        val info = android.app.ActivityManager.MemoryInfo().also { am?.getMemoryInfo(it) }
+        val lowRam = am?.isLowRamDevice ?: false
+        val totalMem = info.totalMem
+        !lowRam && totalMem >= 3L * 1024L * 1024L * 1024L
+    }
+    // A sweep already under way stops for good the first time the system asks
+    // for memory back (TRIM_MEMORY_RUNNING_LOW or worse). The tabs it already
+    // built stay: they are the ones the user is most likely to open, and
+    // dropping them would put the reload back.
+    val prewarmStopped = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    DisposableEffect(context) {
+        val cb = object : android.content.ComponentCallbacks2 {
+            override fun onTrimMemory(level: Int) {
+                if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                    prewarmStopped.set(true)
+                }
+            }
+            override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
+            @Deprecated("ComponentCallbacks")
+            override fun onLowMemory() { prewarmStopped.set(true) }
+        }
+        context.registerComponentCallbacks(cb)
+        onDispose { context.unregisterComponentCallbacks(cb) }
+    }
+    LaunchedEffect(prewarmIsTv, prewarmAllowed) {
+        if (!prewarmIsTv || !prewarmAllowed) return@LaunchedEffect
         androidx.compose.runtime.withFrameNanos { }
         kotlinx.coroutines.delay(2_000L)
         // Cheapest first (measured cold key-to-frame: Settings and Favorites
@@ -589,8 +630,9 @@ fun MainScaffold(
         )
         // Tabs can still materialize a beat after launch (VOD, recordings), so
         // keep sweeping for a while instead of taking one snapshot.
-        val deadline = android.os.SystemClock.uptimeMillis() + 60_000L
+        val deadline = android.os.SystemClock.uptimeMillis() + 180_000L
         while (android.os.SystemClock.uptimeMillis() < deadline) {
+            if (prewarmStopped.get()) return@LaunchedEffect
             val next = order.firstOrNull {
                 it in prewarmTabsNow.value && it !in visitedTabs
             }
@@ -2461,12 +2503,26 @@ private data class VodPresence(
  *  hidden. Tab content gates focus pulls and BackHandlers on it. */
 val LocalTabIsActive = androidx.compose.runtime.compositionLocalOf { true }
 
-/** Measured at zero size and never placed: no draw, no focus geometry, no
- *  semantics, but the composition (and its state, scroll positions, loaded
- *  data) survives. */
+/** Measured at the REAL slot size and never placed: no draw, no focus
+ *  geometry, no semantics, but the composition (and its state, scroll
+ *  positions, loaded data) survives.
+ *
+ *  It used to measure at ZERO. That made showing a tab a full relayout, and a
+ *  pre-warmed tab was laid out at 0 width, so its first placed frame was the
+ *  0-width one: the hero carousel (which measures its own width) rendered its
+ *  pages as slivers for a beat (Logan 2026-09-11). Measuring at the real size
+ *  means the hidden tab is laid out exactly as it will be shown and its first
+ *  placed frame is final; the parent still reports 0 x 0 and never places it,
+ *  so it draws nothing, and canFocus/invisibleToUser below still keep it out
+ *  of focus search and accessibility. */
 private fun Modifier.keepAliveHidden(): Modifier = this
-    .layout { measurable, _ ->
-        val placeable = measurable.measure(androidx.compose.ui.unit.Constraints(maxWidth = 0, maxHeight = 0))
+    .layout { measurable, constraints ->
+        // Same constraints the ACTIVE slot's fillMaxSize() resolves to.
+        val full = constraints.copy(
+            minWidth = constraints.maxWidth.takeIf { it != androidx.compose.ui.unit.Constraints.Infinity } ?: constraints.minWidth,
+            minHeight = constraints.maxHeight.takeIf { it != androidx.compose.ui.unit.Constraints.Infinity } ?: constraints.minHeight,
+        )
+        measurable.measure(full)
         layout(0, 0) { /* deliberately not placed */ }
     }
     .focusProperties { canFocus = false }
