@@ -392,8 +392,11 @@ fun DvrMediaTabContent(
                 searchActive = searchActive, query = query, isSearching = isSearching,
                 onQueryChange = { query = it },
                 onSearchToggle = { searchActive = !searchActive; if (!searchActive) query = "" },
-                onClearSearch = { query = "" },
+                // tvOS clearSearch() clears the text AND closes the field
+                // (DVRView.swift:161-164).
+                onClearSearch = { query = ""; searchActive = false },
                 onFilter = { showManageChannels = true }, filterActive = hiddenChannels.isNotEmpty(),
+                filterOpen = showManageChannels,
                 menuActions = ::menuActions,
                 onPlay = ::play, onPlayFromStart = ::playFromStart, onJumpToLive = ::jumpToLive,
                 onStop = { rec -> scope.launch { viewModel.stopRecording(rec) } }, onInfo = ::showInfo,
@@ -666,6 +669,8 @@ private fun TvDvrPage(
     onClearSearch: () -> Unit,
     onFilter: () -> Unit,
     filterActive: Boolean,
+    /** The Filter surface is open over the page: focus returns to the circle on close. */
+    filterOpen: Boolean,
     menuActions: (Rec) -> List<com.aeriotv.android.core.tv.TvMenuAction>,
     onPlay: (Rec) -> Unit,
     onPlayFromStart: (Rec) -> Unit,
@@ -699,8 +704,10 @@ private fun TvDvrPage(
             } else {
                 add(com.aeriotv.android.feature.movies.tv.TvHeroButton(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true) { onPlay(rec) })
                 if (progress > 0f) add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Play from Beginning", Icons.Filled.Replay) { onPlayFromStart(rec) })
-                add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Details", Icons.Outlined.Info) { onInfo(rec) })
             }
+            // Details is appended after the recording / finished branch, so a
+            // recording-now page has it too (DVRView.swift:1620-1625).
+            add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Details", Icons.Outlined.Info) { onInfo(rec) })
         }
         return com.aeriotv.android.feature.movies.tv.TvHeroPage(
             key = rec.id, title = rec.title.ifBlank { "Recording" }, artUrl = rec.backdropUrl ?: rec.posterUrl, logoUrl = channelLogo(rec),
@@ -738,12 +745,29 @@ private fun TvDvrPage(
     fun shelf(title: String, items: List<Rec>, onClick: (Rec) -> Unit) = com.aeriotv.android.feature.movies.tv.TvShelf(
         title = title, items = items, key = { it.id }, cardWidth = 170.dp,
     ) { rec, modifier -> card(rec, modifier) { onClick(rec) } }
-    val heroPages = remember(continueWatching, now) { continueWatching.map(::hero) }
+    // tvOS heroPages: Continue Watching when it has more than one entry,
+    // else the single heroRecording pick, which falls through a playable
+    // in-progress capture, any in-progress capture, the newest partly-watched
+    // finished recording and finally the newest finished recording
+    // (DVRView.swift:227-245). A settled library still shows a hero.
+    val heroPages = remember(continueWatching, recordingNow, recentRecordings, now) {
+        if (continueWatching.size > 1) continueWatching.map(::hero)
+        else {
+            val newestFinished = recentRecordings.sortedByDescending { it.startMillis }
+            val heroPick = recordingNow.firstOrNull { it.inProgressUrl != null }
+                ?: recordingNow.firstOrNull()
+                ?: newestFinished.firstOrNull { val p = progressOf(it); p > 0f && p < 0.97f }
+                ?: newestFinished.firstOrNull()
+            listOfNotNull(heroPick).map(::hero)
+        }
+    }
     com.aeriotv.android.feature.movies.tv.TvMediaPage(
         gridState = gridState,
         heroPages = heroPages,
         shelves = listOf(
-            shelf("Recording Now", recordingNow) { onPlayFromStart(it) },
+            // tvOS: every card, shelf or grid, calls actions.play(rec), i.e.
+            // RESUME (DVRView.swift:1198, 1300-1307).
+            shelf("Recording Now", recordingNow) { onPlay(it) },
             shelf("Scheduled", scheduled) { onInfo(it) },
             shelf("Recent Recordings", if (recentRecordings.size > 1) recentRecordings else emptyList()) { onPlay(it) },
         ),
@@ -778,6 +802,12 @@ private fun TvDvrPage(
         railLetters = available,
         railIndexOf = { letter -> filteredLibrary.indexOfFirst { bucket(it.title) == letter } },
         railMinimumCount = 16,
+        // tvOS DVR does not gate the rail on search (DVRView.swift:517).
+        hideRailWhileSearching = false,
+        // tvOS DVR: 620 pt / 310 dp with a hero, 260 pt / 130 dp without
+        // (DVRView.swift:863).
+        barHideThreshold = if (heroPages.isNotEmpty()) 310.dp else 130.dp,
+        filterOpen = filterOpen,
         returnKey = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] },
         onReturnHandled = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending.remove("dvr") },
     )

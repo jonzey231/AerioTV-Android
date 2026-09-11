@@ -67,6 +67,8 @@ internal fun TvMediaTab(
     onSort: (MediaSortOrder) -> Unit,
     onFilter: () -> Unit,
     filterActive: Boolean,
+    /** The Filter sheet is open over the page: focus returns to the circle on close. */
+    filterOpen: Boolean,
     watchlistKeys: Set<String>,
     onToggleWatchlist: (MediaItem) -> Unit,
     onRemoveWatchlist: (String) -> Unit,
@@ -177,6 +179,7 @@ internal fun TvMediaTab(
         sortActions = sortActions,
         onFilter = onFilter,
         filterActive = filterActive,
+        filterOpen = filterOpen,
         searchEnabled = true,
         searchActive = searchActive,
         query = query,

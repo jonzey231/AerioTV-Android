@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 
 /**
  * Owns the DVR tab's state and the recording-creation entry point. Phase 9a
@@ -373,6 +374,17 @@ class DvrViewModel @Inject constructor(
 
     init {
         refresh()
+        // tvOS reconciles the DVR list immediately and then every 30 s while
+        // the tab is mounted (DVRView.swift:395-402); without it an
+        // in-progress recording's elapsed time freezes and a finished capture
+        // stays in Recording Now. A tick is skipped while a refresh is still
+        // in flight.
+        viewModelScope.launch {
+            while (isActive) {
+                kotlinx.coroutines.delay(30_000)
+                if (refreshJob?.isActive != true) refresh()
+            }
+        }
         // Mirror the on-device recorder's live state into UiState so the
         // dynamic DVR tab appears the instant a local recording starts and
         // steps back out when it ends (real rows then decide). Also refresh
@@ -457,8 +469,10 @@ class DvrViewModel @Inject constructor(
         _state.update { it.copy(filter = filter) }
     }
 
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
     fun refresh() {
-        viewModelScope.launch {
+        refreshJob = viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist()
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||

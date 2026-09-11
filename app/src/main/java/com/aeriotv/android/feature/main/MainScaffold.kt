@@ -652,16 +652,14 @@ fun MainScaffold(
                     animationSpec = if (barTarget == 1f) androidx.compose.animation.core.snap() else tween(durationMillis = 250),
                     label = "tvTopBarCollapse",
                 )
-                // In step with the page: the bar slides off as the page
-                // scrolls its first bar-height of content (tvOS).
-                var barHeightPx by remember { mutableIntStateOf(0) }
-                val barScrolled = if (barHasFocus || barHeightPx == 0) 1f
-                    else (1f - chromeScroll.value.toFloat() / barHeightPx).coerceIn(0f, 1f)
-                val barFraction = minOf(barCollapse, barScrolled)
+                // Nothing proportional: tvOS keeps the bar fully present until
+                // the page passes the hide threshold and then hides it, so the
+                // collapse tween is the only channel (Movies spec D10, DVR D9).
+                // The page owns the threshold (TvMediaPage.barHideThreshold).
+                val barFraction = barCollapse
                 Box(
                     modifier = Modifier
                         .onFocusChanged { barHasFocus = it.hasFocus; topNavHasFocusState.value = it.hasFocus }
-                        .onSizeChanged { if (barFraction >= 1f && it.height > barHeightPx) barHeightPx = it.height }
                         .collapsibleChrome(barFraction),
                 ) {
                     TvTopTabBar(

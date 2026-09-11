@@ -181,13 +181,26 @@ fun MediaTabContent(
     // stays on screen until the new one lands. Built inline it stalled the
     // first open of Movies for ~3 s and TV Shows for ~1 s on the Nothing
     // Phone (Logan 2026-09-09, "switching tabs freezes for a couple seconds").
+    val gridState = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) com.aeriotv.android.ui.tv.rememberTvMediaGridState() else rememberLazyGridState()
     var libraryBuilt by remember { mutableStateOf<Pair<List<MediaItem>, Set<Char>>>(emptyList<MediaItem>() to emptySet()) }
     val sourceMovies = state.movies
     val sourceSeries = state.series
     var libraryPending by remember { mutableStateOf(true) }
+    // The provider sweep republishes every few seconds, and applying a
+    // multi-thousand-item rebuild mid-scroll reads as stutter, so tvOS HOLDS
+    // a recomputed library until the scroll rests (MoviesView.swift:536-551,
+    // 1782-1791). The first population publishes at once.
+    var pendingBuilt by remember { mutableStateOf<Pair<List<MediaItem>, Set<Char>>?>(null) }
+    LaunchedEffect(pendingBuilt, gridState.isScrollInProgress) {
+        val next = pendingBuilt ?: return@LaunchedEffect
+        if (libraryBuilt.first.isEmpty() || !gridState.isScrollInProgress) {
+            libraryBuilt = next
+            pendingBuilt = null
+        }
+    }
     LaunchedEffect(sourceMovies, sourceSeries, kind, hiddenGroups, selectedGenre, sortOrder) {
         libraryPending = true
-        libraryBuilt = withContext(Dispatchers.Default) {
+        pendingBuilt = withContext(Dispatchers.Default) {
             val all = if (kind == MediaKind.Movies) sourceMovies.map { it.toMediaItem() } else sourceSeries.map { it.toMediaItem() }
             val list = all.asSequence()
                 .filter { it.category == null || it.category !in hiddenGroups }
@@ -236,7 +249,6 @@ fun MediaTabContent(
             backdrops = backdrops + (page.key to url)
         }
     }
-    val gridState = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) com.aeriotv.android.ui.tv.rememberTvMediaGridState() else rememberLazyGridState()
 
     fun submitQuery(v: String) {
         query = v
@@ -313,6 +325,7 @@ fun MediaTabContent(
             sortOrder = sortOrder,
             onSort = { if (kind == MediaKind.Movies) settingsVm.setMoviesSortOrder(it.wire) else settingsVm.setSeriesSortOrder(it.wire) },
             onFilter = { showManageGroups = true }, filterActive = hiddenGroups.isNotEmpty(),
+            filterOpen = showManageGroups,
             watchlistKeys = watchlistKeys, onToggleWatchlist = { watchlistVm.toggle(it) }, onRemoveWatchlist = { watchlistVm.remove(it) },
             onRemoveProgress = { watchVm.delete(it) },
             onPlay = { videoId, title ->
