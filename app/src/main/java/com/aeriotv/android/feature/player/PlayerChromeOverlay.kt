@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Speed
@@ -326,7 +327,8 @@ fun PlayerChromeOverlay(
 
             if (isTv) {
             // Android TV (tvOS parity): a centered row of action pills at the
-            // bottom -- Options | Record | Add Stream. With Live Rewind
+            // bottom -- Record | Rewind | Pause | Forward | Multiview | Options.
+            // With Live Rewind
             // buffering, a read-only timeline rides above the row and the
             // transport joins the SAME focus row as pills (identical focus
             // visuals; Options keeps initial focus, LEFT reaches transport).
@@ -383,7 +385,7 @@ fun PlayerChromeOverlay(
                 Spacer(Modifier.height(16.dp))
             }
             // Control pill row (Logan 2026-09-11): Record, Rewind, Pause,
-            // Forward, Add Stream, Options, with the Pause pill anchored at
+            // Forward, Multiview, Options, with the Pause pill anchored at
             // the SCREEN center. Laid out as three slots rather than one Row
             // so the center never shifts when a side pill's label width or
             // presence changes (Record is hidden on non-Dispatcharr playlists
@@ -454,9 +456,12 @@ fun PlayerChromeOverlay(
                     }
                 }
                 if (!catchupMode) {
+                    // "Add Stream" said nothing about what it does (Logan
+                    // 2026-09-11): it opens a new multiview tile.
                     PlayerPill(
-                        icon = Icons.Filled.Add,
-                        label = "Add Stream",
+                        icon = Icons.Outlined.GridView,
+                        label = "Multiview",
+                        contentDescription = "Add a multiview tile",
                         onClick = onAddToMultiview,
                     )
                 }
@@ -875,7 +880,7 @@ private fun CircleIconButton(
 /**
  * tvOS-style action pill: a rounded capsule with a leading icon + label and
  * a clear D-pad focus treatment (brighter fill + white border + grow).
- * Mirrors PlaybackBottomChrome_tvOS's Options / Record / Add Stream pills.
+ * Mirrors PlaybackBottomChrome_tvOS's Options / Record / Multiview pills.
  */
 /**
  * Three-slot control row: [center] is placed at the SCREEN center, [left] ends
@@ -931,6 +936,8 @@ private fun PlayerPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     iconTint: Color = Color.White,
+    /** Spoken label when the visible one does not say what the pill does. */
+    contentDescription: String? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
@@ -958,7 +965,7 @@ private fun PlayerPill(
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = contentDescription,
             tint = if (iconTint == Color.White) contentColor else iconTint,
             modifier = Modifier.size(14.dp),
         )
