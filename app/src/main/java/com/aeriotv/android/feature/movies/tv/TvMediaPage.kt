@@ -326,6 +326,12 @@ fun <T> TvMediaPage(
     // So for any anchor: target = restTopOf(anchorIndex) - Y, clamped to
     // [0, maxScroll].
     //
+    // A DOWNWARD hop only ever scrolls DOWN: the table position describes
+    // arriving from ABOVE, so when the candidate is already behind the page
+    // the anchor falls back to the minimum move and a row that is comfortably
+    // on screen does not move at all. Up onto the Header is the same shape
+    // with a 24 dp top margin instead of 100.
+    //
     // Every DOWNWARD target is additionally at least the bottom-clear target
     // (Logan 2026-09-11): the minimum offset that leaves the focused row's
     // BOTTOM 100 dp above the bottom edge of the grid viewport, which is the
@@ -470,15 +476,25 @@ fun <T> TvMediaPage(
          *  163 dp) would otherwise sit with its text under the bottom edge
          *  (Logan 2026-09-11). */
         fun bottomClear(top: Int, height: Int, viewport: Int): Int = top + height - viewport + edgeMarginPx
-        /** The minimum move that satisfies a margin at the edge we travel toward. */
-        fun minimumMove(current: Int, top: Int, height: Int, viewport: Int): Int {
-            val upper = top - edgeMarginPx
+        /** The minimum move that satisfies the margins: nothing at all when the
+         *  row already sits between them (what the tvOS engine does). */
+        fun minimumMove(current: Int, top: Int, height: Int, viewport: Int, topMargin: Int = edgeMarginPx): Int {
+            val upper = top - topMargin
             val lower = top + height - viewport + edgeMarginPx
             return when {
                 current > upper -> upper
                 current < lower -> lower
                 else -> current
             }
+        }
+        /** A downward hop only ever scrolls DOWN. The table positions describe
+         *  arriving from above (the row was below its Y, or under the bottom
+         *  edge); a row that is already comfortably on screen must not be
+         *  dragged back up to its table position (Logan 2026-09-11: All pill,
+         *  Search, All pill sent the page to the very top). */
+        fun downTarget(current: Int, top: Int, height: Int, viewport: Int, table: Int): Int {
+            val candidate = maxOf(table, bottomClear(top, height, viewport))
+            return if (candidate > current) candidate else minimumMove(current, top, height, viewport)
         }
         /** The ONE table: every anchor's absolute target offset, or null when
          *  the geometry it needs is not measured yet. */
@@ -503,7 +519,7 @@ fun <T> TvMediaPage(
                 val height = g.leadingHeightOf(index)
                 when {
                     top == null -> null
-                    down -> maxOf(top - yShelfPx, bottomClear(top, height ?: 0, viewport))
+                    down -> downTarget(current, top, height ?: 0, viewport, top - yShelfPx)
                     target.ordinal == 0 -> {
                         // Up onto the first shelf: the page goes to the
                         // top when the whole shelf block fits under the
@@ -515,8 +531,13 @@ fun <T> TvMediaPage(
                 }
             }
             is TvPageAnchor.Header -> g.restTopOf(live.headerIndex)?.let { top ->
-                if (down) maxOf(top - yHeaderPx, bottomClear(top, g.leadingHeightOf(live.headerIndex) ?: 0, viewport))
-                else top - headerUpGapPx
+                val height = g.leadingHeightOf(live.headerIndex) ?: 0
+                // Up onto the header: seat it 24 dp under the top edge only
+                // when it is closer than that, never scroll back DOWN to the
+                // seat (Logan 2026-09-11: All pill to Search nudged the page
+                // the wrong way).
+                if (down) downTarget(current, top, height, viewport, top - yHeaderPx)
+                else minimumMove(current, top, height, viewport, topMargin = headerUpGapPx)
             }
             is TvPageAnchor.Pills -> {
                 val index = live.leadingCount - 1
@@ -524,7 +545,7 @@ fun <T> TvMediaPage(
                 val height = g.leadingHeightOf(index)
                 when {
                     top == null -> null
-                    down -> maxOf(top - yPillsPx, bottomClear(top, height ?: 0, viewport))
+                    down -> downTarget(current, top, height ?: 0, viewport, top - yPillsPx)
                     // Up from row 0 onto the pills: the minimum move
                     // that leaves the pill row 100 dp clear of the top
                     // edge, never a snap.
@@ -542,9 +563,9 @@ fun <T> TvMediaPage(
                         spec(250, androidx.compose.animation.core.EaseInOut)
                         top - headerUpGapPx
                     }
-                    down && target.row == 0 -> maxOf(
+                    down && target.row == 0 -> downTarget(
+                        current, top, g.cellHeight, viewport,
                         g.restTopOf(live.headerIndex) ?: (top - edgeMarginPx),
-                        bottomClear(top, g.cellHeight, viewport),
                     )
                     else -> minimumMove(current, top, g.cellHeight, viewport)
                 }
