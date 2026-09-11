@@ -492,13 +492,15 @@ fun <T> TvMediaPage(
             columns = GridCells.Fixed(columns),
             state = gridState,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = TvPage.overscan),
+                .fillMaxSize(),
             // The library cells sit at the content inset; the full-width rows
             // bleed back over this start padding (fullSpan below) so every
             // cell measures the same width. Padding only the first column
             // made column-one posters narrower (Logan 2026-09-10).
-            contentPadding = PaddingValues(start = TvPage.contentInset - TvPage.heroInset, top = 0.dp, bottom = 40.dp),
+            // The grid spans the screen so shelves can scroll under both edges
+            // (tvOS; Logan 2026-09-10): the overscan lives in this padding and
+            // the full-width rows bleed over it.
+            contentPadding = PaddingValues(start = TvPage.overscan + TvPage.contentInset - TvPage.heroInset, end = TvPage.overscan, top = 0.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(gridRowSpacing),
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
         ) {
@@ -529,7 +531,7 @@ fun <T> TvMediaPage(
                         // tvOS: any hero button gaining focus while the page
                         // is scrolled snaps the page back to the top.
                         onButtonFocused = { enterZone(0); scrollToTop() },
-                        modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
+                        modifier = Modifier.padding(start = TvPage.overscan, end = TvPage.overscan, bottom = TvPage.sectionSpacing),
                     )
                 }
             }
@@ -553,7 +555,7 @@ fun <T> TvMediaPage(
             fullSpan("header") {
                 Column(
                     modifier = Modifier
-                        .padding(start = TvPage.contentInset, end = TvPage.heroInset)
+                        .padding(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset)
                         .onFocusChanged { headerFocused.value = it.hasFocus; if (it.hasFocus) enterZone(2) },
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -610,7 +612,7 @@ fun <T> TvMediaPage(
             if (isSearching) {
                 searchExtras.forEachIndexed { i, extra ->
                     fullSpan("extra:$i") {
-                        Box(modifier = Modifier.padding(start = TvPage.contentInset, top = 6.dp)) { extra() }
+                        Box(modifier = Modifier.padding(start = TvPage.overscan + TvPage.contentInset, top = 6.dp)) { extra() }
                     }
                 }
             }
@@ -620,7 +622,7 @@ fun <T> TvMediaPage(
                     // below always lands on All (Logan 2026-09-10).
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = PaddingValues(start = TvPage.contentInset, end = TvPage.heroInset),
+                        contentPadding = PaddingValues(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset),
                         modifier = Modifier
                             .padding(vertical = 6.dp)
                             .fillMaxWidth()
@@ -705,17 +707,19 @@ private fun TvRailSlot(visible: () -> Boolean, content: @Composable () -> Unit) 
 /** A full-width grid row that reclaims the grid's start inset (see contentPadding in TvMediaPage). */
 private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(key: Any, content: @Composable () -> Unit) {
     item(key = key, span = { GridItemSpan(maxLineSpan) }) {
-        val bleed = TvPage.contentInset - TvPage.heroInset
+        val bleedStart = TvPage.overscan + TvPage.contentInset - TvPage.heroInset
+        val bleedEnd = TvPage.overscan
         Box(
             modifier = Modifier.layout { measurable, constraints ->
-                val extra = bleed.roundToPx()
+                val extraStart = bleedStart.roundToPx()
+                val extra = extraStart + bleedEnd.roundToPx()
                 val placeable = measurable.measure(
                     constraints.copy(
                         minWidth = (constraints.minWidth + extra).coerceAtMost(constraints.maxWidth + extra),
                         maxWidth = constraints.maxWidth + extra,
                     ),
                 )
-                layout(constraints.maxWidth, placeable.height) { placeable.place(-extra, 0) }
+                layout(constraints.maxWidth, placeable.height) { placeable.place(-extraStart, 0) }
             },
         ) { content() }
     }
@@ -990,7 +994,7 @@ private fun <T> TvShelfRow(
         Text(
             shelf.title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(start = TvPage.contentInset, bottom = 4.dp),
+            modifier = Modifier.padding(start = TvPage.overscan + TvPage.contentInset, bottom = 4.dp),
         )
         // All the shelf's on-screen cards are prepared while the shelf is
         // still below the fold (the default prefetches two).
@@ -1003,13 +1007,13 @@ private fun <T> TvShelfRow(
         // partly visible card in (Logan 2026-09-10). The card is kept a
         // content inset clear of the row's edges, minimal distance.
         val rowSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
-            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(marginPx = TvPage.contentInset.toPx()) }
+            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(marginPx = (TvPage.overscan + TvPage.contentInset).toPx()) }
         }
         CompositionLocalProvider(LocalBringIntoViewSpec provides rowSpec) {
         LazyRow(
             state = rowState,
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
-            contentPadding = PaddingValues(start = TvPage.contentInset, end = TvPage.heroInset, top = 6.dp, bottom = 6.dp),
+            contentPadding = PaddingValues(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset, top = 6.dp, bottom = 6.dp),
         ) {
             items(shelf.items.size, key = { shelf.key(shelf.items[it]) }) { i ->
                 shelf.card(
