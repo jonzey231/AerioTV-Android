@@ -339,7 +339,11 @@ fun <T> TvMediaPage(
         }
     }
     val scrollToTop: () -> Unit = {
-        if (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0) {
+        // One snap at a time: a rapid Up from the shelf onto the hero while
+        // the shelf's snap was running cancelled it and restarted from a
+        // standstill (two visible jumps, logcat 2026-09-10 22:04). The
+        // running snap is already heading to the top.
+        if (!snappingToTop.value && (gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0)) {
             scope.launch {
                 snappingToTop.value = true
                 // Bring the bar back before the page moves: one relayout,
