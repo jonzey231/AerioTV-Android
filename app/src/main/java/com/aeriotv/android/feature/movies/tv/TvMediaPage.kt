@@ -66,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.alpha
@@ -385,11 +386,15 @@ fun <T> TvMediaPage(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = TvPage.overscan),
-            contentPadding = PaddingValues(top = 0.dp, bottom = 40.dp),
+            // The library cells sit at the content inset; the full-width rows
+            // bleed back over this start padding (fullSpan below) so every
+            // cell measures the same width. Padding only the first column
+            // made column-one posters narrower (Logan 2026-09-10).
+            contentPadding = PaddingValues(start = TvPage.contentInset - TvPage.heroInset, top = 0.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(gridRowSpacing),
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
         ) {
-            item(key = "catcher", span = { GridItemSpan(maxLineSpan) }) {
+            fullSpan("catcher") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -408,7 +413,7 @@ fun <T> TvMediaPage(
                 )
             }
             if (hasHero) {
-                item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
+                fullSpan("hero") {
                     TvHeroCarousel(
                         pages = heroPages,
                         primaryRequester = heroPrimary,
@@ -421,7 +426,7 @@ fun <T> TvMediaPage(
                 }
             }
             visibleShelves.forEachIndexed { si, shelf ->
-                item(key = "shelf:" + shelf.title, span = { GridItemSpan(maxLineSpan) }) {
+                fullSpan("shelf:" + shelf.title) {
                     TvShelfRow(
                         shelf = shelf,
                         firstCardRequester = if (si == 0) firstShelfCard else null,
@@ -433,7 +438,7 @@ fun <T> TvMediaPage(
                     )
                 }
             }
-            item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
+            fullSpan("header") {
                 Column(modifier = Modifier.padding(start = TvPage.contentInset, end = TvPage.heroInset)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(
@@ -488,13 +493,13 @@ fun <T> TvMediaPage(
             }
             if (isSearching) {
                 searchExtras.forEachIndexed { i, extra ->
-                    item(key = "extra:$i", span = { GridItemSpan(maxLineSpan) }) {
+                    fullSpan("extra:$i") {
                         Box(modifier = Modifier.padding(start = TvPage.contentInset, top = 6.dp)) { extra() }
                     }
                 }
             }
             if (pillRow) {
-                item(key = "pills", span = { GridItemSpan(maxLineSpan) }) {
+                fullSpan("pills") {
                     // Entering the row from the sort circle above or the grid
                     // below always lands on All (Logan 2026-09-10).
                     LazyRow(
@@ -518,7 +523,7 @@ fun <T> TvMediaPage(
                 }
             }
             if (gridItems.isEmpty()) {
-                item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                fullSpan("empty") {
                     Box(modifier = Modifier.fillMaxWidth().padding(top = 40.dp), contentAlignment = Alignment.Center) { emptyContent() }
                 }
             }
@@ -526,10 +531,6 @@ fun <T> TvMediaPage(
                 val k = gridKey(item)
                 val requester = remember(k) { cellRequesters.getOrPut(k) { FocusRequester() } }
                 val cellModifier = Modifier
-                    .padding(
-                        start = if (index % columns == 0) TvPage.contentInset - TvPage.heroInset else 0.dp,
-                        end = if (index % columns == columns - 1) 0.dp else 0.dp,
-                    )
                     .focusRequester(requester)
                     .then(if (index == 0) Modifier.focusRequester(firstCell) else Modifier)
                     // Top row: Up lands on the All pill, not whatever the
@@ -579,6 +580,25 @@ fun <T> TvMediaPage(
 @Composable
 private fun TvRailSlot(visible: () -> Boolean, content: @Composable () -> Unit) {
     if (visible()) content()
+}
+
+/** A full-width grid row that reclaims the grid's start inset (see contentPadding in TvMediaPage). */
+private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(key: Any, content: @Composable () -> Unit) {
+    item(key = key, span = { GridItemSpan(maxLineSpan) }) {
+        val bleed = TvPage.contentInset - TvPage.heroInset
+        Box(
+            modifier = Modifier.layout { measurable, constraints ->
+                val extra = bleed.roundToPx()
+                val placeable = measurable.measure(
+                    constraints.copy(
+                        minWidth = (constraints.minWidth + extra).coerceAtMost(constraints.maxWidth + extra),
+                        maxWidth = constraints.maxWidth + extra,
+                    ),
+                )
+                layout(constraints.maxWidth, placeable.height) { placeable.place(-extra, 0) }
+            },
+        ) { content() }
+    }
 }
 
 // MARK: hero
