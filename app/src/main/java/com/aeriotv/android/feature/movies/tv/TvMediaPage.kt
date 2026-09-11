@@ -483,7 +483,7 @@ fun <T> TvMediaPage(
                 com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(
                     marginPx = 100.dp.toPx(),
                     suppressed = { snappingToTop.value || scrollingToTarget.value },
-                    holdIfVisible = { headerFocused.value || pillsFocused.value },
+                    holdIfVisible = { headerFocused.value || pillsFocused.value || zone == 1 },
                 )
             }
         }
@@ -541,7 +541,11 @@ fun <T> TvMediaPage(
                         // tvOS: a card of the FIRST shelf gaining focus while
                         // the page is scrolled brings the page to the top so
                         // the hero is fully back (Apple TV Up walk 2026-09-10).
-                        onCardFocused = { enterZone(1); if (si == 0 && hasHero) scrollToTop() },
+                        // The snap to the top only when focus ENTERS the
+                        // shelf from below; Left and Right inside it must not
+                        // move the page (rapid-press recording 2026-09-10:
+                        // each press nudged the page down and snapped it up).
+                        onCardFocused = { val from = zone; enterZone(1); if (si == 0 && hasHero && from > 1) scrollToTop() },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -993,6 +997,14 @@ private fun <T> TvShelfRow(
         val rowState = androidx.compose.foundation.lazy.rememberLazyListState(
             prefetchStrategy = remember { androidx.compose.foundation.lazy.LazyListPrefetchStrategy(nestedPrefetchItemCount = 6) },
         )
+        // Its own horizontal spec: the page's spec holds the page still while
+        // a shelf card has focus, which also stopped the ROW from bringing a
+        // partly visible card in (Logan 2026-09-10). The card is kept a
+        // content inset clear of the row's edges, minimal distance.
+        val rowSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
+            remember(this) { com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(marginPx = TvPage.contentInset.toPx()) }
+        }
+        CompositionLocalProvider(LocalBringIntoViewSpec provides rowSpec) {
         LazyRow(
             state = rowState,
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
@@ -1007,6 +1019,7 @@ private fun <T> TvShelfRow(
                         .then(if (onCardFocused != null) Modifier.onFocusChanged { if (it.hasFocus) onCardFocused() } else Modifier),
                 )
             }
+        }
         }
     }
 }
