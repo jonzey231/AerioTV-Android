@@ -682,6 +682,17 @@ class AppPreferences @Inject constructor(
      * TVShowsView.swift:27). Surfaced via ManageGroupsSheet from the On
      * Demand tab and consumed inside OnDemandViewModel to filter the lists.
      */
+    val hiddenDvrChannels: Flow<Set<String>> = store.data.map { prefs ->
+        val raw = prefs[KEY_HIDDEN_DVR_CHANNELS] ?: ""
+        if (raw.isBlank()) emptySet()
+        else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
+    }
+    suspend fun setHiddenDvrChannels(channels: Set<String>) {
+        store.edit { prefs ->
+            if (channels.isEmpty()) prefs.remove(KEY_HIDDEN_DVR_CHANNELS)
+            else prefs[KEY_HIDDEN_DVR_CHANNELS] = channels.joinToString("\n")
+        }
+    }
     val hiddenMovieGroups: Flow<Set<String>> = store.data.map { prefs ->
         val raw = prefs[KEY_HIDDEN_MOVIE_GROUPS] ?: ""
         if (raw.isBlank()) emptySet()
@@ -1565,6 +1576,8 @@ class AppPreferences @Inject constructor(
         // namespace into our DataStore the same way the live-TV
         // `hidden_groups` key does.
         val KEY_HIDDEN_MOVIE_GROUPS = stringPreferencesKey("hidden_movie_groups")
+        /** DVR Filter (2026-09-10): channel names hidden from the recordings library. */
+        val KEY_HIDDEN_DVR_CHANNELS = stringPreferencesKey("hidden_dvr_channels")
         val KEY_HIDDEN_SERIES_GROUPS = stringPreferencesKey("hidden_series_groups")
         val KEY_DISPLAY_SCALE_MOVIES = doublePreferencesKey("display_scale_movies")
         val KEY_DISPLAY_SCALE_LIVE_TV = doublePreferencesKey("display_scale_live_tv")

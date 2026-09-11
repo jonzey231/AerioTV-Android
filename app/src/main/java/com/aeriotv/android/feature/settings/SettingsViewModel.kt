@@ -147,6 +147,11 @@ class SettingsViewModel @Inject constructor(
     // VOD group filters (iOS MoviesView hiddenMovieGroups / TVShowsView
     // hiddenSeriesGroups). Surfaced via ManageGroupsSheet from the On Demand
     // tab; applied in MoviesSubScreen / SeriesSubScreen to filter the lists.
+    /** DVR Filter: channels hidden from the recordings library (all platforms, 2026-09-10). */
+    val hiddenDvrChannels: Flow<Set<String>> = prefs.hiddenDvrChannels
+    fun setHiddenDvrChannels(channels: Set<String>) {
+        viewModelScope.launch { prefs.setHiddenDvrChannels(channels) }
+    }
     val hiddenMovieGroups: Flow<Set<String>> = prefs.hiddenMovieGroups
     fun setHiddenMovieGroups(groups: Set<String>) {
         viewModelScope.launch { prefs.setHiddenMovieGroups(groups) }

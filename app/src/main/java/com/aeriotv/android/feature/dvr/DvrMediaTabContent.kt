@@ -53,6 +53,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -236,8 +237,23 @@ fun DvrMediaTabContent(
     val library = remember(recordingNow, completed) { recordingNow + completed }
     var selectedKind by remember { mutableStateOf<DvrKind?>(null) }
     val kindsPresent = remember(library) { library.map(::classify).toSet() }
-    val filteredLibrary = remember(library, selectedKind, sortOrder) {
-        library.filter { selectedKind == null || classify(it) == selectedKind }.let { list ->
+    // Search and Filter (Logan 2026-09-10, like Movies and TV Shows):
+    // search matches title, subtitle and description; Filter hides channels.
+    val hiddenChannels by settingsVm.hiddenDvrChannels.collectAsStateWithLifecycle(initialValue = emptySet())
+    val channelNames = remember(library) { library.map(channelName).filter { it.isNotBlank() }.distinct().sorted() }
+    var query by rememberSaveable { mutableStateOf("") }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    val isSearching = query.isNotBlank()
+    var showManageChannels by remember { mutableStateOf(false) }
+    val filteredLibrary = remember(library, selectedKind, sortOrder, hiddenChannels, query) {
+        val q = query.trim()
+        library.filter { rec ->
+            (selectedKind == null || classify(rec) == selectedKind) &&
+                channelName(rec) !in hiddenChannels &&
+                (q.isEmpty() || rec.title.contains(q, ignoreCase = true) ||
+                    (rec.subTitle?.contains(q, ignoreCase = true) == true) ||
+                    rec.description.contains(q, ignoreCase = true))
+        }.let { list ->
             when (sortOrder) {
                 DvrSortOrder.Newest -> list.sortedByDescending { it.startMillis }
                 DvrSortOrder.Oldest -> list.sortedBy { it.startMillis }
@@ -373,6 +389,11 @@ fun DvrMediaTabContent(
                 channelName = channelName, channelLogo = channelLogo, progressOf = progressOf,
                 kindPills = kindPills, selectedKind = selectedKind, onKind = { selectedKind = it },
                 sortOrder = sortOrder, onSort = { settingsVm.setDvrSortOrder(it.wire) },
+                searchActive = searchActive, query = query, isSearching = isSearching,
+                onQueryChange = { query = it },
+                onSearchToggle = { searchActive = !searchActive; if (!searchActive) query = "" },
+                onClearSearch = { query = "" },
+                onFilter = { showManageChannels = true }, filterActive = hiddenChannels.isNotEmpty(),
                 menuActions = ::menuActions,
                 onPlay = ::play, onPlayFromStart = ::playFromStart, onJumpToLive = ::jumpToLive,
                 onStop = { rec -> scope.launch { viewModel.stopRecording(rec) } }, onInfo = ::showInfo,
@@ -402,7 +423,7 @@ fun DvrMediaTabContent(
                     }
                 }
             }),
-            headerTitle = "All Recordings",
+            headerTitle = if (isSearching) "Results" else "All Recordings",
             headerCount = filteredLibrary.size,
             sortMenu = {
                 DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
@@ -416,6 +437,14 @@ fun DvrMediaTabContent(
                 }
             },
             onSort = { showSort = true },
+            onFilter = { showManageChannels = true },
+            searchEnabled = true,
+            searchActive = searchActive,
+            query = query,
+            onQueryChange = { query = it },
+            onSearchToggle = { searchActive = !searchActive; if (!searchActive) query = "" },
+            searchPlaceholder = "Search recordings",
+            isSearching = isSearching,
             pills = if (kindPills.size > 1) kindPills.map { it.label } else emptyList(),
             selectedPill = selectedKind?.label,
             onPill = { label -> selectedKind = kindPills.firstOrNull { it.label == label } },
@@ -433,6 +462,14 @@ fun DvrMediaTabContent(
         )
     }
 
+    if (showManageChannels) {
+        com.aeriotv.android.feature.livetv.ManageGroupsSheet(
+            allGroups = channelNames,
+            hiddenGroups = hiddenChannels,
+            onSave = { settingsVm.setHiddenDvrChannels(it) },
+            onDismiss = { showManageChannels = false },
+        )
+    }
     infoTarget?.let { ProgramInfoSheet(target = it, onDismiss = { infoTarget = null }) }
     pendingEdit?.let { rec ->
         EditRecordingSheet(
@@ -621,6 +658,14 @@ private fun TvDvrPage(
     onKind: (DvrKind?) -> Unit,
     sortOrder: DvrSortOrder,
     onSort: (DvrSortOrder) -> Unit,
+    searchActive: Boolean,
+    query: String,
+    isSearching: Boolean,
+    onQueryChange: (String) -> Unit,
+    onSearchToggle: () -> Unit,
+    onClearSearch: () -> Unit,
+    onFilter: () -> Unit,
+    filterActive: Boolean,
     menuActions: (Rec) -> List<com.aeriotv.android.core.tv.TvMenuAction>,
     onPlay: (Rec) -> Unit,
     onPlayFromStart: (Rec) -> Unit,
@@ -702,9 +747,19 @@ private fun TvDvrPage(
             shelf("Scheduled", scheduled) { onInfo(it) },
             shelf("Recent Recordings", if (recentRecordings.size > 1) recentRecordings else emptyList()) { onPlay(it) },
         ),
-        headerTitle = "All Recordings",
+        headerTitle = if (isSearching) "Results" else "All Recordings",
         headerCount = filteredLibrary.size,
         columns = 5,
+        onFilter = onFilter,
+        filterActive = filterActive,
+        searchEnabled = true,
+        searchActive = searchActive,
+        query = query,
+        onQueryChange = onQueryChange,
+        onSearchToggle = onSearchToggle,
+        onClearSearch = onClearSearch,
+        searchPlaceholder = "Search recordings",
+        isSearching = isSearching,
         gridRowSpacing = 22.dp,
         sortActions = DvrSortOrder.entries.map { o ->
             com.aeriotv.android.core.tv.TvMenuAction(if (o == sortOrder) o.label + "  \u2713" else o.label) { onSort(o) }
