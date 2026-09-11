@@ -104,13 +104,13 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         return ImageLoader.Builder(context)
             .memoryCache {
                 MemoryCache.Builder()
-                    .maxSizeBytes(32L * 1024L * 1024L)
+                    .maxSizeBytes(64L * 1024L * 1024L)
                     .build()
             }
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("coil_disk_cache"))
-                    .maxSizeBytes(100L * 1024L * 1024L)
+                    .maxSizeBytes(400L * 1024L * 1024L)
                     .build()
             }
             .components {

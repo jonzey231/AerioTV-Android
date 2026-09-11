@@ -37,6 +37,8 @@ data class MediaItem(
     /** Sort/bucket key: quality prefix stripped, case and diacritics folded. */
     val sortKey: String by lazy { foldTitle(stripQualityPrefix(title)) }
     val bucket: Char by lazy { bucketFor(sortKey) }
+    /** Persistent TMDB art key for this title (see [tmdbArtKey]). */
+    val artKey: String by lazy { tmdbArtKey(title, key.startsWith("m:")) }
     val ratingValue: Double? by lazy { rating?.trim()?.toDoubleOrNull() }
 }
 
@@ -68,6 +70,33 @@ fun displayTitle(raw: String, year: Int?): String {
     val found = m.groupValues[1].ifEmpty { m.groupValues[2] }
     return if (year == null || found == year.toString()) t.substring(0, m.range.first).trim() else t
 }
+
+/**
+ * The title reduced to its identity for the persistent TMDB art cache, an
+ * exact mirror of Apple's LibraryMatcher.cleanTitle (VODModels.swift:1194):
+ * leading quality tags stripped repeatedly, trailing "(YYYY)" years stripped,
+ * case and diacritics folded, "&" spelled out, every other non-alphanumeric
+ * folded to a single space. Two copies of the same film in different groups
+ * therefore share one cached lookup.
+ */
+fun cleanArtTitle(raw: String): String {
+    var s = stripQualityPrefix(raw.trim())
+    while (true) {
+        val m = artTrailingYear.find(s) ?: break
+        val head = s.substring(0, m.range.first).trim()
+        if (head.isEmpty()) break
+        s = head
+    }
+    s = foldTitle(s).replace("&", " and ")
+    val spaced = s.map { if (it.isLetterOrDigit()) it else ' ' }.joinToString("")
+    return spaced.split(' ').filter { it.isNotEmpty() }.joinToString(" ")
+}
+
+/** Cache key: the kind prefix plus [cleanArtTitle] (Apple TMDBArtCache.key). */
+fun tmdbArtKey(title: String, isMovie: Boolean): String =
+    (if (isMovie) "m:" else "t:") + cleanArtTitle(title)
+
+private val artTrailingYear = Regex("""\s*\((?:19|20)\d{2}\)\s*$""")
 
 /** Title for a TMDB search: display cleanup plus any remaining trailing year. */
 fun searchTitle(raw: String): String = trailingYear.replace(displayTitle(raw, null), "").trim()

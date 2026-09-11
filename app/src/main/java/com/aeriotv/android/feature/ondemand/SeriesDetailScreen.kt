@@ -86,7 +86,9 @@ import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
+import com.aeriotv.android.feature.movies.displayTitle
 import com.aeriotv.android.feature.movies.MediaItem
+import com.aeriotv.android.feature.movies.tmdbArtKey
 import com.aeriotv.android.feature.watchprogress.UpNextEntry
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -157,6 +159,13 @@ fun SeriesDetailScreen(
     // whether the opt-in + key are set, so an art-less title can say "add a
     // key" vs "no match" (iOS tmdbLookupDone / TMDBPosters.apiKey).
     var tmdbLookupDone by remember(seriesId) { mutableStateOf(false) }
+    // Persistent art cache: same TMDB-first rule as the movie screen.
+    val artVersion by viewModel.artVersion.collectAsStateWithLifecycle(initialValue = 0)
+    val artKey = remember(seriesId, series?.displayName) {
+        series?.let { tmdbArtKey(displayTitle(it.displayName, it.year), false) }
+    }
+    val cachedBackdropUrl = remember(artKey, artVersion) { artKey?.let { viewModel.artBackdropUrl(it) } }
+    val cachedOverview = remember(artKey, artVersion) { artKey?.let { viewModel.artOverview(it) } }
     var tmdbConfigured by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { tmdbConfigured = viewModel.isTmdbConfigured() }
     val hasServerArt = series != null && (
@@ -408,6 +417,7 @@ fun SeriesDetailScreen(
                         info = info,
                         tmdbPosterUrl = tmdbPosterUrl,
                         tmdbDetails = tmdbDetails,
+                        tmdbBackdropUrl = cachedBackdropUrl,
                         isTv = isTv,
                     )
                 }
@@ -416,6 +426,7 @@ fun SeriesDetailScreen(
                         series = series,
                         info = info,
                         tmdbDetails = tmdbDetails,
+                        cachedOverview = cachedOverview,
                         isTv = isTv,
                         castPhotosVisible = castCrewPeople.isNotEmpty(),
                         // Only offered when there is an actual choice (> 1
@@ -683,11 +694,13 @@ fun SeriesDetailScreen(
 private fun SeriesHeroSection(
     series: DispatcharrVODSeries,
     info: DispatcharrVODProviderInfo?,
+    /** Cached TMDB backdrop for this title; wins over the provider's art. */
+    tmdbBackdropUrl: String? = null,
     tmdbPosterUrl: String?,
     tmdbDetails: TmdbDetails?,
     isTv: Boolean,
 ) {
-    val heroUrl = info?.backdropUrl ?: series.posterUrl ?: tmdbPosterUrl
+    val heroUrl = tmdbBackdropUrl ?: info?.backdropUrl ?: series.posterUrl ?: tmdbPosterUrl
     val posterUrl = series.posterUrl ?: info?.posterUrl ?: tmdbPosterUrl
     // TMDB sits last in each chain: it only backfills fields the server
     // (provider-info AND the list row) left empty.
@@ -832,6 +845,8 @@ private fun SeriesInfoSection(
     series: DispatcharrVODSeries,
     info: DispatcharrVODProviderInfo?,
     tmdbDetails: TmdbDetails?,
+    /** TMDB synopsis from the persistent art cache. */
+    cachedOverview: String? = null,
     isTv: Boolean,
     castPhotosVisible: Boolean,
     // Non-null only when there is more than one provider copy to pick from
@@ -851,9 +866,10 @@ private fun SeriesInfoSection(
     chipRowModifier: Modifier,
     onOpenUrl: (label: String, url: String) -> Unit,
 ) {
-    // Server-provided values always win; TMDB backfills only the holes.
-    val plot = info?.effectivePlot?.takeIf { it.isNotBlank() } ?: series.plot?.takeIf { it.isNotBlank() }
-        ?: tmdbDetails?.overview
+    // Server-provided values always win; TMDB backfills only the holes. The
+    // synopsis is the exception: TMDB's wins when there is one.
+    val plot = tmdbDetails?.overview?.takeIf { it.isNotBlank() } ?: cachedOverview
+        ?: info?.effectivePlot?.takeIf { it.isNotBlank() } ?: series.plot?.takeIf { it.isNotBlank() }
     val genre = info?.effectiveGenre?.takeIf { it.isNotBlank() } ?: series.genre?.takeIf { it.isNotBlank() }
         ?: tmdbDetails?.genres
     val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop

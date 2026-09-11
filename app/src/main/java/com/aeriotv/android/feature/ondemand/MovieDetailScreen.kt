@@ -75,7 +75,9 @@ import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
+import com.aeriotv.android.feature.movies.displayTitle
 import com.aeriotv.android.feature.movies.MediaItem
+import com.aeriotv.android.feature.movies.tmdbArtKey
 import com.aeriotv.android.feature.movies.MediaPosterCard
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -148,6 +150,15 @@ fun MovieDetailScreen(
     // whether the opt-in + key are set, so an art-less title can say "add a
     // key" vs "no match" (iOS tmdbLookupDone / TMDBPosters.apiKey).
     var tmdbLookupDone by remember(movie?.id) { mutableStateOf(false) }
+    // Persistent art cache (Logan 2026-09-04: TMDB first when a key is set).
+    // The background library pass has usually resolved this title already, so
+    // the hero and synopsis are right on the first frame with no request.
+    val artVersion by viewModel.artVersion.collectAsStateWithLifecycle(initialValue = 0)
+    val artKey = remember(movie?.uuid, movie?.displayName) {
+        movie?.let { tmdbArtKey(displayTitle(it.displayName, it.year), true) }
+    }
+    val cachedBackdropUrl = remember(artKey, artVersion) { artKey?.let { viewModel.artBackdropUrl(it) } }
+    val cachedOverview = remember(artKey, artVersion) { artKey?.let { viewModel.artOverview(it) } }
     var tmdbConfigured by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { tmdbConfigured = viewModel.isTmdbConfigured() }
     val hasServerArt = movie != null && (
@@ -289,6 +300,7 @@ fun MovieDetailScreen(
                         info = info,
                         tmdbPosterUrl = tmdbPosterUrl,
                         tmdbDetails = tmdbDetails,
+                        tmdbBackdropUrl = cachedBackdropUrl,
                         hasResume = hasResume,
                         isTv = isTv,
                         onPlay = { onPlay(movie) },
@@ -306,6 +318,7 @@ fun MovieDetailScreen(
                         movie = movie,
                         info = info,
                         tmdbDetails = tmdbDetails,
+                        cachedOverview = cachedOverview,
                         isTv = isTv,
                         castPhotosVisible = castCrewPeople.isNotEmpty(),
                         // Only offered when there is an actual choice (> 1
@@ -469,12 +482,14 @@ private fun HeroSection(
     info: DispatcharrVODProviderInfo?,
     tmdbPosterUrl: String?,
     tmdbDetails: TmdbDetails?,
+    /** Cached TMDB backdrop for this title; wins over the provider's art. */
+    tmdbBackdropUrl: String? = null,
     hasResume: Boolean,
     isTv: Boolean,
     onPlay: () -> Unit,
     onPlayFocused: () -> Unit = {},
 ) {
-    val heroUrl = info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl
+    val heroUrl = tmdbBackdropUrl ?: info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl
     val posterUrl = movie.logo?.url ?: info?.posterUrl ?: tmdbPosterUrl
     // TMDB sits last in each chain: it only backfills fields the server
     // (provider-info AND the list row) left empty.
@@ -722,6 +737,9 @@ private fun InfoSection(
     movie: DispatcharrVODMovie,
     info: DispatcharrVODProviderInfo?,
     tmdbDetails: TmdbDetails?,
+    /** TMDB synopsis from the persistent art cache (the provider's plot can
+     *  arrive in another language, Logan 2026-09-04). */
+    cachedOverview: String? = null,
     isTv: Boolean,
     castPhotosVisible: Boolean,
     // Non-null only when there is more than one provider copy to pick from
@@ -740,9 +758,11 @@ private fun InfoSection(
     tmdbLookupDone: Boolean = false,
     onOpenUrl: (label: String, url: String) -> Unit,
 ) {
-    // Server-provided values always win; TMDB backfills only the holes.
-    val plot = info?.effectivePlot?.takeIf { it.isNotBlank() } ?: movie.plot?.takeIf { it.isNotBlank() }
-        ?: tmdbDetails?.overview
+    // Server-provided values always win; TMDB backfills only the holes. The
+    // synopsis is the exception: TMDB's wins when there is one (Apple
+    // VODDetailView.mergedPlot).
+    val plot = tmdbDetails?.overview?.takeIf { it.isNotBlank() } ?: cachedOverview
+        ?: info?.effectivePlot?.takeIf { it.isNotBlank() } ?: movie.plot?.takeIf { it.isNotBlank() }
     val genre = info?.effectiveGenre?.takeIf { it.isNotBlank() } ?: movie.genre?.takeIf { it.isNotBlank() }
         ?: tmdbDetails?.genres
     val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop

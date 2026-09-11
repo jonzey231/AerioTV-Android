@@ -21,6 +21,21 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
+ * One resolved title's TMDB art, the unit the persistent art cache stores
+ * (Apple parity: TMDBArtCache.Entry). [poster] / [backdrop] are TMDB relative
+ * paths, never URLs, so a size change costs nothing. Empty [poster] marks a
+ * confirmed miss; a transport failure returns null instead and stays
+ * retryable.
+ */
+data class TmdbArtEntry(
+    val tmdbId: String,
+    val poster: String,
+    val backdrop: String,
+    val overview: String?,
+    val at: Long,
+)
+
+/**
  * Detail metadata TMDB can backfill when the Dispatcharr server provides
  * none (bare playlists with no provider-info). All fields pre-joined for
  * direct display: [genres] and [castTop] (first 6 names) are ", "-joined,
@@ -233,6 +248,43 @@ class TMDBService @Inject constructor() {
                 if (resp.status == HttpStatusCode.OK) resp.bodyAsText() else null
             }.getOrNull()
         }
+
+    /**
+     * One typed search (movie or tv) for the persistent art cache, mirroring
+     * Apple's TMDBService.lookupArt (VODService.swift:1182). A trailing year
+     * in the title becomes a `year` / `first_air_date_year` filter instead of
+     * query text. Returns null on a transport failure, a non-200 or a 429 (the
+     * caller backs off and retries later) and an entry with empty paths on a
+     * confirmed miss, which the cache remembers for 30 days.
+     */
+    suspend fun lookupArt(title: String, isMovie: Boolean, rawKey: String): TmdbArtEntry? {
+        val key = rawKey.trim()
+        if (key.isEmpty()) return null
+        val (cleaned, year) = splitTitleYear(title)
+        if (cleaned.isBlank()) return TmdbArtEntry("", "", "", null, System.currentTimeMillis())
+        val query = buildList {
+            add("query=${cleaned.encodeURLParameter()}")
+            add("include_adult=false")
+            year?.let { add((if (isMovie) "year=" else "first_air_date_year=") + it) }
+        }.joinToString("&")
+        val body = getJsonOrNull(if (isMovie) "/search/movie" else "/search/tv", query, key) ?: return null
+        return parseArt(body)
+    }
+
+    private fun parseArt(body: String): TmdbArtEntry? = runCatching {
+        val results = json.parseToJsonElement(body).jsonObject["results"]?.jsonArray?.map { it.jsonObject }
+            ?: emptyList()
+        fun field(o: kotlinx.serialization.json.JsonObject, name: String): String? =
+            o[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        val hit = results.firstOrNull { field(it, "poster_path") != null } ?: results.firstOrNull()
+        TmdbArtEntry(
+            tmdbId = hit?.let { field(it, "id") } ?: "",
+            poster = hit?.let { field(it, "poster_path") } ?: "",
+            backdrop = hit?.let { field(it, "backdrop_path") } ?: "",
+            overview = hit?.let { field(it, "overview") },
+            at = System.currentTimeMillis(),
+        )
+    }.getOrNull()
 
     /** Validate a credential by hitting `/configuration`. 200 = valid. */
     suspend fun validateKey(rawKey: String): Boolean {

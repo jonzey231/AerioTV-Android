@@ -17,6 +17,8 @@ import com.aeriotv.android.core.network.DispatcharrVODProviderMedia
 import com.aeriotv.android.core.network.DispatcharrVODProviderRelation
 import com.aeriotv.android.core.network.DispatcharrVODSeries
 import com.aeriotv.android.core.network.TMDBService
+import com.aeriotv.android.core.network.TmdbArtCache
+import com.aeriotv.android.core.network.TmdbArtEntry
 import com.aeriotv.android.core.network.TmdbCredits
 import com.aeriotv.android.core.network.TmdbDetails
 import com.aeriotv.android.core.network.TmdbKnownForItem
@@ -45,6 +47,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.aeriotv.android.feature.movies.displayTitle
+import com.aeriotv.android.feature.movies.tmdbArtKey
 import com.aeriotv.android.feature.movies.toMediaItem
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -70,6 +74,7 @@ class OnDemandViewModel @Inject constructor(
     private val learnedStreamStore: VodLearnedStreamStore,
     private val versionSelectionStore: VodVersionSelectionStore,
     private val snapshotStore: VodLibrarySnapshotStore,
+    private val tmdbArtCache: TmdbArtCache,
 ) : ViewModel() {
 
     data class UiState(
@@ -254,11 +259,17 @@ class OnDemandViewModel @Inject constructor(
                 if (moviesFresh && seriesFresh) {
                     Log.i(TAG, "[VOD-CACHE] both sweeps younger than ${limitMs / 3_600_000} h; skipping launch sweep")
                     restoredFromSnapshot = true
+                    // No sweep will run, so the restored library is what the
+                    // art pass has to work from (Apple enriches on restore too).
+                    enrichArt(isMovie = true)
+                    enrichArt(isMovie = false)
                     return@launch
                 }
                 Log.i(TAG, "[VOD-CACHE] launch sweep: movies=${if (moviesFresh) "fresh" else "stale"} series=${if (seriesFresh) "fresh" else "stale"}")
-                if (!moviesFresh) refresh()
-                if (!seriesFresh) refreshSeries()
+                // The stale kinds re-enrich when their sweep lands; the fresh
+                // ones only ever get the pass from here.
+                if (moviesFresh) enrichArt(isMovie = true) else refresh()
+                if (seriesFresh) enrichArt(isMovie = false) else refreshSeries()
                 return@launch
             }
             refresh()
@@ -272,6 +283,57 @@ class OnDemandViewModel @Inject constructor(
     // Completion stamps carried into every save (see the launch gate).
     private var moviesCompletedAtMs = 0L
     private var seriesCompletedAtMs = 0L
+
+    /**
+     * Background TMDB art pass over a library once its sweep completes
+     * (Apple MoviesView.enrichArt / VODStore, MoviesView.swift:143). Titles
+     * the caller wants first (the tab's hero pages) go in [priorityKeys] as
+     * (art key, title) pairs; everything else follows in library order.
+     */
+    fun enrichArt(priorityKeys: List<Pair<String, String>> = emptyList(), isMovie: Boolean) {
+        viewModelScope.launch {
+            val st = _state.value
+            val items = withContext(Dispatchers.Default) {
+                if (isMovie) {
+                    st.movies.map { m -> val t = displayTitle(m.displayName, m.year); tmdbArtKey(t, true) to t }
+                } else {
+                    st.series.map { sr -> val t = displayTitle(sr.displayName, sr.year); tmdbArtKey(t, false) to t }
+                }
+            }
+            if (items.isEmpty() && priorityKeys.isEmpty()) return@launch
+            tmdbArtCache.enrich(items, isMovie, priorityKeys)
+        }
+    }
+
+    /** Bumped as cached art lands; the media tabs observe it once per tab. */
+    val artVersion: StateFlow<Int> get() = tmdbArtCache.version
+
+    /** Cached TMDB poster for a library key, or null (caller falls back). */
+    fun artPosterUrl(key: String): String? = tmdbArtCache.posterUrl(key)
+
+    /** Cached TMDB backdrop for a library key, or null. */
+    fun artBackdropUrl(key: String): String? = tmdbArtCache.backdropUrl(key)
+
+    /** Cached TMDB synopsis for a library key, or null. */
+    fun artOverview(key: String): String? = tmdbArtCache.overview(key)
+
+    /**
+     * Hero backdrop: the persistent cache first, then a one-off TMDB details
+     * lookup whose result is folded back into the cache, so a hero title
+     * resolved once never refetches.
+     */
+    suspend fun heroBackdropUrl(artKey: String, tmdbId: String?, title: String, isMovie: Boolean): String? {
+        tmdbArtCache.backdropUrl(artKey)?.let { return it }
+        val details = resolveTmdbDetails(tmdbId, title, isMovie) ?: return null
+        tmdbArtCache.merge(
+            key = artKey,
+            tmdbId = tmdbId?.trim().orEmpty(),
+            poster = details.posterPath.orEmpty(),
+            backdrop = details.backdropPath.orEmpty(),
+            overview = details.overview,
+        )
+        return details.backdropPath?.takeIf { it.isNotBlank() }?.let { tmdbService.imageUrlFor(it) }
+    }
 
     /**
      * Write the current lists as the playlist's library snapshot.
@@ -894,7 +956,7 @@ class OnDemandViewModel @Inject constructor(
                         else groupsWithContent.toList().sorted(),
                 )
             }
-            if (merged.isNotEmpty()) persistSnapshot(MediaSweep.Movies)
+            if (merged.isNotEmpty()) { persistSnapshot(MediaSweep.Movies); enrichArt(isMovie = true) }
         }
     }
 
@@ -1079,7 +1141,7 @@ class OnDemandViewModel @Inject constructor(
                         else groupsWithContent.toList().sorted(),
                 )
             }
-            if (merged.isNotEmpty()) persistSnapshot(MediaSweep.Series)
+            if (merged.isNotEmpty()) { persistSnapshot(MediaSweep.Series); enrichArt(isMovie = false) }
         }
     }
 
@@ -2299,7 +2361,7 @@ class OnDemandViewModel @Inject constructor(
                 hasDeferredXtreamContent = pendingMovieCats.isNotEmpty() || pendingSeriesCats.isNotEmpty(),
             )
         }
-        if (xtreamItemsLoaded) persistSnapshot(MediaSweep.Both)
+        if (xtreamItemsLoaded) { persistSnapshot(MediaSweep.Both); enrichArt(isMovie = true); enrichArt(isMovie = false) }
     }
 
     /**
@@ -2365,6 +2427,8 @@ class OnDemandViewModel @Inject constructor(
             _state.update { it.copy(isLoading = false, isLoadingSeries = false) }
             xtreamItemsLoaded = true
             persistSnapshot(MediaSweep.Both)
+            enrichArt(isMovie = true)
+            enrichArt(isMovie = false)
         }
     }
 

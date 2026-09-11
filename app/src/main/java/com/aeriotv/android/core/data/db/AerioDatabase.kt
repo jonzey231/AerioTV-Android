@@ -8,6 +8,7 @@ import com.aeriotv.android.core.data.db.dao.FavoriteChannelDao
 import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.data.db.dao.ReminderDao
+import com.aeriotv.android.core.data.db.dao.TmdbArtDao
 import com.aeriotv.android.core.data.db.dao.WatchProgressDao
 import com.aeriotv.android.core.data.db.entity.ChannelSnapshotEntity
 import com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity
@@ -15,6 +16,7 @@ import com.aeriotv.android.core.data.db.entity.FavoriteChannelEntity
 import com.aeriotv.android.core.data.db.entity.LocalRecordingEntity
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.db.entity.ReminderEntity
+import com.aeriotv.android.core.data.db.entity.TmdbArtEntity
 import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
 
 @Database(
@@ -26,8 +28,9 @@ import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
         ReminderEntity::class,
         EpgProgrammeEntity::class,
         ChannelSnapshotEntity::class,
+        TmdbArtEntity::class,
     ],
-    version = 26,
+    version = 27,
     exportSchema = false,
 )
 abstract class AerioDatabase : RoomDatabase() {
@@ -38,4 +41,5 @@ abstract class AerioDatabase : RoomDatabase() {
     abstract fun reminderDao(): ReminderDao
     abstract fun epgProgrammeDao(): EpgProgrammeDao
     abstract fun channelSnapshotDao(): ChannelSnapshotDao
+    abstract fun tmdbArtDao(): TmdbArtDao
 }

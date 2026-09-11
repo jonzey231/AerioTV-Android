@@ -243,15 +243,49 @@ fun MediaTabContent(
     val gridItems = if (isSearching) results else library
     val available: Set<Char> = libraryBuilt.second
 
+    // Persistent TMDB art (Logan 2026-09-04: TMDB first when a key is set,
+    // the provider's poster as the fallback). ONE observer per tab: the
+    // version bump hands out a fresh resolver, which re-reads the cache for
+    // the cards that recompose, instead of an observer on every card.
+    val artVersion by viewModel.artVersion.collectAsStateWithLifecycle(initialValue = 0)
+    val posterUrlFor: (MediaItem) -> String? = remember(artVersion, viewModel) {
+        { item -> viewModel.artPosterUrl(item.artKey) ?: item.posterUrl }
+    }
+
     // Hero backdrops (Apple parity: TMDB backdrop per hero page when a key is
     // set); the cropped poster shows until one arrives. Cached per page key.
     var backdrops by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
     LaunchedEffect(heroPages.map { it.key } + watchlistPages.map { it.key }) {
         for (page in heroPages + watchlistPages) {
             if (backdrops.containsKey(page.key)) continue
-            val url = viewModel.resolveTmdbBackdropUrl(page.tmdbId, searchTitle(page.title), page.isMovie)
+            val artKey = page.item?.artKey ?: tmdbArtKey(page.title, page.isMovie)
+            val url = viewModel.heroBackdropUrl(artKey, page.tmdbId, searchTitle(page.title), page.isMovie)
             backdrops = backdrops + (page.key to url)
         }
+    }
+
+    // The tab knows which titles are on screen first, so the art pass runs the
+    // hero carousel ahead of the rest of the library (Apple MoviesView:145).
+    LaunchedEffect(heroPages.map { it.key }, kind) {
+        if (heroPages.isEmpty()) return@LaunchedEffect
+        val priority = heroPages.mapNotNull { page ->
+            val t = searchTitle(page.title)
+            if (t.isBlank()) null else (page.item?.artKey ?: tmdbArtKey(t, page.isMovie)) to t
+        }
+        if (priority.isNotEmpty()) viewModel.enrichArt(priority, kind == MediaKind.Movies)
+    }
+
+    // A hero title the background pass resolves after the effect above ran:
+    // re-read the cache on the next version bump so the carousel catches up.
+    LaunchedEffect(artVersion) {
+        if (artVersion == 0) return@LaunchedEffect
+        var next = backdrops
+        for (page in heroPages + watchlistPages) {
+            if (next[page.key] != null) continue
+            val artKey = page.item?.artKey ?: tmdbArtKey(page.title, page.isMovie)
+            viewModel.artBackdropUrl(artKey)?.let { next = next + (page.key to it) }
+        }
+        if (next !== backdrops) backdrops = next
     }
 
     fun submitQuery(v: String) {
@@ -323,6 +357,7 @@ fun MediaTabContent(
         com.aeriotv.android.feature.movies.tv.TvMediaTab(
             kind = kind, gridState = gridState, heroPages = heroPages, watchlistPages = watchlistPages,
             backdrops = backdrops, library = library, gridItems = gridItems, available = available,
+            posterUrlFor = posterUrlFor,
             isSearching = isSearching, searchActive = searchActive, query = query,
             onQueryChange = { submitQuery(it) },
             onSearchToggle = { searchActive = !searchActive; if (!searchActive) submitQuery("") },
@@ -407,6 +442,7 @@ fun MediaTabContent(
             val open = { item.movieUuid?.let(onMovieClick) ?: item.seriesId?.let(onSeriesClick); Unit }
             MediaPosterCard(
                 item = item,
+                posterUrl = posterUrlFor(item),
                 onClick = open,
                 menu = { close ->
                     DropdownMenuItem(text = { Text("Details") }, onClick = { close(); open() })
@@ -480,6 +516,10 @@ fun MediaPosterCard(
     item: MediaItem,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Resolved art: the cached TMDB poster when there is one, the provider's
+     *  otherwise. Passed in as a plain String so the card keeps recomposing on
+     *  its own inputs only. */
+    posterUrl: String? = item.posterUrl,
     menu: (@Composable (close: () -> Unit) -> Unit)? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -503,7 +543,7 @@ fun MediaPosterCard(
             // A small spinner where the poster will be while the art is
             // missing or still loading; the title is under the box (Logan
             // 2026-09-09, both platforms).
-            var artLoaded by remember(item.posterUrl) { mutableStateOf(false) }
+            var artLoaded by remember(posterUrl) { mutableStateOf(false) }
             if (!artLoaded) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center).size(22.dp),
@@ -511,9 +551,9 @@ fun MediaPosterCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 )
             }
-            if (!item.posterUrl.isNullOrBlank()) {
+            if (!posterUrl.isNullOrBlank()) {
                 AsyncImage(
-                    model = item.posterUrl,
+                    model = posterUrl,
                     contentDescription = item.title,
                     contentScale = ContentScale.Crop,
                     onSuccess = { artLoaded = true },

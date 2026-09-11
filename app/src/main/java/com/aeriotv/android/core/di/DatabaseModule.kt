@@ -308,6 +308,19 @@ object DatabaseModule {
         }
     }
 
+    /** Persistent TMDB art paths for library titles (TmdbArtCache). A new,
+     *  purely derived table: nothing to backfill, and an empty cache simply
+     *  resolves again in the background. */
+    private val MIGRATION_26_27 = object : Migration(26, 27) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `tmdb_art` (`key` TEXT NOT NULL, `tmdbId` TEXT NOT NULL, " +
+                    "`poster` TEXT NOT NULL, `backdrop` TEXT NOT NULL, `overview` TEXT, " +
+                    "`at` INTEGER NOT NULL, PRIMARY KEY(`key`))",
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -316,7 +329,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 
@@ -348,4 +361,7 @@ object DatabaseModule {
 
     @Provides
     fun provideChannelSnapshotDao(db: AerioDatabase): ChannelSnapshotDao = db.channelSnapshotDao()
+
+    @Provides
+    fun provideTmdbArtDao(db: AerioDatabase): com.aeriotv.android.core.data.db.dao.TmdbArtDao = db.tmdbArtDao()
 }

@@ -46,6 +46,9 @@ internal fun TvMediaTab(
     heroPages: List<MediaHeroPage>,
     watchlistPages: List<MediaHeroPage>,
     backdrops: Map<String, String?>,
+    /** Resolved poster per item: the cached TMDB art first, the provider's
+     *  otherwise. Re-created by the tab on each art-cache version bump. */
+    posterUrlFor: (MediaItem) -> String?,
     library: List<MediaItem>,
     gridItems: List<MediaItem>,
     available: Set<Char>,
@@ -171,7 +174,9 @@ internal fun TvMediaTab(
     ) { page, modifier ->
         val item = page.item
         TvPosterCard(
-            title = page.title, year = page.year, posterUrl = page.artUrl, rating = formatRating(page.rating),
+            title = page.title, year = page.year,
+            posterUrl = item?.let(posterUrlFor) ?: page.artUrl,
+            rating = formatRating(page.rating),
             onClick = { item?.let(open) }, modifier = modifier,
             longPressActions = listOfNotNull(
                 item?.let { TvMenuAction("Details") { open(it) } },
@@ -228,7 +233,7 @@ internal fun TvMediaTab(
         gridKey = { it.key },
         cell = { item, scope ->
             TvPosterCard(
-                title = item.title, year = item.year, posterUrl = item.posterUrl, rating = formatRating(item.rating),
+                title = item.title, year = item.year, posterUrl = posterUrlFor(item), rating = formatRating(item.rating),
                 onClick = { open(item) }, modifier = scope.modifier,
                 longPressActions = listOf(
                     TvMenuAction("Details") { open(item) },
