@@ -268,6 +268,10 @@ fun <T> TvMediaPage(
     // (Logan 2026-09-10).
     val restTops = remember { HashMap<Int, Int>() }
     val restHeights = remember { HashMap<Int, Int>() }
+    // The rows above the grid change index when a shelf appears later (the
+    // Watchlist loads after the first layout), so positions recorded under
+    // the old indices describe the wrong rows: drop them on any change.
+    LaunchedEffect(leadingCount, visibleShelves.size, hasHero) { restTops.clear(); restHeights.clear() }
     val chromeScroll = com.aeriotv.android.feature.main.LocalTvChromeScroll.current
     /** Pixels the page has scrolled, from a visible item whose rest position is known; null when none is. */
     fun scrollOffsetPx(): Int? {
@@ -355,8 +359,8 @@ fun <T> TvMediaPage(
     val revealFirstShelf: () -> Unit = {
         val shelfIndex = 1 + (if (hasHero) 1 else 0)
         val shelfTop = restTops[shelfIndex]
-        val shelfHeight = restHeights[shelfIndex]
-            ?: gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
+        val shelfHeight = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
+            ?: restHeights[shelfIndex]
         val viewport = gridState.layoutInfo.viewportSize.height
         val fitsAtTop = shelfTop == null || shelfHeight == null || shelfTop + shelfHeight <= viewport
         if (fitsAtTop) {
