@@ -317,12 +317,49 @@ fun <T> TvMediaPage(
                     } finally { scrollingToTarget.value = false }
                 }
             }
+        } else if (next == 1 && previous > 1) {
+            // handled by revealFirstShelf from the shelf's own focus hook
         } else if (next == 2 && previous > 2) {
             // Up from the pills onto Sort (Logan 2026-09-10): the library
             // header lands just under the top of the screen.
             val targetPx = restTops[headerIndex]?.let { it - with(density) { 24.dp.roundToPx() } }
             val current = scrollOffsetPx()
             if (targetPx != null && current != null && targetPx < current) {
+                scope.launch {
+                    scrollingToTarget.value = true
+                    try {
+                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
+                            var previousValue = 0f
+                            androidx.compose.animation.core.animate(
+                                initialValue = 0f, targetValue = (targetPx - current).toFloat(),
+                                animationSpec = tween(durationMillis = 300, easing = androidx.compose.animation.core.EaseOut),
+                            ) { value, _ -> scrollBy(value - previousValue); previousValue = value }
+                        }
+                    } finally { scrollingToTarget.value = false }
+                }
+            }
+        }
+    }
+    val scrollToTopRef = remember { mutableStateOf<() -> Unit>({}) }
+    /**
+     * Up from the header onto the first shelf (Apple TV, 2026-09-10): when
+     * the whole shelf block fits on screen with the page at the top (DVR's
+     * 16:9 cards) the page goes to the top; when it would run off the
+     * bottom (a 2:3 Watchlist) the page stops with the shelf row 86 dp
+     * under the top edge instead, so the poster and its text are in view.
+     */
+    val revealFirstShelf: () -> Unit = {
+        val shelfIndex = 1 + (if (hasHero) 1 else 0)
+        val shelfTop = restTops[shelfIndex]
+        val shelfHeight = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
+        val viewport = gridState.layoutInfo.viewportSize.height
+        val fitsAtTop = shelfTop == null || shelfHeight == null || shelfTop + shelfHeight <= viewport
+        if (fitsAtTop) {
+            scrollToTopRef.value()
+        } else {
+            val targetPx = shelfTop - with(density) { 86.dp.roundToPx() }
+            val current = scrollOffsetPx()
+            if (current != null && targetPx < current) {
                 scope.launch {
                     scrollingToTarget.value = true
                     try {
@@ -392,6 +429,7 @@ fun <T> TvMediaPage(
             }
         }
     }
+    scrollToTopRef.value = scrollToTop
     val cellRequesters = remember { HashMap<Any, FocusRequester>() }
     var sortOpen by remember { mutableStateOf(false) }
     val menuGuard = rememberTvMenuGuard()
@@ -552,7 +590,7 @@ fun <T> TvMediaPage(
                         // shelf from below; Left and Right inside it must not
                         // move the page (rapid-press recording 2026-09-10:
                         // each press nudged the page down and snapped it up).
-                        onCardFocused = { val from = zone; enterZone(1); if (si == 0 && hasHero && from > 1) scrollToTop() },
+                        onCardFocused = { val from = zone; enterZone(1); if (si == 0 && hasHero && from > 1) revealFirstShelf() },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
