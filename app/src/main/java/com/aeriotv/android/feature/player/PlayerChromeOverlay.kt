@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
@@ -858,21 +859,29 @@ private fun PlayerPill(
             .clip(CircleShape)
             .background(if (focused) Color.White else Color.Black.copy(alpha = 0.6f))
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            // tvOS player button metrics, halved from the 1080 pt canvas: a
+            // 60 pt capsule with 26 pt side padding and a 22 pt semibold label
+            // -> 30 dp tall, 13 dp padding, 11 sp. Identical to the media page
+            // hero pills (TvMediaPage.TvHeroButtonView). requiredHeight so a
+            // squeezed parent cannot flatten the capsule. These pills are TV
+            // only; the phone chrome uses CircleIconButton.
+            .requiredHeight(30.dp)
+            .padding(horizontal = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             tint = if (iconTint == Color.White) contentColor else iconTint,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(14.dp),
         )
         Text(
             text = label,
             color = contentColor,
-            style = MaterialTheme.typography.titleSmall,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
         )
     }
 }

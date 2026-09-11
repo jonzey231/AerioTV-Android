@@ -2120,10 +2120,12 @@ private fun BottomChrome(
             )
             Spacer(Modifier.width(8.dp))
             val ppFocused = isTvForm && tvFocusZone == TvVodFocusZone.PlayPause
+            // TV keeps the tvOS 30 dp control size (phone keeps its 52 dp
+            // touch target); the glyph scales with it.
             Box(
                 modifier = Modifier
                     .tvFocusScale(ppFocused)
-                    .size(52.dp)
+                    .size(if (isTvForm) 36.dp else 52.dp)
                     .clip(CircleShape)
                     .background(if (ppFocused) Color.White else Color.White.copy(alpha = 0.18f))
                     .pointerInput(Unit) {
@@ -2135,7 +2137,7 @@ private fun BottomChrome(
                     imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                     contentDescription = if (isPaused) "Play" else "Pause",
                     tint = if (ppFocused) Color.Black else Color.White,
-                    modifier = Modifier.size(34.dp),
+                    modifier = Modifier.size(if (isTvForm) 18.dp else 34.dp),
                 )
             }
             Spacer(Modifier.width(8.dp))
@@ -2259,10 +2261,14 @@ private fun TransportIconButton(
     // skip button reads as selected under the app-owned D-pad zone model (focus
     // is driven by the root key handler, not Compose traversal, so this is
     // purely a visual treatment).
+    // tvOS player button metrics, halved: a 60 pt control is a 30 dp circle
+    // with a 14 dp glyph, the same sizing the media page hero pills use
+    // (TvMediaPage.TvHeroButtonView). Was 44 dp with a 28 dp glyph, about
+    // 1.6x tvOS on the Streamer (Logan 2026-09-11).
     Box(
         modifier = Modifier
             .tvFocusScale(focused)
-            .size(44.dp)
+            .size(30.dp)
             .clip(CircleShape)
             .background(if (focused) Color.White else Color.Transparent)
             .pointerInput(Unit) { detectTapGestures(onTap = { onClick() }) },
@@ -2272,7 +2278,7 @@ private fun TransportIconButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = if (focused) Color.Black else Color.White,
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier.size(14.dp),
         )
     }
 }
