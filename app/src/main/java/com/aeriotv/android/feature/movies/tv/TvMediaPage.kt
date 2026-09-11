@@ -523,7 +523,12 @@ fun <T> TvMediaPage(
                 )
             }
             if (hasHero) {
-                fullSpan("hero") {
+                // The hero's own 14 dp section gap plus the grid's row spacing
+                // doubled the gap under it (tvOS has one 28 pt gap), pushing
+                // the first shelf's posters off the bottom at rest (Logan
+                // 2026-09-10). The hero row gives back the row spacing plus
+                // 10 dp so the shelf sits fully in view.
+                fullSpan("hero", trimBottom = gridRowSpacing + 10.dp) {
                     TvHeroCarousel(
                         pages = heroPages,
                         primaryRequester = heroPrimary,
@@ -712,7 +717,12 @@ private fun TvRailSlot(visible: () -> Boolean, content: @Composable () -> Unit) 
 }
 
 /** A full-width grid row that reclaims the grid's start inset (see contentPadding in TvMediaPage). */
-private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(key: Any, content: @Composable () -> Unit) {
+private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(
+    key: Any,
+    /** Height the row gives back so the next row sits closer (the grid's row spacing still applies). */
+    trimBottom: Dp = 0.dp,
+    content: @Composable () -> Unit,
+) {
     item(key = key, span = { GridItemSpan(maxLineSpan) }) {
         val bleedStart = TvPage.overscan + TvPage.contentInset - TvPage.heroInset
         val bleedEnd = TvPage.overscan
@@ -726,7 +736,8 @@ private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(key: An
                         maxWidth = constraints.maxWidth + extra,
                     ),
                 )
-                layout(constraints.maxWidth, placeable.height) { placeable.place(-extraStart, 0) }
+                val height = (placeable.height - trimBottom.roundToPx()).coerceAtLeast(0)
+                layout(constraints.maxWidth, height) { placeable.place(-extraStart, 0) }
             },
         ) { content() }
     }
