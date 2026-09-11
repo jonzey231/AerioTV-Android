@@ -695,7 +695,11 @@ fun PlayerScreen(
             channelListVisible = false
             channelListSidebarOpen = false
             recentsOverlayVisible = false
-            if (idx != currentIndex) currentIndex = idx
+            if (idx != currentIndex) {
+                // Trace: the digit-entry commit IS the press that starts this tune.
+                exoHolder.markTunePress(channels[idx].name)
+                currentIndex = idx
+            }
             true
         } else false
     }
@@ -1512,6 +1516,7 @@ fun PlayerScreen(
                                 val next = (currentIndex + direction)
                                     .coerceIn(0, channels.lastIndex)
                                 if (next != currentIndex) {
+                                    exoHolder.markTunePress(channels[next].name)
                                     currentIndex = next
                                     chromeVisible = true
                                 }
@@ -1751,6 +1756,8 @@ fun PlayerScreen(
             val next = (cur + delta).coerceIn(0, list.lastIndex)
             if (next != cur) {
                 lastFlipAt = now
+                // Trace: stamp the real D-pad press for press->firstFrame.
+                exoHolder.markTunePress(list[next].name)
                 currentIndex = next
                 // NO chromeVisible = true here (task #148, user
                 // directive): a flip surfaces only the top program card

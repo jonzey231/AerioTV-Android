@@ -907,6 +907,9 @@ fun AerioTVNavHost(
                             if (exoHolderNav.currentChannelId != channel.id ||
                                 exoHolderNav.isIdle()
                             ) {
+                                // Trace: the guide's select press is the
+                                // start of this tune's press->firstFrame.
+                                exoHolderNav.markTunePress(channel.name)
                                 exoHolderNav.playUrl(
                                     url = channel.url,
                                     title = channel.name,

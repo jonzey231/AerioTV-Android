@@ -89,6 +89,20 @@ class AerioExoPlayerHolder @Inject constructor(
         private set
 
     /**
+     * Always-on release playback tracer (tag `AerioTrace`): the Android
+     * counterpart of the Apple player's [TUNE] / [STALL] / feed lines. Purely
+     * observational, never changes playback.
+     */
+    val tracer = PlaybackTracer()
+
+    /**
+     * Stamp the REAL key event that starts a live channel change so
+     * press->firstFrame is measured end to end (D-pad zap, number entry,
+     * channel-list / recents pick, the guide's select press).
+     */
+    fun markTunePress(channelName: String?) = tracer.markPress(channelName)
+
+    /**
      * Observable mirror of [player] so the persistent PlayerView can REBIND
      * when the instance is recreated. The view's AndroidView factory runs
      * once per process and bound the original instance; after a destroy()
@@ -282,6 +296,7 @@ class AerioExoPlayerHolder @Inject constructor(
             }
             // Attach (or definitively fail) the keepalive before dropping the player's connection.
             withTimeoutOrNull(4_000L) { connected.await() }
+            tracer.recover("keepalive re-prime (stream follow / manual switch)")
             withContext(Dispatchers.Main) { playUrl(url, title, subtitle, artworkUri) }
             // Hold until ExoPlayer's reconnect is established (client count back >= 2).
             delay(keepaliveHoldMs)
@@ -472,6 +487,7 @@ class AerioExoPlayerHolder @Inject constructor(
                     error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED)
             ) {
                 Log.w(TAG, "[AUDIO-HEAL] sink failed (${error.errorCodeName}); rebuilding with stock context sink")
+            tracer.recover("audio sink fallback (${error.errorCodeName})")
                 audioSinkFallback = true
                 rebuildWithStockAudioAndReplay()
                 return
@@ -578,6 +594,7 @@ class AerioExoPlayerHolder @Inject constructor(
                         val fresh = runCatching { hook() }.getOrNull()
                         if (!fresh.isNullOrBlank() && fresh != lastPlayUrl) {
                             Log.w(TAG, "[RETUNE] terminal error; re-priming onto reprobed url $fresh")
+                            tracer.recover("terminal error; re-priming onto reprobed url")
                             withContext(Dispatchers.Main) {
                                 playUrl(fresh, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
                             }
@@ -607,6 +624,7 @@ class AerioExoPlayerHolder @Inject constructor(
             // rendered" from "decoded but never painted". Once per prime, so
             // it's cheap enough for release builds.
             Log.i(TAG, "first video frame rendered ch=$currentChannelId (+${SystemClock.elapsedRealtime() - streamPrimedAtMs}ms)")
+            tracer.onFirstFrame()
         }
     }
 
@@ -772,6 +790,8 @@ class AerioExoPlayerHolder @Inject constructor(
                 addListener(watchdogListener)
                 // Always-on: network LOAD errors into the shareable log (GH #32).
                 addAnalyticsListener(LoadErrorDiagnosticsListener)
+                // Always-on tune/stall/feed tracer (tag AerioTrace).
+                addAnalyticsListener(tracer.analyticsListener)
                 // Debug-only rich diagnostics firehose (codec / hwdec path,
                 // input format changes, dropped frames, audio underruns) -- the
                 // Android analog of iOS's libmpv log bridge. Read with
@@ -793,6 +813,7 @@ class AerioExoPlayerHolder @Inject constructor(
 
         player = fresh
         _playerInstance.value = fresh
+        tracer.tracedPlayer = fresh
         builtWithPassthrough = audioPassthrough
         builtWithBufferFloorMs = bufferFloorMs
         startWatchdog()
@@ -830,6 +851,10 @@ class AerioExoPlayerHolder @Inject constructor(
                 dataSourceFactory,
             ) { timeshift.get().activeWriter }
         }
+        // Byte-flow accounting for [TUNE] firstByte and the [FEED] lines. The
+        // progressive TS load never "completes", so onLoadCompleted alone
+        // would never see a byte on the live path.
+        dataSourceFactory = tracer.wrapDataSourceFactory(dataSourceFactory)
 
         // Force-route raw .ts URLs through ProgressiveMediaSource +
         // TsExtractor. Without this, DefaultMediaSourceFactory looks at
@@ -1193,8 +1218,9 @@ class AerioExoPlayerHolder @Inject constructor(
             .setMediaId("catchup")
             .setMediaMetadata(mediaMetadata)
             .build()
+        tracer.markTuneStart(title, "catchup")
         val source = ProgressiveMediaSource.Factory(
-            httpDataSourceFactory(isLive = true),
+            tracer.wrapDataSourceFactory(httpDataSourceFactory(isLive = true)),
             tsOnlyExtractorsFactory(),
         ).createMediaSource(mediaItem)
         p.setMediaSource(source)
@@ -1257,6 +1283,7 @@ class AerioExoPlayerHolder @Inject constructor(
         // UNLESS a companion remote explicitly asked for Audio Only, which a
         // watchdog/poller re-prime must not undo.
         setVideoTrackEnabled(!remoteAudioOnly)
+        tracer.markTuneStart(title, PlaybackTracer.urlKind(url))
         val source = buildMediaSource(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey)
         p.setMediaSource(source)
         p.prepare()
@@ -1481,6 +1508,8 @@ class AerioExoPlayerHolder @Inject constructor(
         watchdogJob = null
         lastPlayUrl = null
         try {
+            tracer.tracedPlayer = null
+            p.removeAnalyticsListener(tracer.analyticsListener)
             p.removeListener(LoggingPlayerListener)
             p.removeListener(watchdogListener)
             p.release()
@@ -1510,6 +1539,8 @@ class AerioExoPlayerHolder @Inject constructor(
                 delay(watchdogPollMs)
                 val p = player ?: continue
                 val now = SystemClock.elapsedRealtime()
+                // Steady-state heartbeat ([PERF] + [FEED], one pair per 15s).
+                tracer.tick(p)
 
                 // Jank discount. This loop runs on Main.immediate, so a tick
                 // arriving well past its schedule means the MAIN THREAD was
@@ -1695,6 +1726,8 @@ class AerioExoPlayerHolder @Inject constructor(
         lastForcedReloadAtMs = now
         consecutiveReloads++
         Log.w(TAG, "[MPV-RELOAD] live stall reload ch=$currentChannelId reason=$reason attempt=$consecutiveReloads")
+        tracer.recover("in-place reload reason=$reason attempt=$consecutiveReloads")
+        tracer.markTuneStart(lastPlayTitle, PlaybackTracer.urlKind(url))
         // Disarm until the re-primed stream reaches steady playback again.
         hasReachedPlaybackRestart = false
         lastKnownPositionMs = 0L
@@ -1727,6 +1760,7 @@ class AerioExoPlayerHolder @Inject constructor(
             _lastErrorText.value = "No data received from the stream"
         }
         _streamUnavailable.value = true
+        tracer.recover("stream unavailable; stopping")
         stop()
     }
 
@@ -1738,6 +1772,7 @@ class AerioExoPlayerHolder @Inject constructor(
         val url = lastPlayUrl ?: return
         val ctx = appContext ?: return
         Log.w(TAG, "[BLACKSCREEN] no video frame after reload; recreating player ch=$currentChannelId")
+        tracer.recover("recreating player (no video frame)")
         val title = lastPlayTitle
         val subtitle = lastPlaySubtitle
         val art = lastPlayArtworkUri
