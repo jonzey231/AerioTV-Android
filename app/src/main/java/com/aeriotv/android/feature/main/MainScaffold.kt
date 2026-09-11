@@ -456,6 +456,15 @@ fun MainScaffold(
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.LiveTV) }
     var initialTabApplied by rememberSaveable { mutableStateOf(false) }
+    // Which tabs are already composed and alive (see MainTabContent). Hoisted
+    // here because the TV tab bar needs it too: switching to a tab that is
+    // ALREADY built is free, so it must commit on the same frame as the pill
+    // highlight, while a first visit still gets the settle window that keeps a
+    // pill walk from cold-building every tab it passes through.
+    val visitedTabs = rememberSaveable(saver = androidx.compose.runtime.saveable.listSaver(
+        save = { it.map { t -> t.name } },
+        restore = { names -> names.mapNotNull { n -> AppTab.entries.firstOrNull { it.name == n } }.toMutableStateList() },
+    )) { mutableStateListOf<AppTab>() }
 
     // Honour the saved defaultTab once its tab is actually available. On Demand /
     // DVR now materialise a beat after launch (their content loads async), so we
@@ -731,6 +740,7 @@ fun MainScaffold(
                         tabEntryFocus = tabEntryFocus,
                         lastUpKeyMs = lastUpKeyMs,
                         pillRequesters = pillRequesters,
+                        isTabWarm = { it in visitedTabs },
                         onLeftEdgeChanged = { navLeftEdgePx = it },
                     )
                 }
@@ -753,6 +763,7 @@ fun MainScaffold(
                     onOpenSearch = onOpenSearch,
                     onSelectTab = { selectedTab = it; initialTabApplied = true },
                     viewModel = viewModel,
+                    visited = visitedTabs,
                     modifier = Modifier
                         .fillMaxSize()
                         // The FIXED inset every tab used to get from the bar's
@@ -976,6 +987,7 @@ fun MainScaffold(
                 onOpenSearch = onOpenSearch,
                 onSelectTab = { selectedTab = it; initialTabApplied = true },
                 viewModel = viewModel,
+                visited = visitedTabs,
                 modifier = Modifier.fillMaxSize(),
             )
             // iOS "Syncing" pill, top-left over content (below the status bar).
@@ -1531,6 +1543,9 @@ private fun MainTabContent(
     // first minute of every cold launch, and the guide running on a
     // different state timeline than the scaffold).
     viewModel: PlaylistViewModel,
+    /** Hoisted in MainScaffold; the TV tab bar reads it to skip its settle
+     *  window for tabs that are already composed. */
+    visited: androidx.compose.runtime.snapshots.SnapshotStateList<AppTab>,
     modifier: Modifier = Modifier,
 ) {
     // Keep visited tabs alive (Logan 2026-09-03: "why does every tab have to
@@ -1540,10 +1555,6 @@ private fun MainTabContent(
     // pulls are gated on [LocalTabIsActive]. A tab absent from [tabs] (no
     // favorites, VOD or recordings) is not composed at all. Search is the
     // floating screen and is never kept.
-    val visited = rememberSaveable(saver = androidx.compose.runtime.saveable.listSaver(
-        save = { it.map { t -> t.name } },
-        restore = { names -> names.mapNotNull { n -> AppTab.entries.firstOrNull { it.name == n } }.toMutableStateList() },
-    )) { mutableStateListOf<AppTab>() }
     if (selectedTab != AppTab.Search && selectedTab !in visited) visited.add(selectedTab)
     val keepAliveTabs = tabs.filter { it in visited }
     Box(modifier = modifier) {
@@ -1668,6 +1679,9 @@ private fun TvTopTabBar(
     tabEntryFocus: androidx.compose.runtime.State<FocusRequester?>? = null,
     lastUpKeyMs: LongArray = longArrayOf(0L),
     pillRequesters: Map<AppTab, FocusRequester> = emptyMap(),
+    /** True when the tab is already composed and alive, so selecting it is a
+     *  placement rather than a cold build and can commit immediately. */
+    isTabWarm: (AppTab) -> Boolean = { false },
     /** Refresh circle (Logan 2026-08-06): TV's stand-in for pull-to-refresh.
      *  Re-fetches channels + EPG so Dispatcharr-side group/channel edits show
      *  up without a trip through Settings > playlist. */
@@ -1728,7 +1742,15 @@ private fun TvTopTabBar(
             // step, so pass-through pills never build. This LaunchedEffect is
             // keyed on focusedTab: moving to the next pill cancels the
             // pending commit with the coroutine.
-            kotlinx.coroutines.delay(250L)
+            //
+            // 2026-09-11 (Streamer, measured): with the keep-alive slots that
+            // landed in 4c800955 a tab that has been visited once is already
+            // composed, so committing costs one placement (25-105 ms to the
+            // first placed frame) and there is nothing to protect against.
+            // The flat 250 ms was the WHOLE perceived delay Logan reported:
+            // key to placed frame was 324-386 ms warm, of which ~280 ms was
+            // this sleep. Cold tabs keep the settle window.
+            if (!isTabWarm(cur)) kotlinx.coroutines.delay(250L)
             onSelect(cur)
         }
     }
@@ -1826,7 +1848,19 @@ private fun TvTopTabBar(
                     TvTab(
                         tab = tab,
                         selected = tab == selected,
-                        onFocused = { focusedTab = tab },
+                        onFocused = {
+                            focusedTab = tab
+                            // Warm tabs commit on the SAME frame as the pill
+                            // highlight (tvOS TabView behavior). Going through
+                            // the LaunchedEffect below cost another 22-38 ms
+                            // of coroutine scheduling for nothing. The cold
+                            // path still runs there, with its settle window.
+                            if (tab != selected && isTabWarm(tab) &&
+                                (armed || android.os.SystemClock.uptimeMillis() - lastUpKeyMs[0] < 400L)
+                            ) {
+                                onSelect(tab)
+                            }
+                        },
                         modifier = pillRequesters[tab]?.let { Modifier.focusRequester(it) } ?: Modifier,
                     )
                 }
