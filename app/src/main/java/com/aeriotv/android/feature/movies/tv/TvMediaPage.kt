@@ -259,6 +259,8 @@ fun <T> TvMediaPage(
     val snappingToTop = remember { mutableStateOf(false) }
     /** The library header row (title, search, sort, filter) holds focus. */
     val headerFocused = remember { mutableStateOf(false) }
+    /** The genre pill row holds focus: Up from the top poster row onto All must not scroll either. */
+    val pillsFocused = remember { mutableStateOf(false) }
     // Item tops at scroll zero, recorded whenever the page rests at the
     // top: the snap back up is then one animateScrollBy over the exact
     // distance (tvOS .smooth 0.45 s). animateScrollToItem jumps in
@@ -401,7 +403,7 @@ fun <T> TvMediaPage(
                 com.aeriotv.android.ui.tv.TvEdgeMarginBringIntoViewSpec(
                     marginPx = 100.dp.toPx(),
                     suppressed = { snappingToTop.value },
-                    holdIfVisible = { headerFocused.value },
+                    holdIfVisible = { headerFocused.value || pillsFocused.value },
                 )
             }
         }
@@ -538,6 +540,7 @@ fun <T> TvMediaPage(
                         modifier = Modifier
                             .padding(vertical = 6.dp)
                             .fillMaxWidth()
+                            .onFocusChanged { pillsFocused.value = it.hasFocus }
                             .focusProperties {
                                 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
                                 run { enter = { allPill } }
