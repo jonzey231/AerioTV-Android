@@ -302,8 +302,11 @@ fun PlayerChromeOverlay(
         exit = fadeOut(),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Top + bottom gradient scrims so the card and pills stay legible
-            // over bright video (matches the tvOS player chrome gradients).
+            // Top gradient scrim so the channel card stays legible over
+            // bright video. The bottom gradient is gone: the whole bottom
+            // control block now sits on ONE flat black 55 percent band (below),
+            // so there is a single background rather than a gradient with a
+            // band inside it (Logan 2026-09-11).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -312,17 +315,6 @@ fun PlayerChromeOverlay(
                     .background(
                         Brush.verticalGradient(
                             listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent),
-                        ),
-                    ),
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(190.dp)
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f)),
                         ),
                     ),
             )
@@ -345,12 +337,18 @@ fun PlayerChromeOverlay(
             } else {
                 System.currentTimeMillis()
             }
+            // ONE continuous band behind the ENTIRE bottom control block:
+            // timeline / scrubber row, the remaining-time and LIVE labels, the
+            // control pill row and the hint strip. Flush with the bottom edge,
+            // starting 12 dp above the topmost element, fading with the chrome
+            // (it is inside this AnimatedVisibility).
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.55f))
                     .navigationBarsPadding()
-                    .padding(bottom = 28.dp),
+                    .padding(top = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
             if (tvTransport) {
@@ -494,29 +492,21 @@ fun PlayerChromeOverlay(
                     )
                 }
             }
-            }
-            // Remote hint strip: its own full-width band flush with the bottom
-            // edge of the screen, black at 55 percent so the 9sp text stays
-            // readable over bright video (Logan's Streamer screenshot,
-            // 2026-09-11). Drawn as a SIBLING of the control Column, below its
-            // 28dp bottom padding, so no control moves and nothing overlaps;
-            // plain Text, so it can never take focus. Inside the chrome's
-            // AnimatedVisibility, so it fades with the controls.
+            // Remote hint strip: the LAST row of the block, on the same band.
+            // Plain Text, so it can never take focus, and it adds height under
+            // the controls rather than displacing them.
             if (hintPairs.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    com.aeriotv.android.ui.tv.TvRemoteHintStrip(
-                        hints = hintPairs,
-                        keyColor = Color.White.copy(alpha = 0.45f),
-                        actionColor = Color.White.copy(alpha = 0.72f),
-                    )
-                }
+                Spacer(Modifier.height(10.dp))
+                com.aeriotv.android.ui.tv.TvRemoteHintStrip(
+                    hints = hintPairs,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    keyColor = Color.White.copy(alpha = 0.45f),
+                    actionColor = Color.White.copy(alpha = 0.72f),
+                )
+                Spacer(Modifier.height(8.dp))
+            } else {
+                Spacer(Modifier.height(24.dp))
+            }
             }
             } else {
             // Phone / tablet (iOS PlayerView parity): top bar with Close on the
@@ -641,6 +631,7 @@ fun PlayerChromeOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.55f))
                     .navigationBarsPadding()
                     .padding(horizontal = 18.dp, vertical = 24.dp),
             ) {
