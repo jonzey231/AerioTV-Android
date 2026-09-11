@@ -282,7 +282,21 @@ fun <T> TvMediaPage(
                     val anchor = gridState.layoutInfo.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
                     if (anchor != null) {
                         val distance = (restTops.getValue(anchor.index) - anchor.offset.y).toFloat()
-                        gridState.animateScrollBy(-distance, tween(durationMillis = 600, easing = FastOutSlowInEasing))
+                        // PreventUserInput: the focused card's own bring-into-view
+                        // request (even a zero-distance one) took the scroll
+                        // mutex and cancelled a Default-priority animateScrollBy
+                        // after a few frames, leaving the hard snap to finish
+                        // the move (the "caught" animation, Logan 2026-09-10).
+                        gridState.scroll(androidx.compose.foundation.MutatePriority.PreventUserInput) {
+                            var previous = 0f
+                            androidx.compose.animation.core.animate(
+                                initialValue = 0f, targetValue = -distance,
+                                animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+                            ) { value, _ ->
+                                scrollBy(value - previous)
+                                previous = value
+                            }
+                        }
                     } else {
                         gridState.animateScrollToItem(0)
                     }
