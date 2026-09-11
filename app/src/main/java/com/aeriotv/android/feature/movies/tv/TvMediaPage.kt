@@ -286,6 +286,20 @@ fun <T> TvMediaPage(
                 // The grid's viewport is taller once the tab bar has collapsed;
                 // "fits at the top" must use the room the page has AT the top.
                 restViewport.value = info.viewportSize.height
+            } else {
+                // Rows below the first viewport are never on screen at rest, so
+                // extend the table from any visible row whose rest top is known:
+                // the header, pills and poster rows get exact rest positions as
+                // the page walks down. Without this, Up from the grid found no
+                // anchor and the pills > Sort and Sort > Watchlist scrolls
+                // silently did nothing (logcat 2026-09-10 23:17).
+                val anchor = info.visibleItemsInfo.firstOrNull { restTops.containsKey(it.index) }
+                if (anchor != null) {
+                    val base = restTops.getValue(anchor.index) - anchor.offset.y
+                    info.visibleItemsInfo.forEach {
+                        if (!restTops.containsKey(it.index)) { restTops[it.index] = base + it.offset.y; restHeights[it.index] = it.size.height }
+                    }
+                }
             }
             chromeScroll?.value = scrollOffsetPx() ?: Int.MAX_VALUE
         }
