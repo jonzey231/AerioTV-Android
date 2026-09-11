@@ -267,6 +267,7 @@ fun <T> TvMediaPage(
     // viewport-sized chunks over that distance, which read as chunky
     // (Logan 2026-09-10).
     val restTops = remember { HashMap<Int, Int>() }
+    val restHeights = remember { HashMap<Int, Int>() }
     val chromeScroll = com.aeriotv.android.feature.main.LocalTvChromeScroll.current
     /** Pixels the page has scrolled, from a visible item whose rest position is known; null when none is. */
     fun scrollOffsetPx(): Int? {
@@ -276,7 +277,7 @@ fun <T> TvMediaPage(
     LaunchedEffect(gridState) {
         snapshotFlow { gridState.layoutInfo }.collect { info ->
             if (gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0) {
-                info.visibleItemsInfo.forEach { restTops[it.index] = it.offset.y }
+                info.visibleItemsInfo.forEach { restTops[it.index] = it.offset.y; restHeights[it.index] = it.size.height }
             }
             chromeScroll?.value = scrollOffsetPx() ?: Int.MAX_VALUE
         }
@@ -299,6 +300,9 @@ fun <T> TvMediaPage(
                     2 -> 92.dp.roundToPx()
                     3 -> 129.dp.roundToPx()
                     4 -> restTops[headerIndex]
+                        ?: scrollOffsetPx()?.let { cur ->
+                            gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == headerIndex }?.let { cur + it.offset.y }
+                        }
                     else -> null
                 }
             }
@@ -351,7 +355,8 @@ fun <T> TvMediaPage(
     val revealFirstShelf: () -> Unit = {
         val shelfIndex = 1 + (if (hasHero) 1 else 0)
         val shelfTop = restTops[shelfIndex]
-        val shelfHeight = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
+        val shelfHeight = restHeights[shelfIndex]
+            ?: gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
         val viewport = gridState.layoutInfo.viewportSize.height
         val fitsAtTop = shelfTop == null || shelfHeight == null || shelfTop + shelfHeight <= viewport
         if (fitsAtTop) {
@@ -713,8 +718,14 @@ fun <T> TvMediaPage(
         }
         }
 
-        val railVisible by remember(railAllowed) {
-            derivedStateOf { railAllowed && (focusedCellKeyState.value != null || railHasFocusState.value) }
+        // tvOS parks the rail at the grid's top edge, so it only reads once
+        // the library has scrolled to the top of the screen; here the rail
+        // waits for the header line to reach the top (Logan 2026-09-10).
+        val railVisible by remember(railAllowed, headerIndex) {
+            derivedStateOf {
+                railAllowed && gridState.firstVisibleItemIndex >= headerIndex &&
+                    (focusedCellKeyState.value != null || railHasFocusState.value)
+            }
         }
         TvRailSlot(visible = { railVisible }) {
             TvAlphabetRail(
