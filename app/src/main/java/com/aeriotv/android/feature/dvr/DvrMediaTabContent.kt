@@ -466,7 +466,14 @@ fun DvrMediaTabContent(
     }
 
     if (showManageChannels) {
-        com.aeriotv.android.feature.livetv.ManageGroupsSheet(
+        if (rememberLiveTvFormFactor().isTv) {
+            com.aeriotv.android.ui.tv.TvFilterPage(
+                groups = channelNames,
+                hiddenGroups = hiddenChannels,
+                onChange = { settingsVm.setHiddenDvrChannels(it) },
+                onDismiss = { showManageChannels = false },
+            )
+        } else com.aeriotv.android.feature.livetv.ManageGroupsSheet(
             allGroups = channelNames,
             hiddenGroups = hiddenChannels,
             onSave = { settingsVm.setHiddenDvrChannels(it) },
@@ -793,7 +800,15 @@ private fun TvDvrPage(
         onPill = { label -> onKind(kindPills.firstOrNull { it.label == label }) },
         gridItems = filteredLibrary,
         gridKey = { it.id },
-        cell = { rec, cellScope -> card(rec, cellScope.modifier) { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] = rec.id; onPlay(rec) } },
+        cell = { rec, cellScope ->
+            card(rec, cellScope.modifier) {
+                com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] = rec.id
+                // Return to the exact offset (tvOS keeps the tab alive).
+                com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingOffset["dvr"] =
+                    gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+                onPlay(rec)
+            }
+        },
         emptyContent = {
             if (isLoading) CircularProgressIndicator()
             else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -809,6 +824,7 @@ private fun TvDvrPage(
         barHideThreshold = if (heroPages.isNotEmpty()) 310.dp else 130.dp,
         filterOpen = filterOpen,
         returnKey = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] },
-        onReturnHandled = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending.remove("dvr") },
+        returnOffset = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingOffset["dvr"] },
+        onReturnHandled = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending.remove("dvr"); com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingOffset.remove("dvr") },
     )
 }

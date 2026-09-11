@@ -89,6 +89,10 @@ fun MediaTabContent(
     onEpisodeResume: (String) -> Unit,
     onResumeMovie: (String) -> Unit,
     onPlayMovie: (String) -> Unit = onResumeMovie,
+    /** Hero "Play from Beginning": start at 0 and KEEP the Continue Watching
+     *  row (tvOS MoviesView:1507-1511 plays with resumePositionMs 0). */
+    onPlayMovieFromStart: (String) -> Unit = onPlayMovie,
+    onEpisodeResumeFromStart: (String) -> Unit = onEpisodeResume,
     viewModel: OnDemandViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel = hiltViewModel(),
@@ -261,10 +265,15 @@ fun MediaTabContent(
             if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, page.title); onPlayMovie(videoId) }
             else onEpisodeResume(videoId)
         }
+        // tvOS keeps the WatchProgress row here: no watchVm.delete.
+        val playFromStart: () -> Unit = {
+            if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, page.title); onPlayMovieFromStart(videoId) }
+            else onEpisodeResumeFromStart(videoId)
+        }
         MediaHeroCard(
             page = backdrops[page.key]?.let { page.copy(artUrl = it) } ?: page,
             onPrimary = play,
-            onPlayFromStart = { watchVm.delete(videoId); play() },
+            onPlayFromStart = playFromStart,
             onDetails = { page.item?.movieUuid?.let { u -> viewModel.noteMovieTitle(u, page.title); onMovieClick(u) } ?: page.item?.seriesId?.let(onSeriesClick) },
             onRemove = { watchVm.delete(videoId) },
             isOnWatchlist = page.item?.key in watchlistKeys,
@@ -331,15 +340,24 @@ fun MediaTabContent(
             onPlay = { videoId, title ->
                 if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, title); onPlayMovie(videoId) } else onEpisodeResume(videoId)
             },
+            onPlayFromStart = { videoId, title ->
+                if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, title); onPlayMovieFromStart(videoId) } else onEpisodeResumeFromStart(videoId)
+            },
             onOpen = { item -> item.movieUuid?.let { u -> viewModel.noteMovieTitle(u, item.title); onMovieClick(u) } ?: item.seriesId?.let(onSeriesClick) },
             isLoading = isLoading, libraryPending = libraryPending,
             isSearchBusy = state.isSearching || state.isSearchingSeries,
         )
         if (showManageGroups && groupNames.isNotEmpty()) {
-            ManageGroupsSheet(
-                allGroups = groupNames,
+            // Native tvOS Filter page on TV (the phone branch below keeps the
+            // bottom sheet).
+            com.aeriotv.android.ui.tv.TvFilterPage(
+                groups = groupNames,
                 hiddenGroups = hiddenGroups,
-                onSave = { if (kind == MediaKind.Movies) settingsVm.setHiddenMovieGroups(it) else settingsVm.setHiddenSeriesGroups(it) },
+                onChange = { next ->
+                    if (kind == MediaKind.Movies) settingsVm.setHiddenMovieGroups(next) else settingsVm.setHiddenSeriesGroups(next)
+                    // tvOS drops a genre selection once its group is hidden.
+                    selectedGenre?.let { g -> if (g in next) selectedGenre = null }
+                },
                 onDismiss = { showManageGroups = false },
             )
         }

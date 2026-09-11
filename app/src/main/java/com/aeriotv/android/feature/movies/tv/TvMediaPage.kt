@@ -139,6 +139,11 @@ import kotlinx.coroutines.launch
  */
 object TvReturnMemory {
     val pending = androidx.compose.runtime.mutableStateMapOf<String, Any>()
+    /** The grid's (firstVisibleItemIndex, firstVisibleItemScrollOffset) at the
+     *  moment that cell was opened. tvOS never disposes the tab, so the page
+     *  comes back at the exact offset (MoviesView.swift:221, 259-279); this is
+     *  how Android reconstructs it. Not observed: read once on return. */
+    val pendingOffset = HashMap<String, Pair<Int, Int>>()
 }
 
 object TvPage {
@@ -233,6 +238,9 @@ fun <T> TvMediaPage(
      *  first frame after a return, which clamps the saved scroll to the top)
      *  and refocuses the cell, then calls [onReturnHandled]. */
     returnKey: Any? = null,
+    /** Where the grid stood when [returnKey] was opened (index, offset px):
+     *  restored verbatim when it is still in range, else the row-park below. */
+    returnOffset: Pair<Int, Int>? = null,
     onReturnHandled: () -> Unit = {},
     /** tvOS Movies gates the rail on an empty search field (MoviesView.swift:1854);
      *  DVR does NOT (DVRView.swift:517), so it is a parameter, not an invariant. */
@@ -632,8 +640,16 @@ fun <T> TvMediaPage(
         if (!hasItems) return@LaunchedEffect
         val idx = gridItems.indexOfFirst { gridKey(it) == key }
         if (idx < 0) { onReturnHandled(); return@LaunchedEffect }
-        // tvOS parks the row 24 pt under the top edge, not flush with it.
-        runCatching { gridState.scrollToItem(leadingCount + (idx / columns) * columns, -restoreGapPx) }
+        // Exact offset first (tvOS returns pixel-identical); the row park is
+        // the fallback when the recorded index no longer exists after a
+        // library change.
+        val exact = returnOffset?.takeIf { it.first < leadingCount + gridItems.size }
+        if (exact != null) {
+            runCatching { gridState.scrollToItem(exact.first, exact.second) }
+        } else {
+            // tvOS parks the row 24 pt under the top edge, not flush with it.
+            runCatching { gridState.scrollToItem(leadingCount + (idx / columns) * columns, -restoreGapPx) }
+        }
         repeat(150) {
             withFrameNanos { }
             if (runCatching { cellRequesters[key]?.requestFocus() }.getOrNull() == true) {
@@ -689,7 +705,11 @@ fun <T> TvMediaPage(
             // The grid spans the screen so shelves can scroll under both edges
             // (tvOS; Logan 2026-09-10): the overscan lives in this padding and
             // the full-width rows bleed over it.
-            contentPadding = PaddingValues(start = TvPage.overscan + TvPage.contentInset - TvPage.heroInset, end = TvPage.overscan, top = 0.dp, bottom = 40.dp),
+            // Columns line up with the header and the shelves (tvOS: grid at
+            // 142 pt = 71 dp, header and shelf at 140 pt = 70 dp;
+            // MoviesView.swift:2083-2089, :2597). start 70 + end 48 leaves
+            // 960 - 118 = 842 dp, exactly 7 x 110 dp with 6 x 12 dp spacing.
+            contentPadding = PaddingValues(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset, top = 0.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(gridRowSpacing),
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
         ) {
@@ -978,8 +998,8 @@ private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(
     content: @Composable () -> Unit,
 ) {
     item(key = key, span = { GridItemSpan(maxLineSpan) }) {
-        val bleedStart = TvPage.overscan + TvPage.contentInset - TvPage.heroInset
-        val bleedEnd = TvPage.overscan
+        val bleedStart = TvPage.overscan + TvPage.contentInset
+        val bleedEnd = TvPage.overscan + TvPage.heroInset
         Box(
             modifier = Modifier.layout { measurable, constraints ->
                 val extraStart = bleedStart.roundToPx()

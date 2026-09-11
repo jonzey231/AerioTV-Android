@@ -14,6 +14,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,7 +28,7 @@ import com.aeriotv.android.feature.movies.MediaSortOrder
 import com.aeriotv.android.feature.movies.formatRating
 import com.aeriotv.android.ui.tv.TvPill
 
-/** Poster column width on the 960 dp Streamer canvas: (880 - 30 - 8 - 6 * 12) / 7. */
+/** Poster column width on the 960 dp Streamer canvas: (960 - 70 - 48 - 6 * 12) / 7. */
 internal val TV_POSTER_WIDTH = 110.dp
 
 /**
@@ -74,13 +75,22 @@ internal fun TvMediaTab(
     onRemoveWatchlist: (String) -> Unit,
     onRemoveProgress: (String) -> Unit,
     onPlay: (videoId: String, title: String) -> Unit,
+    /** "Play from Beginning": start at 0 and KEEP the Continue Watching row. */
+    onPlayFromStart: (videoId: String, title: String) -> Unit,
     onOpen: (MediaItem) -> Unit,
     isLoading: Boolean,
     libraryPending: Boolean,
     isSearchBusy: Boolean,
 ) {
     val pageId = kind.name
-    val open: (MediaItem) -> Unit = { item -> TvReturnMemory.pending[pageId] = item.key; onOpen(item) }
+    val open: (MediaItem) -> Unit = { item ->
+        TvReturnMemory.pending[pageId] = item.key
+        // Come back at the exact offset, not with the row parked at the top
+        // (tvOS never disposes the tab, MoviesView.swift:221, 259-279).
+        TvReturnMemory.pendingOffset[pageId] =
+            gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+        onOpen(item)
+    }
 
     fun heroFor(page: MediaHeroPage, watchlist: Boolean): TvHeroPage {
         val item = page.item
@@ -92,12 +102,20 @@ internal fun TvMediaTab(
         val meta = buildList {
             page.year?.let { add(it.toString()) }
             if ((page.season ?: 0) > 0) add("S${page.season} E${page.episode ?: 0}")
-            page.durationSecs?.takeIf { it > 0 }?.let { s -> add(if (s >= 3600) "${s / 3600} h ${(s % 3600) / 60} min" else "${s / 60} min") }
+            // tvOS: VODSeries.durationText is always empty, so a TV Shows
+            // hero never carries a runtime (VODModels.swift:1288).
+            if (kind != MediaKind.TVShows) {
+                page.durationSecs?.takeIf { it > 0 }?.let { s -> add(if (s >= 3600) "${s / 3600} h ${(s % 3600) / 60} min" else "${s / 60} min") }
+            }
             page.genre?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it) }
         }
         val buttons = buildList {
             add(TvHeroButton(if (page.hasProgress) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, onClick = play))
-            if (page.hasProgress) add(TvHeroButton("Play from Beginning", Icons.Filled.Replay) { onRemoveProgress(videoId); play() })
+            // tvOS plays at 0 and LEAVES WatchProgress intact
+            // (MoviesView.swift:1507-1511): the row must survive.
+            if (page.hasProgress) {
+                add(TvHeroButton("Play from Beginning", Icons.Filled.Replay) { onPlayFromStart(videoId, page.title) })
+            }
             add(TvHeroButton("Details", Icons.Outlined.Info, onClick = details))
         }
         val longPress = buildList {
@@ -112,24 +130,38 @@ internal fun TvMediaTab(
         )
     }
 
-    // tvOS: with nothing in progress the hero shows the first library title.
-    val tvHero = remember(heroPages, backdrops, library, watchlistKeys) {
-        if (heroPages.isNotEmpty()) heroPages.map { heroFor(it, watchlist = false) }
-        else library.firstOrNull()?.let { first ->
-            listOf(
-                TvHeroPage(
-                    key = "lib:" + first.key, title = first.title, artUrl = first.posterUrl,
-                    meta = listOfNotNull(first.year?.toString()), rating = formatRating(first.rating).ifEmpty { null },
-                    buttons = listOf(
-                        TvHeroButton("Play", Icons.Filled.PlayArrow, primary = true) { first.movieUuid?.let { onPlay(it, first.title) } ?: open(first) },
-                        TvHeroButton("Details", Icons.Outlined.Info) { open(first) },
-                    ),
-                    longPressActions = listOf(
-                        TvMenuAction(if (first.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") { onToggleWatchlist(first) },
-                    ),
+    fun libraryFallbackHero(): List<TvHeroPage> {
+        val first = library.firstOrNull() ?: return emptyList()
+        return listOf(
+            TvHeroPage(
+                key = "lib:" + first.key, title = first.title, artUrl = first.posterUrl,
+                meta = listOfNotNull(first.year?.toString()), rating = formatRating(first.rating).ifEmpty { null },
+                buttons = listOf(
+                    TvHeroButton("Play", Icons.Filled.PlayArrow, primary = true) { first.movieUuid?.let { onPlay(it, first.title) } ?: open(first) },
+                    TvHeroButton("Details", Icons.Outlined.Info) { open(first) },
                 ),
-            )
-        } ?: emptyList()
+                longPressActions = listOf(
+                    TvMenuAction(if (first.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") { onToggleWatchlist(first) },
+                ),
+            ),
+        )
+    }
+
+    // tvOS: with nothing in progress the hero shows the first library title
+    // (Android has no addedAt yet, so it is library.first, not the newest).
+    // Mid-sweep hold (MoviesView.swift:1042-1046): while the library is still
+    // loading and nothing has resolved, KEEP the pages already on screen
+    // instead of swapping the carousel for a single static card.
+    val heldHero = remember { mutableStateOf(emptyList<TvHeroPage>()) }
+    val tvHero = remember(heroPages, backdrops, library, watchlistKeys, isLoading) {
+        if (!isLoading || heroPages.isNotEmpty() || heldHero.value.isEmpty()) {
+            heldHero.value = if (heroPages.isNotEmpty()) {
+                heroPages.map { heroFor(it, watchlist = false) }
+            } else {
+                libraryFallbackHero()
+            }
+        }
+        heldHero.value
     }
     val watchlistShelf = TvShelf(
         title = "Watchlist",
@@ -215,6 +247,7 @@ internal fun TvMediaTab(
         // restart the restore while the page is still up (it would clear the
         // key before the detail even opened).
         returnKey = remember { TvReturnMemory.pending[pageId] },
-        onReturnHandled = { TvReturnMemory.pending.remove(pageId) },
+        returnOffset = remember { TvReturnMemory.pendingOffset[pageId] },
+        onReturnHandled = { TvReturnMemory.pending.remove(pageId); TvReturnMemory.pendingOffset.remove(pageId) },
     )
 }

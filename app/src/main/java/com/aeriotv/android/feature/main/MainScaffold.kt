@@ -213,6 +213,10 @@ fun MainScaffold(
     onResumeMovie: (String) -> Unit = {},
     /** Media center hero: play a movie directly (resumes from saved progress). */
     onPlayMovie: (String) -> Unit = {},
+    /** Media center hero "Play from Beginning": start at 0 and KEEP the
+     *  Continue Watching row (tvOS MoviesView:1507-1511). */
+    onPlayMovieFromStart: (String) -> Unit = onPlayMovie,
+    onEpisodeResumeFromStart: (String) -> Unit = onEpisodeResume,
     /** (playbackUrl, title, dispatcharrRecordingId or -1). */
     onPlayRecording: (String, String, Int) -> Unit = { _, _, _ -> },
     /** Catch-up (task #136): url, title, progStartMillis, progEndMillis, panelTz. */
@@ -714,6 +718,8 @@ fun MainScaffold(
                     onEpisodeResume = onEpisodeResume,
                     onResumeMovie = onResumeMovie,
                     onPlayMovie = onPlayMovie,
+                    onPlayMovieFromStart = onPlayMovieFromStart,
+                    onEpisodeResumeFromStart = onEpisodeResumeFromStart,
                     onPlayRecording = onPlayRecording,
                     onPlayCatchup = onPlayCatchup,
                     onLaunchMultiview = onLaunchMultiview,
@@ -931,6 +937,8 @@ fun MainScaffold(
                 onEpisodeResume = onEpisodeResume,
                 onResumeMovie = onResumeMovie,
                 onPlayMovie = onPlayMovie,
+                onPlayMovieFromStart = onPlayMovieFromStart,
+                onEpisodeResumeFromStart = onEpisodeResumeFromStart,
                 onPlayRecording = onPlayRecording,
                 onPlayCatchup = onPlayCatchup,
                 onLaunchMultiview = onLaunchMultiview,
@@ -1473,6 +1481,9 @@ private fun MainTabContent(
     onEpisodeResume: (String) -> Unit,
     onResumeMovie: (String) -> Unit,
     onPlayMovie: (String) -> Unit = {},
+    /** See MainScaffold: start-at-zero siblings that keep the progress row. */
+    onPlayMovieFromStart: (String) -> Unit = onPlayMovie,
+    onEpisodeResumeFromStart: (String) -> Unit = onEpisodeResume,
     onPlayRecording: (String, String, Int) -> Unit,
     onPlayCatchup: (String, String, String, Long, Long, String, String) -> Unit,
     onLaunchMultiview: () -> Unit,
@@ -1539,6 +1550,8 @@ private fun MainTabContent(
                     onEpisodeResume = onEpisodeResume,
                     onResumeMovie = onResumeMovie,
                     onPlayMovie = onPlayMovie,
+                    onPlayMovieFromStart = onPlayMovieFromStart,
+                    onEpisodeResumeFromStart = onEpisodeResumeFromStart,
                 )
             }
             AppTab.TVShows -> {
@@ -1549,6 +1562,8 @@ private fun MainTabContent(
                     onEpisodeResume = onEpisodeResume,
                     onResumeMovie = onResumeMovie,
                     onPlayMovie = onPlayMovie,
+                    onPlayMovieFromStart = onPlayMovieFromStart,
+                    onEpisodeResumeFromStart = onEpisodeResumeFromStart,
                 )
             }
             AppTab.OnDemand -> {

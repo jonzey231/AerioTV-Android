@@ -89,10 +89,10 @@ object Routes {
     // iPhone vs the tvOS unified player). csEnd <= csStart = not catch-up.
     const val PLAYER = "player/{channelId}?csUrl={csUrl}&csTitle={csTitle}" +
         "&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}&mini={mini}"
-    const val VOD_PLAYER = "vod_player/{movieUuid}"
+    const val VOD_PLAYER = "vod_player/{movieUuid}?fromStart={fromStart}"
     const val MOVIE_DETAIL = "movie_detail/{movieUuid}"
     const val SERIES_DETAIL = "series_detail/{seriesId}"
-    const val VOD_EPISODE_PLAYER = "vod_episode_player/{episodeUuid}"
+    const val VOD_EPISODE_PLAYER = "vod_episode_player/{episodeUuid}?fromStart={fromStart}"
     const val MULTIVIEW = "multiview"
     // fromPlayer marks a search opened from the fullscreen player (Remote
     // Control hold-Down): its Back then resumes the player instead of
@@ -122,10 +122,14 @@ object Routes {
     ) = "player/${Uri.encode(channelId)}" +
         "?csUrl=${Uri.encode(playbackUrl)}&csTitle=${Uri.encode(title)}" +
         "&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
-    fun vodPlayer(movieUuid: String) = "vod_player/${Uri.encode(movieUuid)}"
+    // fromStart (tvOS MoviesView "Play from Beginning"): start at 0 and
+    // LEAVE the WatchProgress row alone, so Continue Watching survives.
+    fun vodPlayer(movieUuid: String, fromStart: Boolean = false) =
+        "vod_player/${Uri.encode(movieUuid)}?fromStart=$fromStart"
     fun movieDetail(movieUuid: String) = "movie_detail/${Uri.encode(movieUuid)}"
     fun seriesDetail(seriesId: Int) = "series_detail/$seriesId"
-    fun vodEpisodePlayer(episodeUuid: String) = "vod_episode_player/${Uri.encode(episodeUuid)}"
+    fun vodEpisodePlayer(episodeUuid: String, fromStart: Boolean = false) =
+        "vod_episode_player/${Uri.encode(episodeUuid)}?fromStart=$fromStart"
     fun recordingPlayer(
         playbackUrl: String,
         title: String,
@@ -955,6 +959,17 @@ fun AerioTVNavHost(
                             navController.navigate(Routes.vodEpisodePlayer(videoId))
                         }
                     },
+                    // Hero "Play from Beginning": start at 0 without deleting
+                    // the Continue Watching row. The companion-TV branch has no
+                    // start-at flag on the wire and plays as usual.
+                    onEpisodeResumeFromStart = { videoId ->
+                        if (companionTvName != null) {
+                            companionRemoteNav.playVod(videoId, isEpisode = true)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.vodEpisodePlayer(videoId, fromStart = true))
+                        }
+                    },
                     // #9: resume an in-progress movie from Continue Watching by
                     // opening its detail (which offers the Resume button).
                     onResumeMovie = { videoId ->
@@ -968,6 +983,15 @@ fun AerioTVNavHost(
                             toastPlayingOnTv()
                         } else {
                             navController.navigate(Routes.vodPlayer(videoId))
+                        }
+                    },
+                    // See onEpisodeResumeFromStart above.
+                    onPlayMovieFromStart = { videoId ->
+                        if (companionTvName != null) {
+                            companionRemoteNav.playVod(videoId, isEpisode = false)
+                            toastPlayingOnTv()
+                        } else {
+                            navController.navigate(Routes.vodPlayer(videoId, fromStart = true))
                         }
                     },
                     onPlayRecording = { playbackUrl, title, recId ->
@@ -1254,7 +1278,10 @@ fun AerioTVNavHost(
 
             composable(
                 route = Routes.VOD_EPISODE_PLAYER,
-                arguments = listOf(navArgument("episodeUuid") { type = NavType.StringType }),
+                arguments = listOf(
+                    navArgument("episodeUuid") { type = NavType.StringType },
+                    navArgument("fromStart") { type = NavType.BoolType; defaultValue = false },
+                ),
             ) { entry ->
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
@@ -1282,6 +1309,9 @@ fun AerioTVNavHost(
                 tearDownLiveForVod(navController)
 
                 val episodeUuid = Uri.decode(entry.arguments?.getString("episodeUuid").orEmpty())
+                // Hero "Play from Beginning": skip the resume seek, keep the
+                // saved WatchProgress row (tvOS MoviesView:1507-1511).
+                val epFromStart = entry.arguments?.getBoolean("fromStart") ?: false
 
                 val apiKey = playlistState.playlist?.apiKey
                 val headers = remember(apiKey, playlistState.playlist?.sourceType) {
@@ -1347,6 +1377,7 @@ fun AerioTVNavHost(
                 VODPlayerScreen(
                     streamUrl = resolved?.url.orEmpty(),
                     title = episode?.displayName ?: "Episode",
+                    startFromBeginning = epFromStart,
                     // Audit #53/#38: never replay the API key to a session URL
                     // that resolved OFF the server's origin.
                     httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,
@@ -1465,7 +1496,10 @@ fun AerioTVNavHost(
 
             composable(
                 route = Routes.VOD_PLAYER,
-                arguments = listOf(navArgument("movieUuid") { type = NavType.StringType }),
+                arguments = listOf(
+                    navArgument("movieUuid") { type = NavType.StringType },
+                    navArgument("fromStart") { type = NavType.BoolType; defaultValue = false },
+                ),
             ) { entry ->
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
@@ -1490,6 +1524,8 @@ fun AerioTVNavHost(
                 tearDownLiveForVod(navController)
 
                 val movieUuid = Uri.decode(entry.arguments?.getString("movieUuid").orEmpty())
+                // See the episode route above.
+                val movieFromStart = entry.arguments?.getBoolean("fromStart") ?: false
                 val movie = onDemandState.movies.firstOrNull { it.uuid == movieUuid }
 
                 // Version switching: make sure the provider copies are loaded
@@ -1545,6 +1581,7 @@ fun AerioTVNavHost(
                 VODPlayerScreen(
                     streamUrl = resolved?.url.orEmpty(),
                     title = movie?.displayName ?: "On Demand",
+                    startFromBeginning = movieFromStart,
                     // Audit #53/#38: never replay the API key to a session URL
                     // that resolved OFF the server's origin.
                     httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,

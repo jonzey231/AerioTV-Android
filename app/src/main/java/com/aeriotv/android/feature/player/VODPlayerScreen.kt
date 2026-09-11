@@ -182,6 +182,10 @@ fun VODPlayerScreen(
      *  movie Continue Watching rail, and the type now syncs. */
     progressVodType: String? = null,
     posterUrl: String? = null,
+    /** Hero "Play from Beginning" (tvOS MoviesView:1507-1511): ignore the
+     *  saved position and start at 0. The WatchProgress row is left alone,
+     *  so Continue Watching keeps the title, and saving continues as usual. */
+    startFromBeginning: Boolean = false,
     isDvr: Boolean = false,
     startAtLiveEdge: Boolean = true,
     /** Tap-on-row semantics (iOS parity 2026-08-28): resume the saved
@@ -1198,6 +1202,7 @@ fun VODPlayerScreen(
             // dvrAutoResume); explicit Start at Live / Watch from
             // Beginning keep their own start handling.
             if (isDvr && !dvrAutoResume) return@LaunchedEffect
+            if (startFromBeginning) return@LaunchedEffect
             val pos = savedPositionMs ?: return@LaunchedEffect
             if (pos <= 0L) return@LaunchedEffect
             // The from-beginning watcher would drag a DVR resume back to
