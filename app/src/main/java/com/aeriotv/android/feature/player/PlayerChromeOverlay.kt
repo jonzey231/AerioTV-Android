@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -393,8 +395,6 @@ fun PlayerChromeOverlay(
             // replay, Go Live only exists while the buffer is scrubbed back).
             // Slots are placed left to right, so geometric D-pad traversal
             // still walks them in reading order.
-            var focusedCaption by remember { mutableStateOf("") }
-            val setCaption: (String?) -> Unit = { focusedCaption = it ?: "" }
             // Rewind / Forward need a rolling buffer (or a catch-up replay).
             // Without one they stay in the row, greyed and inert, and say why
             // when focused, rather than vanishing and reflowing the row.
@@ -405,7 +405,6 @@ fun PlayerChromeOverlay(
                     icon = if (isPlayerPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                     title = if (isPlayerPaused) "Play" else "Pause",
                     onClick = onRewindTogglePause,
-                    onCaption = setCaption,
                     modifier = Modifier.focusRequester(pauseFocus),
                 )
             }
@@ -418,8 +417,7 @@ fun PlayerChromeOverlay(
                         icon = Icons.Filled.Refresh,
                         title = "Retry",
                         onClick = onRetry,
-                        onCaption = setCaption,
-                        modifier = Modifier.focusRequester(retryFocus),
+                            modifier = Modifier.focusRequester(retryFocus),
                     )
                 }
                 // Task #148 milestone B: an archive replay can't be recorded
@@ -430,8 +428,7 @@ fun PlayerChromeOverlay(
                         title = "Record",
                         iconTint = Color(0xFFFF4757),
                         onClick = { recordCurrent() },
-                        onCaption = setCaption,
-                    )
+                        )
                 }
                 PlayerControlCircle(
                     icon = Icons.Filled.Replay30,
@@ -442,7 +439,6 @@ fun PlayerChromeOverlay(
                         if (catchupMode) onCatchupSeekTo(catchupPositionMs - 30_000)
                         else onRewindSeekWall(tvCurrentWall - 30_000)
                     },
-                    onCaption = setCaption,
                 )
             }
             val rightPills: @Composable () -> Unit = {
@@ -455,15 +451,13 @@ fun PlayerChromeOverlay(
                         if (catchupMode) onCatchupSeekTo(catchupPositionMs + 30_000)
                         else onRewindSeekWall(tvCurrentWall + 30_000)
                     },
-                    onCaption = setCaption,
                 )
                 if (tvTransport && !catchupMode && timeshiftState?.timeshifting == true) {
                     PlayerControlCircle(
                         icon = Icons.Filled.PlayArrow,
                         title = "Go Live",
                         onClick = onGoLive,
-                        onCaption = setCaption,
-                    )
+                        )
                 }
                 if (!catchupMode) {
                     PlayerControlCircle(
@@ -471,16 +465,14 @@ fun PlayerChromeOverlay(
                         title = "Multiview",
                         contentDescription = "Add a multiview tile",
                         onClick = onAddToMultiview,
-                        onCaption = setCaption,
-                    )
+                        )
                 }
                 Box {
                     PlayerControlCircle(
                         icon = Icons.Filled.Tune,
                         title = "Options",
                         onClick = { moreOpen = true },
-                        onCaption = setCaption,
-                        modifier = Modifier.focusRequester(optionsFocus),
+                            modifier = Modifier.focusRequester(optionsFocus),
                     )
                     PlayerMoreMenu(
                         expanded = moreOpen,
@@ -534,22 +526,10 @@ fun PlayerChromeOverlay(
                 center = centerPill,
                 right = rightPills,
             )
-            // Fixed-height caption slot: only the focused control names
-            // itself, and the slot keeps its height when nothing is focused so
-            // the row above never moves.
-            Box(
-                modifier = Modifier.fillMaxWidth().height(16.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = focusedCaption,
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color.White,
-                    maxLines = 1,
-                )
-            }
+            // Room for the per-control captions, which each circle draws
+            // BELOW itself without taking layout height (see
+            // PlayerControlCircle), so the hint strip never moves.
+            Spacer(Modifier.height(16.dp))
             // Remote hint strip: the LAST row of the block, on the same band.
             // Plain Text, so it can never take focus, and it adds height under
             // the controls rather than displacing them.
@@ -947,7 +927,6 @@ private fun PlayerControlCircle(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     onClick: () -> Unit,
-    onCaption: (String?) -> Unit,
     modifier: Modifier = Modifier,
     iconTint: Color = Color.White,
     /** Spoken label when the title does not say what the control does. */
@@ -968,38 +947,53 @@ private fun PlayerControlCircle(
         enabled -> Color.White
         else -> Color.White.copy(alpha = 0.4f)
     }
-    Box(
-        modifier = modifier
-            .onFocusChanged {
-                focused = it.isFocused
-                // Compose delivers the loss before the gain, so clearing here
-                // and setting on gain leaves exactly the focused control's
-                // caption up, and an empty slot when focus leaves the row.
-                if (it.isFocused) {
-                    onCaption(if (enabled) title else (disabledCaption ?: title))
-                } else {
-                    onCaption(null)
-                }
-            }
-            .tvFocusScale(focused, focusedScale = 1.04f)
-            .size(30.dp)
-            .clip(CircleShape)
-            .background(if (focused) Color.White else Color.White.copy(alpha = 0.14f))
-            .clickable(interactionSource = interaction, indication = null) {
-                if (enabled) onClick()
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription ?: title,
-            tint = when {
-                focused -> Color.Black
-                iconTint != Color.White -> if (enabled) iconTint else iconTint.copy(alpha = 0.4f)
-                else -> contentColor
-            },
-            modifier = Modifier.size(14.dp),
-        )
+    // The cell IS the 30 dp circle. Its caption is drawn below it as an
+    // OVERLAY (Logan 2026-09-11): centered on this circle, measured with an
+    // unbounded width so a long caption ("Enable Live Rewind in Settings")
+    // stays one line and simply extends over its neighbors' empty caption
+    // space, and never affecting this cell's width or the row's layout. Only
+    // the focused control draws one, and tvFocusScale's zIndex bump means the
+    // focused cell (and its caption) paints above its siblings.
+    Box(modifier = modifier.size(30.dp)) {
+        Box(
+            modifier = Modifier
+                .onFocusChanged { focused = it.isFocused }
+                .tvFocusScale(focused, focusedScale = 1.04f)
+                .fillMaxSize()
+                .clip(CircleShape)
+                .background(if (focused) Color.White else Color.White.copy(alpha = 0.14f))
+                .clickable(interactionSource = interaction, indication = null) {
+                    if (enabled) onClick()
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription ?: title,
+                tint = when {
+                    focused -> Color.Black
+                    iconTint != Color.White -> if (enabled) iconTint else iconTint.copy(alpha = 0.4f)
+                    else -> contentColor
+                },
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        if (focused) {
+            Text(
+                text = if (enabled) title else (disabledCaption ?: title),
+                fontSize = 9.sp,
+                lineHeight = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+                maxLines = 1,
+                softWrap = false,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 34.dp)
+                    .wrapContentWidth(Alignment.CenterHorizontally, unbounded = true),
+            )
+        }
     }
 }
 
