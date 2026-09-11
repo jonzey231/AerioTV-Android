@@ -241,14 +241,18 @@ fun PlayerChromeOverlay(
     val optionsFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val closeFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val retryFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-    LaunchedEffect(chromeVisible, connectionIssue) {
+    val pauseFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val hasTransportRow = (timeshiftState?.buffering == true && !catchupMode) || catchupMode
+    LaunchedEffect(chromeVisible, connectionIssue, hasTransportRow) {
         if (chromeVisible) {
             kotlinx.coroutines.delay(100)
             // During a connection issue the Retry pill is the primary action,
-            // so land focus there; otherwise the usual Options / Close target.
+            // so land focus there; otherwise the center Pause pill (Logan
+            // 2026-09-11), falling back to Options when there is no transport.
             runCatching {
                 when {
                     connectionIssue && isTv -> retryFocus.requestFocus()
+                    isTv && hasTransportRow -> pauseFocus.requestFocus()
                     isTv -> optionsFocus.requestFocus()
                     else -> closeFocus.requestFocus()
                 }
@@ -378,20 +382,46 @@ fun PlayerChromeOverlay(
                 }
                 Spacer(Modifier.height(16.dp))
             }
-            Row(
-                modifier = Modifier.focusGroup(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Connection-issue Retry: leads the standard control row and
-                // auto-focuses (see the focus LaunchedEffect) so the remote has
-                // a reachable re-tune while "Channel Unavailable" is showing.
+            // Control pill row (Logan 2026-09-11): Record, Rewind, Pause,
+            // Forward, Add Stream, Options, with the Pause pill anchored at
+            // the SCREEN center. Laid out as three slots rather than one Row
+            // so the center never shifts when a side pill's label width or
+            // presence changes (Record is hidden on non-Dispatcharr playlists
+            // and during a catch-up replay, Go Live only exists while the
+            // rewind buffer is scrubbed back). Slots are placed left to right,
+            // so geometric D-pad traversal still walks them in reading order.
+            val centerPill: (@Composable () -> Unit)? = if (tvTransport) {
+                {
+                    PlayerPill(
+                        icon = if (isPlayerPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                        label = if (isPlayerPaused) "Play" else "Pause",
+                        onClick = onRewindTogglePause,
+                        modifier = Modifier.focusRequester(pauseFocus),
+                    )
+                }
+            } else {
+                null
+            }
+            val leftPills: @Composable () -> Unit = {
+                // Connection-issue Retry leads the row and auto-focuses (see
+                // the focus LaunchedEffect) so the remote has a reachable
+                // re-tune while "Channel Unavailable" is showing.
                 if (connectionIssue) {
                     PlayerPill(
                         icon = Icons.Filled.Refresh,
                         label = "Retry",
                         onClick = onRetry,
                         modifier = Modifier.focusRequester(retryFocus),
+                    )
+                }
+                // Task #148 milestone B: an archive replay can't be recorded
+                // or joined by live tiles (tvOS parity: catch-up gates both).
+                if (canRecord && !catchupMode) {
+                    PlayerPill(
+                        icon = Icons.Filled.FiberManualRecord,
+                        label = "Record",
+                        iconTint = Color(0xFFFF4757),
+                        onClick = { recordCurrent() },
                     )
                 }
                 if (tvTransport) {
@@ -403,11 +433,10 @@ fun PlayerChromeOverlay(
                             else onRewindSeekWall(tvCurrentWall - 30_000)
                         },
                     )
-                    PlayerPill(
-                        icon = if (isPlayerPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                        label = if (isPlayerPaused) "Play" else "Pause",
-                        onClick = onRewindTogglePause,
-                    )
+                }
+            }
+            val rightPills: @Composable () -> Unit = {
+                if (tvTransport) {
                     PlayerPill(
                         icon = Icons.Filled.Forward30,
                         label = "Forward",
@@ -423,6 +452,13 @@ fun PlayerChromeOverlay(
                             onClick = onGoLive,
                         )
                     }
+                }
+                if (!catchupMode) {
+                    PlayerPill(
+                        icon = Icons.Filled.Add,
+                        label = "Add Stream",
+                        onClick = onAddToMultiview,
+                    )
                 }
                 Box {
                     PlayerPill(
@@ -475,22 +511,25 @@ fun PlayerChromeOverlay(
                         },
                     )
                 }
-                // Task #148 milestone B: an archive replay can't be recorded
-                // or joined by live tiles (tvOS parity: catch-up gates both).
-                if (canRecord && !catchupMode) {
-                    PlayerPill(
-                        icon = Icons.Filled.FiberManualRecord,
-                        label = "Record",
-                        iconTint = Color(0xFFFF4757),
-                        onClick = { recordCurrent() },
-                    )
-                }
-                if (!catchupMode) {
-                    PlayerPill(
-                        icon = Icons.Filled.Add,
-                        label = "Add Stream",
-                        onClick = onAddToMultiview,
-                    )
+            }
+            if (centerPill != null) {
+                CenterAnchoredPillRow(
+                    modifier = Modifier.fillMaxWidth().focusGroup(),
+                    gap = 16.dp,
+                    left = leftPills,
+                    center = centerPill,
+                    right = rightPills,
+                )
+            } else {
+                // No transport (plain live, buffer off): nothing to anchor, so
+                // the remaining pills simply center as a group.
+                Row(
+                    modifier = Modifier.focusGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    leftPills()
+                    rightPills()
                 }
             }
             // Remote hint strip: the LAST row of the block, on the same band.
@@ -838,6 +877,53 @@ private fun CircleIconButton(
  * a clear D-pad focus treatment (brighter fill + white border + grow).
  * Mirrors PlaybackBottomChrome_tvOS's Options / Record / Add Stream pills.
  */
+/**
+ * Three-slot control row: [center] is placed at the SCREEN center, [left] ends
+ * [gap] before it and [right] starts [gap] after it. Unlike a single Row with
+ * an even arrangement, the center pill does not move when a side pill changes
+ * width or disappears (Logan 2026-09-11). Slots are placed in reading order,
+ * so geometric D-pad traversal still walks left to right.
+ */
+@Composable
+private fun CenterAnchoredPillRow(
+    gap: androidx.compose.ui.unit.Dp,
+    left: @Composable () -> Unit,
+    center: @Composable () -> Unit,
+    right: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.ui.layout.Layout(
+        modifier = modifier,
+        content = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(gap),
+                verticalAlignment = Alignment.CenterVertically,
+                content = { left() },
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, content = { center() })
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(gap),
+                verticalAlignment = Alignment.CenterVertically,
+                content = { right() },
+            )
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val leftP = measurables[0].measure(loose)
+        val centerP = measurables[1].measure(loose)
+        val rightP = measurables[2].measure(loose)
+        val width = constraints.maxWidth
+        val height = maxOf(leftP.height, centerP.height, rightP.height)
+        val gapPx = gap.roundToPx()
+        val centerX = (width - centerP.width) / 2
+        layout(width, height) {
+            leftP.placeRelative(centerX - gapPx - leftP.width, (height - leftP.height) / 2)
+            centerP.placeRelative(centerX, (height - centerP.height) / 2)
+            rightP.placeRelative(centerX + centerP.width + gapPx, (height - rightP.height) / 2)
+        }
+    }
+}
+
 @Composable
 private fun PlayerPill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
