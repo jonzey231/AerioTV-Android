@@ -978,6 +978,7 @@ fun TvHeroButtonView(
 
 // MARK: shelves
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun <T> TvShelfRow(
     shelf: TvShelf<T>,
