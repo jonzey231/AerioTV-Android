@@ -268,6 +268,7 @@ fun <T> TvMediaPage(
     // (Logan 2026-09-10).
     val restTops = remember { HashMap<Int, Int>() }
     val restHeights = remember { HashMap<Int, Int>() }
+    val restViewport = remember { mutableIntStateOf(0) }
     // The rows above the grid change index when a shelf appears later (the
     // Watchlist loads after the first layout), so positions recorded under
     // the old indices describe the wrong rows: drop them on any change.
@@ -282,6 +283,9 @@ fun <T> TvMediaPage(
         snapshotFlow { gridState.layoutInfo }.collect { info ->
             if (gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0) {
                 info.visibleItemsInfo.forEach { restTops[it.index] = it.offset.y; restHeights[it.index] = it.size.height }
+                // The grid's viewport is taller once the tab bar has collapsed;
+                // "fits at the top" must use the room the page has AT the top.
+                restViewport.value = info.viewportSize.height
             }
             chromeScroll?.value = scrollOffsetPx() ?: Int.MAX_VALUE
         }
@@ -361,7 +365,7 @@ fun <T> TvMediaPage(
         val shelfTop = restTops[shelfIndex]
         val shelfHeight = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == shelfIndex }?.size?.height
             ?: restHeights[shelfIndex]
-        val viewport = gridState.layoutInfo.viewportSize.height
+        val viewport = restViewport.intValue.takeIf { it > 0 } ?: gridState.layoutInfo.viewportSize.height
         val fitsAtTop = shelfTop == null || shelfHeight == null || shelfTop + shelfHeight <= viewport
         if (fitsAtTop) {
             scrollToTopRef.value()
