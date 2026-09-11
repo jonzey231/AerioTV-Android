@@ -7,6 +7,9 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.setValue
 import androidx.media3.exoplayer.ExoPlayer
 import com.aeriotv.android.core.data.VodLearnedStream
 import kotlin.math.roundToInt
@@ -26,12 +29,89 @@ import kotlin.math.roundToInt
  * select-callback and `applyTrackSelection()` -- it never lives
  * anywhere durable, so we don't need it to survive a process restart.
  */
+/**
+ * The video facts BOTH the Stream Info panel and the chrome's format badge
+ * read, so the two can never disagree (Logan 2026-09-11). One extraction, one
+ * frame-rate spelling, one scan-type call.
+ *
+ * Source notes, audited 2026-09-11:
+ * - [ExoPlayer.getVideoFormat] is the format of the track the video renderer
+ *   is CURRENTLY decoding, not the first track in the group, so it already
+ *   follows adaptive HLS variant switches.
+ * - [Format.width] / [Format.height] are the CODED size. Anamorphic sources
+ *   (1440x1080 PAR 4:3, common on broadcast MPEG-2) need
+ *   [Format.pixelWidthHeightRatio] applied to the WIDTH to get what the
+ *   viewer actually sees; height is unaffected by PAR, which is why the badge,
+ *   which prints the height, was already right and the panel's "1440x1080"
+ *   was not.
+ * - [Format.frameRate] is [Format.NO_VALUE] (-1f) on most live MPEG-TS feeds
+ *   until something measures it. It is never printed raw ("-1 fps" is
+ *   impossible: every read goes through `takeIf { it > 0f }`), and when it is
+ *   missing we fall back to the rate DisplayFrameRateMatcher already measures
+ *   from rendered-frame presentation timestamps, rather than inventing a
+ *   second measurement.
+ * - Media3's [Format] exposes NO field-order / interlacing flag, and
+ *   `onVideoSizeChanged` carries none either, so interlacing cannot be read
+ *   out. [interlaced] is therefore a conservative INFERENCE, applied only
+ *   where it is safe: 1080-line MPEG-2 or H.264 at a 25 / 29.97 / 30 frame
+ *   rate is interlaced broadcast in practice (1080p25 / 1080p30 transmissions
+ *   effectively do not exist), and 720 / 2160 lines are always progressive.
+ *   Everything else stays "p". The FRAME rate is stated in both cases, so
+ *   1080i broadcast reads "1080i · 29.97 fps" and never mixes in the 59.94
+ *   field rate.
+ */
+@OptIn(UnstableApi::class)
+internal data class VideoFormatFacts(
+    /** Coded width, as the decoder sees it. */
+    val codedWidth: Int?,
+    /** Width after [Format.pixelWidthHeightRatio]: what the viewer sees. */
+    val displayWidth: Int?,
+    val height: Int?,
+    val fps: Float?,
+    val interlaced: Boolean,
+) {
+    /** "1080i" / "2160p", or null before the height is known. */
+    val scanLabel: String?
+        get() = height?.let { "$it" + if (interlaced) "i" else "p" }
+}
+
+@OptIn(UnstableApi::class)
+internal fun videoFormatFacts(
+    format: Format?,
+    /** Measured rate used when the container carries no frameRate. */
+    fallbackFps: Float? = null,
+): VideoFormatFacts {
+    val width = format?.width?.takeIf { it > 0 }
+    val height = format?.height?.takeIf { it > 0 }
+    val par = format?.pixelWidthHeightRatio?.takeIf { it > 0f && !it.isNaN() } ?: 1f
+    val fps = format?.frameRate?.takeIf { it > 0f && !it.isNaN() }
+        ?: fallbackFps?.takeIf { it > 0f && !it.isNaN() }
+    val mime = format?.sampleMimeType.orEmpty()
+    val broadcastCodec = mime.contains("mpeg2") || mime.contains("avc") || mime.contains("h263")
+    val interlaced = height == 1080 && broadcastCodec &&
+        fps != null && fps > 24.5f && fps < 31.5f
+    return VideoFormatFacts(
+        codedWidth = width,
+        displayWidth = width?.let { (it * par).roundToInt().takeIf { w -> w > 0 } },
+        height = height,
+        fps = fps,
+        interlaced = interlaced,
+    )
+}
+
+/** "59.94" / "60": two decimals when fractional, integer otherwise. */
+internal fun formatFps(fps: Float): String {
+    val rounded = (fps * 100f).roundToInt() / 100.0
+    return if (rounded % 1.0 == 0.0) rounded.toInt().toString() else rounded.toString()
+}
+
 @OptIn(UnstableApi::class)
 fun ExoPlayer.captureStreamInfo(): StreamInfoSnapshot {
     val format = videoFormat
-    val width = format?.width?.takeIf { it > 0 }
-    val height = format?.height?.takeIf { it > 0 }
-    val fps = format?.frameRate?.takeIf { it > 0f }
+    val facts = videoFormatFacts(format, DisplayFrameRateMatcher.contentFps.value)
+    val width = facts.displayWidth
+    val height = facts.height
+    val fps = facts.fps
     val codec = format?.codecs.orEmpty().ifBlank { format?.sampleMimeType.orEmpty().removePrefix("video/") }
     val colorInfo = format?.colorInfo
     val bitrate = format?.bitrate?.takeIf { it != Format.NO_VALUE }
@@ -39,11 +119,17 @@ fun ExoPlayer.captureStreamInfo(): StreamInfoSnapshot {
     val videoLines = buildList {
         if (codec.isNotBlank()) add(codec)
         val resFps = buildString {
-            if (width != null && height != null) append("${width}x${height}")
+            // Display width (PAR applied) so an anamorphic 1440x1080 broadcast
+            // reads as the 1920x1080 the viewer sees, and the scan-type suffix
+            // the badge shows.
+            if (width != null && height != null) {
+                append("${width}x${height}")
+                facts.scanLabel?.let { append(" ($it)") }
+            }
             if (fps != null) {
                 if (isNotEmpty()) append("  ")
-                // Media3 reports a precise frame rate; round to one decimal for the chrome.
-                append("${(fps * 10).roundToInt() / 10.0}fps")
+                // Same spelling the format badge uses (formatFps).
+                append("${formatFps(fps)}fps")
             }
         }
         if (resFps.isNotBlank()) add(resFps)
@@ -296,4 +382,78 @@ private fun colorRangeLabel(range: Int): String? = when (range) {
     C.COLOR_RANGE_LIMITED -> "limited"
     C.COLOR_RANGE_FULL -> "full"
     else -> null
+}
+
+/**
+ * "1080i · 29.97 fps" / "2160p · 60 fps" for the player chrome's format badge
+ * (Logan 2026-09-11). Built from [videoFormatFacts] and [formatFps], the exact
+ * values and spelling the Stream Info panel shows, so the badge and the panel
+ * can never disagree. Null until the height is known; the fps half is dropped
+ * when neither the container nor the measurement has a rate yet, so "-1 fps"
+ * can never appear.
+ */
+@OptIn(UnstableApi::class)
+fun videoFormatBadge(format: Format?, fallbackFps: Float? = null): String? {
+    val facts = videoFormatFacts(format, fallbackFps)
+    val scan = facts.scanLabel ?: return null
+    val fps = facts.fps ?: return scan
+    return "$scan · ${formatFps(fps)} fps"
+}
+
+/**
+ * [videoFormatBadge] for the player currently bound, recomputed only when the
+ * video INPUT FORMAT actually changes (which covers adaptive HLS variant
+ * switches that keep the same resolution), when the video size changes, or
+ * when the measured fallback rate lands. Never polled per frame.
+ *
+ * [resetKey] (the channel / media identity) clears the badge immediately on a
+ * channel change, so the new channel never shows the previous one's numbers
+ * while its first format is still on the way; a media-item transition clears
+ * it too.
+ */
+@OptIn(UnstableApi::class)
+@androidx.compose.runtime.Composable
+fun rememberVideoFormatBadge(player: ExoPlayer?, resetKey: Any? = null): String? {
+    val measuredFps by DisplayFrameRateMatcher.contentFps
+        .collectAsStateWithLifecycle()
+    var format by androidx.compose.runtime.remember(player, resetKey) {
+        androidx.compose.runtime.mutableStateOf<Format?>(null)
+    }
+    androidx.compose.runtime.DisposableEffect(player, resetKey) {
+        val p = player ?: return@DisposableEffect onDispose { }
+        val listener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onVideoInputFormatChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                newFormat: Format,
+                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+            ) {
+                format = newFormat
+            }
+            override fun onVideoSizeChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                videoSize: androidx.media3.common.VideoSize,
+            ) {
+                format = p.videoFormat
+            }
+            override fun onVideoDisabled(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                decoderCounters: androidx.media3.exoplayer.DecoderCounters,
+            ) {
+                // Channel flip / stop: drop the old numbers rather than
+                // carrying them into the next stream.
+                format = null
+            }
+            override fun onMediaItemTransition(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                mediaItem: androidx.media3.common.MediaItem?,
+                reason: Int,
+            ) {
+                format = null
+            }
+        }
+        format = p.videoFormat
+        p.addAnalyticsListener(listener)
+        onDispose { p.removeAnalyticsListener(listener) }
+    }
+    return videoFormatBadge(format, measuredFps)
 }

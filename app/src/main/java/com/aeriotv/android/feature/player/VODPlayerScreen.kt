@@ -83,6 +83,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -276,6 +277,9 @@ fun VODPlayerScreen(
 
     var chromeVisible by remember { mutableStateOf(true) }
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    // Resolution / frame rate readout for the band's right end. Recomputed on
+    // video-size / track changes only, never polled.
+    val vodFormatBadge = rememberVideoFormatBadge(exoPlayer, streamUrl)
 
     // Options entry point (bottom chrome, rightmost): a small sheet with
     // Switch Version (when the item has > 1 provider copy) + Audio Track +
@@ -1682,6 +1686,7 @@ fun VODPlayerScreen(
                     // Generated from the VOD player's OWN key model (it runs a
                     // focus-zone transport and deliberately ignores the remote
                     // map), so the pairs follow the zone the user is in.
+                    formatBadge = vodFormatBadge,
                     hintPairs = if (isTvForm && showRemoteHints) {
                         com.aeriotv.android.core.remote.RemoteControlHints
                             .vodPlayerStripHints(
@@ -2052,6 +2057,8 @@ private fun BottomChrome(
     isDvr: Boolean = false,
     onSeekToLive: () -> Unit = {},
     onOptions: () -> Unit = {},
+    /** "1080p · 59.94 fps" for the band's right end; null hides it. TV only. */
+    formatBadge: String? = null,
     /** Remote hint strip pairs (TV only; empty = nothing drawn). Rendered as
      *  the LAST row of this block, under the time row, as extra height so no
      *  control moves. */
@@ -2154,6 +2161,25 @@ private fun BottomChrome(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+            // Resolution / frame rate readout, leading this right-hand group so
+            // it sits at the band's right end without covering the duration or
+            // the Options button that already live there. Plain Text in a
+            // frosted capsule: never focusable.
+            if (formatBadge != null && isTvForm) {
+                Text(
+                    text = formatBadge,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+            }
             if (isDvr) {
                 // LIVE pill (iOS PlayerView): filled red within 15s of the
                 // live edge, hollow/gray when scrubbed back. Tapping it

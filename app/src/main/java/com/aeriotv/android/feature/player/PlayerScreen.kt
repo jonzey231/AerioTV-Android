@@ -2443,6 +2443,12 @@ private fun LiveRewindChromeSection(
     // Settings > Remote Control > Show remote hints.
     val showRemoteHints by settingsVm.showRemoteHints
         .collectAsStateWithLifecycle(initialValue = true)
+    // Resolution / frame rate readout for the band's right edge. Recomputed
+    // only on video-size / track changes, never polled.
+    val boundPlayerForBadge by exoHolder.playerInstance.collectAsStateWithLifecycle()
+    // Keyed on the channel so a flip clears the badge instead of showing the
+    // previous channel's numbers until the new format arrives.
+    val formatBadge = rememberVideoFormatBadge(boundPlayerForBadge, currentChannel?.id)
     var catchupPositionMs by catchupPositionMsState
     var tsPositionWallMs by tsPositionWallMsState
     var tsPaused by tsPausedState
@@ -2607,6 +2613,7 @@ private fun LiveRewindChromeSection(
         // player's live mode, so a remapped button is named as the user set
         // it and a slot that does nothing here drops out. Off when the
         // "Show remote hints" toggle is off.
+        formatBadge = if (isTvForm) formatBadge else null,
         hintPairs = if (isTvForm && showRemoteHints) {
             com.aeriotv.android.core.remote.RemoteControlHints.livePlayerStripHints(
                 map = remoteMap,

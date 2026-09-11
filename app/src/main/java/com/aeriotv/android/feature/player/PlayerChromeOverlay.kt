@@ -152,6 +152,9 @@ fun PlayerChromeOverlay(
      *  it renders as the LAST row of the bottom control block and fades with
      *  the chrome. TV only. */
     hintPairs: List<com.aeriotv.android.core.remote.RemoteHint> = emptyList(),
+    /** "1080p · 59.94 fps" for the right edge of the band; null hides it. TV
+     *  only, resolved by the caller from the player's current video format. */
+    formatBadge: String? = null,
     /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
      *  bar. Null on TV and on any Cast-disabled build. */
     castSlot: (@Composable () -> Unit)? = null,
@@ -519,13 +522,27 @@ fun PlayerChromeOverlay(
                     )
                 }
             }
-            CenterAnchoredPillRow(
-                modifier = Modifier.fillMaxWidth().focusGroup(),
-                gap = 9.dp,
-                left = leftPills,
-                center = centerPill,
-                right = rightPills,
-            )
+            Box(modifier = Modifier.fillMaxWidth()) {
+                CenterAnchoredPillRow(
+                    modifier = Modifier.fillMaxWidth().focusGroup(),
+                    gap = 9.dp,
+                    left = leftPills,
+                    center = centerPill,
+                    right = rightPills,
+                )
+                // Resolution / frame rate readout at the RIGHT edge of the
+                // band, vertically centered on the control row. Plain Text in
+                // a frosted capsule: not focusable, and it sits in the row's
+                // own empty right margin so nothing moves.
+                if (formatBadge != null) {
+                    PlayerFormatBadge(
+                        text = formatBadge,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 20.dp),
+                    )
+                }
+            }
             // Room for the per-control captions, which each circle draws
             // BELOW itself without taking layout height (see
             // PlayerControlCircle), so the hint strip never moves.
@@ -918,6 +935,23 @@ private fun CenterAnchoredPillRow(
             rightP.placeRelative(centerX + centerP.width + gapPx, (height - rightP.height) / 2)
         }
     }
+}
+
+/** Frosted capsule carrying the video format readout ("1080p · 59.94 fps"). */
+@Composable
+private fun PlayerFormatBadge(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        fontSize = 9.sp,
+        lineHeight = 11.sp,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        maxLines = 1,
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.14f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    )
 }
 
 @Composable

@@ -52,6 +52,17 @@ object DisplayFrameRateMatcher {
     @Volatile var lastRequestedRate: Float = 0f
         private set
 
+    /**
+     * The MEASURED content frame rate (the raw median, NOT the doubled request
+     * class), 0 when nothing has been measured for the current stream. Live
+     * MPEG-TS very often carries no frameRate in the container
+     * (Format.frameRate == -1), so this is the fallback the Stream Info panel
+     * and the chrome's format badge use rather than printing nothing (Logan
+     * 2026-09-11). Cleared on a stream discontinuity / channel flip, so a new
+     * channel never shows the previous one's rate.
+     */
+    val contentFps = kotlinx.coroutines.flow.MutableStateFlow(0f)
+
     /** Fired (on the metadata thread) whenever the requested rate class
      *  changes. MainActivity uses it to pick a display MODE at that rate when
      *  the seamless request cannot be honoured (2160p50 on a 60 Hz mode). */
@@ -73,6 +84,7 @@ object DisplayFrameRateMatcher {
                 val d = presentationTimeUs - lastPtsUs
                 if (d < 0L || d > 1_000_000L) {
                     deltasUs.clear() // stream discontinuity / channel flip
+                    contentFps.value = 0f
                 } else if (d in 4_000L..210_000L) {
                     deltasUs.addLast(d)
                     if (deltasUs.size > 60) deltasUs.removeFirst()
@@ -82,6 +94,7 @@ object DisplayFrameRateMatcher {
             if (deltasUs.size >= 30) {
                 val sorted = deltasUs.sorted()
                 val fps = (1_000_000.0 / sorted[sorted.size / 2]).toFloat()
+                if (abs(fps - contentFps.value) > 0.2f) contentFps.value = fps
                 // Map measured CONTENT fps to the rate we actually request.
                 // Only the 50 / 59.94 / 60 class is ever requested: 25 / 29.97
                 // / 30 content is requested at DOUBLE rate, which the panel
@@ -130,6 +143,7 @@ object DisplayFrameRateMatcher {
     /** Stop measuring and release our frame-rate preference (so the guide /
      *  launcher revert to the panel default). */
     fun detach(player: ExoPlayer?, handle: Any?, surfaceView: SurfaceView?) {
+        contentFps.value = 0f
         (handle as? VideoFrameMetadataListener)?.let { l ->
             runCatching { player?.clearVideoFrameMetadataListener(l) }
         }
