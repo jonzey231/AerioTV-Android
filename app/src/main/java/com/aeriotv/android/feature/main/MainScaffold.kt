@@ -564,6 +564,43 @@ fun MainScaffold(
     }
     val anyBackgroundWork = syncLabels.isNotEmpty()
 
+    // Pre-warm (Logan 2026-09-11): a FIRST visit to a tab still cost 419-567 ms
+    // key to frame on the Streamer, of which ~250 ms was the settle window and
+    // 130-280 ms was the tab's own first composition plus layout. Once Live TV
+    // has painted and the app is idle, each present tab is composed into its
+    // hidden keep-alive slot, one at a time, cheapest first, so the user's
+    // first real visit is a warm one. A pre-warmed tab counts as visited, so
+    // the settle window never runs for it either. Never pre-warms a tab that
+    // is not present, never while a channel/EPG/VOD sweep is saturating the
+    // main thread, and TV only (the phone keeps one tab at a time).
+    val prewarmTabsNow = androidx.compose.runtime.rememberUpdatedState(tabs)
+    val prewarmBusyNow = androidx.compose.runtime.rememberUpdatedState(anyBackgroundWork)
+    val prewarmIsTv = rememberLiveTvFormFactor().isTv
+    LaunchedEffect(prewarmIsTv) {
+        if (!prewarmIsTv) return@LaunchedEffect
+        androidx.compose.runtime.withFrameNanos { }
+        kotlinx.coroutines.delay(2_000L)
+        // Cheapest first (measured cold key-to-frame: Settings and Favorites
+        // are plain columns, DVR/Movies/TV Shows are the LazyVerticalGrid
+        // media pages, On Demand is the legacy grid).
+        val order = listOf(
+            AppTab.Settings, AppTab.Favorites, AppTab.DVR,
+            AppTab.Movies, AppTab.TVShows, AppTab.OnDemand,
+        )
+        // Tabs can still materialize a beat after launch (VOD, recordings), so
+        // keep sweeping for a while instead of taking one snapshot.
+        val deadline = android.os.SystemClock.uptimeMillis() + 60_000L
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            val next = order.firstOrNull {
+                it in prewarmTabsNow.value && it !in visitedTabs
+            }
+            if (next == null) { kotlinx.coroutines.delay(2_000L); continue }
+            if (prewarmBusyNow.value) { kotlinx.coroutines.delay(500L); continue }
+            visitedTabs.add(next)
+            kotlinx.coroutines.delay(500L)
+        }
+    }
+
     // iOS Issue #24: when the app returns to the foreground, refresh the guide
     // if it has gone stale (>30min). Skip the first ON_START (cold launch
     // already loads the EPG) so a normal launch never double-fetches.
@@ -1966,12 +2003,24 @@ private fun TvTab(
     // FOCUSED pill is a white platter with dark ink, the SELECTED pill keeps
     // the accent fill, everything else is bare text. No ring: the platter
     // is the focus visual, exactly as on the Apple TV.
+    // Both tweens run the SAME 150 ms EaseInOut as tvFocusScale (the tvOS pill
+    // grow). The default color spring took 145-210 ms to settle and landed the
+    // highlight ~200-260 ms after the key press, which is AFTER the content
+    // swap now arrives (51-199 ms warm): the tab read as loading ahead of the
+    // bar (Logan 2026-09-11). tvOS changes the pill and the content together,
+    // so the bar is sped up to meet the content rather than the content
+    // delayed to meet the bar.
+    val pillTween = androidx.compose.animation.core.tween<Color>(
+        durationMillis = 150,
+        easing = androidx.compose.animation.core.EaseInOut,
+    )
     val background by animateColorAsState(
         targetValue = when {
             focused -> Color.White
             selected -> MaterialTheme.colorScheme.primary
             else -> Color.Transparent
         },
+        animationSpec = pillTween,
         label = "tvTabBackground",
     )
     val foreground by animateColorAsState(
@@ -1980,6 +2029,7 @@ private fun TvTab(
             selected -> MaterialTheme.colorScheme.onPrimary
             else -> MaterialTheme.colorScheme.onSurfaceVariant
         },
+        animationSpec = pillTween,
         label = "tvTabForeground",
     )
     Row(
