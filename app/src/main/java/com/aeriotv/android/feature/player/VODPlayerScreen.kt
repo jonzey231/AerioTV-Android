@@ -95,6 +95,7 @@ import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.core.pip.supportsPip
 import com.aeriotv.android.feature.ondemand.VodProviderOption
 import com.aeriotv.android.feature.ondemand.VodVersionPickerSheet
+import com.aeriotv.android.feature.player.PLAYER_CHROME_HIDE_MS
 import com.aeriotv.android.feature.settings.SettingsViewModel
 import com.aeriotv.android.feature.settings.bufferMillisFor
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
@@ -143,7 +144,9 @@ private const val WATCH_FROM_START_TARGET_OFFSET_MS = 30L * 24L * 60L * 60L * 10
 /** Cap on re-corrections so a window that refuses to hold position 0 degrades
  *  to "starts at live" rather than an endless seek loop. */
 private const val WATCH_FROM_START_MAX_CORRECTIONS = 5
-private const val AUTO_HIDE_MS = 4_000L
+/** One shared countdown with the live player (see PLAYER_CHROME_HIDE_MS); was
+ *  a separate 4 s copy here. */
+private const val AUTO_HIDE_MS = PLAYER_CHROME_HIDE_MS
 
 /**
  * Android-TV VOD transport focus zones (Archie spec, task #44). The whole
@@ -795,6 +798,11 @@ fun VODPlayerScreen(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                 val isRepeat = event.nativeKeyEvent.repeatCount > 0
                 val now = android.os.SystemClock.uptimeMillis()
+                // EVERY handled press is a user action. The per-branch bumps
+                // below are now redundant but harmless; this one guarantees no
+                // branch can be added later that silently leaves the countdown
+                // running from the previous action.
+                lastInteractionAt = now
                 val reveal = {
                     chromeVisible = true
                     if (tvFocusZone == TvVodFocusZone.None) tvFocusZone = TvVodFocusZone.PlayPause
@@ -2021,8 +2029,20 @@ fun VODPlayerScreen(
     // pending scrub pins the chrome, and pause holds the chrome up until
     // resume (iOS scheduleControlsHide fires only while playing).
     val tvHoldChrome = isTvForm && isPaused
-    LaunchedEffect(chromeVisible, isDragging, lastInteractionAt, scrubTargetMs, tvHoldChrome) {
-        if (chromeVisible && !isDragging && scrubTargetMs == null && !tvHoldChrome) {
+    // One hide job at a time: the keys cancel the running countdown and start
+    // a fresh AUTO_HIDE_MS one, so a stale job from an earlier reveal can
+    // never fire early. It does not start until the chrome is actually
+    // visible, and it stands down while a sheet is open, while the scrubber
+    // holds a pending target, and while a drag or a pause holds the chrome.
+    val vodInteractionLocked = showOptionsSheet || showVersionSheet ||
+        showAudioSheet || showSubtitlesSheet
+    LaunchedEffect(
+        chromeVisible, isDragging, lastInteractionAt, scrubTargetMs, tvHoldChrome,
+        vodInteractionLocked,
+    ) {
+        if (chromeVisible && !isDragging && scrubTargetMs == null && !tvHoldChrome &&
+            !vodInteractionLocked
+        ) {
             delay(AUTO_HIDE_MS)
             if (!isDragging) chromeVisible = false
         }

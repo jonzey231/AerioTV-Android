@@ -942,7 +942,9 @@ fun MultiviewScreen(
     // finishes.
     LaunchedEffect(chromeVisible, lastInteractionAt, relocatingIndex) {
         if (chromeVisible && relocatingIndex == null) {
-            kotlinx.coroutines.delay(4_000L)
+            kotlinx.coroutines.delay(
+                com.aeriotv.android.feature.player.PLAYER_CHROME_HIDE_MS,
+            )
             chromeVisible = false
         }
     }

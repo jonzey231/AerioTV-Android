@@ -173,6 +173,9 @@ fun PlayerChromeOverlay(
     onSetSleepMinutes: (Int) -> Unit,
     sleepRemainingMillis: Long?,
     onInteractingChange: (Boolean) -> Unit = {},
+    /** "The user just did something": restarts the host's auto-hide countdown.
+     *  Fired on every focus move and every activation inside the chrome. */
+    onInteraction: () -> Unit = {},
     // Connection-issue Retry (2026-07-12): shown in the standard controls ONLY
     // while the stream is unavailable, so the remote has a focusable Retry
     // (the center error-card button can't take focus on TV). onRetry re-tunes.
@@ -409,6 +412,7 @@ fun PlayerChromeOverlay(
                     title = if (isPlayerPaused) "Play" else "Pause",
                     onClick = onRewindTogglePause,
                     modifier = Modifier.focusRequester(pauseFocus),
+                    onInteraction = onInteraction,
                 )
             }
             val leftPills: @Composable () -> Unit = {
@@ -421,6 +425,7 @@ fun PlayerChromeOverlay(
                         title = "Retry",
                         onClick = onRetry,
                             modifier = Modifier.focusRequester(retryFocus),
+                        onInteraction = onInteraction,
                     )
                 }
                 // Task #148 milestone B: an archive replay can't be recorded
@@ -431,6 +436,7 @@ fun PlayerChromeOverlay(
                         title = "Record",
                         iconTint = Color(0xFFFF4757),
                         onClick = { recordCurrent() },
+                        onInteraction = onInteraction,
                         )
                 }
                 PlayerControlCircle(
@@ -442,6 +448,7 @@ fun PlayerChromeOverlay(
                         if (catchupMode) onCatchupSeekTo(catchupPositionMs - 30_000)
                         else onRewindSeekWall(tvCurrentWall - 30_000)
                     },
+                    onInteraction = onInteraction,
                 )
             }
             val rightPills: @Composable () -> Unit = {
@@ -454,12 +461,14 @@ fun PlayerChromeOverlay(
                         if (catchupMode) onCatchupSeekTo(catchupPositionMs + 30_000)
                         else onRewindSeekWall(tvCurrentWall + 30_000)
                     },
+                    onInteraction = onInteraction,
                 )
                 if (tvTransport && !catchupMode && timeshiftState?.timeshifting == true) {
                     PlayerControlCircle(
                         icon = Icons.Filled.PlayArrow,
                         title = "Go Live",
                         onClick = onGoLive,
+                            onInteraction = onInteraction,
                         )
                 }
                 if (!catchupMode) {
@@ -468,6 +477,7 @@ fun PlayerChromeOverlay(
                         title = "Multiview",
                         contentDescription = "Add a multiview tile",
                         onClick = onAddToMultiview,
+                            onInteraction = onInteraction,
                         )
                 }
                 Box {
@@ -476,6 +486,7 @@ fun PlayerChromeOverlay(
                         title = "Options",
                         onClick = { moreOpen = true },
                             modifier = Modifier.focusRequester(optionsFocus),
+                        onInteraction = onInteraction,
                     )
                     PlayerMoreMenu(
                         expanded = moreOpen,
@@ -967,6 +978,7 @@ private fun PlayerControlCircle(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     onClick: () -> Unit,
+    onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
     iconTint: Color = Color.White,
     /** Spoken label when the title does not say what the control does. */

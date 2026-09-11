@@ -70,7 +70,17 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 private const val TAG = "PlayerScreen"
-private const val AUTO_HIDE_MS = 4_000L
+/**
+ * The ONE chrome auto-hide countdown (Logan 2026-09-11: "exactly 3 seconds
+ * after the LAST user action"). Shared by the live player, the VOD player and
+ * multiview so they cannot drift apart again; it was 4 s in all three.
+ */
+const val PLAYER_CHROME_HIDE_MS = 3_000L
+
+/** The launch info pill's own dwell. NOT the chrome timer: it is the brief
+ *  "what am I watching" card, and shortening it with the chrome would change
+ *  unrelated behavior. */
+private const val LAUNCH_HINT_MS = 4_000L
 private const val SWIPE_THRESHOLD_PX = 120f
 // Min gap between two hardware D-pad channel flips. Auto-repeat on a held UP/DOWN
 // fires rapidly; this paces it so a hold surfs one channel at a time instead of
@@ -639,6 +649,15 @@ fun PlayerScreen(
     // chrome is visible so the auto-hide timer re-arms instead of firing
     // mid-traversal. Phase 172.
     var lastInteractionAt by remember { mutableStateOf(0L) }
+    // THE single "the user just did something" entry point. Advancing this
+    // restarts the auto-hide LaunchedEffect (it is one of its keys), which
+    // cancels the running countdown and starts a fresh one, so there is only
+    // ever one hide job in flight. Every action routes through here: key
+    // events at this screen, activity-level mapped actions and media keys,
+    // channel flips, scrub steps, and focus / click inside the chrome.
+    val reportInteraction: () -> Unit = {
+        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+    }
     // Remote Control A2: OK short/long split latch (engaged only when an
     // okLong action is mapped; the default map keeps the plain clickable).
     var okLongFired by remember { mutableStateOf(false) }
@@ -782,7 +801,7 @@ fun PlayerScreen(
         // session-scoped last-channel zap memory.
         currentChannel?.id?.let { exoWindowState.recordTune(it) }
         launchHintActive = true
-        kotlinx.coroutines.delay(AUTO_HIDE_MS)
+        kotlinx.coroutines.delay(LAUNCH_HINT_MS)
         launchHintActive = false
     }
     val pillVisible = chromeVisible || launchHintActive
@@ -1282,7 +1301,7 @@ fun PlayerScreen(
         }
         scrubStepSerial += 1
         scrubHudVisible = true
-        lastInteractionAt = android.os.SystemClock.uptimeMillis()
+        reportInteraction()
     }
     // Deferred single commit; the null branch runs after a commit (or
     // cancel) and lets the HUD linger briefly so the user sees where
@@ -1315,9 +1334,10 @@ fun PlayerScreen(
             // onPreviewKeyEvent returns false -> doesn't consume; the
             // event still reaches the chrome buttons below.
             .onPreviewKeyEvent { event ->
-                if (chromeVisible) {
-                    lastInteractionAt = android.os.SystemClock.uptimeMillis()
-                }
+                // Every key is a user action, whether or not the chrome is up:
+                // gating this on chromeVisible meant the press that REVEALED
+                // the chrome did not seed the countdown.
+                reportInteraction()
                 // GH #71: digit keys (and OK / Back while digits are
                 // pending) belong to channel-number entry on TV. Checked
                 // first so no mapping below can steal a digit; every other
@@ -1576,6 +1596,7 @@ fun PlayerScreen(
             scrubStep = scrubStep,
             onLoadChannelStreams = onLoadChannelStreams,
             onLoadCurrentStreamId = onLoadCurrentStreamId,
+            reportInteraction = reportInteraction,
             onClose = onClose,
         )
 
@@ -1678,7 +1699,7 @@ fun PlayerScreen(
         // Never auto-hide while the stream is unavailable: the chrome hosts the
         // Retry control the user needs, so it must stay put during an outage.
         if (chromeVisible && !interactionLocked && !streamUnavailable) {
-            delay(AUTO_HIDE_MS)
+            delay(PLAYER_CHROME_HIDE_MS)
             chromeVisible = false
         }
     }
@@ -1719,6 +1740,7 @@ fun PlayerScreen(
     var lastFlipAt by remember { mutableStateOf(0L) }
     DisposableEffect(exoWindowState) {
         exoWindowState.onLiveChannelFlip = flip@{ delta ->
+            reportInteraction()
             if (!flipEnabled || flipLocked) return@flip false
             if (flipBlockedByChrome) return@flip false
             val list = flipChannels
@@ -1751,6 +1773,11 @@ fun PlayerScreen(
     // falls through).
     DisposableEffect(exoWindowState) {
         exoWindowState.onPlayerRemoteAction = act@{ action ->
+            // Activity-level dispatch (media keys, long Up/Down, mapped
+            // actions) never reaches this screen's onPreviewKeyEvent, so those
+            // presses used to leave the countdown running from the previous
+            // action -- the chrome then vanished "too soon" after them.
+            reportInteraction()
             when (action) {
                 com.aeriotv.android.core.remote.PlayerRemoteAction.TOGGLE_CONTROLS -> {
                     chromeVisible = !chromeVisible
@@ -2434,6 +2461,7 @@ private fun LiveRewindChromeSection(
     scrubStep: (Int, Boolean) -> Unit,
     onLoadChannelStreams: suspend (Int) -> List<StreamOption>,
     onLoadCurrentStreamId: suspend (String) -> Int?,
+    reportInteraction: () -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -2721,6 +2749,9 @@ private fun LiveRewindChromeSection(
         },
         sleepRemainingMillis = sleepRemainingMillis,
         onInteractingChange = { chromeMenuOpen = it },
+        // Focus moves and clicks inside the chrome are user actions too, and
+        // they arrive as focus events rather than keys on some remotes.
+        onInteraction = reportInteraction,
     )
 }
 
