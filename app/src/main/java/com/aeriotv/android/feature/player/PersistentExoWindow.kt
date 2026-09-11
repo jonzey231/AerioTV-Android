@@ -73,6 +73,9 @@ private val MINI_HEIGHT = 115.dp
 private val MINI_END_INSET = 20.dp
 private val MINI_CORNER = 6.dp
 
+/** Floor for the fit-to-band shrink; below this the mini is not a picture. */
+private val MINI_MIN_HEIGHT = 56.dp
+
 @OptIn(UnstableApi::class)
 @Composable
 fun BoxScope.PersistentExoWindow(
@@ -103,18 +106,43 @@ fun BoxScope.PersistentExoWindow(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
+    // Bottom-align the mini with the Channel Preview banner's art card, the
+    // way tvOS shares one baseline between the logo, the copy and the corner
+    // mini (Logan 2026-09-11). Preferred frame is the tvOS 205x115; the top is
+    // artBottom - 115, clamped so the mini never rises above the tab bar's
+    // drawn bottom + 4 dp. When the art bottom sits too high for a full-size
+    // mini, the frame shrinks at 16:9 to fit that band instead of moving down
+    // over the guide's time bar. With no banner mounted (list view, other
+    // tabs) the mini keeps its full size at bar bottom + 4 dp.
+    val localDensity = androidx.compose.ui.platform.LocalDensity.current
+    val artBottomPx by MiniPlayerChrome.bannerArtBottomPx.collectAsStateWithLifecycle()
+    val barBottomInset = miniTopInsetDp.dp
+    val artBottom = if (artBottomPx > 0f) with(localDensity) { artBottomPx.toDp() } else 0.dp
+    val band = artBottom - barBottomInset
+    val miniFitHeight = when {
+        artBottom <= 0.dp -> MINI_HEIGHT
+        band >= MINI_HEIGHT -> MINI_HEIGHT
+        else -> band.coerceAtLeast(MINI_MIN_HEIGHT)
+    }
+    val miniFitWidth = MINI_WIDTH * (miniFitHeight / MINI_HEIGHT)
+    val miniFitTop = if (artBottom > 0.dp) {
+        (artBottom - miniFitHeight).coerceAtLeast(barBottomInset)
+    } else {
+        barBottomInset
+    }
+
     val miniWidth by animateDpAsState(
-        targetValue = if (miniTarget) MINI_WIDTH else screenW,
+        targetValue = if (miniTarget) miniFitWidth else screenW,
         animationSpec = miniSpec,
         label = "miniWidth",
     )
     val miniHeight by animateDpAsState(
-        targetValue = if (miniTarget) MINI_HEIGHT else screenH,
+        targetValue = if (miniTarget) miniFitHeight else screenH,
         animationSpec = miniSpec,
         label = "miniHeight",
     )
     val miniTopInset by animateDpAsState(
-        targetValue = if (miniTarget) miniTopInsetDp.dp else 0.dp,
+        targetValue = if (miniTarget) miniFitTop else 0.dp,
         animationSpec = miniSpec,
         label = "miniTopInset",
     )

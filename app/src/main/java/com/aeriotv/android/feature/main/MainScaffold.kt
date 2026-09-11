@@ -6,6 +6,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -725,6 +727,7 @@ fun MainScaffold(
             // top inset, and the bar animates its own offset and alpha on
             // top of it. Nothing the bar does resizes the content.
             var barHeightPx by remember { mutableIntStateOf(0) }
+            var barDrawnBottomPx by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
             val chromeDensity = LocalDensity.current
             // 62dp is the bar's designed height (16 top + 34 capsule + 12
             // bottom); it only ever seeds the very first frame, after which
@@ -740,9 +743,14 @@ fun MainScaffold(
             // window state instead; PersistentExoWindow takes its top inset
             // from it (tvOS pins the mini 87pt from the physical screen top,
             // deliberately clear of the tab bar: mini report D1).
-            androidx.compose.runtime.LaunchedEffect(barInset) {
+            val barDrawnBottom = if (barDrawnBottomPx > 0f) {
+                with(chromeDensity) { barDrawnBottomPx.toDp() }
+            } else {
+                barInset - 12.dp
+            }
+            androidx.compose.runtime.LaunchedEffect(barDrawnBottom) {
                 com.aeriotv.android.feature.player.MiniPlayerChrome
-                    .topInsetDp.value = barInset.value + 4f
+                    .topInsetDp.value = barDrawnBottom.value + 4f
             }
             // Collapse the bar only while the content reports a scrolled
             // state AND no pill holds focus: the UP-from-content redirect
@@ -837,6 +845,7 @@ fun MainScaffold(
                         lastUpKeyMs = lastUpKeyMs,
                         pillRequesters = pillRequesters,
                         isTabWarm = { it in visitedTabs },
+                        onDrawnBottomChanged = { barDrawnBottomPx = it },
                     )
                 }
                 MainTabContent(
@@ -1749,6 +1758,10 @@ private fun TvTopTabBar(
      *  a standalone strip was not reachable by D-pad; field 2026-08-31). */
     retainedCount: Int = 0,
     onRetainedClick: () -> Unit = {},
+    /** Bottom of the bar's DRAWN content (capsule / circles) in root px. The
+     *  outer Box is 16 dp taller above and 12 dp below, so its measured height
+     *  is not where the bar visually ends; the corner mini needs the real one. */
+    onDrawnBottomChanged: (Float) -> Unit = {},
 ) {
     // Selection-follows-focus, but committed ONLY for focus moves BETWEEN pills
     // (real D-pad traversal of the bar), never for focus ENTERING the bar from
@@ -1853,7 +1866,9 @@ private fun TvTopTabBar(
     androidx.compose.ui.layout.Layout(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 16.dp, bottom = 12.dp),
+            .padding(top = 16.dp, bottom = 12.dp)
+            // AFTER the padding, so these bounds are the drawn content's.
+            .onGloballyPositioned { onDrawnBottomChanged(it.boundsInRoot().bottom) },
         content = {
             Row(
                 modifier = Modifier

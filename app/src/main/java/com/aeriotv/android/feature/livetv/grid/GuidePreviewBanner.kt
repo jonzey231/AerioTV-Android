@@ -39,6 +39,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -142,6 +144,12 @@ fun GuidePreviewBanner(
     }
     val art = artKey?.let { previewArt[it] }
     val artKnown = artKey != null && previewArt.containsKey(artKey)
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            com.aeriotv.android.feature.player.MiniPlayerChrome
+                .bannerArtBottomPx.value = 0f
+        }
+    }
     val colors = MaterialTheme.colorScheme
     val clockMode = rememberClockMode()
     val fmt = remember(clockMode) { ClockFormat.guideShort(clockMode) }
@@ -158,7 +166,20 @@ fun GuidePreviewBanner(
     ) {
         // 360x203 pt art slot, halved. Channel logo only once every source
         // missed; nothing while a lookup is open (no logo flash).
-        Box(modifier = Modifier.width(180.dp).height(101.dp), contentAlignment = Alignment.Center) {
+        // The corner mini player's BOTTOM edge lines up with this art card's
+        // (Logan 2026-09-11; tvOS shares one baseline between the logo, the
+        // copy and the mini). Published in root coordinates because the mini
+        // is mounted at the activity root, outside this composition.
+        Box(
+            modifier = Modifier
+                .width(180.dp)
+                .height(101.dp)
+                .onGloballyPositioned {
+                    com.aeriotv.android.feature.player.MiniPlayerChrome
+                        .bannerArtBottomPx.value = it.boundsInRoot().bottom
+                },
+            contentAlignment = Alignment.Center,
+        ) {
             when {
                 art != null -> AsyncImage(
                     model = art, contentDescription = null, contentScale = ContentScale.Crop,

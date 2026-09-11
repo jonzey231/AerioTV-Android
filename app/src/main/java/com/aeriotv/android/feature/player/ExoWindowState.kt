@@ -40,8 +40,18 @@ import kotlinx.coroutines.flow.asStateFlow
  * pill however the bar is laid out.
  */
 object MiniPlayerChrome {
-    /** Bar height + 4 dp, in dp. Seeded with the bar's designed 62 dp. */
-    val topInsetDp = MutableStateFlow(66f)
+    /** Tab bar CONTENT bottom + 4 dp, in dp. The bar Box is 16 dp taller at
+     *  the top and 12 dp taller at the bottom than the capsule it draws, so
+     *  the Box's measured height would park the mini ~13 dp too low; the bar
+     *  reports its drawn bottom instead. Seeded with the designed layout. */
+    val topInsetDp = MutableStateFlow(54f)
+
+    /** Bottom of the Channel Preview banner's program art card in root px,
+     *  published by GuidePreviewBanner while it is mounted, 0 when it is not.
+     *  The mini's BOTTOM edge lines up with it (Logan 2026-09-11, tvOS: "logo,
+     *  copy and the corner mini share one baseline"), which is what keeps the
+     *  mini clear of the guide's time bar whatever the bar and banner measure. */
+    val bannerArtBottomPx = MutableStateFlow(0f)
 }
 
 @Singleton
