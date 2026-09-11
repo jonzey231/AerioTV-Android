@@ -677,16 +677,23 @@ fun <T> TvMediaPage(
             TvAlphabetRail(
                 available = railLetters,
                 onFocusChanged = { railHasFocusState.value = it },
+                // tvOS Movies rail: a click scrolls the letter's row to the
+                // top of the grid; focus STAYS on the rail. Right goes back
+                // to the last poster, Up from # to the hero.
                 onLetter = { letter ->
                     val idx = railIndexOf(letter)
                     if (idx >= 0) scope.launch {
-                        gridState.animateScrollToItem(gridTopFor(idx / columns))
-                        repeat(8) {
-                            withFrameNanos { }
-                            if (runCatching { cellRequesters[gridKey(gridItems[idx])]?.requestFocus() }.isSuccess) return@launch
-                        }
+                        gridState.animateScrollToItem(gridTopFor(idx / columns), -restoreGapPx)
                     }
                 },
+                onExitRight = {
+                    val key = focusedCellKeyState.value
+                    val last = key?.let { cellRequesters[it] }
+                    if (last == null || runCatching { last.requestFocus() }.getOrNull() != true) {
+                        runCatching { firstCell.requestFocus() }
+                    }
+                },
+                onExitUp = { runCatching { entry.requestFocus() } },
                 modifier = Modifier.align(Alignment.CenterStart).padding(start = 17.dp),
             )
         }
@@ -1278,6 +1285,10 @@ private fun TvAlphabetRail(
     available: Set<Char>,
     onFocusChanged: (Boolean) -> Unit,
     onLetter: (Char) -> Unit,
+    /** tvOS: Right on a letter leaves the rail back to the last poster. */
+    onExitRight: () -> Unit,
+    /** tvOS: Up from # leaves the rail to the hero. */
+    onExitUp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val letters = remember { listOf('#') + ('A'..'Z').toList() }
@@ -1304,21 +1315,30 @@ private fun TvAlphabetRail(
                     .border(1.dp, if (focused) Color.White else Color.Transparent, CircleShape)
                     .focusable(interactionSource = interaction)
                     .onPreviewKeyEvent { ev ->
-                        if (ev.type == KeyEventType.KeyDown && (ev.key == Key.DirectionCenter || ev.key == Key.Enter)) {
-                            // Unavailable letters resolve to the nearest one after, else before.
-                            val target = when {
-                                isAvailable -> letter
-                                else -> letters.drop(letters.indexOf(letter)).firstOrNull { it in available }
-                                    ?: letters.take(letters.indexOf(letter)).lastOrNull { it in available }
+                        if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (ev.key) {
+                            Key.DirectionCenter, Key.Enter -> {
+                                // Unavailable letters resolve to the nearest one after, else before.
+                                val target = when {
+                                    isAvailable -> letter
+                                    else -> letters.drop(letters.indexOf(letter)).firstOrNull { it in available }
+                                        ?: letters.take(letters.indexOf(letter)).lastOrNull { it in available }
+                                }
+                                if (target != null) onLetter(target)
+                                true
                             }
-                            if (target != null) onLetter(target)
-                            true
-                        } else false
+                            Key.DirectionRight -> { onExitRight(); true }
+                            Key.DirectionUp -> if (letter == '#') { onExitUp(); true } else false
+                            else -> false
+                        }
                     },
                 contentAlignment = Alignment.Center,
             ) {
+                // Explicit line height: the theme's 24 sp made the glyph
+                // overflow its 16 dp cell and sit below the ring (Logan
+                // 2026-09-10).
                 Text(
-                    letter.toString(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                    letter.toString(), fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold,
                     color = when {
                         focused -> Color.White
                         isAvailable -> MaterialTheme.colorScheme.onSurfaceVariant
