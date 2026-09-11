@@ -143,12 +143,12 @@ fun PlayerChromeOverlay(
     chromeVisible: Boolean,
     pillVisible: Boolean = chromeVisible,
     isTv: Boolean = false,
-    showChannelFlipHint: Boolean = false,
-    /** The "Press Select ... / Hold Select ..." hint line, derived from the
-     *  effective remote map by the caller; null hides the line. */
-    selectHint: String? = "Press Select for player controls.",
-    /** Left/Right gesture line (map-derived); null = omitted. */
-    horizontalHint: String? = null,
+    /** Remote hint strip pairs, resolved from the effective remote map and
+     *  the player's current mode by the caller (RemoteControlHints
+     *  .livePlayerStripHints). Empty = the strip is off or nothing applies;
+     *  it renders as the LAST row of the bottom control block and fades with
+     *  the chrome. TV only. */
+    hintPairs: List<com.aeriotv.android.core.remote.RemoteHint> = emptyList(),
     /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
      *  bar. Null on TV and on any Cast-disabled build. */
     castSlot: (@Composable () -> Unit)? = null,
@@ -494,6 +494,20 @@ fun PlayerChromeOverlay(
                     )
                 }
             }
+            // Remote hint strip: the LAST row of the bottom control block,
+            // 8dp under the pill row, centered on the screen. Added as EXTRA
+            // height under the controls so no control moves, and it is plain
+            // Text inside this Column, so it can never take focus or sit over
+            // anything. It lives inside the chrome's AnimatedVisibility, so it
+            // fades in and out with the rest of the controls.
+            if (hintPairs.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                com.aeriotv.android.ui.tv.TvRemoteHintStrip(
+                    hints = hintPairs,
+                    keyColor = Color.White.copy(alpha = 0.45f),
+                    actionColor = Color.White.copy(alpha = 0.72f),
+                )
+            }
             }
             } else {
             // Phone / tablet (iOS PlayerView parity): top bar with Close on the
@@ -705,28 +719,10 @@ fun PlayerChromeOverlay(
                     programme = nowProgramme,
                     sleepRemainingMillis = sleepRemainingMillis,
                 )
-                if (isTv) {
-                    // #10 tvOS parity: gesture hints ride the banner's same
-                    // appear/fade window, left-aligned with the info card. Copy
-                    // verbatim from HomeView.playerHint (tvOS single-stream live).
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        // Compressed copy (Logan 2026-07-20). "Back = TV Guide"
-                        // merges with the Up/Down chip when flip is on so the
-                        // hint stack stays at most two short lines.
-                        val backHint = if (showChannelFlipHint) {
-                            "Back = TV Guide  ·  Up/Down = channels"
-                        } else {
-                            "Back = TV Guide"
-                        }
-                        PlayerHintChip(backHint)
-                        // Dynamic (Remote Control initiative): the Select line
-                        // follows the mapped OK actions; null = omitted.
-                        selectHint?.let { PlayerHintChip(it) }
-                        // Left/Right line (Logan 2026-08-06): channel list /
-                        // groups / previous-channel zap, from the map.
-                        horizontalHint?.let { PlayerHintChip(it) }
-                    }
-                }
+                // The gesture hints used to be a stack of capsule chips here,
+                // under the info card. They are now ONE centered strip at the
+                // bottom of the control block (Logan 2026-09-11), so the top
+                // left corner carries the channel card alone.
             }
         }
     }
@@ -835,27 +831,6 @@ private fun CircleIconButton(
     }
 }
 
-/**
- * tvOS gesture-hint capsule (HomeView.playerHint parity): medium white@0.55 on a
- * black@0.72 pill. 8sp to match the guide hint chips (tvOS draws both at the
- * same size). Non-interactive; rides the banner's appear/fade window.
- */
-@Composable
-private fun PlayerHintChip(text: String) {
-    Text(
-        text = text,
-        fontSize = 8.sp,
-        fontWeight = FontWeight.Medium,
-        color = Color.White.copy(alpha = 0.55f),
-        maxLines = 1,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        modifier = Modifier
-            .widthIn(max = 360.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.72f))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-    )
-}
 
 /**
  * tvOS-style action pill: a rounded capsule with a leading icon + label and

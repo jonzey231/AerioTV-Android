@@ -212,6 +212,13 @@ class SettingsViewModel @Inject constructor(
     val remoteControlMap: StateFlow<com.aeriotv.android.core.remote.RemoteControlMap> =
         prefs.effectiveRemoteControlMap
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT)
+    /** Remote hint strip on Live TV and in the players. Default ON. */
+    val showRemoteHints: StateFlow<Boolean> = prefs.showRemoteHints
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    fun setShowRemoteHints(value: Boolean) {
+        viewModelScope.launch { prefs.setShowRemoteHints(value) }
+    }
+
     /** TV guide group-selector style: "pills" (top row) or "sidebar". */
     val guideGroupSelector: StateFlow<String> = prefs.guideGroupSelector
         .stateIn(viewModelScope, SharingStarted.Eagerly, "pills")

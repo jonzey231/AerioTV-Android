@@ -341,6 +341,18 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Remote hint strip (Logan 2026-09-11): the single "key  action" line
+     * shown under the tab bar on Live TV and as the last row of the player
+     * controls. Default ON; the toggle lives at the top of Settings >
+     * Remote Control. Synced (Apple uses the name `showRemoteHints`).
+     */
+    val showRemoteHints: Flow<Boolean> =
+        store.data.map { it[KEY_SHOW_REMOTE_HINTS] ?: true }
+    suspend fun setShowRemoteHints(value: Boolean) {
+        store.edit { it[KEY_SHOW_REMOTE_HINTS] = value }
+    }
+
+    /**
      * TV guide group-selector style (Logan 2026-07-20): "pills" = the top
      * group-pill row (the original layout), "sidebar" = a docked left menu
      * opened with a Left press from the currently-airing column. Mutually
@@ -1161,6 +1173,7 @@ class AppPreferences @Inject constructor(
         data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
         data[KEY_PHONE_GROUP_SELECTOR]?.let { out["phoneGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
+        data[KEY_SHOW_REMOTE_HINTS]?.let { out["showRemoteHints"] = it.toString() }
         data[KEY_CAST_TAP_STAYS_ON_LIST]?.let { out["castTapStaysOnList"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
@@ -1213,6 +1226,7 @@ class AppPreferences @Inject constructor(
             keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
             keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
+            keys["showRemoteHints"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_REMOTE_HINTS] = it }
             keys["castTapStaysOnList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CAST_TAP_STAYS_ON_LIST] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
             keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
@@ -1544,6 +1558,7 @@ class AppPreferences @Inject constructor(
         val KEY_GUIDE_GROUP_SELECTOR = stringPreferencesKey("guide_group_selector")
         val KEY_PHONE_GROUP_SELECTOR = stringPreferencesKey("phone_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
+        val KEY_SHOW_REMOTE_HINTS = booleanPreferencesKey("show_remote_hints")
         val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
         val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")

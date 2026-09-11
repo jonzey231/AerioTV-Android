@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -22,8 +25,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
@@ -51,7 +56,8 @@ import com.aeriotv.android.feature.settings.SettingsViewModel
  *   - Hidden: AndroidView mounted inside a zero-size Box.
  *   - Fullscreen: fillMaxSize within the outer Box. Default z-order, so
  *     PlayerScreen chrome drawn ON TOP via NavHost (Phase 167's trick).
- *   - Mini: 210x118 dp at top-right with 24dp end / 12dp top inset.
+ *   - Mini: 205x115 dp at top-right, 20dp end inset and a top inset taken
+ *     from the MEASURED tab bar height plus 4dp ([MiniPlayerChrome]).
  *     zIndex(1f) so it floats above whatever NavHost route is showing
  *     underneath (Phase 175's fix).
  *
@@ -61,6 +67,12 @@ import com.aeriotv.android.feature.settings.SettingsViewModel
  * the QTI HEVC-in-MPEG-TS bug. No GLES blit, no FFmpeg hevc_mediacodec
  * wrapper.
  */
+/** tvOS mini frame, halved from the 1080 pt canvas (HomeView.swift:4848). */
+private val MINI_WIDTH = 205.dp
+private val MINI_HEIGHT = 115.dp
+private val MINI_END_INSET = 20.dp
+private val MINI_CORNER = 6.dp
+
 @OptIn(UnstableApi::class)
 @Composable
 fun BoxScope.PersistentExoWindow(
@@ -75,26 +87,75 @@ fun BoxScope.PersistentExoWindow(
     val settingsVm: SettingsViewModel = hiltViewModel()
     val aspectMode by settingsVm.playerAspectMode.collectAsStateWithLifecycle(initialValue = "fit")
 
+    // Minimize / expand is ONE spring on size AND position (tvOS
+    // .spring(response: 0.35), HomeView.swift:4920), not a hard cut. The
+    // PlayerView instance is never recreated and a resize does not recreate
+    // the codec (see the factory notes below), so animating the frame is safe.
+    // Both directions animate: the mini frame keeps drawing while it grows
+    // back out to full screen, and only then does the plain Fullscreen branch
+    // take over.
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val screenW = cfg.screenWidthDp.dp
+    val screenH = cfg.screenHeightDp.dp
+    val miniTarget = mode == ExoWindowState.Mode.Mini
+    val miniTopInsetDp by MiniPlayerChrome.topInsetDp.collectAsStateWithLifecycle()
+    val miniSpec = spring<Dp>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    val miniWidth by animateDpAsState(
+        targetValue = if (miniTarget) MINI_WIDTH else screenW,
+        animationSpec = miniSpec,
+        label = "miniWidth",
+    )
+    val miniHeight by animateDpAsState(
+        targetValue = if (miniTarget) MINI_HEIGHT else screenH,
+        animationSpec = miniSpec,
+        label = "miniHeight",
+    )
+    val miniTopInset by animateDpAsState(
+        targetValue = if (miniTarget) miniTopInsetDp.dp else 0.dp,
+        animationSpec = miniSpec,
+        label = "miniTopInset",
+    )
+    val miniEndInset by animateDpAsState(
+        targetValue = if (miniTarget) MINI_END_INSET else 0.dp,
+        animationSpec = miniSpec,
+        label = "miniEndInset",
+    )
+    val miniCorner by animateDpAsState(
+        targetValue = if (miniTarget) MINI_CORNER else 0.dp,
+        animationSpec = miniSpec,
+        label = "miniCorner",
+    )
+    // Hidden is an instant teardown (no surface to animate); Fullscreen keeps
+    // the mini frame only for as long as the expand spring is still running.
+    val drawMiniFrame = miniTarget ||
+        (mode == ExoWindowState.Mode.Fullscreen && miniWidth < screenW)
+
     // See PersistentMpvWindow for the long form of the z-index rationale.
     // tl;dr: NavHost paints over PersistentExoWindow by declaration order;
     // fullscreen wants that (chrome over video), mini doesn't (mini needs
     // to float above the Guide's opaque background).
-    val containerModifier = when (mode) {
-        ExoWindowState.Mode.Hidden -> Modifier.size(0.dp)
-        ExoWindowState.Mode.Fullscreen -> Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-        ExoWindowState.Mode.Mini -> Modifier
+    val containerModifier = when {
+        mode == ExoWindowState.Mode.Hidden -> Modifier.size(0.dp)
+        // tvOS geometry, halved from the 1080 pt canvas (mini report D2-D4):
+        // 410x231 pt -> 205x115 dp, 40 pt -> 20 dp end inset, corner radius
+        // 12 pt -> 6 dp, shadow blur 20 pt -> 10 dp. The top inset is the
+        // MEASURED tab bar height plus 4 dp rather than tvOS's fixed 87 pt,
+        // because Android's bar is not a fixed-height system bar: that is what
+        // stops the mini clipping the centered Settings pill, which the old
+        // 12 dp inset did.
+        drawMiniFrame -> Modifier
             .zIndex(1f)
             .align(Alignment.TopEnd)
-            .padding(end = 24.dp, top = 12.dp)
-            // 16:9. Grown from 210x118 to fill the reserved band below it; width
-            // is capped here because the top-right corner butts up against the
-            // centered top-nav ("Settings") -- wider would overlap it. The
-            // MainScaffold mini spacer is trimmed to match so the group pills
-            // sit just under this.
-            .size(width = 240.dp, height = 135.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .padding(end = miniEndInset, top = miniTopInset)
+            .size(width = miniWidth, height = miniHeight)
+            .shadow(elevation = 10.dp, shape = RoundedCornerShape(miniCorner))
+            .clip(RoundedCornerShape(miniCorner))
+            .background(Color.Black)
+        else -> Modifier
+            .fillMaxSize()
             .background(Color.Black)
     }
 

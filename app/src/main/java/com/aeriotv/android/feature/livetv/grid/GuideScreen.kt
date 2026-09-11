@@ -573,6 +573,7 @@ fun GuideScreen(
                 // tvOS: Down from the description lands on the clock when
                 // there is no pill row between them.
                 onDown = if (pillsShown) null else ({ clockSelectTrigger += 1; true }),
+                miniActive = miniActive,
                 // tvOS pulls the banner 28 pt up under the tab bar so eight
                 // rows still fit (ChannelListView, Logan 2026-09-05); halved.
                 modifier = Modifier.layout { measurable, constraints ->

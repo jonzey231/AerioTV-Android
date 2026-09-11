@@ -92,6 +92,10 @@ fun GuidePreviewBanner(
     onDescriptionFocusChanged: (Boolean) -> Unit = {},
     /** Down handled by the host (tvOS: lands on the clock when no pill row). Return true when consumed. */
     onDown: (() -> Boolean)? = null,
+    /** Corner mini player showing: reserve its column in the copy (tvOS
+     *  GuidePreviewBanner.trailingReserve = 422 pt -> 211 dp). Nothing else
+     *  about the banner changes, and nothing below it moves. */
+    miniActive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -169,7 +173,15 @@ fun GuidePreviewBanner(
         if (program == null) {
             Text("Select a program", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colors.tertiary)
         } else {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            // The mini (205 dp wide, 20 dp from the end) floats over the
+            // banner's right end; the copy stops short of it rather than the
+            // whole guide dropping below the mini.
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = if (miniActive) 211.dp else 0.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
                 // tvOS: title and channel name share the first text baseline.
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text(

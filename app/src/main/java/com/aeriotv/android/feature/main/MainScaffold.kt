@@ -713,10 +713,6 @@ fun MainScaffold(
             LocalTvFullScreenOverlay provides fullScreenOverlay,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-            // Left edge the nav bar actually occupies. Declared at BOX scope,
-            // not inside the Column: the bar that reports it and the hint
-            // overlay that consumes it are siblings of each other here.
-            var navLeftEdgePx by remember { mutableIntStateOf(0) }
             // TV chrome is an OVERLAY, not a sibling above the content
             // (2026-09-11). The bar used to live in a Column with the tab
             // content and collapsibleChrome animated its HEIGHT, so the
@@ -738,6 +734,16 @@ fun MainScaffold(
             } else {
                 62.dp
             }
+            // The corner mini player is mounted at the ACTIVITY root, outside
+            // this composition, so it cannot read a CompositionLocal from
+            // here. Publish the measured bar height through the app-scoped
+            // window state instead; PersistentExoWindow takes its top inset
+            // from it (tvOS pins the mini 87pt from the physical screen top,
+            // deliberately clear of the tab bar: mini report D1).
+            androidx.compose.runtime.LaunchedEffect(barInset) {
+                com.aeriotv.android.feature.player.MiniPlayerChrome
+                    .topInsetDp.value = barInset.value + 4f
+            }
             // Collapse the bar only while the content reports a scrolled
             // state AND no pill holds focus: the UP-from-content redirect
             // (focusProperties onExit below) lands focus on the selected
@@ -757,24 +763,35 @@ fun MainScaffold(
             // collapse tween is the only channel (Movies spec D10, DVR D9).
             // The page owns the threshold (TvMediaPage.barHideThreshold).
             val barFraction = barCollapse
-            // Reserve a band below the nav for the top-left gesture hints so
-            // the group pills / guide grid sit clear of them:
-            //  - Mini active: 78dp -- the right-aligned corner video (~148dp
-            //    tall from y=12) needs it, and all THREE hints fit under it.
-            //  - Idle Live TV: a small gap so the TWO-line hint stack has
-            //    room between the nav bar and the group pills.
-            //  - Other tabs / fullscreen (Pending): none (no hints shown).
+            // Remote hint strip inputs. The copy is generated from the
+            // EFFECTIVE remote map plus the live app state (below), so a user
+            // who remaps a button in Settings > Remote Control sees their own
+            // button named; the whole strip is gated on the "Show remote
+            // hints" toggle in that same screen.
+            val hintSettingsVm: com.aeriotv.android.feature.settings.SettingsViewModel =
+                hiltViewModel()
+            val hintsEnabled by hintSettingsVm.showRemoteHints
+                .collectAsStateWithLifecycle(initialValue = true)
+            val hintMap by hintSettingsVm.remoteControlMap.collectAsStateWithLifecycle(
+                initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
+            )
+            val hintGroupSelector by hintSettingsVm.guideGroupSelector
+                .collectAsStateWithLifecycle(initialValue = "pills")
+            // Reserve a band below the nav bar for the remote hint STRIP.
+            // The mini player used to push all tab content down 78dp; it no
+            // longer does (tvOS parity, mini report D5): the mini now sits
+            // clear of the bar in the top-right corner and the Channel
+            // Preview banner reserves its column instead, so nothing moves
+            // when a channel starts playing in the corner.
+            //  - Live TV: a 16dp band under the bar holds the one-line strip.
+            //  - During background work the Syncing pill hangs below the bar,
+            //    so the band grows and the strip centers lower, clear of it.
+            //  - Other tabs / fullscreen (Pending): none (no strip shown).
             val miniActive = miniPlayerState is MiniPlayerSession.State.Active
+            val showHintStrip = hintsEnabled &&
+                selectedTab == AppTab.LiveTV &&
+                miniPlayerState !is MiniPlayerSession.State.Pending
             val topHintGap = when {
-                miniActive -> 78.dp
-                // Idle Live TV: the two 8sp hint chips float at the nav bar's
-                // height and only need a slim band under it. 40dp over-reserved
-                // and pushed the guide grid down enough to clip the 7th channel
-                // row (tvOS fits 7). 16dp still clears the idle hint stack while
-                // reclaiming a full row. During background work the hints are
-                // pushed DOWN to top=60dp to clear the Syncing pill, so reserve
-                // the larger band then to avoid the pills overlapping them
-                // (transient -- normal idle usage shows all 7 rows).
                 selectedTab == AppTab.LiveTV &&
                     miniPlayerState !is MiniPlayerSession.State.Pending ->
                     if (anyBackgroundWork) 40.dp else 16.dp
@@ -820,7 +837,6 @@ fun MainScaffold(
                         lastUpKeyMs = lastUpKeyMs,
                         pillRequesters = pillRequesters,
                         isTabWarm = { it in visitedTabs },
-                        onLeftEdgeChanged = { navLeftEdgePx = it },
                     )
                 }
                 MainTabContent(
@@ -878,69 +894,48 @@ fun MainScaffold(
                     .align(Alignment.TopStart)
                     .padding(start = 24.dp, top = 18.dp),
             )
-            // #10 tvOS Menu/Back gesture hints (HomeView guideMenuHint parity).
-            // Rendered at the Home level -- NOT inside the guide -- so they land
-            // in the top-left corner at the nav bar's height, left of the
-            // centered tab bar and ABOVE the group pills, exactly like tvOS.
-            // Gated to the Live TV tab and to idle-or-mini (Pending == the
-            // fullscreen player is up, which draws its own player hints). A1
-            // (resume) only while the mini is Active; drops below the sync pill
-            // when background work is running (tvOS isAnyBackgroundWork branch).
-            if (selectedTab == AppTab.LiveTV &&
-                miniPlayerState !is MiniPlayerSession.State.Pending
-            ) {
-                // Hard width budget: the gutter between this column's start
-                // padding and the nav bar's measured left edge, less a 12dp
-                // gap. Logan 2026-08-10: a fixed 320dp cap let the chips run
-                // under the bar. Before the first measurement (and if the bar
-                // is ever absent) fall back to the old cap.
-                val hintStartPad = 24.dp
-                val density = LocalDensity.current
-                val hintMaxWidth = if (navLeftEdgePx > 0) {
-                    (with(density) { navLeftEdgePx.toDp() } - hintStartPad - 12.dp)
-                        .coerceAtLeast(160.dp)
-                } else {
-                    320.dp
-                }
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = hintStartPad, top = if (anyBackgroundWork) 60.dp else 18.dp),
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
-                ) {
-                    // Compressed copy (Logan 2026-07-20: the chips were
-                    // bleeding into the grid). Terse "gesture -> result"
-                    // phrasing, capped to a couple of lines total.
-                    if (miniPlayerState is MiniPlayerSession.State.Active) {
-                        TvGuideHintChip("Play/Pause = resume  ·  Hold Right = close mini", hintMaxWidth)
+            // Remote hint strip (Logan's design, approved 2026-09-11). ONE
+            // line, horizontally CENTERED, in the band between the tab bar and
+            // the Channel Preview banner. Rendered at the Home level -- NOT
+            // inside the guide -- so the band is measured off the SAME bar
+            // height the content inset uses and the strip can never land on
+            // the bar or its nav circles (the old chip stack sat at a
+            // hard-coded top=18dp, which became the bar's own band once the
+            // bar turned into an overlay). If the reserved band is shorter
+            // than the text the strip is dropped entirely rather than drawn
+            // over something.
+            if (showHintStrip) {
+                val stripBandTop = barInset + 2.dp
+                val stripBandHeight = topHintGap - 2.dp
+                if (stripBandHeight >= com.aeriotv.android.ui.tv.remoteHintStripHeight) {
+                    // Stay centered even next to the mini: cap the width at
+                    // twice the gap between screen center and the mini's left
+                    // edge (205dp wide, 20dp from the end) so a long strip
+                    // truncates with an ellipsis instead of shifting.
+                    val screenW = androidx.compose.ui.platform.LocalConfiguration
+                        .current.screenWidthDp.dp
+                    val stripMaxWidth = if (miniActive) {
+                        (screenW - 450.dp).coerceAtLeast(160.dp)
+                    } else {
+                        (screenW - 48.dp).coerceAtLeast(160.dp)
                     }
-                    TvGuideHintChip("Double Back = top channel", hintMaxWidth)
-                    // Dynamic hints (Remote Control initiative): copy follows
-                    // the user's effective map + guide selector mode, so a
-                    // remapped button never advertises a stale gesture.
-                    val hintSettingsVm: com.aeriotv.android.feature.settings.SettingsViewModel =
-                        hiltViewModel()
-                    val hintMap by hintSettingsVm.remoteControlMap.collectAsStateWithLifecycle(
-                        initialValue = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT,
-                    )
-                    val hintGroupSelector by hintSettingsVm.guideGroupSelector
-                        .collectAsStateWithLifecycle(initialValue = "pills")
-                    // One nav chip. Sidebar mode claims the hold-Left gesture
-                    // outright (Logan 2026-08-06: short Left must scroll the
-                    // EPG naturally), so the mapped hold-Left action is not
-                    // advertised there - it never fires in that mode.
-                    val navHints = buildList {
-                        if (hintGroupSelector == "sidebar") {
-                            // Short Left opens the sidebar too, so "Left" alone
-                            // is both true and shorter than "Left / Hold Left".
-                            add("Left = groups")
-                        } else {
-                            com.aeriotv.android.core.remote.RemoteControlHints
-                                .guideHoldLeftShort(hintMap)?.let { add(it) }
-                        }
-                    }
-                    if (navHints.isNotEmpty()) {
-                        TvGuideHintChip(navHints.joinToString("  ·  "), hintMaxWidth)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .fillMaxWidth()
+                            .padding(top = stripBandTop)
+                            .height(stripBandHeight),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        com.aeriotv.android.ui.tv.TvRemoteHintStrip(
+                            hints = com.aeriotv.android.core.remote.RemoteControlHints
+                                .guideStripHints(
+                                    map = hintMap,
+                                    sidebarGroups = hintGroupSelector == "sidebar",
+                                    miniActive = miniActive,
+                                ),
+                            modifier = Modifier.widthIn(max = stripMaxWidth),
+                        )
                     }
                 }
             }
@@ -1560,30 +1555,6 @@ private fun MinimizedTabPill(
     }
 }
 
-/** tvOS guide gesture-hint capsule (HomeView.guideMenuHint parity): near-white
- *  text (white@0.9) on a black@0.4 pill with tight padding so the bubble hugs
- *  the text. 8sp keeps them small like tvOS AND narrow enough that the longest
- *  line clears the centered top-nav in the top-left corner (Android's TV density
- *  renders sp larger than tvOS points). Non-interactive; state-gated by the caller. */
-@Composable
-private fun TvGuideHintChip(text: String, maxWidth: Dp) {
-    Text(
-        text = text,
-        fontSize = 8.sp,
-        fontWeight = FontWeight.Medium,
-        color = Color.White.copy(alpha = 0.9f),
-        // Wrap rather than truncate: [maxWidth] is a hard cap measured off the
-        // nav bar, and there is empty height between the bar and the guide, so
-        // a long remapped hint should stay readable instead of losing its tail.
-        maxLines = 2,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        modifier = Modifier
-            .widthIn(max = maxWidth)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.4f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
-}
 
 /**
  * Shared body for both the phone (bottom-nav Scaffold) and TV (top-tab) shells.

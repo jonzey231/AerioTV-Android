@@ -33,6 +33,7 @@ import com.aeriotv.android.ui.adaptive.adaptiveFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsRowContainer
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
@@ -181,6 +182,9 @@ fun RemoteControlSettingsScreen(
         initialValue = false,
     )
     var editingTuneTarget by remember { mutableStateOf(false) }
+    val showRemoteHints by viewModel.showRemoteHints.collectAsStateWithLifecycle(
+        initialValue = true,
+    )
     val menuGuard = rememberTvMenuGuard()
 
     fun saveEdited(newMap: RemoteControlMap) {
@@ -198,6 +202,18 @@ fun RemoteControlSettingsScreen(
                     .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = LocalTabBarBottomInset.current),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
+                SettingsSection(
+                    header = "Hints",
+                    footer = "The one-line key reminder under the tab bar on Live TV and at the bottom of the player controls. Turn it off once the buttons are second nature.",
+                ) {
+                    SettingsToggleRow(
+                        title = "Show remote hints",
+                        subtitle = "Key reminders on Live TV and in the player",
+                        checked = showRemoteHints,
+                        onCheckedChange = { viewModel.setShowRemoteHints(it) },
+                    )
+                }
+
                 SettingsSection(
                     header = "While Watching",
                     footer = "What each button does while a channel is playing fullscreen. Changes apply immediately. Back always navigates and cannot be reassigned.",

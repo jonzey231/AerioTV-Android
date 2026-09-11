@@ -2440,6 +2440,9 @@ private fun LiveRewindChromeSection(
     // Own collector: this section is where the ticking window state is READ
     // at composition, so its emissions invalidate only this scope.
     val tsState by timeshiftController.state.collectAsStateWithLifecycle()
+    // Settings > Remote Control > Show remote hints.
+    val showRemoteHints by settingsVm.showRemoteHints
+        .collectAsStateWithLifecycle(initialValue = true)
     var catchupPositionMs by catchupPositionMsState
     var tsPositionWallMs by tsPositionWallMsState
     var tsPaused by tsPausedState
@@ -2600,13 +2603,20 @@ private fun LiveRewindChromeSection(
             unavailableRetrySerial += 1
             exoHolder.retryUnavailable()
         },
-        // #10 player gesture hints: only advertise Up/Down channel-flip when
-        // it can actually do something (setting on + more than one channel).
-        showChannelFlipHint = appleTVChannelFlip && channels.size >= 2 &&
-            com.aeriotv.android.core.remote.RemoteControlHints.verticalFlipMapped(remoteMap),
-        selectHint = com.aeriotv.android.core.remote.RemoteControlHints.selectHint(remoteMap),
-        horizontalHint = com.aeriotv.android.core.remote.RemoteControlHints
-            .playerHorizontalHint(remoteMap),
+        // Remote hint strip: generated from the user's EFFECTIVE map plus the
+        // player's live mode, so a remapped button is named as the user set
+        // it and a slot that does nothing here drops out. Off when the
+        // "Show remote hints" toggle is off.
+        hintPairs = if (isTvForm && showRemoteHints) {
+            com.aeriotv.android.core.remote.RemoteControlHints.livePlayerStripHints(
+                map = remoteMap,
+                catchupMode = isCatchupMode,
+                rewindBuffering = tsState.buffering,
+                channelFlip = appleTVChannelFlip && channels.size >= 2,
+            )
+        } else {
+            emptyList()
+        },
         // Explicit X tap = user is done with this channel; clear the mini-player
         // session, destroy the held MPV instance, and stop the background
         // PlaybackService so the notification disappears. System back keeps

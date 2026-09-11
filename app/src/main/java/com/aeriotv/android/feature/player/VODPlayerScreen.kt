@@ -257,6 +257,9 @@ fun VODPlayerScreen(
         .collectAsStateWithLifecycle(initialValue = false)
     val streamBufferSize by settingsVm.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
     val aspectMode by settingsVm.playerAspectMode.collectAsStateWithLifecycle(initialValue = "fit")
+    // Settings > Remote Control > Show remote hints.
+    val showRemoteHints by settingsVm.showRemoteHints
+        .collectAsStateWithLifecycle(initialValue = true)
     val watchVm: WatchProgressViewModel = hiltViewModel()
 
     val context = LocalContext.current
@@ -1676,6 +1679,18 @@ fun VODPlayerScreen(
                         showOptionsSheet = true
                         lastInteractionAt = android.os.SystemClock.uptimeMillis()
                     },
+                    // Generated from the VOD player's OWN key model (it runs a
+                    // focus-zone transport and deliberately ignores the remote
+                    // map), so the pairs follow the zone the user is in.
+                    hintPairs = if (isTvForm && showRemoteHints) {
+                        com.aeriotv.android.core.remote.RemoteControlHints
+                            .vodPlayerStripHints(
+                                scrubberZone = tvFocusZone == TvVodFocusZone.Scrubber,
+                                isPaused = isPaused,
+                            )
+                    } else {
+                        emptyList()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter),
@@ -2032,6 +2047,10 @@ private fun BottomChrome(
     isDvr: Boolean = false,
     onSeekToLive: () -> Unit = {},
     onOptions: () -> Unit = {},
+    /** Remote hint strip pairs (TV only; empty = nothing drawn). Rendered as
+     *  the LAST row of this block, under the time row, as extra height so no
+     *  control moves. */
+    hintPairs: List<com.aeriotv.android.core.remote.RemoteHint> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     var thumbCenterPx by remember { mutableFloatStateOf(0f) }
@@ -2180,6 +2199,19 @@ private fun BottomChrome(
                 isTvForm = isTvForm,
             )
             }
+            }
+            // Remote hint strip: last row of the control block, 8dp under the
+            // time row, centered. Plain Text, so it never takes focus, and it
+            // adds height rather than displacing anything above it. Inside the
+            // chrome's AnimatedVisibility, so it fades with the controls.
+            if (hintPairs.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                com.aeriotv.android.ui.tv.TvRemoteHintStrip(
+                    hints = hintPairs,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyColor = Color.White.copy(alpha = 0.45f),
+                    actionColor = Color.White.copy(alpha = 0.72f),
+                )
             }
         }
         // Floating scrub-readout bubble (iOS PlayerView.scrubReadout parity,

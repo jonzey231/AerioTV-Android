@@ -9,6 +9,13 @@ package com.aeriotv.android.core.remote
  * Actions without a natural short phrase return null and their sentence
  * is simply omitted - a hint that says nothing beats one that lies.
  */
+/**
+ * One "key  action" reminder for the on-screen hint strip. [key] is the
+ * button as printed on the remote ("Hold Left", "Play/Pause"), [action] is
+ * what that press does right now: sentence case, no punctuation.
+ */
+data class RemoteHint(val key: String, val action: String)
+
 object RemoteControlHints {
 
     private fun playerPhrase(action: PlayerRemoteAction): String? = when (action) {
@@ -101,4 +108,198 @@ object RemoteControlHints {
     fun guideHoldLeftShort(map: RemoteControlMap): String? =
         guidePhraseShort(map.guideAction(RemoteSlot.LEFT_LONG))
             ?.let { "Hold Left = $it" }
+
+    // ---------------------------------------------------------------
+    // The remote hint STRIP (Logan 2026-09-11). One line of "key action"
+    // pairs, generated from the CURRENT effective map plus the current app
+    // state, never hard-coded: a user who remaps a button in Settings >
+    // Remote Control must see their own button named here. A slot whose
+    // action is unmapped, or not applicable in this mode, drops out.
+    // ---------------------------------------------------------------
+
+    /** The button name as printed on the remote, for the strip's key column. */
+    fun slotLabel(slot: RemoteSlot): String = when (slot) {
+        RemoteSlot.OK_SHORT -> "OK"
+        RemoteSlot.OK_LONG -> "Hold OK"
+        RemoteSlot.UP_SHORT -> "Up"
+        RemoteSlot.UP_LONG -> "Hold Up"
+        RemoteSlot.DOWN_SHORT -> "Down"
+        RemoteSlot.DOWN_LONG -> "Hold Down"
+        RemoteSlot.LEFT_SHORT -> "Left"
+        RemoteSlot.LEFT_LONG -> "Hold Left"
+        RemoteSlot.RIGHT_SHORT -> "Right"
+        RemoteSlot.RIGHT_LONG -> "Hold Right"
+        RemoteSlot.PLAY_PAUSE -> "Play/Pause"
+        RemoteSlot.FFWD -> "Fast Forward"
+        RemoteSlot.REWIND -> "Rewind"
+        RemoteSlot.CHANNEL_UP -> "Channel Up"
+        RemoteSlot.CHANNEL_DOWN -> "Channel Down"
+    }
+
+    /** Strip wording for a guide action; null = nothing worth advertising. */
+    private fun guideStripAction(action: GuideRemoteAction, sidebarGroups: Boolean): String? =
+        when (action) {
+            GuideRemoteAction.FOCUS_GROUP_PILLS -> if (sidebarGroups) "Groups" else "Group pills"
+            GuideRemoteAction.TIMELINE_BACK -> "Earlier programs"
+            GuideRemoteAction.TIMELINE_FORWARD -> "Later programs"
+            GuideRemoteAction.PAGE_UP -> "Page up"
+            GuideRemoteAction.PAGE_DOWN -> "Page down"
+            GuideRemoteAction.JUMP_TO_NOW -> "Now"
+            GuideRemoteAction.JUMP_TO_DAY -> "Jump to day"
+            GuideRemoteAction.JUMP_TO_TOP -> "Top channel"
+            GuideRemoteAction.RESUME_PLAYER -> "Resume"
+            GuideRemoteAction.CLOSE_MINI_PLAYER -> "Close mini"
+            GuideRemoteAction.PROGRAM_INFO -> "Program menu"
+            GuideRemoteAction.OPEN_SEARCH -> "Search"
+            GuideRemoteAction.NONE -> null
+        }
+
+    /** Strip wording for a player action; null = nothing worth advertising. */
+    private fun playerStripAction(action: PlayerRemoteAction): String? = when (action) {
+        PlayerRemoteAction.TOGGLE_CONTROLS -> "Player controls"
+        PlayerRemoteAction.SHOW_PROGRAM_INFO -> "Program info"
+        PlayerRemoteAction.OPTIONS_MENU -> "Options"
+        PlayerRemoteAction.CHANNEL_LIST -> "Channel list"
+        PlayerRemoteAction.RECENT_CHANNELS -> "Recent channels"
+        PlayerRemoteAction.OPEN_SEARCH -> "Search"
+        PlayerRemoteAction.LAST_CHANNEL -> "Previous channel"
+        PlayerRemoteAction.MINIMIZE_TO_GUIDE -> "TV Guide"
+        PlayerRemoteAction.CHANNEL_UP -> "Channel up"
+        PlayerRemoteAction.CHANNEL_DOWN -> "Channel down"
+        PlayerRemoteAction.PLAY_PAUSE -> "Play or pause"
+        PlayerRemoteAction.SEEK_FORWARD -> "Seek forward"
+        PlayerRemoteAction.SEEK_BACKWARD -> "Seek back"
+        PlayerRemoteAction.RESTART_PROGRAM -> "Restart"
+        PlayerRemoteAction.JUMP_TO_LIVE -> "Jump to live"
+        PlayerRemoteAction.SUBTITLES -> "Subtitles"
+        PlayerRemoteAction.AUDIO_TRACKS -> "Audio"
+        PlayerRemoteAction.ASPECT_RATIO -> "Aspect ratio"
+        PlayerRemoteAction.RECORD -> "Record"
+        PlayerRemoteAction.SLEEP_TIMER -> "Sleep timer"
+        PlayerRemoteAction.STOP_PLAYBACK -> "Stop"
+        PlayerRemoteAction.NONE -> null
+    }
+
+    /** Cap: the strip is ONE line, so an unbounded list would just truncate. */
+    private const val MAX_PAIRS = 6
+
+    /**
+     * Live TV tab strip. [sidebarGroups] is the guide's group-selector mode
+     * ("sidebar" drawer vs the pill row), [miniActive] whether the corner mini
+     * is playing.
+     *
+     * The groups pair reads the guide's REAL hold-Left resolution
+     * (GuideGrid.kt): sidebar mode always opens the drawer, otherwise the
+     * mapped leftLong action runs and an unmapped slot falls back to the group
+     * pills. Back is never a map slot: with a mini up the guide's Back belongs
+     * to the mini (single = resume, double = top channel), without one a single
+     * Back walks the guide back to the top channel.
+     */
+    fun guideStripHints(
+        map: RemoteControlMap,
+        sidebarGroups: Boolean,
+        miniActive: Boolean,
+    ): List<RemoteHint> = buildList {
+        val holdLeft = if (sidebarGroups) {
+            GuideRemoteAction.FOCUS_GROUP_PILLS
+        } else {
+            map.guideAction(RemoteSlot.LEFT_LONG)
+                .takeIf { it != GuideRemoteAction.NONE }
+                ?: GuideRemoteAction.FOCUS_GROUP_PILLS
+        }
+        guideStripAction(holdLeft, sidebarGroups)?.let {
+            add(RemoteHint(slotLabel(RemoteSlot.LEFT_LONG), it))
+        }
+        add(RemoteHint(if (miniActive) "Double Back" else "Back", "Top channel"))
+        if (miniActive) {
+            map.guideSlotFor(GuideRemoteAction.RESUME_PLAYER)?.let {
+                add(RemoteHint(slotLabel(it), "Resume"))
+            }
+            map.guideSlotFor(GuideRemoteAction.CLOSE_MINI_PLAYER)?.let {
+                add(RemoteHint(slotLabel(it), "Close mini"))
+            }
+        }
+    }.take(MAX_PAIRS)
+
+    /**
+     * Live player strip. Mirrors PlayerScreen's own key routing: in catch-up
+     * (and while the Live Rewind buffer is rolling with a seek-mapped slot)
+     * Left/Right scrub the timeline instead of running their mapped actions,
+     * Up/Down only channel-surf while [channelFlip] is on and not replaying,
+     * and Back is fixed (minimize to the corner mini, hold to stop).
+     */
+    fun livePlayerStripHints(
+        map: RemoteControlMap,
+        catchupMode: Boolean,
+        rewindBuffering: Boolean,
+        channelFlip: Boolean,
+    ): List<RemoteHint> = buildList {
+        val scrubbing = catchupMode ||
+            (
+                rewindBuffering &&
+                    (
+                        map.playerAction(RemoteSlot.LEFT_SHORT) == PlayerRemoteAction.SEEK_BACKWARD ||
+                            map.playerAction(RemoteSlot.RIGHT_SHORT) == PlayerRemoteAction.SEEK_FORWARD
+                        )
+                )
+        playerStripAction(map.playerAction(RemoteSlot.OK_SHORT))?.let {
+            add(RemoteHint(slotLabel(RemoteSlot.OK_SHORT), it))
+        }
+        playerStripAction(map.playerAction(RemoteSlot.OK_LONG))?.let {
+            add(RemoteHint(slotLabel(RemoteSlot.OK_LONG), it))
+        }
+        if (scrubbing) {
+            add(RemoteHint("Left/Right", "Scrub"))
+        } else {
+            if (channelFlip && verticalFlipMapped(map)) {
+                add(RemoteHint("Up/Down", "Channels"))
+            } else {
+                if (channelFlip) {
+                    playerStripAction(map.playerAction(RemoteSlot.UP_SHORT))?.let {
+                        add(RemoteHint(slotLabel(RemoteSlot.UP_SHORT), it))
+                    }
+                    playerStripAction(map.playerAction(RemoteSlot.DOWN_SHORT))?.let {
+                        add(RemoteHint(slotLabel(RemoteSlot.DOWN_SHORT), it))
+                    }
+                }
+            }
+            playerStripAction(map.playerAction(RemoteSlot.LEFT_SHORT))?.let {
+                add(RemoteHint(slotLabel(RemoteSlot.LEFT_SHORT), it))
+            }
+            playerStripAction(map.playerAction(RemoteSlot.RIGHT_SHORT))?.let {
+                add(RemoteHint(slotLabel(RemoteSlot.RIGHT_SHORT), it))
+            }
+            playerStripAction(map.playerAction(RemoteSlot.LEFT_LONG))?.let {
+                add(RemoteHint(slotLabel(RemoteSlot.LEFT_LONG), it))
+            }
+            playerStripAction(map.playerAction(RemoteSlot.RIGHT_LONG))?.let {
+                add(RemoteHint(slotLabel(RemoteSlot.RIGHT_LONG), it))
+            }
+        }
+        add(RemoteHint("Back", if (catchupMode) "Exit" else "Mini player"))
+    }.take(MAX_PAIRS)
+
+    /**
+     * VOD / recording player strip. VODPlayerScreen runs its OWN transport
+     * model (a focus ZONE walked with Left/Right, Up into the scrubber) and
+     * deliberately does not consult the remote map, so these pairs follow the
+     * zone rather than the mapping. [scrubberZone] = the scrubber holds the
+     * zone.
+     */
+    fun vodPlayerStripHints(
+        scrubberZone: Boolean,
+        isPaused: Boolean,
+    ): List<RemoteHint> = buildList {
+        if (scrubberZone) {
+            add(RemoteHint("Left/Right", "Scrub"))
+            add(RemoteHint("OK", "Go to time"))
+            add(RemoteHint("Down", "Controls"))
+        } else {
+            add(RemoteHint("OK", if (isPaused) "Play" else "Pause"))
+            add(RemoteHint("Left/Right", "Controls"))
+            add(RemoteHint("Up", "Scrubber"))
+        }
+        add(RemoteHint("Play/Pause", if (isPaused) "Play" else "Pause"))
+        add(RemoteHint("Back", "Exit"))
+    }.take(MAX_PAIRS)
 }

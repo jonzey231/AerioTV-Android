@@ -27,6 +27,23 @@ import kotlinx.coroutines.flow.asStateFlow
  * inadvertently move the other's view. Once libmpv is torn out
  * (task #67) MpvWindowState goes away and only this one survives.
  */
+/**
+ * Chrome geometry the corner mini player has to respect. The mini is mounted
+ * at the ACTIVITY root, outside MainScaffold's composition, so a
+ * CompositionLocal cannot reach it; MainScaffold publishes the MEASURED TV tab
+ * bar height here instead and PersistentExoWindow reads it.
+ *
+ * tvOS pins the mini 87 pt (43.5 dp) below the physical top of the screen so it
+ * clears the system tab bar and the nav action circles beside it (HomeView
+ * .swift:4901). Android's bar is measured rather than fixed, so the inset is
+ * "the bar's own height plus 4 dp" and the mini can never clip the Settings
+ * pill however the bar is laid out.
+ */
+object MiniPlayerChrome {
+    /** Bar height + 4 dp, in dp. Seeded with the bar's designed 62 dp. */
+    val topInsetDp = MutableStateFlow(66f)
+}
+
 @Singleton
 class ExoWindowState @Inject constructor() {
 
