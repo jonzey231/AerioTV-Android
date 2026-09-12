@@ -556,8 +556,28 @@ class CompanionHostController @Inject constructor(
                 // Apple's PlayerSession.shared.exit() leaves. Stopping the
                 // ExoPlayer alone would strand the TV on a dead player screen.
                 // The phone disconnects right after, so no state reply matters.
+                // Must go through AerioExoPlayerHolder.stop(), NOT the raw
+                // ExoPlayer.stop() controlPlayer() hands back. Measured on the
+                // Streamer 2026-09-12 (gtvlogs/session5.txt lines 100788-100803
+                // and again at 111805): the raw stop parked the player in IDLE
+                // and left every piece of holder bookkeeping armed --
+                // lastPlayUrl, currentChannelId, hasReachedPlaybackRestart, the
+                // failover deadline -- so the stall watchdog saw a frozen
+                // position on a channel it still believed was playing and
+                // re-primed it 10 s later ("[MPV-RELOAD] live stall reload
+                // ch=... reason=stale=7002ms attempt=1", 02:32:26.365). The
+                // player screen was already gone, so the re-tune came back as
+                // audio only, with the media session pushed back to the top of
+                // the stack. The holder's own stop disarms all of it.
                 CastControl.CMD_STOP -> runCatching {
-                    controlPlayer()?.stop()
+                    val external = externalPlayerProvider?.invoke()
+                    if (external != null) external.stop() else holder.stop()
+                    // Apple's PlayerSession.exit() also drops the now-playing
+                    // notification; the mini player's dismiss is the local
+                    // precedent for this pair.
+                    runCatching {
+                        com.aeriotv.android.core.playback.AerioMediaPlaybackService.stop(context)
+                    }
                     _playRequests.trySend(PlayRequest.Exit)
                     Log.i(TAG, "companion stop: playback stopped, exiting to Live TV")
                 }

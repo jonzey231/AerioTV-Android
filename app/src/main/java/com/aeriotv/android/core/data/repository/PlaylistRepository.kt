@@ -1730,6 +1730,24 @@ class PlaylistRepository @Inject constructor(
         epgProgrammeDao.newestFetchedAt(playlistId)
 
     /**
+     * Span (earliest start .. latest end) of what is cached for this source,
+     * or null when nothing is cached. Two indexed MIN/MAX aggregates, so this
+     * costs nothing next to reading the rows.
+     *
+     * Launch no longer decodes the whole retention window into the guide
+     * catalog (see PlaylistViewModel.rebuildGuideCatalog), so "how many days
+     * can the user jump to" can no longer be inferred from what the catalog
+     * happens to hold. This is that answer, straight from the cache, which is
+     * what Guide Days semantics actually promise.
+     */
+    suspend fun cachedEpgSpan(playlistId: String): Pair<Long, Long>? =
+        withContext(layeringDispatcher) {
+            val from = epgProgrammeDao.earliestStart(playlistId) ?: return@withContext null
+            val to = epgProgrammeDao.latestEnd(playlistId) ?: return@withContext null
+            from to to
+        }
+
+    /**
      * Per-playlist EPG cache purge (iOS GuideStore audit P2 #11). Called by
      * the user-initiated "Refresh EPG Data" action on the playlist detail
      * so the next fetch starts from a clean slate instead of reusing

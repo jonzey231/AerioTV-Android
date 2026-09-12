@@ -56,11 +56,23 @@ class CastHlsProxySession @Inject constructor(
     internal companion object {
         const val TAG = "CAST-HLS"
 
-        /** loadMedia is gated on this many segments so the receiver's
-         *  first playlist fetch always has something playable. */
-        const val READY_SEGMENTS = 2
+        /** loadMedia is gated on this many segments so the receiver starts
+         *  a safe distance BEHIND the live edge.
+         *
+         *  Raised from 2 to 3 on 2026-09-12. With two ~4 s segments the
+         *  receiver began 8 s from the live edge, HLS's own rule is three
+         *  target durations, and the Google TV Streamer ran the buffer dry
+         *  8 s in (02:28:44 BUFFERING_HAVE_ENOUGH, 02:28:52 dry). It then
+         *  re-synced to the live edge instead of fetching the next segment
+         *  (fetched seg0, seg1, then seg4) and never fetched another
+         *  segment again, because a skipped segment in MSE 'sequence'
+         *  AppendMode leaves a 0.147 s hole the video renderer will not
+         *  cross while the audio track plays straight through it: Logan's
+         *  "launches now but it's frozen". Starting three segments back
+         *  removes the underrun that starts the whole chain. */
+        const val READY_SEGMENTS = 3
 
-        /** Bound on the wait for [READY_SEGMENTS]: two 3 s segments plus
+        /** Bound on the wait for [READY_SEGMENTS]: three 3 s segments plus
          *  provider join latency; past this the channel is declared
          *  uncastable and the user told (the sender quotes this number in
          *  the "did not send any data" message, so the two never drift). */

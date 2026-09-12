@@ -313,19 +313,18 @@ fun GuideScreen(
             resolveGuideDays(pl.epgRetentionDays)
         else null
     }
-    val epgDaysAheadOffered = guideDaysOffered ?: epgDaysAhead
-    val epgDaysBackOffered = guideDaysOffered ?: epgDaysBack
+    // The catalog only decodes the days in view now (PlaylistViewModel
+    // guideLaunchSpanDays), so on All Available the offer comes from what the
+    // CACHE holds, not from what happens to be loaded; jumping to one of those
+    // days widens the catalog through ensureGuideRange below.
+    val epgDaysAheadOffered = guideDaysOffered ?: maxOf(epgDaysAhead, state.epgCachedDaysAhead)
+    val epgDaysBackOffered = guideDaysOffered ?: maxOf(epgDaysBack, state.epgCachedDaysBack)
     // Extent: a fixed Guide Days setting drives both directions from the
     // setting; All Available (and non-Dispatcharr sources) follow the guide
     // that is actually loaded.
     val historyHours = (guideDaysOffered?.times(24)
         ?: minOf(state.epgHistoryHours, epgDaysBack * 24)).coerceAtLeast(1)
     val forwardHours = (guideDaysOffered?.times(24) ?: (epgDaysAhead * 24)).coerceAtLeast(3)
-    // Quantized to 15 min so re-entering the tab within that window reuses
-    // the memoized rows instead of rebuilding them for a new "now".
-    val windowStartMs = remember(historyHours) {
-        (System.currentTimeMillis() - historyHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS
-    }
     // Guide jump-to-day (Roman via Discord 2026-09-06; Apple parity): the
     // target instant while a jump is active. The window grows to hold it
     // (plus three hours of room), the view model fetches the missing days,
@@ -334,13 +333,30 @@ fun GuideScreen(
     var pendingJumpScroll by remember { mutableStateOf(false) }
     var showJumpSheet by remember { mutableStateOf(false) }
     val jumpWindowEnd = jumpTargetMs?.let { (it + 3 * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS }
+    // A jump backwards has to widen the window and the catalog the same way a
+    // forward one does: launch only decodes today plus/minus a day
+    // (PlaylistViewModel guideLaunchSpanDays), so the cached day the user
+    // picked is in Room but not yet in memory.
+    val jumpWindowStart = jumpTargetMs?.let { (it - 3 * 3_600_000L) / QUANTUM_MS * QUANTUM_MS }
+    // Quantized to 15 min so re-entering the tab within that window reuses
+    // the memoized rows instead of rebuilding them for a new "now".
+    val windowStartMs = remember(historyHours, jumpWindowStart) {
+        minOf(
+            (System.currentTimeMillis() - historyHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS,
+            jumpWindowStart ?: Long.MAX_VALUE,
+        )
+    }
     val windowEndMs = remember(forwardHours, jumpWindowEnd) {
         maxOf(
             (System.currentTimeMillis() + forwardHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS,
             jumpWindowEnd ?: 0L,
         )
     }
-    LaunchedEffect(jumpWindowEnd) { jumpWindowEnd?.let { viewModel.ensureGuideForward(it) } }
+    LaunchedEffect(jumpWindowStart, jumpWindowEnd) {
+        if (jumpWindowStart != null || jumpWindowEnd != null) {
+            viewModel.ensureGuideRange(jumpWindowStart ?: 0L, jumpWindowEnd ?: 0L)
+        }
+    }
     val grid = remember { GuideGridState(initialViewportStartMs = System.currentTimeMillis() - 15 * 60_000L) }
     val rows = remember(displayChannels, state.epgByChannel, windowStartMs, windowEndMs) {
         com.aeriotv.android.feature.livetv.GuideMemo.get(
@@ -356,7 +372,10 @@ fun GuideScreen(
         grid.installRows(rows)
         // Land the jump once the rows reach far enough to hold it.
         val target = jumpTargetMs
-        if (pendingJumpScroll && target != null && rows.windowEndMs >= target) {
+        // Both edges, now that a backward jump also widens the window.
+        if (pendingJumpScroll && target != null &&
+            rows.windowEndMs >= target && rows.windowStartMs <= target
+        ) {
             grid.scrollViewportTo(target - grid.leadMs)
             pendingJumpScroll = false
         }
@@ -377,7 +396,9 @@ fun GuideScreen(
     val startJump: (Long) -> Unit = { target ->
         jumpTargetMs = target
         pendingJumpScroll = true
-        if (grid.rows.windowEndMs >= target) { grid.scrollViewportTo(target - grid.leadMs); pendingJumpScroll = false }
+        if (grid.rows.windowEndMs >= target && grid.rows.windowStartMs <= target) {
+            grid.scrollViewportTo(target - grid.leadMs); pendingJumpScroll = false
+        }
     }
     val snapToNow: () -> Unit = { jumpTargetMs = null; pendingJumpScroll = false; grid.anchorToNow(System.currentTimeMillis()) }
 

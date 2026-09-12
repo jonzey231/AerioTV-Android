@@ -468,9 +468,25 @@ class AerioCastSender @Inject constructor(
         if (content != null) loadOnSession(session, content)
     }
 
-    /** End the current cast session (returns local playback to the phone). */
+    /**
+     * End the current cast session (returns local playback to the phone).
+     *
+     * The media session is stopped FIRST, and only then is the Cast session
+     * ended. Ending the session alone tears the receiver app down out from
+     * under a playing HTMLMediaElement: the Google TV Streamer log for the
+     * card's X (2026-09-12 02:29:26) shows CastV2.Receiver.Stop.In and
+     * "Stopping app" with no preceding media request of type STOP anywhere in
+     * the session, and the audio pipeline outlived the video surface long
+     * enough for Logan to hear it ("video stopped but audio still playing in
+     * the background"). A MEDIA STOP makes the receiver unload the element
+     * and release its decoders in the normal order before the app goes away.
+     */
     fun stopCasting() {
         endingGracefully = true
+        // Best effort and deliberately not awaited: the session teardown below
+        // must happen even if the receiver never answers (a wedged receiver is
+        // exactly when the user reaches for the X).
+        runCatching { currentSession()?.remoteMediaClient?.stop() }
         runCatching { CastContext.getSharedInstance()?.sessionManager?.endCurrentSession(true) }
     }
 

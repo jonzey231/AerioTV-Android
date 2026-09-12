@@ -154,11 +154,14 @@ class CastHlsProxyServerTest {
     }
 
     @Test
-    fun `requests beyond newest plus one or behind the ring fail immediately`() {
+    fun `requests far past the edge or behind the ring fail immediately`() {
         val gen1 = server.beginGeneration()
         publish(gen1, 3) // seq 0..2
         val start = System.currentTimeMillis()
-        assertNull("two past the edge is a bad URL", server.awaitSegment(5, 5_000))
+        // The hold window is the next sequence plus MAX_FUTURE_SEGMENTS
+        // (seq 3, 4 and 5 here); anything further out is a bad URL and
+        // must 404 at once rather than pinning a connection thread.
+        assertNull("four past the edge is a bad URL", server.awaitSegment(7, 5_000))
         assertTrue("no hold for far-future sequences", System.currentTimeMillis() - start < 1_000)
         publish(gen1, 8) // evict seq 0..2
         assertNull("behind the ring is gone", server.awaitSegment(0, 5_000))

@@ -65,6 +65,14 @@ interface EpgProgrammeDao {
     @Query("SELECT MAX(fetchedAt) FROM epg_programme WHERE playlistId = :playlistId")
     suspend fun newestFetchedAt(playlistId: String): Long?
 
+    /** Earliest cached start for this source, or null when nothing is cached. */
+    @Query("SELECT MIN(startMillis) FROM epg_programme WHERE playlistId = :playlistId")
+    suspend fun earliestStart(playlistId: String): Long?
+
+    /** Latest cached end for this source, or null when nothing is cached. */
+    @Query("SELECT MAX(endMillis) FROM epg_programme WHERE playlistId = :playlistId")
+    suspend fun latestEnd(playlistId: String): Long?
+
     @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: String)
 

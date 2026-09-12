@@ -108,6 +108,14 @@ class PlaylistViewModel @Inject constructor(
          *  history pass has merged (task #135); 1h before that so cold-launch
          *  paint keeps its cheap narrow window. */
         val epgHistoryHours: Int = 1,
+        /** Whole days either side of now that the on-disk EPG cache actually
+         *  holds, refreshed whenever the cached paint runs. The guide catalog
+         *  itself only spans the launch window plus whatever the user has
+         *  scrolled or jumped to (see [rebuildGuideCatalog]), so the Jump To
+         *  extent has to come from the cache instead of from the catalog:
+         *  Guide Days still promises every cached day is reachable. */
+        val epgCachedDaysBack: Int = 0,
+        val epgCachedDaysAhead: Int = 0,
         val searchQuery: String = "",
         val selectedGroup: String = ALL_GROUPS,
         val sortMode: SortMode = SortMode.ByNumber,
@@ -684,15 +692,52 @@ class PlaylistViewModel @Inject constructor(
     private var guideForwardJob: kotlinx.coroutines.Job? = null
 
     /**
+     * Guide jump: how far BACK the catalog has been asked to cover (absolute
+     * ms; 0 = default window). Counterpart to [guideForwardThroughMs], added
+     * with the lazy launch window below so a backward jump can widen the
+     * catalog the same way a forward one does.
+     */
+    private var guideBackThroughMs = 0L
+
+    /**
+     * Days either side of now the catalog covers at launch.
+     *
+     * Measured 2026-09-12 (gtvlogs/session5.txt line 142506, nplogs line
+     * 29688): the old launch path rebuilt the ENTIRE retention window from
+     * Room every single launch. On the Google TV Streamer with Guide Days =
+     * All Available that is "guide catalog rebuilt (cache): 267051 rows -> 657
+     * channels in 72960ms", with the heap climbing to 440 MB and 2-4 s
+     * concurrent GCs running back to back for the whole minute (Choreographer
+     * "Skipped 171 frames"); the Nothing Phone paid 4930 ms and a 229 MB heap
+     * for 160622 rows. Nothing on screen needs more than today, so the catalog
+     * now starts at today plus/minus one day and widens on demand through
+     * [ensureGuideRange]. The cache is untouched: every cached day is still
+     * reachable, it is just not decoded into memory until it is asked for.
+     */
+    private val guideLaunchSpanDays = 1L
+
+    /**
      * Guide jump-to-day (Apple parity, GuideStore.ensureForwardWindow): make
      * sure the catalog covers [throughMs]. Dispatcharr sources fetch the
      * missing day chunks on demand; every source then rebuilds the catalog
      * with the wider forward edge. Never refetches a day already pulled.
      */
-    fun ensureGuideForward(throughMs: Long) {
+    fun ensureGuideForward(throughMs: Long) = ensureGuideRange(0L, throughMs)
+
+    /**
+     * Widen the loaded catalog to cover [fromMs]..[throughMs] (either may be 0
+     * to leave that edge alone). Forward days are still fetched from
+     * Dispatcharr on demand exactly as before; backward days are always
+     * already in Room (retention keeps them), so widening back is a pure
+     * re-read. Both edges are hard-bounded by the playlist's Guide Days.
+     */
+    fun ensureGuideRange(fromMs: Long, throughMs: Long) {
         val playlist = _state.value.playlist ?: return
-        if (throughMs <= guideForwardThroughMs) return
-        guideForwardThroughMs = throughMs
+        val widensBack = fromMs > 0L && (guideBackThroughMs == 0L || fromMs < guideBackThroughMs)
+        val widensForward = throughMs > guideForwardThroughMs
+        if (!widensBack && !widensForward) return
+        if (widensBack) guideBackThroughMs = fromMs
+        if (widensForward) guideForwardThroughMs = throughMs
         guideForwardJob?.cancel()
         guideForwardJob = viewModelScope.launch {
             // Logan 2026-09-11: the playlist's Guide Days setting governs the
@@ -723,11 +768,25 @@ class PlaylistViewModel @Inject constructor(
         val now = System.currentTimeMillis()
         // Quick pass: only what the guide paints at launch (a couple of hours
         // back, the evening ahead); the full retention window follows.
-        val fromMillis = if (quick) now - 2L * 60L * 60L * 1000L else now - retentionDays * 24L * 60L * 60L * 1000L
-        val toMillis = maxOf(
-            if (quick) now + 8L * 60L * 60L * 1000L else now + windowHours * 60L * 60L * 1000L,
-            guideForwardThroughMs,
-        )
+        // Non-quick passes no longer read the whole retention window (see
+        // [guideLaunchSpanDays] for the measurement): they cover today plus or
+        // minus [guideLaunchSpanDays], widened to whatever the user has jumped
+        // or scrolled to, and hard-bounded by Guide Days in both directions.
+        val dayMs = 24L * 60L * 60L * 1000L
+        val backBoundMs = now - retentionDays * dayMs
+        val forwardBoundMs = now + windowHours * 60L * 60L * 1000L
+        val fromMillis = if (quick) {
+            now - 2L * 60L * 60L * 1000L
+        } else {
+            val wanted = if (guideBackThroughMs > 0L) minOf(guideBackThroughMs, now - guideLaunchSpanDays * dayMs)
+            else now - guideLaunchSpanDays * dayMs
+            maxOf(backBoundMs, wanted)
+        }
+        val toMillis = if (quick) {
+            maxOf(now + 8L * 60L * 60L * 1000L, guideForwardThroughMs)
+        } else {
+            minOf(forwardBoundMs, maxOf(now + guideLaunchSpanDays * dayMs, guideForwardThroughMs))
+        }
         val t0 = android.os.SystemClock.elapsedRealtime()
         val rows = runCatching { repository.loadCachedEpg(playlist.id, fromMillis, toMillis) }
             .onFailure { Log.w(TAG, "rebuildGuideCatalog($reason): cache read failed", it) }
@@ -746,6 +805,24 @@ class PlaylistViewModel @Inject constructor(
             "guide catalog rebuilt ($reason): ${rows.size} rows -> ${catalog.size} channels " +
                 "in ${android.os.SystemClock.elapsedRealtime() - t0}ms",
         )
+    }
+
+    /**
+     * Publish how many whole days either side of now the on-disk cache holds,
+     * so Jump To can still offer every cached day now that the catalog only
+     * decodes the days in view. Two indexed aggregates; safe to call on every
+     * cached paint.
+     */
+    private suspend fun publishCachedEpgSpan(playlist: PlaylistEntity) {
+        val span = runCatching { repository.cachedEpgSpan(playlist.id) }.getOrNull() ?: return
+        val now = System.currentTimeMillis()
+        val dayMs = 24L * 60L * 60L * 1000L
+        val back = (((now - span.first) + dayMs - 1) / dayMs).toInt().coerceAtLeast(0)
+        val ahead = (((span.second - now) + dayMs - 1) / dayMs).toInt().coerceAtLeast(0)
+        _state.update {
+            if (it.epgCachedDaysBack == back && it.epgCachedDaysAhead == ahead) it
+            else it.copy(epgCachedDaysBack = back, epgCachedDaysAhead = ahead)
+        }
     }
 
     private suspend fun mergeEpgHistory(playlist: PlaylistEntity) {
@@ -849,6 +926,7 @@ class PlaylistViewModel @Inject constructor(
             rebuildGuideCatalog(playlist, "cache-quick", quick = true)
             _state.update { it.copy(isEpgLoading = false) }
             rebuildGuideCatalog(playlist, "cache")
+            publishCachedEpgSpan(playlist)
         }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).

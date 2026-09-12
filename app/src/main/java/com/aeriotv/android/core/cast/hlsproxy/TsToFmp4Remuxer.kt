@@ -181,6 +181,31 @@ class TsToFmp4Remuxer(
      *  receiver's timeline starts near zero. */
     private var timelineBase = -1L
 
+    /** First queued video PRESENTATION time (dts + composition offset).
+     *
+     *  Audio is gated on this, not on [timelineBase]. The Cast receiver
+     *  appends our muxed segments in MSE 'sequence' AppendMode (Shaka's
+     *  HLS default; Chromium logs the warning on every load), and in that
+     *  mode Chromium ignores tfdt and anchors the whole append on the
+     *  PRESENTATION timestamp of the first coded frame it sees, which is
+     *  our first video sample. Any audio sitting between timelineBase and
+     *  that presentation time therefore lands BEFORE zero and Chromium
+     *  throws it away, logging (Google TV Streamer, 2026-09-12 02:28:43):
+     *
+     *    Dropping audio frame (DTS -24000us PTS -24000us,-2667us) that is
+     *      outside append window [0us, ...]
+     *    Truncating audio buffer which overlaps append window start.
+     *      PTS -2667us frame_end_timestamp 18666us append_window_start 0us
+     *
+     *  The truncated frame is then the one that fails to decode
+     *  ("Failed to send audio packet for decoding ... timestamp=0", then
+     *  "audio decoder fallback after initial decode error"), costing the
+     *  load a decoder swap and a reseek on both senders. Measured on the
+     *  dumped segments: audio started 56 ms before the first video
+     *  presentation time. Gating on the presentation time removes the
+     *  whole sequence. */
+    private var timelineBasePts = -1L
+
     // ---- pending segment ----
 
     private class VideoSample(val data: ByteArray, val dts: Long, val pts: Long, val keyframe: Boolean)
@@ -417,7 +442,12 @@ class TsToFmp4Remuxer(
 
         val dts = videoClock.unwrap(dts33)
         val pts = unwrapPtsAgainstDts(pts33, dts)
-        if (timelineBase < 0) timelineBase = dts
+        if (timelineBase < 0) {
+            timelineBase = dts
+            // The composition offset of the first sample is what the
+            // receiver anchors on; see [timelineBasePts].
+            timelineBasePts = pts
+        }
 
         if (keyframe && videoQueue.isNotEmpty() && dts - videoQueue.first().dts >= targetSegmentTicks) {
             finalizeSegment(cutDts = dts)
@@ -522,7 +552,7 @@ class TsToFmp4Remuxer(
             if (initSent) {
                 if (framePts < 0) framePts = audioClock.unwrap(pts33)
                 val durationTicks = info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
-                if (timelineBase >= 0 && framePts >= timelineBase) {
+                if (timelineBasePts >= 0 && framePts >= timelineBasePts) {
                     audioQueue.add(
                         AudioSample(data.copyOfRange(p, next), framePts, durationTicks),
                     )
@@ -602,10 +632,12 @@ class TsToFmp4Remuxer(
                 // by the fixed 1024-sample frame duration. Re-anchoring on
                 // every PES keeps drift bounded to one PES worth of frames.
                 if (framePts < 0) framePts = audioClock.unwrap(pts33)
-                // Frames BEFORE the video timeline base are dropped, not
-                // clamped (2026-09-12 ffprobe run): audio commonly leads
-                // the first kept video keyframe by tens of ms, and the
-                // unsigned tfdt cannot express a negative start. The old
+                // Frames BEFORE the first video PRESENTATION time are
+                // dropped, not clamped (2026-09-12 ffprobe run): audio
+                // commonly leads the first kept video keyframe by tens of
+                // ms, and the unsigned tfdt cannot express a negative
+                // start. See [timelineBasePts] for why the gate is the
+                // presentation time and not the decode time. The old
                 // coerceAtLeast(0) in buildMoof pretended such a segment
                 // started at 0, which shifted its whole audio track
                 // forward by that lead and made it OVERLAP the next
@@ -614,7 +646,7 @@ class TsToFmp4Remuxer(
                 // the next segment's audio tfdt was 348000). Chromium
                 // gets a backwards audio append one segment in, which is
                 // the IDLE/ERROR a second after the first playlist fetch.
-                if (timelineBase >= 0 && framePts >= timelineBase) {
+                if (timelineBasePts >= 0 && framePts >= timelineBasePts) {
                     audioQueue.add(
                         AudioSample(
                             data.copyOfRange(p + headerLen, p + frameLen),
@@ -761,10 +793,11 @@ class TsToFmp4Remuxer(
                 box(
                     "traf",
                     fullBox("tfhd", 0, 0x020000, u32(AUDIO_TRACK_ID)),
-                    // No clamp: samples earlier than timelineBase are
-                    // dropped at queue time (see onAdtsAudioPes), so this
-                    // is always >= 0 and always the truth. Clamping here
-                    // is what overlapped consecutive segments' audio.
+                    // No clamp: samples earlier than timelineBasePts are
+                    // dropped at queue time (see onAdtsAudioPes), and
+                    // timelineBasePts >= timelineBase, so this is always
+                    // >= 0 and always the truth. Clamping here is what
+                    // overlapped consecutive segments' audio.
                     fullBox("tfdt", 1, 0, u64(audio.first().pts - timelineBase)),
                     audioTrun(audio, audioDataOffset),
                 ),

@@ -53,10 +53,21 @@ class CastHlsProxyServer(
          *  previous playlist advertised. */
         private const val RING_SIZE = 8
 
-        /** Bound on holding a segment GET that names the imminent next
-         *  sequence (the receiver racing the live edge); segments land
-         *  every ~3 s, so 6 s covers a slow cut without pinning threads. */
+        /** Bound on holding a segment GET that names a sequence the ingest
+         *  has not published yet (the receiver racing the live edge);
+         *  segments land every ~3 s, so 6 s covers a slow cut without
+         *  pinning threads. */
         private const val NEXT_SEGMENT_WAIT_MS = 6_000L
+
+        /** How far past the newest published sequence a fetch may name and
+         *  still be held rather than 404ed. A 404 is not a harmless retry
+         *  for this receiver: Shaka drops the segment and re-syncs to the
+         *  live edge, which SKIPS segments, and a skipped segment in MSE
+         *  'sequence' AppendMode leaves a sub-frame-invisible hole in the
+         *  buffered range that the video renderer never crosses (measured
+         *  in Chromium: 0.147 s, see the review notes). Two segments of
+         *  slack costs nothing and removes the trigger. */
+        private const val MAX_FUTURE_SEGMENTS = 2
 
         /** Requests logged verbatim at the start of a session before the
          *  rate limit kicks in (enough to cover master + playlist + init
@@ -217,18 +228,17 @@ class CastHlsProxyServer(
     internal fun initSegment(gen: Int): ByteArray? = synchronized(lock) { inits[gen] }
 
     /**
-     * Segment [seq]'s bytes. A fetch naming the imminent NEXT sequence
-     * (newest+1, the receiver racing the live edge) is held up to
-     * [timeoutMs] for the ingest to publish it instead of 404ing;
-     * anything already evicted from the ring or further in the future
-     * fails immediately.
+     * Segment [seq]'s bytes. A fetch naming a sequence the ingest has not
+     * published yet, up to [MAX_FUTURE_SEGMENTS] past the newest one, is
+     * held up to [timeoutMs] instead of 404ing; anything already evicted
+     * from the ring or further in the future fails immediately.
      */
     internal fun awaitSegment(seq: Int, timeoutMs: Long = NEXT_SEGMENT_WAIT_MS): ByteArray? {
         val deadline = System.currentTimeMillis() + timeoutMs
         synchronized(lock) {
             while (true) {
                 ring.firstOrNull { it.seq == seq }?.let { return it.data }
-                if (!storeOpen || seq != nextSeq) return null
+                if (!storeOpen || seq < nextSeq || seq > nextSeq + MAX_FUTURE_SEGMENTS) return null
                 val remaining = deadline - System.currentTimeMillis()
                 if (remaining <= 0) return null
                 try {
