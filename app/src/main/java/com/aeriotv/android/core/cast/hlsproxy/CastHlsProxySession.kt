@@ -136,7 +136,8 @@ class CastHlsProxySession @Inject constructor(
     /**
      * Point the proxy at [rawTsUrl] (the SAME URL + headers the local
      * player would use, plus `?output_profile=<id>` when the sender
-     * resolved Dispatcharr's AAC profile) and suspend until the playlist
+     * resolved Dispatcharr's AAC profile AND the receiver cannot decode
+     * AC-3 itself) and suspend until the playlist
      * has [READY_MEDIA_TICKS] of media.
      *
      * [fallbackUrl] is the same channel WITHOUT the output_profile

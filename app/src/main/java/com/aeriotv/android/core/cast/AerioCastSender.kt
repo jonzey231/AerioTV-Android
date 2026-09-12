@@ -684,14 +684,36 @@ class AerioCastSender @Inject constructor(
             // untouched and keeps the AC-3 feed. Viewers without the
             // parameter keep the original feed too: the server runs one
             // transcode per (channel, profile), shared.
-            val profileId = runCatching {
-                playlistDao.firstActive()?.castAacOutputProfileId()
-            }.getOrNull()
+            //
+            // 2026-09-12 (Google TV Streamer, gtv session10): the profile
+            // used to be applied to EVERY cast, including receivers that
+            // decode AC-3 themselves. Dispatcharr's ffmpeg AAC encoder
+            // emits channel_configuration 0 (layout in a PCE) whenever the
+            // AC-3 source layout is outside Table 1.19, and the receiver's
+            // AAC decoder then substitutes silence for every frame. So the
+            // profile is now requested ONLY when the receiver cannot
+            // decode AC-3; a capable receiver ingests the PLAIN stream and
+            // the remuxer passes AC-3 / E-AC-3 through untouched.
+            val ac3Ok = receiverDecodesAc3()
+            val receiverName = lastDeviceName ?: (state.value as? State.Connected)?.deviceName
+            val profileId = if (ac3Ok) {
+                null
+            } else {
+                runCatching {
+                    playlistDao.firstActive()?.castAacOutputProfileId()
+                }.getOrNull()
+            }
             val profiledUrl = profileId
                 ?.let { dispatcharrClient.withOutputProfile(rawTsUrl, it) }
                 ?: rawTsUrl
-            val ac3Ok = receiverDecodesAc3()
-            val receiverName = lastDeviceName ?: (state.value as? State.Connected)?.deviceName
+            val receiverModel = runCatching {
+                currentSession()?.castDevice?.modelName
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: receiverName ?: "unknown"
+            Log.i(
+                TAG,
+                "[Cast] audio plan: receiver=$receiverModel ac3=${if (ac3Ok) "yes" else "no"} " +
+                    "-> ingest=${profileId?.let { "profile $it" } ?: "plain"}",
+            )
             val started = try {
                 hlsProxy.startChannel(
                     rawTsUrl = profiledUrl,
