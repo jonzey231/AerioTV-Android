@@ -115,7 +115,25 @@ fun aerioRenderersFactory(
             out: ArrayList<Renderer>,
         ) {
             if (tileAudioGate == null) {
-                super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+                // Stock build first (it also appends the bundled FFmpeg audio
+                // renderer, and its ORDER carries the PREFER/ON semantics), then
+                // swap the platform MediaCodec audio renderer in place for our
+                // subclass so every path gets the 0-channel AAC workaround.
+                val stock = ArrayList<Renderer>()
+                super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, stock)
+                for (renderer in stock) {
+                    if (renderer.javaClass == androidx.media3.exoplayer.audio.MediaCodecAudioRenderer::class.java) {
+                        out.add(
+                            AerioMediaCodecAudioRenderer(
+                                context, codecAdapterFactory, mediaCodecSelector,
+                                enableDecoderFallback, eventHandler, eventListener, audioSink,
+                                clockless = false,
+                            ),
+                        )
+                    } else {
+                        out.add(renderer)
+                    }
+                }
                 return
             }
             // Multiview tile: the audio renderer is NOT a media clock. The tile
@@ -125,11 +143,13 @@ fun aerioRenderersFactory(
             // clock and never re-selects tracks. The audible tile's sink plays
             // at the standalone clock's pace; the sync error is bounded by the
             // AudioTrack start latency, which multiview tolerates.
-            out.add(object : androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(
-                context, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener, audioSink,
-            ) {
-                override fun getMediaClock(): androidx.media3.exoplayer.MediaClock? = null
-            })
+            out.add(
+                AerioMediaCodecAudioRenderer(
+                    context, codecAdapterFactory, mediaCodecSelector,
+                    enableDecoderFallback, eventHandler, eventListener, audioSink,
+                    clockless = true,
+                ),
+            )
         }
 
         override fun buildVideoRenderers(
@@ -495,6 +515,90 @@ private class AerioMediaCodecVideoRenderer(
             DecoderReuseEvaluation.REUSE_RESULT_NO,
             DecoderReuseEvaluation.DISCARD_REASON_WORKAROUND,
         )
+    }
+}
+
+/**
+ * Audio renderer used by every player in the app (live holder, VOD, multiview
+ * tiles). Two deviations from stock:
+ *
+ * 1. Zero-channel AAC (Nothing Phone, Qualcomm yupik, 2026-09-11). Dispatcharr
+ *    transcodes some channels' audio to AAC, and a 5.1 source arrives as
+ *    mp4a.40.2 whose AudioSpecificConfig has channel_configuration 0, i.e. the
+ *    real layout rides in an in-band Program Config Element. The extractor then
+ *    reports Format.channelCount = 0 ("0ch 48000Hz support=HANDLED"), stock
+ *    copies that straight into MediaFormat.KEY_CHANNEL_COUNT, and this SoC's
+ *    MediaCodec AAC decoder refuses the configuration: ERROR_CODE_DECODING_FAILED
+ *    (4003) about 1.5s after the tune, on the decoder retry and the reload too.
+ *    Stereo (2ch) AAC on the same server plays fine. Fix: configure the decoder
+ *    with a placeholder channel count of 2 while leaving the CSD untouched, so
+ *    the decoder parses the PCE and reports the true layout in its OUTPUT
+ *    format, which is the format the audio sink is configured from. Deliberately
+ *    narrow: only AAC with a non-positive channel count is touched.
+ * 2. [clockless] (multiview tiles only) drops the media clock, so the tile runs
+ *    on ExoPlayer's standalone clock whether or not its sink is muted.
+ */
+@OptIn(UnstableApi::class)
+private class AerioMediaCodecAudioRenderer(
+    context: Context,
+    codecAdapterFactory: MediaCodecAdapter.Factory,
+    mediaCodecSelector: MediaCodecSelector,
+    enableDecoderFallback: Boolean,
+    eventHandler: Handler?,
+    eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener?,
+    audioSink: AudioSink,
+    private val clockless: Boolean,
+) : androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(
+    context,
+    codecAdapterFactory,
+    mediaCodecSelector,
+    enableDecoderFallback,
+    eventHandler,
+    eventListener,
+    audioSink,
+) {
+    private var loggedZeroChannelKey: String? = null
+
+    override fun getMediaClock(): androidx.media3.exoplayer.MediaClock? =
+        if (clockless) null else super.getMediaClock()
+
+    override fun getMediaFormat(
+        format: Format,
+        codecMimeType: String,
+        codecMaxInputSize: Int,
+        codecOperatingRate: Float,
+    ): android.media.MediaFormat {
+        if (!isZeroChannelAac(format)) {
+            return super.getMediaFormat(format, codecMimeType, codecMaxInputSize, codecOperatingRate)
+        }
+        val key = "${format.sampleMimeType}/${format.sampleRate}/${format.id}"
+        if (loggedZeroChannelKey != key) {
+            loggedZeroChannelKey = key
+            android.util.Log.i(
+                "AerioExoPlayer",
+                "AAC track reports 0 channels (PCE layout); configuring decoder as stereo",
+            )
+        }
+        // Hand super a stereo-stamped Format so every derived value (the PCM
+        // float capability probe included) is computed from a legal channel
+        // count instead of 0; initializationData (the AudioSpecificConfig with
+        // channel_configuration 0) is carried through untouched.
+        val patched = format.buildUpon().setChannelCount(PLACEHOLDER_CHANNEL_COUNT).build()
+        val mediaFormat =
+            super.getMediaFormat(patched, codecMimeType, codecMaxInputSize, codecOperatingRate)
+        mediaFormat.setInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT, PLACEHOLDER_CHANNEL_COUNT)
+        return mediaFormat
+    }
+
+    private fun isZeroChannelAac(format: Format): Boolean {
+        if (format.channelCount > 0) return false
+        val mime = format.sampleMimeType ?: return false
+        return MimeTypes.AUDIO_AAC.equals(mime, ignoreCase = true) ||
+            mime.startsWith("audio/mp4a", ignoreCase = true)
+    }
+
+    private companion object {
+        const val PLACEHOLDER_CHANNEL_COUNT = 2
     }
 }
 
