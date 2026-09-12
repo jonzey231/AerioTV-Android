@@ -1076,10 +1076,48 @@ class PlaylistRepository @Inject constructor(
                 // so the ViewModel folds it in when it lands. Source discovery
                 // moved in there too (GH #53), so nothing before the guide
                 // paint touches /api/epg/sources/ or /api/epg/epgdata/.
-                if (playlist.dispatcharrVersionAtLeast("0.30.0")) {
+                // Nothing Phone 2026-09-11: a playlist added before the 0.30
+                // code shipped has NO stored server version (it is captured
+                // only at add and at refresh), so the gate below read false,
+                // the guide took the upstream XMLTV layering path, and the
+                // grid window pass never ran -- while a device whose playlist
+                // had been refreshed did run it. Capture the version (and the
+                // 0.30 permissions, same shape) once here when the persisted
+                // value is missing, persist it, and gate on the fresh value in
+                // THIS run. Never refetch when a value is already stored; the
+                // refresh path keeps it current.
+                var gated = playlist
+                if (playlist.dispatcharrServerVersion.isBlank()) {
+                    val captured = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            val v = dispatcharrClient.fetchServerVersion(base, key)
+                            val p = dispatcharrClient.fetchAccountPermissions(base, key)
+                            v to p
+                        }
+                    }.getOrNull()
+                    val version = captured?.first
+                    val perms = captured?.second
+                    if (!version.isNullOrBlank()) {
+                        val updated = playlist.copy(
+                            dispatcharrServerVersion = version,
+                            dispatcharrDvrAccess = perms?.dvrAccess ?: playlist.dispatcharrDvrAccess,
+                            dispatcharrCatchupEnabled =
+                                perms?.catchupEnabled ?: playlist.dispatcharrCatchupEnabled,
+                            dispatcharrVodMoviesEnabled =
+                                perms?.vodMoviesEnabled ?: playlist.dispatcharrVodMoviesEnabled,
+                            dispatcharrVodSeriesEnabled =
+                                perms?.vodSeriesEnabled ?: playlist.dispatcharrVodSeriesEnabled,
+                        )
+                        runCatching { dao.update(updated) }
+                            .onFailure { Log.w("PlaylistRepo", "version capture persist failed", it) }
+                        gated = updated
+                        Log.i("PlaylistRepo", "[EPG] server version captured $version at EPG load")
+                    }
+                }
+                if (gated.dispatcharrVersionAtLeast("0.30.0")) {
                     // Dispatcharr 0.30: the grid serves history and days ahead
                     // itself; no third-party XMLTV layering needed.
-                    extendGridWindowInBackground(playlist, base)
+                    extendGridWindowInBackground(gated, base)
                 } else {
                     layerUpstreamInBackground(playlist.id, base, customXmltv, knownChannelKeys)
                 }
