@@ -64,6 +64,31 @@
     font-size: 26px; font-weight: 400; line-height: 1.25;
   }
   #banner .subtitle:empty { display: none; }
+  /* Loading indicator, under the wordmark on the idle art. Visible from LOAD
+     until the picture is actually rendering, and again if playback sits in
+     BUFFERING. Matches the Apple TV app's wording. */
+  #loading {
+    margin-top: 40px;
+    display: flex; flex-direction: column; align-items: center;
+    transition: opacity .3s ease;
+  }
+  #loading.hidden { opacity: 0; }
+  #loading .spinner {
+    width: 52px; height: 52px;
+    border: 4px solid rgba(255,255,255,.18);
+    border-top-color: #22c3e6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading .status {
+    margin-top: 20px; min-height: 28px;
+    color: rgba(255,255,255,.7); font-size: 24px; font-weight: 400;
+    /* The status strings carry their own spacing, so keep it. */
+    white-space: pre;
+    opacity: 0; transition: opacity .3s ease;
+  }
+  #loading .status.visible { opacity: 1; }
 </style>
 <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </head>
@@ -73,6 +98,10 @@
   <div id="idle">
     <div class="wordmark">Aerio<span>TV</span></div>
     <div class="tagline">Ready to cast</div>
+    <div id="loading" class="hidden">
+      <div class="spinner"></div>
+      <div class="status" id="loadingStatus"></div>
+    </div>
   </div>
 
   <div id="banner">
@@ -88,6 +117,8 @@
     const banner = document.getElementById('banner');
     const bannerTitle = document.getElementById('bannerTitle');
     const bannerSubtitle = document.getElementById('bannerSubtitle');
+    const loading = document.getElementById('loading');
+    const loadingStatus = document.getElementById('loadingStatus');
     let bannerTimer = null;
 
     function flashBanner(title, subtitle) {
@@ -98,6 +129,141 @@
       clearTimeout(bannerTimer);
       bannerTimer = setTimeout(() => banner.classList.remove('visible'), 4000);
     }
+
+    // ---- loading indicator ----
+    //
+    // A cast tune is not instant: the phone's proxy has to open the provider
+    // stream, remux it and publish a window before the receiver has anything
+    // to decode. Until 2026-09-12 this page showed the bare "Ready to cast"
+    // art for all of it, which reads as a dead receiver. The spinner appears
+    // on LOAD, the status line joins it after STATUS_DELAY_MS (a fast tune
+    // never shows any text at all), and both go away the moment the picture
+    // is rendering. Wording follows the Apple TV app so one vocabulary
+    // describes a tune on every platform.
+    const STATUS_DELAY_MS = 3000;
+    const LOADING_TICK_MS = 250;
+    // How long playback has to sit in BUFFERING before the indicator comes
+    // back over the picture. Short stalls are not worth a spinner.
+    const BUFFERING_REVEAL_MS = 3000;
+
+    // Phase bookkeeping for the text. manifestSeenAt is set by the manifest
+    // handler (the first manifest fetch that came back), bytesAppended by the
+    // segment handler; see playbackConfig below.
+    let loadingSince = 0;
+    let manifestSeenAt = 0;
+    let bytesAppended = 0;
+    let renderingSince = 0;
+    let bufferingSince = 0;
+    let loadingVisible = false;
+    let lastRenderTime = null;
+
+    function showLoading() {
+      if (loadingVisible) return;
+      loadingVisible = true;
+      idle.classList.remove('hidden');
+      loading.classList.remove('hidden');
+      loadingStatus.classList.remove('visible');
+      loadingStatus.textContent = '';
+    }
+
+    function hideLoading() {
+      if (!loadingVisible) return;
+      loadingVisible = false;
+      loading.classList.add('hidden');
+      loadingStatus.classList.remove('visible');
+      idle.classList.add('hidden');
+    }
+
+    // Bytes the segment handler has seen, falling back to Shaka's own counter
+    // when this CAF build never calls our handler.
+    function downloadedBytes() {
+      if (bytesAppended > 0) return bytesAppended;
+      try {
+        const player = playerManager.getPlayer && playerManager.getPlayer();
+        const stats = player && player.getStats ? player.getStats() : null;
+        if (stats && typeof stats.bytesDownloaded === 'number') {
+          return stats.bytesDownloaded;
+        }
+      } catch (e) {
+        // Best effort only; the spinner does not depend on it.
+      }
+      return 0;
+    }
+
+    function secondsSince(ms, nowMs) {
+      return Math.max(0, Math.round((nowMs - ms) / 1000));
+    }
+
+    function loadingText(nowMs) {
+      if (bufferingSince && renderingSince) {
+        return 'Buffering  ' + secondsSince(bufferingSince, nowMs) + ' s';
+      }
+      if (!manifestSeenAt) return 'Connecting to server';
+      const bytes = downloadedBytes();
+      if (bytes <= 0) {
+        return 'Waiting for stream data  ' + secondsSince(loadingSince, nowMs) + ' s';
+      }
+      return 'Received ' + (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    setInterval(() => {
+      const video = mediaElement();
+      const nowMs = Date.now();
+      let state = null;
+      try {
+        state = playerManager.getPlayerState();
+      } catch (e) {
+        state = null;
+      }
+      const S = cast.framework.messages.PlayerState;
+      if (state === S.IDLE) {
+        // Nothing loaded: the plain idle art owns the screen.
+        bufferingSince = 0;
+        renderingSince = 0;
+        loadingSince = 0;
+        hideLoading();
+        idle.classList.remove('hidden');
+        return;
+      }
+
+      // Rendering means the playhead is moving with decoded media behind it,
+      // which is the only signal that says a frame actually reached the
+      // screen; PLAYER_LOAD_COMPLETE fires well before that on a live tune.
+      const t = video ? video.currentTime : null;
+      const advancing = video && lastRenderTime !== null && t > lastRenderTime;
+      lastRenderTime = t;
+      const rendering = !!video && state === S.PLAYING && advancing &&
+        video.readyState >= 2 && !video.paused;
+      if (rendering) {
+        if (!renderingSince) renderingSince = nowMs;
+        bufferingSince = 0;
+        hideLoading();
+        return;
+      }
+
+      if (state === S.BUFFERING || state === S.LOADING) {
+        if (!bufferingSince) bufferingSince = nowMs;
+      } else {
+        bufferingSince = 0;
+      }
+
+      // Before the first frame the indicator is up from LOAD. After it, only
+      // a stall longer than BUFFERING_REVEAL_MS brings it back.
+      if (!renderingSince) {
+        if (!loadingSince) loadingSince = nowMs;
+        showLoading();
+      } else if (bufferingSince && nowMs - bufferingSince >= BUFFERING_REVEAL_MS) {
+        showLoading();
+      } else {
+        return;
+      }
+
+      const since = renderingSince ? bufferingSince : loadingSince;
+      if (nowMs - since >= STATUS_DELAY_MS) {
+        loadingStatus.textContent = loadingText(nowMs);
+        loadingStatus.classList.add('visible');
+      }
+    }, LOADING_TICK_MS);
 
     // How far behind the live edge a live load starts, in seconds.
     //
@@ -135,6 +301,23 @@
     // target duration of the end is at the edge by design, not stuck.
     const TARGET_DURATION_SECONDS = 6;
 
+    // The watchdog below may not act more than once per this interval. On the
+    // 2026-09-12 17:13 session it fired every ~4 s for 97 s straight (each
+    // nudge landed outside the buffer, so the next tick was stuck again), and
+    // every one of those seeks flushed the decoder: the Streamer logged 118
+    // "Discard frames from previous generation" and 95 "flushed work; ignored"
+    // in three minutes, which is the slideshow Logan saw. A rescue that has
+    // not worked within 10 s is not going to work on the 4 s retry either.
+    const WATCHDOG_MIN_INTERVAL_MS = 10000;
+
+    // How far inside the buffered range a resync target must sit. The seek is
+    // only useful if the element has decodable media AT the target, so we aim
+    // a second short of the buffered end (the next append has usually not
+    // landed there yet) and half a second past its start (an append can trim
+    // the front out from under us between the clamp and the seek).
+    const RESYNC_END_MARGIN_SECONDS = 1.0;
+    const RESYNC_START_MARGIN_SECONDS = 0.5;
+
     // manifest.availabilityWindowOverride, below. Shaka derives a live HLS
     // stream's segmentAvailabilityDuration from the playlist window itself
     // (hls_parser.js determineDuration_ -> getLiveDuration_, which is
@@ -171,6 +354,26 @@
     // Last error or warning Shaka / CAF surfaced, reported with every
     // snapshot so a stall can be read together with whatever preceded it.
     let lastReceiverError = null;
+
+    // ---- pause / seek / load bookkeeping ----
+    //
+    // The 2026-09-12 17:13 session ran for 97 s with the CAF player state
+    // PAUSED and playbackRate 1 while this page kept seeking, so a resync can
+    // never assume playback will resume on its own. These three flags let the
+    // rescue path tell the two cases apart: somebody asked for a pause (leave
+    // it alone) versus the element is paused with nobody having asked (resume
+    // it, and say so in the telemetry).
+    let userPaused = false;
+    // Set on SEEKING, cleared on SEEKED: the watchdog must never stack a
+    // second seek on an outstanding one.
+    let seekPending = false;
+    // Monotonic timestamps / counters, not wall clock semantics: only
+    // differences are used.
+    let lastWatchdogAt = 0;
+    // Bumped by every LOAD. A deferred teardown captures the value it was
+    // queued at and does nothing if a new load has begun since; see
+    // unloadMediaElement's callers.
+    let loadGeneration = 0;
 
     // ---- measured MSE codec support (replaces the senders' model guess) ----
     //
@@ -313,6 +516,14 @@
         buffered: bufferedRanges(),
         ready: video ? video.readyState : null,
         state: null,
+        // Reported SEPARATELY from state on purpose. The 17:13 session showed
+        // "state=PAUSED rate=1" and there was no way to tell whether the media
+        // element itself was paused or whether only CAF's state machine
+        // thought so, which are different bugs with different fixes.
+        elPaused: video ? !!video.paused : null,
+        cafState: null,
+        userPaused: userPaused,
+        seekPending: seekPending,
         rate: video ? roundTo(video.playbackRate, 2) : null,
         seek: seekRange(),
         bufTime: stats.bufTime === undefined ? null : stats.bufTime,
@@ -322,8 +533,10 @@
       };
       try {
         payload.state = playerManager.getPlayerState();
+        payload.cafState = payload.state;
       } catch (e) {
         payload.state = null;
+        payload.cafState = null;
       }
       try {
         // Broadcast: no sender id, so whichever phone is connected gets it.
@@ -390,8 +603,13 @@
       //     never be reached by playback) or when the element has nothing
       //     decodable at the playhead (readyState < 2) while media IS
       //     buffered ahead of it.
-      //  3. Never seek backward; see resyncPlayhead.
+      //  3. Never act while a seek is already outstanding, and never more
+      //     often than WATCHDOG_MIN_INTERVAL_MS. The 17:13 session nudged
+      //     every 4 s for 97 s and flushed the decoder on every one of them.
       stuckTicks = 0;
+      if (seekPending) return;
+      const nowMs = Date.now();
+      if (nowMs - lastWatchdogAt < WATCHDOG_MIN_INTERVAL_MS) return;
       const ranges = bufferedRanges();
       if (!ranges.length) return;
       const head = ranges[0][0];
@@ -405,6 +623,7 @@
       const behindBuffer = video.currentTime < head;
       const starvedWithMediaAhead = video.readyState < 2 && tail > video.currentTime + 0.1;
       if (!behindBuffer && !starvedWithMediaAhead) return;
+      lastWatchdogAt = nowMs;
       resyncPlayhead('nudge');
     }, 1000);
 
@@ -441,32 +660,114 @@
       if (!video) return;
       const ranges = bufferedRanges();
       if (!ranges.length) return;
-      const head = ranges[0][0];
-      const tail = ranges[ranges.length - 1][1];
       const range = seekRange();
-      // Aim LIVE_START_BEHIND_SECONDS behind the live edge when Shaka will
-      // tell us where that is, and at the head of the buffer when it will
-      // not. Clamped into the media that actually exists, a hair inside the
-      // edges: seeking exactly to a boundary can land back outside it when
-      // the next append trims the front.
+
+      // Seek INTO media that exists. The 17:13 session failed because the
+      // target came from the seek range alone: the playhead was behind the
+      // buffered start (175.58 with buffered=[176.21-188.03]) and every
+      // rescue aimed at a point the element had nothing decodable for, so it
+      // stalled again immediately and the watchdog repeated it.
+      //
+      // Pick the buffered range that actually overlaps the live seek range;
+      // media outside the seek window is media Shaka will not stream on from.
+      // If nothing is buffered inside the seek range there is no seek worth
+      // issuing and we leave the playhead alone: the next append, not a
+      // decoder flush, is what fixes that case.
+      let buf = null;
+      if (range && range[0] !== null && range[1] !== null) {
+        for (const r of ranges) {
+          if (r[1] > range[0] && r[0] < range[1]) {
+            // Prefer the latest overlapping range (closest to the edge).
+            buf = r;
+          }
+        }
+        if (!buf) return;
+      } else {
+        buf = ranges[ranges.length - 1];
+      }
+      const bufStart = buf[0];
+      const bufEnd = buf[1];
+      if (bufEnd - bufStart <= RESYNC_START_MARGIN_SECONDS + RESYNC_END_MARGIN_SECONDS) {
+        // Too little media to aim inside; wait for the next append.
+        return;
+      }
+
+      // Aim LIVE_START_BEHIND_SECONDS behind the live edge, but never past
+      // the media we have, and never at the very front of it.
       let target = range && range[1] !== null ?
-        range[1] - LIVE_START_BEHIND_SECONDS : head;
-      target = Math.min(Math.max(target, head + 0.05), Math.max(tail - 0.05, head));
+        range[1] - LIVE_START_BEHIND_SECONDS : bufEnd - RESYNC_END_MARGIN_SECONDS;
+      target = Math.min(target, bufEnd - RESYNC_END_MARGIN_SECONDS);
+      target = Math.max(target, bufStart + RESYNC_START_MARGIN_SECONDS);
+
       const now = roundTo(video.currentTime, 3);
-      // FORWARD ONLY. A backward seek discards decoded media the renderer
-      // was about to show and, when the seek range itself is the thing that
-      // is wrong, lands outside the buffer: 16:30:52 went 45.411 -> 39.185
-      // and the picture died. Playback's own job is to move forward, so a
-      // rescue that moves back is never the right answer; if the target is
-      // behind us there is nothing to rescue.
-      if (target <= video.currentTime + 0.5) return;
+      // Nothing to do if we are already there. This replaces the old
+      // forward-only rule: a playhead BEHIND the buffered start has to move
+      // forward anyway, and a playhead ahead of the buffer (the other way the
+      // element ends up outside its own media) has to move back to reach it,
+      // so direction is no longer the test. Distance is.
+      if (Math.abs(target - video.currentTime) < RESYNC_START_MARGIN_SECONDS) {
+        maybeResumePlayback(ev + '-atTarget');
+        return;
+      }
       lastReceiverError = ev + ' ' + now + ' -> ' + roundTo(target, 3);
       sendReceiverSnapshot(ev);
+      // Through the CAF API, not video.currentTime. Writing currentTime
+      // behind CAF's back leaves its state machine describing a player that
+      // is not the one on screen (the 17:13 session reported PAUSED with
+      // rate 1 for 97 s while this page seeked the element directly), and
+      // CAF then has no reason to resume or to refresh the media status.
+      let seeked = false;
       try {
-        video.currentTime = target;
+        if (playerManager.seek) {
+          playerManager.seek(target);
+          seeked = true;
+        }
       } catch (e) {
-        // Nothing more to try from here; the snapshot above says so.
+        seeked = false;
       }
+      if (!seeked) {
+        try {
+          video.currentTime = target;
+        } catch (e) {
+          // Nothing more to try from here; the snapshot above says so.
+        }
+      }
+      maybeResumePlayback(ev);
+    }
+
+    // Resume a pause nobody asked for.
+    //
+    // A seek issued while CAF is BUFFERING with autoplay can leave the
+    // element paused, and CAF reports PAUSED from then on: no further media
+    // is decoded however many times the playhead is moved, which is the 97 s
+    // "state=PAUSED rate=1" arc. A user pause is tracked separately (the
+    // PAUSE / PLAY interceptors below) so this never fights the remote.
+    function maybeResumePlayback(ev) {
+      const video = mediaElement();
+      if (!video) return;
+      if (userPaused) return;
+      if (!video.paused) return;
+      lastReceiverError = ev + ' autoresume';
+      try {
+        playerManager.play();
+      } catch (e) {
+        // Fall back to the element; CAF will pick the state up from it.
+        try {
+          const r = video.play();
+          // play() rejects when the element is not allowed to start; record
+          // it rather than letting it surface as an unhandled rejection.
+          if (r && r.catch) {
+            r.catch((err) => {
+              lastReceiverError = ev + ' play() rejected ' +
+                (err && err.name ? err.name : 'error');
+              sendReceiverSnapshot('playreject');
+            });
+          }
+        } catch (e2) {
+          // Nothing more to try.
+        }
+      }
+      sendReceiverSnapshot('resume');
     }
 
     // Shaka configuration for the phone-local HLS proxy.
@@ -535,6 +836,33 @@
           stallSkip: 0.1,
         },
       };
+      // Progress for the loading status line. Both handlers are documented as
+      // pass-through transforms (CastReceiverOptions.playbackConfig), so they
+      // return their input untouched; the only thing this page does is count.
+      // A throw in either one would fail the fetch, hence the try/catch.
+      playbackConfig.manifestHandler = (manifest) => {
+        try {
+          if (!manifestSeenAt) manifestSeenAt = Date.now();
+        } catch (e) {
+          // Diagnostics must never be able to break playback.
+        }
+        return manifest;
+      };
+      playbackConfig.segmentHandler = (segment) => {
+        try {
+          if (segment && typeof segment.byteLength === 'number') {
+            bytesAppended += segment.byteLength;
+          } else if (segment && segment.data &&
+                     typeof segment.data.byteLength === 'number') {
+            bytesAppended += segment.data.byteLength;
+          }
+          // A segment came back, so the manifest certainly did too.
+          if (!manifestSeenAt) manifestSeenAt = Date.now();
+        } catch (e) {
+          // Counting is cosmetic; never let it break a segment.
+        }
+        return segment;
+      };
     }
 
     // Unload the <video> element. Cast tears the page down while the media
@@ -565,15 +893,49 @@
     // Registration is optional polish: if this CAF build does not expose the
     // STOP message type, log and carry on rather than letting a throw here
     // stop the script before context.start().
+    //
+    // The deferred unload is GATED on the load generation. Senders send a STOP
+    // before starting something else, and this callback runs a task later: on
+    // a stop-then-load (a channel flip that goes through STOP) the old code
+    // paused and detached the element AFTER the new load had already created
+    // its MediaSource, leaving a paused element under a CAF that thought it
+    // was playing. That is the shape of the 2026-09-12 17:13 session, which
+    // sat at state=PAUSED rate=1 for 97 s while the watchdog seeked it.
     try {
       playerManager.setMessageInterceptor(
         cast.framework.messages.MessageType.STOP,
         (request) => {
-          setTimeout(unloadMediaElement, 0);
+          const generation = loadGeneration;
+          setTimeout(() => {
+            if (generation !== loadGeneration) return;
+            unloadMediaElement();
+          }, 0);
           return request;
         });
     } catch (e) {
       console.warn('AerioTV: STOP interceptor not registered', e);
+    }
+
+    // Track who asked for a pause, so maybeResumePlayback only ever undoes a
+    // pause that nobody asked for. Interceptors, not events: the event says
+    // the element paused, the interceptor says a PAUSE message arrived.
+    try {
+      playerManager.setMessageInterceptor(
+        cast.framework.messages.MessageType.PAUSE,
+        (request) => {
+          userPaused = true;
+          sendReceiverSnapshot('pause-msg');
+          return request;
+        });
+      playerManager.setMessageInterceptor(
+        cast.framework.messages.MessageType.PLAY,
+        (request) => {
+          userPaused = false;
+          sendReceiverSnapshot('play-msg');
+          return request;
+        });
+    } catch (e) {
+      console.warn('AerioTV: PAUSE/PLAY interceptors not registered', e);
     }
 
     // Normalize each LOAD. Keep the sender's streamType (VOD casting later);
@@ -583,6 +945,19 @@
     playerManager.setMessageInterceptor(
       cast.framework.messages.MessageType.LOAD,
       (loadRequestData) => {
+        // A new load supersedes any pending teardown (see the STOP
+        // interceptor) and clears the pause intent of the previous media.
+        loadGeneration++;
+        userPaused = false;
+        seekPending = false;
+        // Fresh tune: spinner up, counters zeroed, no status text yet.
+        loadingSince = Date.now();
+        manifestSeenAt = 0;
+        bytesAppended = 0;
+        renderingSince = 0;
+        bufferingSince = 0;
+        lastRenderTime = null;
+        showLoading();
         const media = loadRequestData.media;
         if (media) {
           media.contentType = media.contentType || 'video/mp4';
@@ -598,7 +973,10 @@
     playerManager.addEventListener(
       cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
       () => {
-        idle.classList.add('hidden');
+        // The idle art stays up until the picture is actually rendering (the
+        // loading ticker hides it). LOAD_COMPLETE only means CAF accepted the
+        // media: on a live tune the first frame is seconds away, and hiding
+        // the art here left a black screen with no sign of progress.
         const info = playerManager.getMediaInformation();
         // Live: drop SEEK (and queue skipping) from the advertised commands.
         // Google TV's system cast panel pins a timeline overlay permanently
@@ -632,8 +1010,11 @@
       (event) => {
         if (event && event.endedReason ===
             cast.framework.events.EndedReason.INTERRUPTED) return;
+        hideLoading();
         idle.classList.remove('hidden');
         banner.classList.remove('visible');
+        renderingSince = 0;
+        bufferingSince = 0;
       });
 
     // Surface a failed load: without this a flip whose new stream errors would
@@ -641,8 +1022,11 @@
     playerManager.addEventListener(
       cast.framework.events.EventType.ERROR,
       (event) => {
+        hideLoading();
         idle.classList.remove('hidden');
         banner.classList.remove('visible');
+        renderingSince = 0;
+        bufferingSince = 0;
         lastReceiverError = describeError(event);
         sendReceiverSnapshot('error');
       });
@@ -684,7 +1068,13 @@
       // script before context.start().
       if (!type) continue;
       try {
-        playerManager.addEventListener(type, () => sendReceiverSnapshot(label));
+        playerManager.addEventListener(type, () => {
+          // A seek is outstanding between SEEKING and SEEKED; the watchdog
+          // must not stack another one on top of it.
+          if (label === 'seeking') seekPending = true;
+          if (label === 'seeked') seekPending = false;
+          sendReceiverSnapshot(label);
+        });
       } catch (e) {
         console.warn('AerioTV: telemetry listener not registered for ' + name, e);
       }
