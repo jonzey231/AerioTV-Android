@@ -1,24 +1,19 @@
 package com.aeriotv.android.feature.whatsnew
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import com.aeriotv.android.ui.tvDpadScrollable
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,15 +23,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.NavEntryPoint
+import com.aeriotv.android.ui.FormFactorModal
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.android.EntryPointAccessors
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -51,48 +50,28 @@ import kotlinx.coroutines.launch
  * Content is hardcoded per-release; future releases just edit the
  * [WhatsNewContent] list below before bumping versionName in build.gradle.kts.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WhatsNewSheet(
     version: String,
     items: List<WhatsNewItem>,
     onDismiss: () -> Unit,
 ) {
-    // Form-factor split (AddToMultiviewSheet / UpdatePromptSheet precedent):
-    // a bottom sheet is a touch idiom -- on Android TV its drag handle reads
-    // as a dead control and the sheet sits awkwardly at the screen bottom.
-    // TV gets a centered Dialog panel with the dismiss button auto-focused.
-    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
-    if (isTv) {
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = onDismiss,
-            properties = androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false,
-            ),
-        ) {
-            androidx.compose.material3.Surface(
-                modifier = Modifier
-                    .fillMaxWidth(0.55f)
-                    .heightIn(max = 560.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.background,
-            ) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    WhatsNewBody(version, items, onDismiss, autoFocusDismiss = true)
-                }
-            }
-        }
-    } else {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = onDismiss,
-            sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.background,
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
-                WhatsNewBody(version, items, onDismiss, autoFocusDismiss = false)
-            }
-        }
+    // Form-factor split through the house container [FormFactorModal]: phone
+    // and tablet get a Material3 ModalBottomSheet (drag handle, swipe down or
+    // scrim tap to dismiss, content capped at 88% of the window so the notes
+    // below get a real scroll viewport), Android TV gets the centered Dialog
+    // panel painted with TvChrome.dialogSurface like every other TV pop-up,
+    // dismissed with BACK.
+    //
+    // There is no Done button on either form factor (Logan 2026-09-12): the
+    // platform dismiss gesture is the only way out, so nothing competes with
+    // the notes for focus on TV or steals vertical room on a phone.
+    FormFactorModal(
+        onDismiss = onDismiss,
+        tvWidthFraction = 0.55f,
+        tvMaxHeight = 560.dp,
+    ) {
+        WhatsNewBody(version, items)
     }
 }
 
@@ -100,60 +79,114 @@ fun WhatsNewSheet(
 private fun ColumnScope.WhatsNewBody(
     version: String,
     items: List<WhatsNewItem>,
-    onDismiss: () -> Unit,
-    autoFocusDismiss: Boolean,
 ) {
-    val dismissFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val isTv = rememberIsTvDevice()
     Text(
         text = "What's New in v$version",
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onBackground,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(horizontal = 24.dp),
     )
     Spacer(Modifier.height(16.dp))
-    // GH #59: share the scroll state with the TV D-pad handler so long
-    // release notes are scrollable from the remote.
-    val notesScroll = androidx.compose.foundation.rememberScrollState()
+    // GH #59: the notes scroll, and on TV the D-pad has to be able to drive
+    // that scroll. Rather than making the whole block one focusable proxy
+    // (the old tvDpadScrollable wrapper, which read as a single oversized
+    // target), every note row is its own focus target: Up/Down walks the
+    // rows and Compose's focus machinery brings each one into view, so the
+    // panel scrolls as a side effect and there is no dead end at either end.
+    val notesScroll = rememberScrollState()
+    val firstRowFocus = remember { FocusRequester() }
     Column(
         modifier = Modifier
+            // fill = false so a short release (today: 3 notes) still wraps
+            // and the sheet stays compact; a long one takes the remaining
+            // height and scrolls inside it.
             .weight(1f, fill = false)
-            .tvDpadScrollable(notesScroll)
             .verticalScroll(notesScroll),
     ) {
-        items.forEach { item ->
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary,
+        items.forEachIndexed { index, item ->
+            WhatsNewRow(
+                item = item,
+                isTv = isTv,
+                modifier = if (isTv && index == 0) {
+                    Modifier.focusRequester(firstRowFocus)
+                } else {
+                    Modifier
+                },
             )
-            if (item.body.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = item.body,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(14.dp))
         }
     }
-    Spacer(Modifier.height(4.dp))
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        TextButton(
-            onClick = onDismiss,
-            modifier = Modifier.focusRequester(dismissFocus),
-        ) {
-            Text("Got it")
-        }
-    }
-    Spacer(Modifier.height(20.dp))
-    if (autoFocusDismiss) {
+    // Bottom breathing room only. The navigation-bar inset is already handled
+    // by the sheet: ModalBottomSheet pads its content with
+    // BottomSheetDefaults.windowInsets, which is safeDrawing's Top + Bottom
+    // sides (material3 1.4.0, SheetDefaults.kt), and windowInsetsPadding
+    // CONSUMES that inset, so a navigationBarsPadding() here would measure
+    // zero anyway. On TV the inset is zero and this is plain padding.
+    Spacer(Modifier.height(24.dp))
+    if (isTv) {
+        // Park initial focus on the first note so Up/Down scrolls
+        // immediately. Retried because the dialog's focus owner is not ready
+        // on the very first frame.
         LaunchedEffect(Unit) {
             repeat(10) {
-                if (runCatching { dismissFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                if (runCatching { firstRowFocus.requestFocus() }.isSuccess) return@LaunchedEffect
                 kotlinx.coroutines.delay(16L)
             }
+        }
+    }
+}
+
+/**
+ * One release note. On TV it is focusable and carries the house focus
+ * treatment (primary wash plus a 2 dp accent ring) so the D-pad position is
+ * obvious at 10 feet; on touch it is plain text with no focus chrome.
+ */
+@Composable
+private fun WhatsNewRow(
+    item: WhatsNewItem,
+    isTv: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .then(
+                if (isTv) {
+                    Modifier
+                        .background(
+                            if (focused) colors.primary.copy(alpha = 0.18f) else Color.Transparent,
+                        )
+                        .border(
+                            width = 2.dp,
+                            color = if (focused) colors.primary else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .onFocusChanged { focused = it.isFocused }
+                        .focusable()
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        if (item.body.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = item.body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
