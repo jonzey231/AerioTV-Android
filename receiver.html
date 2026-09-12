@@ -100,9 +100,260 @@
     }
 
     // How far behind the live edge a live load starts, in seconds.
-    // HLS's own rule is three target durations; the proxy's target is 3 s,
-    // so 9 s is three of ours and still inside the proxy's ~25 s window.
-    const LIVE_START_BEHIND_SECONDS = 9;
+    //
+    // This was 9 (three of the proxy's 3 s targets). On the 2026-09-12 15:10
+    // session that put the start position at the very beginning of the
+    // published window and the load never recovered: the proxy's ready gate
+    // hands the receiver 9 s of media, the first playlist was
+    // 3.804 + 3.603 + 3.904 = 11.311 s long, and Shaka seeked the element to
+    // 11.311 - 9 = 2.439 s BEFORE a single media segment had been appended
+    // (receiver log: seek(2.439) at 15:10:03.851 and again at .086, the
+    // first appendBuffer of seg0 at .106). One frame was decoded
+    // (kVideoSizeChanged 1920x1080 at 15:10:04.747) and then the playhead
+    // was relocated to the media's own start, seek(0.016) at 15:10:04.187
+    // with External.Cast.Shaka.MediaGapJumped=1, after which the media
+    // status sat at position -58 ms, state BUFFERING, speed 0.0 for 45 s
+    // and no further segment was ever fetched.
+    //
+    // The real mechanism is in resyncPlayhead below: Shaka's start-position
+    // seek is issued before the first media append and the element discards
+    // it, so no value of this constant alone would have fixed the 15:10
+    // freeze. What it still does is bound how far Shaka's presentation
+    // position can sit from the head of the buffer before resyncPlayhead
+    // closes the gap, and it is the target that function seeks to. The cuts
+    // land on keyframes, not on the 3 s target, so three targets back
+    // against three keyframe-length segments aims at the first instants of
+    // the window; four seconds against a 9 to 12 s window aims 5 to 8 s in,
+    // with media both behind the playhead and ahead of it. The matching
+    // proxy-side number is the ready gate (9 s of media before the load is
+    // sent) and the two have to move together.
+    const LIVE_START_BEHIND_SECONDS = 4;
+
+    // ---- receiver telemetry (urn:x-cast:com.aeriotv.receiver.debug) ----
+    //
+    // Nothing this page prints is readable from the devices we debug with:
+    // the 2026-09-12 15:10 capture of the Streamer's whole logcat contains
+    // zero CONSOLE lines from this page, so the receiver's own view of
+    // currentTime, the buffered ranges and the seek range was invisible and
+    // every diagnosis of a stalled playhead had to be inferred from
+    // Chromium's media log. This channel makes that state explicit in the
+    // sender's log instead, which is the log we always have.
+    //
+    // One-way, receiver to sender, diagnostic only: nothing on this page
+    // reads a reply, and both senders do nothing but print what arrives.
+    const DEBUG_NAMESPACE = 'urn:x-cast:com.aeriotv.receiver.debug';
+
+    // Last error or warning Shaka / CAF surfaced, reported with every
+    // snapshot so a stall can be read together with whatever preceded it.
+    let lastReceiverError = null;
+
+    function roundTo(value, places) {
+      if (typeof value !== 'number' || !isFinite(value)) return null;
+      const f = Math.pow(10, places);
+      return Math.round(value * f) / f;
+    }
+
+    function mediaElement() {
+      return document.querySelector('video.castMediaElement');
+    }
+
+    // Every buffered range of the media element. For our single muxed
+    // SourceBuffer Chromium reports the INTERSECTION of the video and audio
+    // tracks, so this is exactly the interval the playhead has to sit inside
+    // for the picture to advance.
+    function bufferedRanges() {
+      const video = mediaElement();
+      const out = [];
+      if (!video) return out;
+      let ranges;
+      try {
+        ranges = video.buffered;
+      } catch (e) {
+        return out;
+      }
+      if (!ranges) return out;
+      for (let i = 0; i < ranges.length; i++) {
+        out.push([roundTo(ranges.start(i), 3), roundTo(ranges.end(i), 3)]);
+      }
+      return out;
+    }
+
+    // Shaka's own counters. CAF bundles Shaka but does not document a getter
+    // for the instance, so this is best effort: whatever is reachable is
+    // reported and the rest comes through as absent rather than as a guess.
+    function shakaStats() {
+      let stats = null;
+      try {
+        const player = playerManager.getPlayer && playerManager.getPlayer();
+        if (player && player.getStats) stats = player.getStats();
+      } catch (e) {
+        stats = null;
+      }
+      if (!stats) {
+        try {
+          if (playerManager.getStats) stats = playerManager.getStats();
+        } catch (e) {
+          stats = null;
+        }
+      }
+      if (!stats) return {};
+      let hist = null;
+      const history = stats.stateHistory;
+      if (Array.isArray(history) && history.length) {
+        const last = history[history.length - 1];
+        if (last) {
+          hist = String(last.state) + '@' + roundTo(last.timestamp, 1) +
+            '+' + roundTo(last.duration, 1) + 's';
+        }
+      }
+      return {
+        bufTime: roundTo(stats.bufferingTime, 2),
+        bw: typeof stats.estimatedBandwidth === 'number' ?
+          Math.round(stats.estimatedBandwidth) : null,
+        hist: hist,
+      };
+    }
+
+    // The live window Shaka believes it has. A playhead outside this range
+    // is the state that stops StreamingEngine asking for segments at all,
+    // which is what the dead proxy log looks like from the sender side.
+    function seekRange() {
+      try {
+        const range = playerManager.getLiveSeekableRange();
+        if (!range) return null;
+        return [roundTo(range.start, 3), roundTo(range.end, 3)];
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function sendReceiverSnapshot(ev) {
+      const video = mediaElement();
+      const stats = shakaStats();
+      const payload = {
+        ev: ev,
+        t: video ? roundTo(video.currentTime, 3) : null,
+        buffered: bufferedRanges(),
+        ready: video ? video.readyState : null,
+        state: null,
+        rate: video ? roundTo(video.playbackRate, 2) : null,
+        seek: seekRange(),
+        bufTime: stats.bufTime === undefined ? null : stats.bufTime,
+        bw: stats.bw === undefined ? null : stats.bw,
+        hist: stats.hist === undefined ? null : stats.hist,
+        err: lastReceiverError,
+      };
+      try {
+        payload.state = playerManager.getPlayerState();
+      } catch (e) {
+        payload.state = null;
+      }
+      try {
+        // Broadcast: no sender id, so whichever phone is connected gets it.
+        context.sendCustomMessage(DEBUG_NAMESPACE, undefined, payload);
+      } catch (e) {
+        // Diagnostics must never be able to break playback.
+      }
+    }
+
+    // Once per second while the playhead is not making progress, which is
+    // the only interval where the numbers matter and keeps a healthy stream
+    // from flooding the sender log. A run of identical currentTime values
+    // while the state is PLAYING is the frozen-picture case and is reported
+    // with ev=stuck.
+    let lastTickTime = null;
+    let stuckTicks = 0;
+    setInterval(() => {
+      const video = mediaElement();
+      if (!video) return;
+      let state = null;
+      try {
+        state = playerManager.getPlayerState();
+      } catch (e) {
+        state = null;
+      }
+      const S = cast.framework.messages.PlayerState;
+      const loadingOrBuffering = state === S.BUFFERING || state === S.LOADING;
+      const now = roundTo(video.currentTime, 3);
+      const advanced = lastTickTime === null || now !== lastTickTime;
+      lastTickTime = now;
+      if (state === S.IDLE) {
+        stuckTicks = 0;
+        return;
+      }
+      if (advanced && !loadingOrBuffering) {
+        stuckTicks = 0;
+        return;
+      }
+      if (!advanced) stuckTicks++;
+      sendReceiverSnapshot(loadingOrBuffering ? 'buffering' : 'stuck');
+
+      // Self-rescue, reported before it acts so the sender log shows both
+      // the state that triggered it and the seek it performed. Three
+      // seconds of a playhead that has not moved is the 15:10 failure
+      // (one frame decoded, position reported as -58 ms, playbackRate 0, no
+      // further segment fetches ever), and the playhead was INSIDE the
+      // buffered range the whole time, so a gap jump was never going to
+      // help and neither is a test for one.
+      if (stuckTicks < 3) return;
+      resyncPlayhead('nudge');
+      stuckTicks = 0;
+    }, 1000);
+
+    // Put the media element where Shaka believes the playhead is.
+    //
+    // Measured off-device in a real Chromium MediaSource, 'segments'
+    // AppendMode and timestampOffset 0 (what manifest.hls.sequenceMode=false
+    // produces), replaying the receiver's own order: append the init
+    // segment, seek, then append seg0 / seg1 / seg2.
+    //
+    //   requested 0.000 -> playhead 0.000, played from buffered start 0.0667
+    //   requested 1.940 -> playhead 0.000, played from buffered start 0.0667
+    //   requested 5.000 -> playhead 0.000, played from buffered start 0.0667
+    //
+    // A seek issued while nothing is buffered is discarded, and the element
+    // then starts at the head of the buffer no matter what was asked for.
+    // That is exactly what the receiver did on 2026-09-12 at 15:10: Shaka
+    // seeked to 2.439 (window end 11.311 minus the presentation delay) at
+    // 15:10:03.851 and again at 15:10:04.086, seg0 was not appended until
+    // 15:10:04.106, and the playhead came out at 0.016, the media's own
+    // first sample. The same three segments with the seek issued AFTER the
+    // appends land the playhead exactly where it was asked for, every time.
+    //
+    // So the element plays from the head of the buffer while Shaka's
+    // presentation position stays a whole presentation delay ahead of it.
+    // Shaka then reports a position before the start of its own live window
+    // (-58 ms), holds the rate at 0 waiting for media at a playhead that
+    // does not exist, and asks StreamingEngine for nothing: the sender's
+    // proxy log goes quiet after seg2 with playlist polls continuing
+    // forever. This function closes that gap with a seek issued when media
+    // does exist, which is the one kind the element honours.
+    function resyncPlayhead(ev) {
+      const video = mediaElement();
+      if (!video) return;
+      const ranges = bufferedRanges();
+      if (!ranges.length) return;
+      const head = ranges[0][0];
+      const tail = ranges[ranges.length - 1][1];
+      const range = seekRange();
+      // Aim LIVE_START_BEHIND_SECONDS behind the live edge when Shaka will
+      // tell us where that is, and at the head of the buffer when it will
+      // not. Clamped into the media that actually exists, a hair inside the
+      // edges: seeking exactly to a boundary can land back outside it when
+      // the next append trims the front.
+      let target = range && range[1] !== null ?
+        range[1] - LIVE_START_BEHIND_SECONDS : head;
+      target = Math.min(Math.max(target, head + 0.05), Math.max(tail - 0.05, head));
+      const now = roundTo(video.currentTime, 3);
+      if (Math.abs(target - video.currentTime) < 0.5) return;
+      lastReceiverError = ev + ' ' + now + ' -> ' + roundTo(target, 3);
+      sendReceiverSnapshot(ev);
+      try {
+        video.currentTime = target;
+      } catch (e) {
+        // Nothing more to try from here; the snapshot above says so.
+      }
+    }
 
     // Shaka configuration for the phone-local HLS proxy.
     //
@@ -250,6 +501,10 @@
         }
         const md = info && info.metadata;
         flashBanner(md && md.title, md && md.subtitle);
+        // Media exists by now, so a seek here is honoured where the one
+        // Shaka issued before the first append was not. See resyncPlayhead.
+        sendReceiverSnapshot('loaded');
+        setTimeout(() => resyncPlayhead('resync'), 0);
       });
 
     // Playback truly over: back to the launch screen. MEDIA_FINISHED ALSO fires
@@ -270,10 +525,55 @@
     // leave the previous idle/banner state stale. Return to a clean idle screen.
     playerManager.addEventListener(
       cast.framework.events.EventType.ERROR,
-      () => {
+      (event) => {
         idle.classList.remove('hidden');
         banner.classList.remove('visible');
+        lastReceiverError = describeError(event);
+        sendReceiverSnapshot('error');
       });
+
+    // ---- telemetry hooks ----
+    //
+    // One snapshot per player state change plus the load and seek
+    // transitions, so the sender log carries the whole arc of a load
+    // (LOADING, BUFFERING, PLAYING, and any stall) with the buffered ranges
+    // and the seek range attached to each step.
+    function describeError(event) {
+      if (!event) return 'error';
+      const parts = [];
+      if (event.detailedErrorCode !== undefined &&
+          event.detailedErrorCode !== null) {
+        parts.push('code=' + event.detailedErrorCode);
+      }
+      if (event.reason) parts.push('reason=' + event.reason);
+      if (event.error && event.error.message) {
+        parts.push(String(event.error.message));
+      }
+      return parts.length ? parts.join(' ') : 'error';
+    }
+
+    const TELEMETRY_EVENTS = [
+      ['PLAYER_STATE_CHANGED', 'state'],
+      ['PLAYER_LOAD_COMPLETE', 'loaded'],
+      ['PLAYER_LOADING', 'loading'],
+      ['BUFFERING', 'buffering-event'],
+      ['SEEKED', 'seeked'],
+      ['SEEKING', 'seeking'],
+      ['STALLED', 'stalled'],
+      ['MEDIA_FINISHED', 'finished'],
+    ];
+    for (const [name, label] of TELEMETRY_EVENTS) {
+      const type = cast.framework.events.EventType[name];
+      // CAF does not expose every one of these in every bundle version;
+      // skipping an absent type is better than a throw that would stop the
+      // script before context.start().
+      if (!type) continue;
+      try {
+        playerManager.addEventListener(type, () => sendReceiverSnapshot(label));
+      } catch (e) {
+        console.warn('AerioTV: telemetry listener not registered for ' + name, e);
+      }
+    }
 
     const receiverOptions = {
       // Required when not using <cast-media-player>, so smart displays don't
@@ -286,6 +586,13 @@
       // a Google TV Streamer); Shaka plays it. Progressive/DASH loads are
       // unaffected by this flag.
       useShakaForHls: true,
+      // Declare the diagnostic channel so CAF will carry our snapshots.
+      // Without the declaration the platform drops the message and logs
+      // "Not supported namespace" (observed for the senders' existing
+      // urn:x-cast:com.aeriotv.control probe, which this page does not
+      // implement and which is handled by the Android TV receiver instead).
+      customNamespaces: Object.assign(
+        {}, { [DEBUG_NAMESPACE]: cast.framework.system.MessageType.JSON }),
     };
     // Shaka tuning above. CastReceiverOptions.playbackConfig is the
     // documented place to supply it; the player manager has no config to read
