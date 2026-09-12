@@ -934,9 +934,28 @@ fun MainScaffold(
             // than the text the strip is dropped entirely rather than drawn
             // over something.
             if (showHintStrip) {
-                val stripBandTop = barInset + 2.dp
-                val stripBandHeight = topHintGap - 2.dp
-                if (stripBandHeight >= com.aeriotv.android.ui.tv.remoteHintStripHeight) {
+                // Center the strip in the VISIBLE band: from the tab bar's
+                // DRAWN bottom (measured, so the bar's own 12 dp bottom
+                // padding is not mistaken for occupied space) down to the
+                // Channel Preview banner's top edge, which is where the tab
+                // content inset ends (barInset + topHintGap). The old band
+                // started at barInset + 2 dp, i.e. 14 dp BELOW the drawn bar,
+                // which pushed the strip against the banner's first text line
+                // (Logan, Google TV Streamer 2026-09-11). tvOS centers it the
+                // same way (ChannelListView.swift:1041 carries the banner's
+                // old -28 pull so the strip sits midway in that band).
+                val stripHeight = com.aeriotv.android.ui.tv.remoteHintStripHeight
+                val bandTop = barDrawnBottom
+                val bannerTop = barInset + topHintGap
+                // The banner is bottom-aligned in its 106 dp row, so its copy
+                // column can reach its top edge: guarantee 6 dp of clear space
+                // above it, shrinking the strip's top offset (never the gap)
+                // when the band is tight.
+                val minBannerClear = 6.dp
+                val centeredTop = bandTop + (bannerTop - bandTop - stripHeight) / 2
+                val maxTop = bannerTop - minBannerClear - stripHeight
+                val stripBandTop = centeredTop.coerceIn(bandTop, maxTop.coerceAtLeast(bandTop))
+                if (maxTop >= bandTop) {
                     // Stay centered even next to the mini: cap the width at
                     // twice the gap between screen center and the mini's left
                     // edge (205dp wide, 20dp from the end) so a long strip
@@ -953,7 +972,7 @@ fun MainScaffold(
                             .align(Alignment.TopStart)
                             .fillMaxWidth()
                             .padding(top = stripBandTop)
-                            .height(stripBandHeight),
+                            .height(stripHeight),
                         contentAlignment = Alignment.Center,
                     ) {
                         com.aeriotv.android.ui.tv.TvRemoteHintStrip(
