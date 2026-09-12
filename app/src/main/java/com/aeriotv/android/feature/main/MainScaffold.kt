@@ -1914,6 +1914,7 @@ private fun TvTopTabBar(
                         tab = tab,
                         selected = tab == selected,
                         onFocused = {
+                            com.aeriotv.android.ui.tv.TvFocusTrace.focus("tab:" + tab.name)
                             focusedTab = tab
                             // Warm tabs commit on the SAME frame as the pill
                             // highlight (tvOS TabView behavior). Going through

@@ -81,6 +81,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
@@ -101,11 +102,13 @@ import com.aeriotv.android.feature.main.LocalTvTabEntryFocus
 import com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester
 import com.aeriotv.android.ui.tv.TvActionCircle
 import com.aeriotv.android.ui.tv.TvChrome
+import com.aeriotv.android.ui.tv.TvFocusTrace
 import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
 import com.aeriotv.android.ui.tv.TvPill
 import com.aeriotv.android.ui.tv.TvSearchCapsule
 import com.aeriotv.android.ui.tv.tvFocusScale
 import com.aeriotv.android.ui.tv.vodGridDpadFallback
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /*
@@ -225,6 +228,8 @@ fun <T> TvMediaPage(
     onPill: (String?) -> Unit = {},
     gridItems: List<T>,
     gridKey: (T) -> Any,
+    /** Short human name for the focus trace ("[FOCUS] grid r0c1 <title>"). */
+    gridLabel: (T) -> String = { gridKey(it).toString() },
     cell: @Composable (item: T, scope: TvCellScope) -> Unit,
     emptyContent: @Composable () -> Unit,
     isLoading: Boolean = false,
@@ -467,7 +472,9 @@ fun <T> TvMediaPage(
     // The anchors every focusable sends, and the one coroutine that moves
     // the page. CONFLATED: a burst of presses collapses to the newest.
     val anchors = remember { kotlinx.coroutines.channels.Channel<TvPageAnchor>(kotlinx.coroutines.channels.Channel.CONFLATED) }
-    val sendAnchor: (TvPageAnchor) -> Unit = remember(anchors) { { anchors.trySend(it) } }
+    val sendAnchor: (TvPageAnchor, String) -> Unit = remember(anchors) {
+        { anchor, source -> TvFocusTrace.anchor(anchor, source); anchors.trySend(anchor) }
+    }
     LaunchedEffect(gridState, density) {
         /** The smallest offset that leaves a row's BOTTOM 100 dp clear of the
          *  bottom edge. Every downward target is at least this: the tvOS Y
@@ -729,13 +736,15 @@ fun <T> TvMediaPage(
     // the hero (the guide's ladder); at the top the handlers stand down so
     // BACK reaches the shell.
     androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && searchEnabled && searchActive) {
+        TvFocusTrace.key("Back", true, "page-close-search")
         closeOrToggleSearch()
     }
     androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && scrolled && !(searchEnabled && searchActive)) {
+        TvFocusTrace.key("Back", true, "page-snap-to-top")
         scope.launch {
             // Through the owner like every other move; 40 frames because
             // the snap from deep in the library runs 600 ms.
-            sendAnchor(TvPageAnchor.Hero)
+            sendAnchor(TvPageAnchor.Hero, "back-handler")
             repeat(40) {
                 if (runCatching { entry.requestFocus() }.isSuccess) return@launch
                 withFrameNanos { }
@@ -758,10 +767,12 @@ fun <T> TvMediaPage(
         // library change.
         val exact = returnOffset?.takeIf { it.first < leadingCount + gridItems.size }
         if (exact != null) {
-            sendAnchor(TvPageAnchor.Restore(exact.first, exact.second))
+            TvFocusTrace.restore("${exact.first}/${exact.second}", idx / columns, idx % columns)
+            sendAnchor(TvPageAnchor.Restore(exact.first, exact.second), "return-exact")
         } else {
             // tvOS parks the row 24 pt under the top edge, not flush with it.
-            sendAnchor(TvPageAnchor.Restore(leadingCount + (idx / columns) * columns, -restoreGapPx))
+            TvFocusTrace.restore("park", idx / columns, idx % columns)
+            sendAnchor(TvPageAnchor.Restore(leadingCount + (idx / columns) * columns, -restoreGapPx), "return-park")
         }
         repeat(150) {
             withFrameNanos { }
@@ -792,8 +803,100 @@ fun <T> TvMediaPage(
     val railHash = remember { FocusRequester() }
     val railShownState = remember { mutableStateOf(false) }
 
+    // ------------------------------------------------------------------
+    // Focus watchdog (Logan 2026-09-11, Google TV Streamer: TV Shows > All >
+    // open a first-row poster > Back, then the whole D-pad was dead and
+    // neither the pills nor the tab bar could be reached).
+    //
+    // Compose keeps focus on ONE node. When that node leaves the composition
+    // while it holds focus, focus is not handed to a neighbour: it is
+    // cleared to the root, and from there a D-pad press has nothing to
+    // search from, so every press is a no-op until something requests focus.
+    // The return-from-a-detail path is exactly where that happens: the page
+    // is rebuilt from scratch (the detail is a nav route ON TOP of MAIN, so
+    // the tab was disposed), the restore below focuses the cell that was
+    // opened, and the library sweep that is still running then republishes
+    // gridItems; any publish that drops that key, or that moves it out of
+    // the composed window, takes the focused node with it. The uiautomator
+    // dump of Logan's stuck screen showed the signature: NOT ONE node with
+    // focused="true" anywhere in the window.
+    //
+    // So: whenever NOTHING IN THE WINDOW holds focus, put focus back on the
+    // last focused cell, else on the page's entry point. 200 ms of grace
+    // first, because a legitimate handoff (opening a detail, a dialog, the
+    // keyboard) also passes through "no focus in the page".
+    //
+    // "Nothing in the window" is deliberately NOT "nothing in the page":
+    // Up out of the grid legitimately parks focus on the tab bar, which is
+    // an OVERLAY composed outside this Box, so a page-only test would yank
+    // the user back off the bar 200 ms after every Up. The three things
+    // that can hold focus while this tab is active are the page (this Box,
+    // rail included), the tab bar (its own onFocusChanged already feeds
+    // LocalTvTopNavHasFocus, and the bar Box wraps the pills AND the
+    // refresh / search circles), and another WINDOW (a dialog, a long-press
+    // menu, the soft keyboard). The corner mini player has no focusable at
+    // all (TvMiniPlayerOverlay.kt), so it is not a holder.
+    // View.findFocus() is not usable as the test: the AndroidComposeView
+    // keeps VIEW focus after Compose has cleared its own focus to the root,
+    // which is precisely the broken state, so it would report "focused"
+    // exactly when we need it to report nothing.
+    // ------------------------------------------------------------------
+    val pageHasFocus = remember { mutableStateOf(false) }
+    val lastCellKeyState = remember { mutableStateOf<Any?>(null) }
+    val tabActive = LocalTabIsActive.current
+    val fullScreenOverlay = com.aeriotv.android.feature.main.LocalTvFullScreenOverlay.current
+    val topNavHasFocus = com.aeriotv.android.feature.main.LocalTvTopNavHasFocus.current
+    val hostView = androidx.compose.ui.platform.LocalView.current
+    val modalOpen = androidx.compose.runtime.rememberUpdatedState(
+        sortOpen || filterOpen || (searchEnabled && searchActive),
+    )
+    /** True only when NO focus holder in this window has focus and no modal
+     *  surface is up: the one state a D-pad press cannot recover from. */
+    val windowIsIdle: () -> Boolean = {
+        !pageHasFocus.value &&
+            !topNavHasFocus.value &&
+            hostView.hasWindowFocus() &&
+            !modalOpen.value &&
+            fullScreenOverlay?.value == null
+    }
+    LaunchedEffect(tabActive) {
+        if (!tabActive) return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow { pageHasFocus.value }
+            .collectLatest { has ->
+                if (has) return@collectLatest
+                kotlinx.coroutines.delay(200)
+                if (!windowIsIdle()) return@collectLatest
+                repeat(10) {
+                    if (!windowIsIdle()) return@collectLatest
+                    val k = lastCellKeyState.value
+                    val landed = (k != null && runCatching { cellRequesters[k]?.requestFocus() }.getOrNull() == true) ||
+                        runCatching { entry.requestFocus() }.getOrNull() == true
+                    if (landed) {
+                        TvFocusTrace.key("recover", true, "focus-watchdog")
+                        return@collectLatest
+                    }
+                    withFrameNanos { }
+                }
+                TvFocusTrace.key("recover", false, "focus-watchdog")
+            }
+    }
+
     TvKeyboardOnOkHost {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // One node, one State write per enter/leave of the whole page:
+            // moving focus BETWEEN two children never calls this back.
+            .onFocusChanged { pageHasFocus.value = it.hasFocus }
+            // Bubble phase: reached only when nothing at all consumed the
+            // key, which is the printed signature of a dead D-pad.
+            .onKeyEvent { ev ->
+                if (ev.type == KeyEventType.KeyDown) {
+                    TvFocusTrace.nameOf(ev)?.let { TvFocusTrace.key(it, false, "page-root(unhandled)") }
+                }
+                false
+            },
+    ) {
         // The owner moves the page, so the grid's own bring-into-view is off
         // everywhere: it was the second mover behind every "notchy" hop
         // (reports C section 6, D section 1a). Deeper grid rows are handled
@@ -851,7 +954,7 @@ fun <T> TvMediaPage(
                         upTarget = topNav,
                         // tvOS: any hero button gaining focus while the page
                         // is scrolled snaps the page back to the top.
-                        onButtonFocused = { sendAnchor(TvPageAnchor.Hero) },
+                        onButtonFocused = { sendAnchor(TvPageAnchor.Hero, "hero-button") },
                         modifier = Modifier.padding(start = TvPage.overscan, end = TvPage.overscan, bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -868,7 +971,7 @@ fun <T> TvMediaPage(
                         // shelf from below; Left and Right inside it must not
                         // move the page (rapid-press recording 2026-09-10:
                         // each press nudged the page down and snapped it up).
-                        onCardFocused = { sendAnchor(TvPageAnchor.Shelf(si)) },
+                        onCardFocused = { sendAnchor(TvPageAnchor.Shelf(si), "shelf-card") },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -877,7 +980,7 @@ fun <T> TvMediaPage(
                 Column(
                     modifier = Modifier
                         .padding(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset)
-                        .onFocusChanged { if (it.hasFocus) sendAnchor(TvPageAnchor.Header) },
+                        .onFocusChanged { if (it.hasFocus) sendAnchor(TvPageAnchor.Header, "header") },
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(
@@ -906,20 +1009,30 @@ fun <T> TvMediaPage(
                             TvActionCircle(
                                 icon = Icons.Filled.Search, contentDescription = if (searchActive) "Close search" else "Search",
                                 selected = searchActive, onClick = closeOrToggleSearch,
-                                modifier = Modifier.focusRequester(searchCircle),
+                                modifier = Modifier
+                                    .focusRequester(searchCircle)
+                                    .onFocusChanged { if (it.isFocused) TvFocusTrace.focus("header:Search") },
                             )
                             if (isSearching) {
-                                TvActionCircle(icon = Icons.Filled.Close, contentDescription = "Clear search", onClick = onClearSearch)
+                                TvActionCircle(
+                                    icon = Icons.Filled.Close, contentDescription = "Clear search", onClick = onClearSearch,
+                                    modifier = Modifier.onFocusChanged { if (it.isFocused) TvFocusTrace.focus("header:Clear") },
+                                )
                             }
                         }
                         if (sortActions.isNotEmpty()) {
-                            TvActionCircle(icon = Icons.Filled.SwapVert, contentDescription = "Sort", onClick = { sortOpen = true })
+                            TvActionCircle(
+                                icon = Icons.Filled.SwapVert, contentDescription = "Sort", onClick = { sortOpen = true },
+                                modifier = Modifier.onFocusChanged { if (it.isFocused) TvFocusTrace.focus("header:Sort") },
+                            )
                         }
                         if (onFilter != null) {
                             TvActionCircle(
                                 icon = Icons.Filled.FilterList, contentDescription = "Filter",
                                 selected = filterActive, onClick = onFilter,
-                                modifier = Modifier.focusRequester(filterCircle),
+                                modifier = Modifier
+                                    .focusRequester(filterCircle)
+                                    .onFocusChanged { if (it.isFocused) TvFocusTrace.focus("header:Filter") },
                             )
                         }
                     }
@@ -927,6 +1040,19 @@ fun <T> TvMediaPage(
                     // is showing: the header changing height mid-walk moved
                     // every rest position below it by 26 dp and the owner's
                     // targets went with it (report B item 9).
+                    // THE "GAP" UNDER THE HEADER (Logan 2026-09-11, "the pills
+                    // sit about 80 dp below All TV Shows"): it is this row.
+                    // Measured on the Streamer, both before and after a
+                    // return from a detail (uiautomator, px halved): grid
+                    // viewport top 70 dp, header item 70 to 112 dp (title row
+                    // 22 + 4 + this 16), grid row spacing 24, pill row 136 to
+                    // 184 with its own 6 dp padding, so header text center to
+                    // pill center is 81 dp. Nothing is inserted between them
+                    // and the return restores it byte-identical; it is just
+                    // taller than tvOS (36 dp there), because tvOS has no
+                    // reserved status line under the header. Left as is: the
+                    // leading heights are what every single-owner target is
+                    // calibrated against.
                     // 16 dp fits the 10 dp spinner and the 9 sp line; at 12 dp
                     // the theme's 24 sp default line height clipped both
                     // (Logan 2026-09-11, "the Updating line is cut off"), so
@@ -966,17 +1092,27 @@ fun <T> TvMediaPage(
                         modifier = Modifier
                             .padding(vertical = 6.dp)
                             .fillMaxWidth()
-                            .onFocusChanged { if (it.hasFocus) sendAnchor(TvPageAnchor.Pills) }
+                            .onFocusChanged { if (it.hasFocus) sendAnchor(TvPageAnchor.Pills, "pill-row") }
                             .focusProperties {
                                 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
                                 run { enter = { allPill } }
                             }
                             .focusGroup(),
                     ) {
-                        item(key = "all") { TvPill("All", selectedPill == null, onClick = { onPill(null) }, modifier = Modifier.focusRequester(allPill)) }
+                        item(key = "all") {
+                            TvPill(
+                                "All", selectedPill == null, onClick = { onPill(null) },
+                                modifier = Modifier
+                                    .focusRequester(allPill)
+                                    .onFocusChanged { if (it.isFocused) TvFocusTrace.focus("pill:All") },
+                            )
+                        }
                         items(pills.size, key = { pills[it] }) { i ->
                             val p = pills[i]
-                            TvPill(p, selectedPill == p, onClick = { onPill(if (selectedPill == p) null else p) })
+                            TvPill(
+                                p, selectedPill == p, onClick = { onPill(if (selectedPill == p) null else p) },
+                                modifier = Modifier.onFocusChanged { if (it.isFocused) TvFocusTrace.focus("pill:" + p) },
+                            )
                         }
                     }
                     }
@@ -993,15 +1129,44 @@ fun <T> TvMediaPage(
                 val cellModifier = Modifier
                     .focusRequester(requester)
                     .then(if (index == 0) Modifier.focusRequester(firstCell) else Modifier)
-                    // Top row: Up lands on the All pill, not whatever the
-                    // geometric search picks above the row (it skipped the
-                    // pill group and reached the sort circle, Logan 2026-09-10).
-                    .then(if (pillRow && index < columns) Modifier.focusProperties { up = allPill } else Modifier)
                     .onFocusChanged {
-                        if (it.isFocused) { focusedCellKeyState.value = k; sendAnchor(TvPageAnchor.GridRow(index / columns)) }
-                        else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null
+                        if (it.isFocused) {
+                            focusedCellKeyState.value = k
+                            lastCellKeyState.value = k
+                            TvFocusTrace.focus("grid r${index / columns}c${index % columns} " + gridLabel(item))
+                            sendAnchor(TvPageAnchor.GridRow(index / columns), "grid-cell")
+                        } else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null
                     }
                     .onPreviewKeyEvent { ev ->
+                        // Top row: Up lands on the All pill, not whatever the
+                        // geometric search picks above the row (it skipped the
+                        // pill group and reached the sort circle, Logan
+                        // 2026-09-10).
+                        //
+                        // WHY THIS IS A KEY HANDLER AND NOT
+                        // `focusProperties { up = allPill }` (Logan
+                        // 2026-09-11, Google TV Streamer, TV Shows > All >
+                        // open a first-row poster > Back): a custom focus
+                        // destination is ABSOLUTE. When the search resolves
+                        // `up` to a FocusRequester whose node is not attached
+                        // (the pill row is outside the composed window, or the
+                        // pills were rebuilt while the detail route was on top
+                        // of MAIN and this cell's modifier still carries the
+                        // requester from the composition that was torn down),
+                        // Compose does not fall back to the geometric search:
+                        // it CANCELS the move and the key is swallowed. Focus
+                        // stays on the poster, Up does nothing forever, and
+                        // the pills and the tab bar are unreachable. Asking
+                        // the requester ourselves gives us the failure as a
+                        // `false` we can act on: we let the event through and
+                        // the ordinary search finds the pill row, the header
+                        // circles, and above them the tab bar.
+                        if (ev.type == KeyEventType.KeyDown && ev.key == Key.DirectionUp && index < columns) {
+                            val landed = pillRow &&
+                                runCatching { allPill.requestFocus() }.getOrNull() == true
+                            TvFocusTrace.key("Up", landed, "grid-top-row")
+                            return@onPreviewKeyEvent landed
+                        }
                         // Left off the first column reaches the rail's '#'
                         // deterministically instead of relying on the
                         // geometric search (Movies spec D8). Only while the
@@ -1057,7 +1222,7 @@ fun <T> TvMediaPage(
                     if (idx >= 0) scope.launch {
                         // The move goes through the owner (seat the row at the
                         // top minus 24 dp, 250 ms EaseInOut); focus follows it.
-                        sendAnchor(TvPageAnchor.GridRow(idx / columns, seatAtTop = true))
+                        sendAnchor(TvPageAnchor.GridRow(idx / columns, seatAtTop = true), "rail-letter")
                         val key = gridItems.getOrNull(idx)?.let(gridKey)
                         if (key != null) repeat(30) {
                             if (runCatching { cellRequesters[key]?.requestFocus() }.getOrNull() == true) return@launch
@@ -1337,7 +1502,12 @@ private fun TvHeroCard(
                         modifier = Modifier
                             .then(if (b.primary && primaryRequester != null) Modifier.focusRequester(primaryRequester) else Modifier)
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
-                            .onFocusChanged { if (it.isFocused) onButtonFocused() },
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    TvFocusTrace.focus("hero:" + b.label.ifEmpty { "button$i" })
+                                    onButtonFocused()
+                                }
+                            },
                     )
                 }
                 if (page.longPressActions.isNotEmpty()) {
@@ -1347,7 +1517,12 @@ private fun TvHeroCard(
                         button = TvHeroButton("", Icons.Filled.MoreHoriz, onClick = { menuOpen = true }),
                         modifier = Modifier
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
-                            .onFocusChanged { if (it.isFocused) onButtonFocused() },
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    TvFocusTrace.focus("hero:More")
+                                    onButtonFocused()
+                                }
+                            },
                     )
                 }
             }
@@ -1726,6 +1901,7 @@ private fun TvAlphabetRail(
                     .background(if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color.Transparent)
                     .border(1.dp, if (focused) Color.White else Color.Transparent, CircleShape)
                     .focusable(interactionSource = interaction)
+                    .onFocusChanged { if (it.isFocused) TvFocusTrace.focus("rail:" + letter) }
                     .onPreviewKeyEvent { ev ->
                         if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (ev.key) {

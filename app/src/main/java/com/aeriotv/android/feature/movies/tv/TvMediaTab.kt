@@ -257,6 +257,7 @@ internal fun TvMediaTab(
         onPill = onGenre,
         gridItems = gridItems,
         gridKey = { it.key },
+        gridLabel = { it.title },
         cell = { item, scope ->
             TvPosterCard(
                 title = item.title, year = item.year, posterUrl = posterUrlFor(item), rating = formatRating(item.rating),
