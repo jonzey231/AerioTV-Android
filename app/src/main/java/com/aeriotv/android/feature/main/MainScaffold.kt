@@ -946,14 +946,24 @@ fun MainScaffold(
                 // old -28 pull so the strip sits midway in that band).
                 val stripHeight = com.aeriotv.android.ui.tv.remoteHintStripHeight
                 val bandTop = barDrawnBottom
-                val bannerTop = barInset + topHintGap
-                // The banner is bottom-aligned in its 106 dp row, so its copy
-                // column can reach its top edge: guarantee 6 dp of clear space
-                // above it, shrinking the strip's top offset (never the gap)
-                // when the band is tight.
+                // The banner does NOT start at the content inset: GuideScreen
+                // lifts it GuidePreviewBanner.tvLift UP into the reserved band
+                // (tvOS's -28 pt, halved), so the old barInset + 2 dp band sat
+                // INSIDE the banner, on top of the title (Streamer screenshot
+                // 2026-09-11: bar bottom 53.5 dp, banner top 73.5 dp, strip
+                // text centered at 78.5 dp). Subtracting the lift puts the
+                // band back where it is drawn. The content inset itself is
+                // untouched, so the banner/guide do not move.
+                val bannerTop = barInset + topHintGap -
+                    com.aeriotv.android.feature.livetv.grid.GuidePreviewBanner.tvLift
+                val bannerFirstText = bannerTop +
+                    com.aeriotv.android.feature.livetv.grid.GuidePreviewBanner.firstTextInset
+                // At least 6 dp of clear space above that first text line;
+                // when the band is tight this shrinks the strip's own top
+                // offset toward the bar, never the gap to the banner.
                 val minBannerClear = 6.dp
                 val centeredTop = bandTop + (bannerTop - bandTop - stripHeight) / 2
-                val maxTop = bannerTop - minBannerClear - stripHeight
+                val maxTop = bannerFirstText - minBannerClear - stripHeight
                 val stripBandTop = centeredTop.coerceIn(bandTop, maxTop.coerceAtLeast(bandTop))
                 if (maxTop >= bandTop) {
                     // Stay centered even next to the mini: cap the width at

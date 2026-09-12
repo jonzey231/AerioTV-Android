@@ -70,6 +70,21 @@ import java.util.Date
  */
 object GuidePreviewBanner {
     val height = 106.dp
+
+    /**
+     * The TV lift: tvOS pulls the banner 28 pt up under the tab bar so eight
+     * guide rows still fit (ChannelListView, Logan 2026-09-05), halved here.
+     * GuideScreen applies it; MainScaffold subtracts it to know where the
+     * banner's top edge actually lands when it places the remote hint strip.
+     */
+    val tvLift = 14.dp
+
+    /**
+     * How far the banner's FIRST text line (the program title) sits below the
+     * banner's top edge: the copy column is bottom-aligned in the 106 dp row
+     * and measured at 4 dp on a 1920x1080 Streamer (Logan 2026-09-11).
+     */
+    val firstTextInset = 4.dp
 }
 
 /** Session art cache keyed by program id or cleaned title; null = every source missed. */

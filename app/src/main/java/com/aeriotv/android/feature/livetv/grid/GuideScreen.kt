@@ -578,7 +578,7 @@ fun GuideScreen(
                 // tvOS pulls the banner 28 pt up under the tab bar so eight
                 // rows still fit (ChannelListView, Logan 2026-09-05); halved.
                 modifier = Modifier.layout { measurable, constraints ->
-                    val lift = 14.dp.roundToPx()
+                    val lift = GuidePreviewBanner.tvLift.roundToPx()
                     val placeable = measurable.measure(constraints)
                     layout(placeable.width, (placeable.height - lift).coerceAtLeast(0)) { placeable.placeRelative(0, -lift) }
                 },
