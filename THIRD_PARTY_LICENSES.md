@@ -12,8 +12,8 @@ license.
 ## FFmpeg (LGPL-2.1-or-later)
 
 `app/libs/media3-decoder-ffmpeg.aar` bundles a build of FFmpeg. It is wired in as
-the fallback software audio renderer and supplies AC-3, E-AC-3, DTS, TrueHD, and
-MP2 decoding on devices with no hardware MediaCodec for those codecs.
+the fallback software audio renderer and supplies AC-3, MP2, and AAC decoding on
+devices with no hardware MediaCodec for those codecs.
 
 | | |
 |---|---|
@@ -27,11 +27,13 @@ The library is configured through the Media3 `decoder_ffmpeg` extension's
 `build_ffmpeg.sh` **without** `--enable-gpl`, enabling only these decoders:
 
 ```
-ac3 eac3 dca mlp truehd mp2 aac mp3 flac alac
+ac3 aac mp2 mp3 flac alac
 ```
 
 All of the above are LGPL-clean. No GPL-only component (x264, x265, libpostproc)
-is linked in. The complete, reproducible build steps are recorded in
+is linked in. The decoder set was trimmed on 2026-09-11 to codecs whose
+essential patents have expired; E-AC-3, DTS and TrueHD/MLP are no longer built,
+so those formats rely on the device's own hardware decoder. The complete, reproducible build steps are recorded in
 [app/libs/README.md](app/libs/README.md).
 
 ### Relinking

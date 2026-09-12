@@ -28,7 +28,12 @@ import kotlin.math.roundToInt
  * [AerioFfmpegPcmDecoder] - the same extension that makes local
  * playback of these muxes work on that phone, so casting must not
  * refuse where playback succeeds. Only with neither does the session
- * refuse.
+ * refuse. Since 2026-09-11 the bundled FFmpeg build carries only the
+ * patent-expired decoders (ac3, aac, mp2, mp3, flac, alac), so the
+ * fallback covers AC-3 and MP2 but NOT E-AC-3; an E-AC-3 mux on a phone
+ * with no platform E-AC-3 decoder now refuses the session. No code
+ * change was needed for that: [AerioFfmpegPcmDecoder.isSupported] asks
+ * the native library at runtime via FfmpegLibrary.supportsFormat.
  *
  * Threading: synchronous, driven entirely by the caller (the FFmpeg
  * decoder's own decode thread is hidden behind a non-blocking

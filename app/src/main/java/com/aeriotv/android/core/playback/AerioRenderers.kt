@@ -26,7 +26,8 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
  *
  * [audioPassthrough] false (the default preference) builds the audio sink
  * with PCM-only capabilities, so Dolby bitstreams (AC3/EAC3) are decoded
- * in-app by MediaCodec and the display receives plain PCM on the standard
+ * in-app (AC-3 by MediaCodec or the bundled FFmpeg decoder, E-AC-3 by
+ * MediaCodec only) and the display receives plain PCM on the standard
  * latency-compensated path. Many TVs decode a passthrough bitstream with
  * latency Android reports as zero, which the player cannot compensate;
  * the visible symptom is lip-sync drift on live TV. True restores the
@@ -57,9 +58,13 @@ fun aerioRenderersFactory(
     // RUNTIME CodecException 0xe on HE-AAC (AAC+SBR) recordings that ffmpeg
     // decodes fine. enableDecoderFallback can't rescue a post-STARTED runtime
     // failure and never crosses to the separate FFmpeg renderer, so the player
-    // fatals + retries the same broken decoder. PREFER routes AAC (and AC-3/
-    // E-AC-3/DTS, which this path already PCM-decodes with passthrough off) to
-    // FFmpeg first. Scoped to on-demand so live TV's 24/7 hardware-first audio
+    // fatals + retries the same broken decoder. PREFER routes AAC (and AC-3,
+    // which this path already PCM-decodes with passthrough off) to FFmpeg
+    // first. E-AC-3/DTS/TrueHD are NOT in the bundled FFmpeg build any more
+    // (patent exposure decision 2026-09-11), so the FFmpeg renderer declines
+    // them and they go to the platform decoder behind it, which is exactly
+    // what PREFER's ordering-not-membership semantics give us.
+    // Scoped to on-demand so live TV's 24/7 hardware-first audio
     // is untouched; a single finite VOD stream is a few % of one core, video
     // stays hardware-decoded. MUST stay false for the live holder + multiview.
     preferSoftwareAudio: Boolean = false,
@@ -163,9 +168,14 @@ fun aerioRenderersFactory(
         // EXTENSION_RENDERER_MODE_ON (live + multiview default): the bundled
         // FFmpeg audio renderer sits AFTER the platform MediaCodec renderers, so
         // hardware decoders stay primary and FFmpeg is used only as a fallback
-        // for formats the device can't decode in hardware -- notably AC-3 /
-        // E-AC-3 / DTS on broadcast (ATSC) channels, which cheaper boxes like the
-        // Chromecast with Google TV have no MediaCodec decoder for. Routing ALL
+        // for formats the device can't decode in hardware -- notably AC-3 and
+        // MP2 on broadcast (ATSC) channels, which cheaper boxes like the
+        // Chromecast with Google TV have no MediaCodec decoder for. E-AC-3, DTS
+        // and TrueHD are deliberately NOT in the bundled FFmpeg build (patent
+        // exposure decision 2026-09-11): for those there is no software
+        // fallback at all, so a device without a hardware decoder plays them
+        // silent and logs the unsupported audio group (GH #8 diagnostic in
+        // AerioExoPlayerHolder). Routing ALL
         // audio through the software decoder 24/7 would waste CPU on formats the
         // hardware handles fine, so live stays hardware-first.
         //
@@ -173,8 +183,9 @@ fun aerioRenderersFactory(
         // FFmpeg audio renderer goes FIRST, so it claims AAC (incl. HE-AAC/SBR)
         // and the quirky-hardware-AAC decode failure in GH #45 can't happen. It
         // changes ORDERING, not membership -- the platform renderer is still in
-        // the list, so any MIME FFmpeg doesn't advertise (Opus/FLAC/Vorbis/ALAC)
-        // still falls through to hardware. No passthrough regression because the
+        // the list, so any MIME FFmpeg doesn't advertise (Opus/Vorbis, and
+        // E-AC-3/DTS/TrueHD since the 2026-09-11 codec trim) still falls
+        // through to hardware. No passthrough regression because the
         // on-demand path already forces a PCM sink (audioPassthrough=false); if
         // a "bitstream to receiver" option is ever added to VOD, revisit this.
         .setExtensionRendererMode(
@@ -221,7 +232,8 @@ private class AudioSyncShiftSink(sink: AudioSink) : ForwardingAudioSink(sink) {
 
 /**
  * Wraps the forced-PCM audio sink to absorb the periodic ~1s output-PTS jumps
- * the FFmpeg AC-3 / E-AC-3 decoder emits on live single-PMT MPEG-TS. Root cause
+ * the FFmpeg AC-3 decoder emits on live single-PMT MPEG-TS (it was first seen
+ * on E-AC-3 too, back when that decoder was bundled). Root cause
  * (verified against media3 1.4.1 DefaultAudioSink.handleBuffer): when the
  * incoming presentationTimeUs diverges from the sink's frame-derived expected by
  * more than a hardcoded 200ms, the sink drains the AudioTrack to re-sync, which

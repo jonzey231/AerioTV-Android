@@ -192,11 +192,17 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
     // FFmpeg software audio decoder (built from the media3 1.4.1 decoder_ffmpeg
-    // extension, AC-3/E-AC-3/DTS/TrueHD/MP2 enabled). Google ships no prebuilt,
-    // so this AAR is built from source; it restores Dolby broadcast audio on
-    // devices with no hardware AC-3 decoder (e.g. Chromecast with Google TV),
-    // wired in as the fallback renderer by aerioRenderersFactory. Consumed via
-    // files() so its base media3 classes resolve against the maven deps above.
+    // extension). Google ships no prebuilt, so this AAR is built from source; it
+    // restores AC-3 broadcast audio on devices with no hardware AC-3 decoder
+    // (e.g. Chromecast with Google TV), wired in as the fallback renderer by
+    // aerioRenderersFactory. Consumed via files() so its base media3 classes
+    // resolve against the maven deps above.
+    //
+    // Enabled decoders: ac3, aac, mp2, mp3, flac, alac -- only codecs whose
+    // essential patents have EXPIRED. E-AC-3, DTS and TrueHD/MLP were dropped
+    // 2026-09-11 (patent exposure decision) and now have no software decoder at
+    // all; they fall through to the platform MediaCodec only. See
+    // app/libs/README.md for the rationale and the reproducible build steps.
     implementation(files("libs/media3-decoder-ffmpeg.aar"))
 
     // Google Cast (GH #33). SENDER: cast-framework gives the phone/tablet the
