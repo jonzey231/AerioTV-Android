@@ -367,8 +367,11 @@ fun PlayerScreen(
         // on a terminal player error the holder asks this to re-probe LAN/WAN and
         // hand back a fresh /proxy/ts/stream/<uuid> URL instead of replaying a
         // possibly dead-host lastPlayUrl. Only Dispatcharr-live channels qualify.
-        exoHolder.onTerminalErrorRebuildUrl = {
-            currentChannel?.id?.takeIf { it.startsWith("disp:") }
+        // The id arrives as a PARAMETER from the holder (session2.txt 19:56:49:
+        // this lambda used to close over currentChannel, captured on mount, so a
+        // channel flip re-primed the failure onto the PREVIOUS channel's URL).
+        exoHolder.onTerminalErrorRebuildUrl = { id ->
+            id.takeIf { it.startsWith("disp:") }
                 ?.let { onRebuildLiveUrl(it.removePrefix("disp:")) }
         }
         // Bring up the MediaSessionService so the session is alive before the
@@ -516,6 +519,11 @@ fun PlayerScreen(
         // screen failure: no logs, Stream Info idle, no server client.
         if (exoHolder.currentChannelId != channelId || exoHolder.isIdle()) {
             Log.i(TAG, "Channel switch on Exo persistent player -> $url")
+            // Trace: this is a real tune entry (channel-list / recents / deep
+            // link / mini-player hand-off), so start press->firstFrame here.
+            // session2.txt had no [TUNE] press line for either tune because
+            // this path never called it.
+            exoHolder.markTunePress(ch.name)
             // Refresh headers each switch -- some Dispatcharr deployments
             // rotate the API key per stream.
             exoHolder.httpHeaders = httpHeaders
@@ -534,6 +542,7 @@ fun PlayerScreen(
                 // GH #27: #KODIPROP DRM signalling for encrypted DASH.
                 drmLicenseType = ch.drmLicenseType,
                 drmLicenseKey = ch.drmLicenseKey,
+                channelId = channelId,
             )
             exoHolder.currentChannelId = channelId
         } else {

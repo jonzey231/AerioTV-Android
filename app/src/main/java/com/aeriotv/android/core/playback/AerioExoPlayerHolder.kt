@@ -148,8 +148,19 @@ class AerioExoPlayerHolder @Inject constructor(
     /** Optional failover hook: on a terminal player error the holder asks this
      *  to re-probe LAN/WAN and return a fresh URL to reload instead of replaying
      *  the (possibly dead-host) lastPlayUrl. Set by PlayerScreen on mount; null
-     *  elsewhere (Auto / background). iOS analog: PlayerSession.failoverRetryCurrent. */
-    @Volatile var onTerminalErrorRebuildUrl: (suspend () -> String?)? = null
+     *  elsewhere (Auto / background). iOS analog: PlayerSession.failoverRetryCurrent.
+     *
+     *  The channel id is passed AS A PARAMETER at call time, from the holder's own
+     *  [currentChannelIdForRebuild]. Before 2026-09-11 the hook closed over a
+     *  composable value captured on mount, so a flip to another channel left the
+     *  lambda pointing at the PREVIOUS one: session2.txt 19:56:49.064 re-primed a
+     *  UHD failure onto ESPN HD's URL and played the wrong channel for a minute. */
+    @Volatile var onTerminalErrorRebuildUrl: (suspend (channelId: String) -> String?)? = null
+
+    /** Live channel id the rebuild hook must be asked about, stamped by [playUrl]
+     *  from the CALLER's channel id so it is always the channel actually primed
+     *  (never a value captured earlier by a composable). */
+    @Volatile var currentChannelIdForRebuild: String? = null
 
     /** Currently-applied custom HTTP headers, replayed onto the
      *  DataSource.Factory each time we build a MediaSource. Dispatcharr
@@ -377,10 +388,9 @@ class AerioExoPlayerHolder @Inject constructor(
         _streamUnavailable.value = false
         _lastErrorText.value = null
         noDataHealAttempts = 0
-        val hook = onTerminalErrorRebuildUrl
-        if (hook != null) {
+        if (onTerminalErrorRebuildUrl != null) {
             watchdogScope.launch {
-                val fresh = runCatching { hook() }.getOrNull()
+                val fresh = rebuildUrlForCurrentChannel()
                 withContext(Dispatchers.Main) {
                     playUrl(
                         if (!fresh.isNullOrBlank()) fresh else url,
@@ -393,9 +403,53 @@ class AerioExoPlayerHolder @Inject constructor(
         }
     }
 
+    /** One transient-decoder retry per tune (session2.txt 19:56:48 codec handover).
+     *  Reset by [resetWatchdogStateForNewStream] on a genuinely new tune; the retry
+     *  itself re-sets it so only ONE retry runs per failure. */
+    private var decoderRetryUsed = false
+
+    /** Codec-handover shaped failure: a reclaimed / dead MediaCodec rather than a
+     *  dead stream. Matches by error code, and by the cause chain for the
+     *  DEAD_OBJECT / CodecException wording MediaTek boxes report. */
+    private fun isTransientDecoderError(error: PlaybackException, causeChain: String): Boolean =
+        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_RESOURCES_RECLAIMED ||
+            causeChain.contains("DEAD_OBJECT", ignoreCase = true) ||
+            generateSequence(error as Throwable?) { it.cause }
+                .any { it is android.media.MediaCodec.CodecException }
+
+    /**
+     * Ask the LAN/WAN rebuild hook for a fresh URL for the channel that is
+     * ACTUALLY primed, and refuse an answer that belongs to a different one.
+     *
+     * session2.txt 19:56:49.064: the hook (then closing over a stale composable
+     * value) handed back ESPN HD's /proxy/ts/stream/e022bf3d... while the holder
+     * was primed on the Sky Sports UHD uuid d02863e4..., so the app played the
+     * wrong channel under the UHD title and polled a 404 status endpoint for a
+     * minute. Returning null here makes the caller fall through to a plain
+     * forceReload of lastPlayUrl instead.
+     */
+    private suspend fun rebuildUrlForCurrentChannel(): String? {
+        val hook = onTerminalErrorRebuildUrl ?: return null
+        val id = currentChannelIdForRebuild ?: return null
+        val fresh = runCatching { hook(id) }.getOrNull()
+        if (fresh.isNullOrBlank()) return null
+        val uuid = id.substringAfterLast(':')
+        if (uuid.isNotBlank() && !fresh.contains(uuid)) {
+            Log.w(TAG, "[RECOVER] rebuild url rejected: belongs to another channel")
+            tracer.recover("rebuild url rejected: belongs to another channel")
+            return null
+        }
+        return fresh
+    }
+
     /** Arms the watchdog on first steady playback + recovers on a hard error. */
     private val watchdogListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            // Reaching READY means the failure (if any) is behind us, so a later
+            // playWhenReady=false is a real user pause again.
+            if (playbackState == Player.STATE_READY) errorPending = false
             if (playbackState == Player.STATE_READY && player?.isPlaying == true) armWatchdog()
         }
 
@@ -450,12 +504,22 @@ class AerioExoPlayerHolder @Inject constructor(
                     ts.onLiveResumedAtEdge()
                 }
             } else {
-                mediaPauseWallMs = System.currentTimeMillis()
+                // session2.txt 19:57:48.711: a "media-key long-pause resume"
+                // fired with NO user pause. playWhenReady=false also arrives on
+                // a terminal error and on every stop / re-prime, so the stamp
+                // was set by the failure itself and the next resume read it as
+                // a 29 s user pause and entered timeshift. Only a genuine pause
+                // of a READY player with no error pending counts.
+                if (player?.playbackState == Player.STATE_READY && !errorPending) {
+                    mediaPauseWallMs = System.currentTimeMillis()
+                }
                 ts.onLivePaused()
             }
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            clearPauseStamp("player error")
+            errorPending = true
             // Task #150: remember the failure in user-showable form for the
             // unavailable overlay (self-heals below may still recover; the
             // text only surfaces if the stream ends up flagged unavailable).
@@ -587,11 +651,44 @@ class AerioExoPlayerHolder @Inject constructor(
                 _streamUnavailable.value = true
                 return
             }
-            if (lastPlayUrl != null) {
-                val hook = onTerminalErrorRebuildUrl
-                if (hook != null) {
+            // Transient decoder death right at tune-in on live. session2.txt
+            // 19:56:48.5: flipping from an AVC HD channel to a HEVC UHD one had
+            // the MediaTek box reclaim c2.mtk.avc.decoder while c2.mtk.hevc.decoder
+            // was being created, and 300 ms later the codec reported DEAD_OBJECT
+            // in state STARTED - 200 ms after the 3840x2160 HEVC format landed.
+            // That is a codec-handover race, not a dead stream, so re-priming the
+            // SAME url once (the shape the catch-up path above already uses) gets
+            // the channel instead of the terminal path's failover. Only inside the
+            // first 3 s of the tune, and only once per tune.
+            val liveUrl = lastPlayUrl
+            if (liveUrl != null && !decoderRetryUsed && isTransientDecoderError(error, causeChain)) {
+                val sinceTune = SystemClock.elapsedRealtime() - streamPrimedAtMs
+                if (sinceTune in 0..DECODER_RETRY_WINDOW_MS) {
+                    decoderRetryUsed = true
+                    Log.w(TAG, "[RECOVER] decoder ${error.errorCodeName} at +${sinceTune}ms after tune; retrying same url once")
+                    tracer.recover("decoder ${error.errorCodeName} at +${sinceTune}ms after tune; retrying same url once")
                     watchdogScope.launch {
-                        val fresh = runCatching { hook() }.getOrNull()
+                        delay(600)
+                        withContext(Dispatchers.Main) {
+                            if (!isTimeshifting && !isCatchup) {
+                                playUrl(
+                                    liveUrl, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri,
+                                    drmLicenseType = lastPlayDrmType, drmLicenseKey = lastPlayDrmKey,
+                                )
+                                // playUrl resets the per-tune state; keep the
+                                // retry spent so a second failure runs the
+                                // existing terminal path.
+                                decoderRetryUsed = true
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+            if (lastPlayUrl != null) {
+                if (onTerminalErrorRebuildUrl != null) {
+                    watchdogScope.launch {
+                        val fresh = rebuildUrlForCurrentChannel()
                         if (!fresh.isNullOrBlank() && fresh != lastPlayUrl) {
                             Log.w(TAG, "[RETUNE] terminal error; re-priming onto reprobed url $fresh")
                             tracer.recover("terminal error; re-priming onto reprobed url")
@@ -1049,7 +1146,21 @@ class AerioExoPlayerHolder @Inject constructor(
      *  transport's long-pause switch onto the rewind buffer. Cleared on
      *  every resume; a chrome pause ALSO stamps it harmlessly (the chrome
      *  resume enters timeshift first, so the callback never consumes it). */
-    private var mediaPauseWallMs = 0L
+    @Volatile private var mediaPauseWallMs = 0L
+
+    /** True between a player error and the next prime, so the playWhenReady=false
+     *  that rides along with the failure is not mistaken for a user pause
+     *  (session2.txt 19:57:48 phantom long-pause resume). */
+    @Volatile private var errorPending = false
+
+    /** Clear the pause stamp whenever playback is (re-)primed or fails; both
+     *  paths drive playWhenReady themselves and neither is a user pause. */
+    private fun clearPauseStamp(reason: String) {
+        errorPending = false
+        if (mediaPauseWallMs == 0L) return
+        mediaPauseWallMs = 0L
+        Log.d(TAG, "[REWIND] pause stamp cleared ($reason)")
+    }
 
     /** Live Rewind can only buffer what the tee mirrors: raw MPEG-TS.
      *  PlayerScreen gates session start on this so HLS/DASH live channels
@@ -1245,6 +1356,12 @@ class AerioExoPlayerHolder @Inject constructor(
         // (license_type + license_key). Null for everything else.
         drmLicenseType: String? = null,
         drmLicenseKey: String? = null,
+        // Channel id of the stream being primed (live tunes pass it). Stamped
+        // onto currentChannelIdForRebuild so the terminal-error rebuild hook is
+        // always asked about the channel actually playing (session2.txt
+        // 19:56:49 wrong-channel re-prime). Internal re-primes pass null and
+        // keep the existing id.
+        channelId: String? = null,
     ) {
         // Self-heal: a channel tap can land before the persistent window's
         // factory ran, or after destroy() released the instance. Swallowing
@@ -1275,6 +1392,8 @@ class AerioExoPlayerHolder @Inject constructor(
         lastPlayArtworkUri = artworkUri
         lastPlayDrmType = drmLicenseType
         lastPlayDrmKey = drmLicenseKey
+        if (channelId != null) currentChannelIdForRebuild = channelId
+        clearPauseStamp("re-prime")
         resetWatchdogStateForNewStream()
         // watchdogReloadEnabled is kept current by the collector in init{}; the
         // cached value reflects the latest pref without blocking the main thread.
@@ -1445,6 +1564,7 @@ class AerioExoPlayerHolder @Inject constructor(
     fun stop() {
         val p = player ?: return
         currentChannelId = null
+        currentChannelIdForRebuild = null
         // Disarm the stall watchdog so a deliberate stop isn't seen as a wedge.
         hasReachedPlaybackRestart = false
         lastPlayUrl = null
@@ -1504,6 +1624,7 @@ class AerioExoPlayerHolder @Inject constructor(
         player = null
         _playerInstance.value = null
         currentChannelId = null
+        currentChannelIdForRebuild = null
         watchdogJob?.cancel()
         watchdogJob = null
         lastPlayUrl = null
@@ -1726,6 +1847,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastForcedReloadAtMs = now
         consecutiveReloads++
         Log.w(TAG, "[MPV-RELOAD] live stall reload ch=$currentChannelId reason=$reason attempt=$consecutiveReloads")
+        clearPauseStamp("re-prime")
         tracer.recover("in-place reload reason=$reason attempt=$consecutiveReloads")
         tracer.markTuneStart(lastPlayTitle, PlaybackTracer.urlKind(url))
         // Disarm until the re-primed stream reaches steady playback again.
@@ -1823,6 +1945,7 @@ class AerioExoPlayerHolder @Inject constructor(
         // re-preserve the current URL. (retryUnavailable already captured its
         // URL before the playUrl that lands here, so clearing is safe.)
         reconnectUrl = null
+        decoderRetryUsed = false
         streamPrimedAtMs = lastPositionAdvanceAtMs
     }
 
@@ -2006,6 +2129,10 @@ class AerioExoPlayerHolder @Inject constructor(
     companion object {
         private const val TAG = "AerioExoPlayer"
         private const val TAG_DIAG = "AerioPlayerDiag"
+
+        /** How long after a tune a decoder failure still counts as the codec
+         *  handover race (session2.txt: the error landed 2.5 s after the flip). */
+        private const val DECODER_RETRY_WINDOW_MS = 3_000L
 
         /**
          * Default player User-Agent. Without an explicit UA, Media3's

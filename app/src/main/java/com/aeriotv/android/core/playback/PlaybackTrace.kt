@@ -1,5 +1,7 @@
 package com.aeriotv.android.core.playback
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
@@ -45,6 +47,11 @@ class PlaybackTracer {
     private var firstFrameAtMs = 0L
     private var formatLogged = false
     private var summaryLogged = false
+    /** First frame arrived before STATE_READY; the summary is waiting for it. */
+    @Volatile private var summaryPending = false
+    @Volatile private var videoDecoderName: String? = null
+    private var pendingFormat: Format? = null
+    private val summaryHandler = Handler(Looper.getMainLooper())
 
     // ---- steady-state counters, reset per tune ----
     private var stallCount = 0
@@ -99,6 +106,9 @@ class PlaybackTracer {
         firstFrameAtMs = 0L
         formatLogged = false
         summaryLogged = false
+        summaryPending = false
+        videoDecoderName = null
+        pendingFormat = null
         stallCount = 0
         stallStartedAtMs = 0L
         droppedTotal = 0
@@ -159,22 +169,63 @@ class PlaybackTracer {
 
     private fun onFormat(format: Format) {
         if (formatLogged) return
+        pendingFormat = format
+        // The decoder name matters: session2.txt 19:56:48 is a MediaTek AVC
+        // decoder being reclaimed while the HEVC one is created, and the log
+        // could not say which codec the tune ended up on. The format usually
+        // lands first, so hold the line until the decoder is named (or until
+        // the first frame / ready forces it out).
+        if (videoDecoderName != null) emitFormat()
+    }
+
+    private fun emitFormat() {
+        val format = pendingFormat ?: return
+        if (formatLogged) return
         formatLogged = true
+        pendingFormat = null
         val fps = if (format.frameRate > 0f) "${format.frameRate}" else "?"
-        Log.i(TAG, "[TUNE] format ${format.width}x${format.height} $fps ${format.sampleMimeType}")
+        Log.i(
+            TAG,
+            "[TUNE] format ${format.width}x${format.height} $fps ${format.sampleMimeType} " +
+                "dec=${videoDecoderName ?: "?"}",
+        )
     }
 
     private fun onReady() {
         if (readyAtMs != 0L) return
         readyAtMs = now()
+        emitFormat()
         Log.i(TAG, "[TUNE] ready +${sincePress(readyAtMs)}ms")
+        // STATE_READY can land AFTER onRenderedFirstFrame; the summary waits up
+        // to [SUMMARY_DEFER_MS] for it so it stops printing ready=n/a
+        // (session2.txt: both tunes reported ready=n/a).
+        if (summaryPending) emitSummary()
     }
 
     /** One summary line per tune, same shape as the tvOS one. */
     fun onFirstFrame() {
-        if (summaryLogged) return
-        summaryLogged = true
+        if (summaryLogged || summaryPending) return
         firstFrameAtMs = now()
+        if (readyAtMs == 0L) {
+            summaryPending = true
+            val tune = playUrlAtMs
+            summaryHandler.postDelayed(
+                {
+                    // Still nothing from STATE_READY: print as before.
+                    if (summaryPending && playUrlAtMs == tune) emitSummary()
+                },
+                SUMMARY_DEFER_MS,
+            )
+            return
+        }
+        emitSummary()
+    }
+
+    private fun emitSummary() {
+        if (summaryLogged) return
+        emitFormat()
+        summaryLogged = true
+        summaryPending = false
         val total = sincePress(firstFrameAtMs)
         fun d(stamp: Long): String = if (stamp == 0L) "n/a" else "${sincePress(stamp)}"
         Log.i(
@@ -286,6 +337,16 @@ class PlaybackTracer {
             onBytes(loadEventInfo.bytesLoaded)
         }
 
+        override fun onVideoDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            decoderName: String,
+            initializedTimestampMs: Long,
+            initializationDurationMs: Long,
+        ) {
+            videoDecoderName = decoderName
+            emitFormat()
+        }
+
         override fun onVideoInputFormatChanged(
             eventTime: AnalyticsListener.EventTime,
             format: Format,
@@ -357,6 +418,7 @@ class PlaybackTracer {
     companion object {
         private const val TAG = "AerioTrace"
         private const val PRESS_MAX_AGE_MS = 15_000L
+        private const val SUMMARY_DEFER_MS = 2_000L
         private const val PERF_INTERVAL_MS = 15_000L
         private const val FEED_WINDOW_MS = 30_000L
         private const val FEED_BUCKET_MS = 1_000L
