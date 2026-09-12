@@ -16,6 +16,19 @@
   UI owned by this page:
    - idle/launch screen: AerioTV wordmark on a dark gradient
    - a channel banner that shows for 4s after each load, then fades out
+
+  COMPOSITING RULE (2026-09-12): on a Cast web receiver the <video> is only
+  presented at the stream's own rate while it is an unoccluded, untransformed,
+  opaque hardware overlay. Anything painted over or around it, including an
+  overlay left at opacity 0, a CSS animation that is still running, a filter
+  or backdrop-filter, or a transform on the video itself, pulls the video into
+  the page compositor and it is then presented at the page's frame rate. The
+  Google TV Streamer measured rafHz 20.7 to 22.6 while the element decoded 58
+  to 60 fps with zero drops, which is exactly that: the picture Logan saw was
+  the compositor's ~21 Hz, not the decoder's 60. So every overlay on this page
+  must reach display:none (never opacity 0) while rendering, the spinner's
+  animation must not run while the indicator is hidden, and nothing anywhere
+  may use filter / backdrop-filter / transform / will-change.
 -->
 <style>
   html, body {
@@ -23,6 +36,8 @@
     background: #000; overflow: hidden;
     font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
   }
+  /* Plain, full-screen, opaque. No transform, no border-radius, no filter:
+     any of those would take the element off the hardware overlay path. */
   video.castMediaElement {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
@@ -38,6 +53,10 @@
     transition: opacity .6s ease;
   }
   #idle.hidden { opacity: 0; pointer-events: none; }
+  /* Added once the fade-out has finished (and immediately whenever the page
+     has no reason to animate). opacity 0 alone keeps the gradient in the
+     compositor and costs the video its overlay; display:none removes it. */
+  #idle.gone { display: none; }
   #idle .wordmark {
     color: #ffffff; font-size: 64px; font-weight: 700; letter-spacing: 1px;
   }
@@ -58,6 +77,10 @@
     pointer-events: none;
   }
   #banner.visible { opacity: 1; }
+  /* Same rule as #idle.gone: the banner is a rounded translucent panel, so
+     while it is not wanted it must be out of the tree, not merely at
+     opacity 0. */
+  #banner.gone { display: none; }
   #banner .title { font-size: 38px; font-weight: 600; line-height: 1.2; }
   #banner .subtitle {
     margin-top: 4px; color: rgba(255,255,255,.65);
@@ -73,11 +96,17 @@
     transition: opacity .3s ease;
   }
   #loading.hidden { opacity: 0; }
+  #loading.gone { display: none; }
   #loading .spinner {
     width: 52px; height: 52px;
     border: 4px solid rgba(255,255,255,.18);
     border-top-color: #22c3e6;
     border-radius: 50%;
+  }
+  /* The animation is attached ONLY while the indicator is actually shown. A
+     spinner rotating behind opacity 0 is a live CSS animation and keeps the
+     page compositing every frame, which is what capped the video at ~21 Hz. */
+  #loading:not(.hidden):not(.gone) .spinner {
     animation: spin 1s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -104,7 +133,7 @@
     </div>
   </div>
 
-  <div id="banner">
+  <div id="banner" class="gone">
     <div class="title" id="bannerTitle"></div>
     <div class="subtitle" id="bannerSubtitle"></div>
   </div>
@@ -121,13 +150,97 @@
     const loadingStatus = document.getElementById('loadingStatus');
     let bannerTimer = null;
 
+    // ---- overlay visibility ----
+    //
+    // Every overlay on this page ends its hide at display:none. The class
+    // dance is: 'hidden' (or losing 'visible') starts the CSS fade, and
+    // 'gone' lands display:none once that fade has run. Nothing may be left
+    // at opacity 0 on screen: see the COMPOSITING RULE at the top of the
+    // file. The fade timers are per element so a re-show cancels the pending
+    // display:none instead of racing it.
+    const goneTimers = new WeakMap();
+
+    function cancelGone(el) {
+      const t = goneTimers.get(el);
+      if (t) {
+        clearTimeout(t);
+        goneTimers.delete(el);
+      }
+    }
+
+    // Bring an overlay on screen: out of display:none first, then let the
+    // caller's class make it opaque.
+    function overlayShow(el) {
+      cancelGone(el);
+      el.classList.remove('gone');
+    }
+
+    // Start the fade and schedule display:none for when it has finished.
+    // fadeMs must match the element's CSS transition.
+    function overlayHide(el, fadeMs) {
+      cancelGone(el);
+      goneTimers.set(el, setTimeout(() => {
+        goneTimers.delete(el);
+        el.classList.add('gone');
+      }, fadeMs));
+    }
+
+    const IDLE_FADE_MS = 600;    // #idle transition: opacity .6s
+    const BANNER_FADE_MS = 500;  // #banner transition: opacity .5s
+    const LOADING_FADE_MS = 300; // #loading transition: opacity .3s
+
+    // Which overlays are actually painted right now, for the vis= telemetry
+    // field. Computed display, not our own class bookkeeping, so the log
+    // proves what the compositor sees rather than what this page intended.
+    const VIS_ELEMENTS = { idle: () => idle, banner: () => banner, loading: () => loading };
+
+    function visibleOverlays() {
+      const out = [];
+      for (const name in VIS_ELEMENTS) {
+        let el = null;
+        try {
+          el = VIS_ELEMENTS[name]();
+        } catch (e) {
+          el = null;
+        }
+        if (!el) continue;
+        let display = null;
+        try {
+          if (typeof getComputedStyle === 'function') {
+            const cs = getComputedStyle(el);
+            display = cs ? cs.display : null;
+          }
+        } catch (e) {
+          display = null;
+        }
+        if (display === null) {
+          // No computed style available (headless check): fall back to the
+          // class we set, which is the same decision the CSS makes.
+          const cl = el.classList;
+          const isGone = cl && cl.contains ? cl.contains('gone') : false;
+          if (!isGone) out.push(name);
+          continue;
+        }
+        if (display !== 'none') out.push(name);
+      }
+      return out.join(',');
+    }
+
     function flashBanner(title, subtitle) {
       if (!title) return;
       bannerTitle.textContent = title;
       bannerSubtitle.textContent = subtitle || '';
+      overlayShow(banner);
       banner.classList.add('visible');
       clearTimeout(bannerTimer);
-      bannerTimer = setTimeout(() => banner.classList.remove('visible'), 4000);
+      bannerTimer = setTimeout(hideBanner, 4000);
+    }
+
+    function hideBanner() {
+      clearTimeout(bannerTimer);
+      bannerTimer = null;
+      banner.classList.remove('visible');
+      overlayHide(banner, BANNER_FADE_MS);
     }
 
     // ---- loading indicator ----
@@ -160,7 +273,9 @@
     function showLoading() {
       if (loadingVisible) return;
       loadingVisible = true;
+      overlayShow(idle);
       idle.classList.remove('hidden');
+      overlayShow(loading);
       loading.classList.remove('hidden');
       loadingStatus.classList.remove('visible');
       loadingStatus.textContent = '';
@@ -172,6 +287,11 @@
       loading.classList.add('hidden');
       loadingStatus.classList.remove('visible');
       idle.classList.add('hidden');
+      // Both must reach display:none: the spinner's animation is attached
+      // only while the indicator is shown, and the idle gradient is the layer
+      // that was sitting over the video at opacity 0.
+      overlayHide(loading, LOADING_FADE_MS);
+      overlayHide(idle, IDLE_FADE_MS);
     }
 
     // Bytes the segment handler has seen, falling back to Shaka's own counter
@@ -222,6 +342,7 @@
         renderingSince = 0;
         loadingSince = 0;
         hideLoading();
+        overlayShow(idle);
         idle.classList.remove('hidden');
         return;
       }
@@ -666,6 +787,10 @@
         stalls: stats.stalls === undefined ? null : stats.stalls,
         gaps: stats.gaps === undefined ? null : stats.gaps,
         rafHz: rafHz,
+        // Overlays whose computed display is not 'none'. While the picture is
+        // rendering this must be empty: anything listed here is composited
+        // over or around the video and caps its presentation at rafHz.
+        vis: visibleOverlays(),
         err: lastReceiverError,
       };
       try {
@@ -1181,7 +1306,7 @@
             cast.framework.events.EndedReason.INTERRUPTED) return;
         hideLoading();
         idle.classList.remove('hidden');
-        banner.classList.remove('visible');
+        hideBanner();
         renderingSince = 0;
         bufferingSince = 0;
       });
@@ -1193,7 +1318,7 @@
       (event) => {
         hideLoading();
         idle.classList.remove('hidden');
-        banner.classList.remove('visible');
+        hideBanner();
         renderingSince = 0;
         bufferingSince = 0;
         lastReceiverError = describeError(event);
