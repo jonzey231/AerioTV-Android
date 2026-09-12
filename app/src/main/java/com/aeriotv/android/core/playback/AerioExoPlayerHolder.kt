@@ -452,6 +452,15 @@ class AerioExoPlayerHolder @Inject constructor(
     private val liveNoDataStartupThresholdMs = 50_000L
     private val liveReadTimeoutMs = 55_000
     private var noDataHealAttempts = 0
+    /** Same-url retries already spent on a "Channel is stopping" 503 this tune.
+     *  Reset by [resetWatchdogStateForNewStream] like every other heal budget. */
+    private var stoppingRetries = 0
+    /** Job holding the pending Retry-After wait, so a channel flip or teardown
+     *  can cancel a retry that is no longer wanted. */
+    private var stoppingRetryJob: Job? = null
+    /** The server's verbatim 503 reason for the current tune, published into the
+     *  unavailable overlay instead of a guessed cause. */
+    @Volatile private var serverReason: String? = null
     private val _streamUnavailable = MutableStateFlow(false)
     /** True when a freshly-tuned live stream produced no data even after a
      *  reconnect, so the player UI can show "Channel unavailable" instead of an
@@ -997,7 +1006,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 addListener(LoggingPlayerListener)
                 addListener(watchdogListener)
                 // Always-on: network LOAD errors into the shareable log (GH #32).
-                addAnalyticsListener(LoadErrorDiagnosticsListener)
+                addAnalyticsListener(LoadErrorDiagnosticsListener())
                 // Always-on tune/stall/feed tracer (tag AerioTrace).
                 addAnalyticsListener(tracer.analyticsListener)
                 // Always-on frame-pacing timer ([JUDDER] / [PERF] render=).
@@ -1144,10 +1153,14 @@ class AerioExoPlayerHolder @Inject constructor(
                 // DefaultExtractorsFactory(MODE_SINGLE_PMT) so its TsExtractor config is
                 // identical to before; we just hand ProgressiveMediaSource that one extractor.
                 ProgressiveMediaSource.Factory(dataSourceFactory, tsOnlyExtractorsFactory())
+                    // A Dispatcharr 503 must reach our own handler on the FIRST
+                    // answer instead of being re-GET by Media3's retry ladder.
+                    .setLoadErrorHandlingPolicy(Live503LoadErrorPolicy())
                     .createMediaSource(mediaItem)
             }
             url.endsWith(".m3u8", ignoreCase = true) -> {
                 HlsMediaSource.Factory(dataSourceFactory)
+                    .setLoadErrorHandlingPolicy(Live503LoadErrorPolicy())
                     .createMediaSource(mediaItem)
             }
             else -> {
@@ -1787,7 +1800,10 @@ class AerioExoPlayerHolder @Inject constructor(
         _playerInstance.value = null
         currentChannelId = null
         currentChannelIdForRebuild = null
-        // Full teardown clears the stream-failover walk.
+        // Full teardown clears the stream-failover walk and any pending
+        // "Channel is stopping" retry.
+        stoppingRetryJob?.cancel()
+        stoppingRetryJob = null
         liveFailover.resetWalk()
         watchdogJob?.cancel()
         watchdogJob = null
@@ -2032,6 +2048,94 @@ class AerioExoPlayerHolder @Inject constructor(
         return true
     }
 
+    /**
+     * Dispatcharr 503 handling for the live tune path (Nothing Phone
+     * session4.txt 01:48:51, ESPN HD: HTTP 503 on every attempt, four ExoPlayer
+     * retries then four in-place reloads, then "stream unavailable; stopping" --
+     * no other stream was ever tried and the message guessed at a cause).
+     *
+     * The server always says WHY in the 503 body, so:
+     *  - "Channel is stopping, retry shortly": the previous session for this
+     *    channel is still being torn down (typically right after a cast ended).
+     *    Wait the advertised Retry-After (1 s default, 3 s ceiling) and retry the
+     *    SAME url, up to [Dispatcharr503.MAX_STOPPING_RETRIES] times, before
+     *    anything else is attempted.
+     *  - anything else ("No available streams for this channel", "Channel
+     *    resources unavailable", a specific upstream error_reason): the server has
+     *    already tried this channel's streams and failed, so waiting on this URL
+     *    cannot help. Trigger the SAME failover walk the first-byte deadline uses,
+     *    immediately.
+     *
+     * The user-facing text quotes the server verbatim either way; we never
+     * substitute a guessed cause such as "too many connections".
+     */
+    private fun handleLive503(error: Throwable) {
+        val info = Dispatcharr503.parse(error) ?: return
+        // Live only: VOD / catch-up / DVR have their own error paths and no
+        // member-stream walk to fall back on.
+        val url = lastPlayUrl ?: return
+        if (isTimeshifting || isCatchup || PlaybackTracer.urlKind(url) != "live") return
+        serverReason = info.reason
+        if (info.kind == Dispatcharr503.Kind.STOPPING) {
+            if (stoppingRetries >= Dispatcharr503.MAX_STOPPING_RETRIES) {
+                Log.w(
+                    TAG,
+                    "[FAILOVER] 503 reason=\"${info.reason}\" retried " +
+                        "$stoppingRetries times on the same url; handing to the failover walk",
+                )
+                liveFailover.onServer503(info.reason)
+                return
+            }
+            if (stoppingRetryJob?.isActive == true) return
+            stoppingRetries += 1
+            val attempt = stoppingRetries
+            liveFailover.publishServerStatus("Reconnecting...")
+            Log.i(
+                TAG,
+                "[RECOVER] 503 reason=\"${info.reason}\" waiting ${info.retryAfterMs}ms " +
+                    "then retrying same url ($attempt/${Dispatcharr503.MAX_STOPPING_RETRIES})",
+            )
+            stoppingRetryJob = watchdogScope.launch {
+                delay(info.retryAfterMs)
+                // A channel flip / teardown since the wait started means this
+                // retry belongs to a stream nobody is watching any more.
+                if (lastPlayUrl != url) return@launch
+                reprimeSameUrl("503 ${info.reason} retry $attempt")
+            }
+            return
+        }
+        liveFailover.onServer503(info.reason)
+    }
+
+    /**
+     * Re-prime the SAME url right now, with no backoff and outside the stall
+     * watchdog's attempt cap. Used only by the "Channel is stopping" 503 path,
+     * where the server explicitly told us when to come back: spending the
+     * watchdog's escalating budget on a retry the server invited would burn the
+     * ladder that exists for genuinely wedged streams.
+     */
+    private fun reprimeSameUrl(reason: String) {
+        val p = player ?: return
+        val url = lastPlayUrl ?: return
+        val now = SystemClock.elapsedRealtime()
+        tracer.recover("re-prime same url reason=$reason")
+        tracer.markTuneStart(lastPlayTitle, PlaybackTracer.urlKind(url))
+        hasReachedPlaybackRestart = false
+        lastKnownPositionMs = 0L
+        lastPositionAdvanceAtMs = now
+        videoFrameRendered = false
+        streamPrimedAtMs = now
+        lastKnownBufferedPositionMs = 0L
+        lastBufferAdvanceAtMs = now
+        val source = buildMediaSource(
+            url, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri,
+            lastPlayDrmType, lastPlayDrmKey,
+        )
+        p.setMediaSource(source)
+        p.prepare()
+        p.playWhenReady = true
+    }
+
     /** Terminal heal for a never-started live stream: the Dispatcharr proxy
      *  produced no bytes even after a reconnect. Flag it so the player UI shows
      *  "Channel unavailable" (instead of an endless black screen) and stop the
@@ -2043,7 +2147,10 @@ class AerioExoPlayerHolder @Inject constructor(
         // yield next; the raw lastPlayUrl is the reliable fallback.
         reconnectUrl = lastPlayUrl ?: reconnectUrl
         if (_lastErrorText.value == null) {
-            _lastErrorText.value = "No data received from the stream"
+            // Quote the server when it told us why; only fall back to the
+            // generic no-data line when nothing was said.
+            _lastErrorText.value = serverReason?.let { "Server: $it" }
+                ?: "No data received from the stream"
         }
         _streamUnavailable.value = true
         tracer.recover("stream unavailable; stopping")
@@ -2103,6 +2210,10 @@ class AerioExoPlayerHolder @Inject constructor(
         videoFrameRendered = false
         noFrameHealAttempts = 0
         noDataHealAttempts = 0
+        stoppingRetries = 0
+        stoppingRetryJob?.cancel()
+        stoppingRetryJob = null
+        serverReason = null
         _streamUnavailable.value = false
         _lastErrorText.value = null
         // A fresh stream is starting; if it fails, markStreamUnavailable will
@@ -2187,7 +2298,7 @@ class AerioExoPlayerHolder @Inject constructor(
      *  and always attached so black-screen reports (GH #32) carry the real
      *  network cause. URIs are redacted for embedded credentials by
      *  LogSanitizer before the log is shared. */
-    private object LoadErrorDiagnosticsListener : AnalyticsListener {
+    private inner class LoadErrorDiagnosticsListener : AnalyticsListener {
         override fun onLoadError(
             eventTime: AnalyticsListener.EventTime,
             loadEventInfo: LoadEventInfo,
@@ -2201,6 +2312,9 @@ class AerioExoPlayerHolder @Inject constructor(
                 "load error uri=${loadEventInfo.uri} " +
                     "${error.javaClass.simpleName}: ${error.message}${causeChain(error)}",
             )
+            // A Dispatcharr 503 carries the server's OWN reason; act on it here
+            // rather than letting the retry ladders guess (see handleLive503).
+            handleLive503(error)
         }
 
         /** Append the CLASS names of the cause chain (GH #32). Media3 wraps an

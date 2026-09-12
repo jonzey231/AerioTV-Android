@@ -537,7 +537,8 @@ fun PlayerScreen(
             // link / mini-player hand-off), so start press->firstFrame here.
             // session2.txt had no [TUNE] press line for either tune because
             // this path never called it.
-            exoHolder.markTunePress(ch.name)
+            com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
+                exoHolder.markTunePress(ch.name)
             // Refresh headers each switch -- some Dispatcharr deployments
             // rotate the API key per stream.
             exoHolder.httpHeaders = httpHeaders
@@ -720,6 +721,7 @@ fun PlayerScreen(
             recentsOverlayVisible = false
             if (idx != currentIndex) {
                 // Trace: the digit-entry commit IS the press that starts this tune.
+                com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
                 exoHolder.markTunePress(channels[idx].name)
                 currentIndex = idx
             }
@@ -1539,7 +1541,8 @@ fun PlayerScreen(
                                 val next = (currentIndex + direction)
                                     .coerceIn(0, channels.lastIndex)
                                 if (next != currentIndex) {
-                                    exoHolder.markTunePress(channels[next].name)
+                                    com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
+                exoHolder.markTunePress(channels[next].name)
                                     currentIndex = next
                                     chromeVisible = true
                                 }
@@ -1759,6 +1762,7 @@ fun PlayerScreen(
             if (next != cur) {
                 lastFlipAt = now
                 // Trace: stamp the real D-pad press for press->firstFrame.
+                com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
                 exoHolder.markTunePress(list[next].name)
                 currentIndex = next
                 // NO chromeVisible = true here (task #148, user

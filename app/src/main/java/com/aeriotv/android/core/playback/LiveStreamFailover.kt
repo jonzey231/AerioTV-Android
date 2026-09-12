@@ -82,6 +82,9 @@ class LiveStreamFailover(
     private var activeStreamId: Int? = null
     private var steps = 0
     private var walkStartedAtMs = 0L
+    /** The server's verbatim 503 reason for this tune, so the walk's own status
+     *  lines can keep quoting it instead of inventing a cause. */
+    private var serverReason: String? = null
 
     /**
      * A live stream has just been primed. [userInitiated] is true for a real
@@ -121,6 +124,43 @@ class LiveStreamFailover(
         }
     }
 
+    /**
+     * The server answered a live tune with a 503 it already explained (see
+     * [Dispatcharr503]): "No available streams for this channel", "Channel
+     * resources unavailable", or a specific upstream error_reason. The server has
+     * already tried this channel's streams, so there is nothing to wait for:
+     * start the SAME walk the first-byte deadline uses, right now.
+     *
+     * [reason] is the server's own text, shown verbatim so the user never sees a
+     * guessed cause.
+     */
+    fun onServer503(reason: String) {
+        scope.launch {
+            val id = channelId ?: return@launch
+            val h = hooks
+            serverReason = reason
+            // The deadline is moot: we have a definitive answer already.
+            deadlineJob?.cancel()
+            deadlineJob = null
+            if (h == null || !h.canSwitch(id)) {
+                Log.i(TAG, "[FAILOVER] 503 reason=\"$reason\" -> standing retry")
+                _statusText.value = "Channel unavailable. Retrying..."
+                return@launch
+            }
+            Log.i(TAG, "[FAILOVER] 503 reason=\"$reason\" -> next stream")
+            _statusText.value = "Server: $reason. Trying another stream..."
+            if (stepJob?.isActive == true) return@launch
+            if (walkStartedAtMs == 0L) walkStartedAtMs = SystemClock.elapsedRealtime()
+            stepJob = scope.launch { step(h, id) }
+        }
+    }
+
+    /** Publish a status line the holder owns (for example the "Reconnecting..."
+     *  shown while a "Channel is stopping" 503 is waited out). */
+    fun publishServerStatus(text: String?) {
+        scope.launch { _statusText.value = text }
+    }
+
     /** Teardown / pipeline stop: cancel the deadline, KEEP the tried set. */
     fun disarm() {
         deadlineJob?.cancel()
@@ -137,6 +177,7 @@ class LiveStreamFailover(
         activeStreamId = null
         steps = 0
         walkStartedAtMs = 0L
+        serverReason = null
         _statusText.value = null
     }
 
@@ -221,11 +262,15 @@ class LiveStreamFailover(
         }
         if (firstByteSeen || channelId != id) return
         activeStreamId = target
-        _statusText.value = "Trying another stream..."
+        // Quote the server when it told us why we are moving; otherwise this was
+        // our own first-byte deadline and there is no server text to show.
+        _statusText.value = serverReason
+            ?.let { "Server: $it. Trying another stream..." }
+            ?: "Trying another stream..."
         Log.i(
             TAG,
             "[FAILOVER] channel=$channelName stream $step/${ids.size} id=$target " +
-                "reason=no first byte in ${FIRST_BYTE_DEADLINE_MS / 1000}s",
+                "reason=${serverReason ?: "no first byte in ${FIRST_BYTE_DEADLINE_MS / 1000}s"}",
         )
         armDeadline()
     }
