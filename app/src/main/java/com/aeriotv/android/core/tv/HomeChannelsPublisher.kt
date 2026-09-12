@@ -61,6 +61,7 @@ class HomeChannelsPublisher @Inject constructor(
     private val favoriteChannelDao: FavoriteChannelDao,
     private val watchProgressDao: WatchProgressDao,
     private val appPreferences: AppPreferences,
+    private val settleGate: com.aeriotv.android.core.app.AppSettleGate,
 ) {
 
     private val isTv: Boolean
@@ -72,6 +73,15 @@ class HomeChannelsPublisher @Inject constructor(
     fun start(scope: CoroutineScope) {
         if (!isTv) return
         scope.launch(Dispatchers.IO) {
+            // Nothing on the launcher's home row is urgent, and publishing it
+            // is not cheap: it reads the whole channel snapshot out of Room and
+            // makes one ContentProvider round trip per card. Measured on the
+            // Streamer 2026-09-12 (gtvlogs/session6.txt 14:19:28.156 and
+            // :29.179), the first publish landed inside the window where the
+            // guide was still waiting for its cached programmes. Wait for the
+            // settle signal; the launcher's own INITIALIZE_PROGRAMS broadcast
+            // still reaches publishNow() immediately.
+            settleGate.awaitSettled()
             combine(
                 playlistDao.observeActive(),
                 appPreferences.recentChannelIds,
@@ -155,7 +165,14 @@ class HomeChannelsPublisher @Inject constructor(
         helper: PreviewChannelHelper,
         rows: List<ChannelSnapshotEntity>,
     ) {
-        val existing = helper.allChannels.firstOrNull { it.internalProviderId == CHANNEL_KEY }
+        // NOT helper.allChannels: androidx.tvprovider's PreviewChannelHelper
+        // queries without ever closing its Cursor (getAllChannels, and the
+        // getWatchNextProgram that updateWatchNextProgram calls). That is the
+        // "A resource failed to call AbstractCursor.close" burst on the
+        // Streamer 2026-09-12 (gtvlogs/session6.txt 14:19:31.332 onward, nine
+        // pairs: one per published row plus the channel lookup). Every query we
+        // own is closed here instead.
+        val existing = ourPreviewChannel()
         val channelId: Long
         if (existing == null) {
             if (rows.isEmpty()) return // nothing to show; don't create an empty row
@@ -256,13 +273,33 @@ class HomeChannelsPublisher @Inject constructor(
             val program = builder.build()
             val existingId = existing[entry.videoId]
             if (existingId != null) {
-                helper.updateWatchNextProgram(program, existingId)
+                // Plain update rather than helper.updateWatchNextProgram: the
+                // helper's no-op diff re-reads the row through a Cursor it
+                // never closes (see ourPreviewChannel above), once per row.
+                context.contentResolver.update(
+                    TvContractCompat.buildWatchNextProgramUri(existingId),
+                    program.toContentValues(), null, null,
+                )
             } else {
                 helper.publishWatchNextProgram(program)
             }
         }
         android.util.Log.d(TAG, "watch next: ${wanted.size} rows (removed ${existing.keys.count { it !in wanted }})")
     }
+
+    /** Our own "Top Channels" preview channel, or null when it has not been
+     *  published yet. Closes its Cursor, which PreviewChannelHelper does not. */
+    private fun ourPreviewChannel(): PreviewChannel? =
+        context.contentResolver.query(
+            TvContractCompat.Channels.CONTENT_URI,
+            PreviewChannel.Columns.PROJECTION, null, null, null,
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val channel = PreviewChannel.fromCursor(cursor)
+                if (channel.internalProviderId == CHANNEL_KEY) return@use channel
+            }
+            null
+        }
 
     /** Launcher-icon bitmap for the PreviewChannel logo (adaptive icons can't
      *  go through BitmapFactory.decodeResource). */

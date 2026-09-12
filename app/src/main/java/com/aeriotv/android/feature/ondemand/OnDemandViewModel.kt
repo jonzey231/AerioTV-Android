@@ -611,7 +611,17 @@ class OnDemandViewModel @Inject constructor(
         startLibraryPipeline(isMovie = true)
         startLibraryPipeline(isMovie = false)
         deferredStart = viewModelScope.launch {
-            kotlinx.coroutines.delay(STARTUP_DEFER_MS)
+            // Measured on the Streamer 2026-09-12 (gtvlogs/session6.txt): the
+            // old fixed 6 s deferral landed the snapshot restore squarely on
+            // top of the guide's cached EPG paint. Reading and decoding a
+            // 30 MB library JSON allocates well over 100 MB (GC at 14:19:32.219
+            // freed "7(120MB) LOS objects"), and the resulting GC storm starved
+            // the EPG Room read + bridge so the guide stayed empty from
+            // 14:19:24.4 to 14:19:46.9. Nothing about restoring the On Demand
+            // library is urgent unless the user opens that tab, which
+            // [ensureLoaded] still short-circuits, so wait for the settle
+            // signal instead of a wall-clock guess.
+            settleGate.awaitSettled()
             startInitialLoads()
         }
         // React to the active playlist changing (switch) or being deleted.
@@ -2826,7 +2836,6 @@ class OnDemandViewModel @Inject constructor(
     }
 
     private companion object {
-        private const val STARTUP_DEFER_MS = 6_000L
         /** Pace for the quiet background sweep: twice the pause of the
          *  foreground walk, so a full library refresh costs the box almost
          *  nothing while the user watches TV. */

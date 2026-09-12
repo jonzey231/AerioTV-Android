@@ -10,6 +10,7 @@ import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.debug.LogSanitizer
+import com.aeriotv.android.core.app.AppLaunchTrace
 import com.aeriotv.android.core.data.bridgeChannelIds
 import com.aeriotv.android.core.data.buildChannelEpgKeyBridge
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
@@ -399,6 +400,7 @@ class PlaylistViewModel @Inject constructor(
             }
             if (hasChannelCache) {
                 Log.i(TAG, "bootstrap: painted ${cachedChannels.size} cached channels")
+                AppLaunchTrace.noteChannels()
                 // Start the EPG cache-first paint in parallel so the guide
                 // cells light up immediately too, instead of waiting on the
                 // channel network refresh.
@@ -756,41 +758,51 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
-    private suspend fun rebuildGuideCatalog(playlist: PlaylistEntity, reason: String, quick: Boolean = false) {
-        val channels = _state.value.channels
-        if (channels.isEmpty()) return
-        // Guide Days drives history AND forward (Logan 2026-09-11). All
-        // Available reads the full hard-bounded span out of Room; what the
-        // catalog actually spans is then whatever got fetched.
+    /**
+     * The window the catalog should currently span: today plus or minus
+     * [guideLaunchSpanDays], widened to whatever the user has jumped or
+     * scrolled to, and hard-bounded by the playlist's Guide Days in both
+     * directions. Shared by [rebuildGuideCatalog] and the cached paint in
+     * [doLoadEpg] so launch performs ONE windowed Room read, not two
+     * overlapping ones.
+     */
+    private fun guideWindow(playlist: PlaylistEntity): Pair<Long, Long> {
+        // Guide Days drives history AND forward (Logan 2026-09-11).
         val guideDays = resolveGuideDays(playlist.epgRetentionDays)
         val retentionDays = guideDays ?: GUIDE_DAYS_ALL_MAX_BACK
         val windowHours = ((guideDays ?: GUIDE_DAYS_ALL_MAX_AHEAD) * 24).coerceAtLeast(24)
         val now = System.currentTimeMillis()
-        // Quick pass: only what the guide paints at launch (a couple of hours
-        // back, the evening ahead); the full retention window follows.
-        // Non-quick passes no longer read the whole retention window (see
-        // [guideLaunchSpanDays] for the measurement): they cover today plus or
-        // minus [guideLaunchSpanDays], widened to whatever the user has jumped
-        // or scrolled to, and hard-bounded by Guide Days in both directions.
         val dayMs = 24L * 60L * 60L * 1000L
         val backBoundMs = now - retentionDays * dayMs
         val forwardBoundMs = now + windowHours * 60L * 60L * 1000L
-        val fromMillis = if (quick) {
-            now - 2L * 60L * 60L * 1000L
+        val wantedFrom = if (guideBackThroughMs > 0L) {
+            minOf(guideBackThroughMs, now - guideLaunchSpanDays * dayMs)
         } else {
-            val wanted = if (guideBackThroughMs > 0L) minOf(guideBackThroughMs, now - guideLaunchSpanDays * dayMs)
-            else now - guideLaunchSpanDays * dayMs
-            maxOf(backBoundMs, wanted)
+            now - guideLaunchSpanDays * dayMs
         }
-        val toMillis = if (quick) {
-            maxOf(now + 8L * 60L * 60L * 1000L, guideForwardThroughMs)
-        } else {
-            minOf(forwardBoundMs, maxOf(now + guideLaunchSpanDays * dayMs, guideForwardThroughMs))
-        }
+        val from = maxOf(backBoundMs, wantedFrom)
+        val to = minOf(forwardBoundMs, maxOf(now + guideLaunchSpanDays * dayMs, guideForwardThroughMs))
+        return from to to
+    }
+
+    /**
+     * @param preloadedRows rows the caller has ALREADY read for exactly this
+     * window (the cached paint), so the launch path does not re-query Room for
+     * data it is holding.
+     */
+    private suspend fun rebuildGuideCatalog(
+        playlist: PlaylistEntity,
+        reason: String,
+        preloadedRows: List<EPGProgramme>? = null,
+    ) {
+        val channels = _state.value.channels
+        if (channels.isEmpty()) return
+        val (fromMillis, toMillis) = guideWindow(playlist)
         val t0 = android.os.SystemClock.elapsedRealtime()
-        val rows = runCatching { repository.loadCachedEpg(playlist.id, fromMillis, toMillis) }
-            .onFailure { Log.w(TAG, "rebuildGuideCatalog($reason): cache read failed", it) }
-            .getOrDefault(emptyList())
+        val rows = preloadedRows
+            ?: runCatching { repository.loadCachedEpg(playlist.id, fromMillis, toMillis) }
+                .onFailure { Log.w(TAG, "rebuildGuideCatalog($reason): cache read failed", it) }
+                .getOrDefault(emptyList())
         val previous = _state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog
         val catalog = withContext(Dispatchers.Default) {
             com.aeriotv.android.core.guide.GuideCatalog.build(
@@ -798,6 +810,7 @@ class PlaylistViewModel @Inject constructor(
             )
         }
         epgWriteMutex.withLock {
+            val retentionDays = resolveGuideDays(playlist.epgRetentionDays) ?: GUIDE_DAYS_ALL_MAX_BACK
             _state.update { it.copy(epgByChannel = catalog, epgHistoryHours = retentionDays * 24) }
         }
         Log.i(
@@ -868,23 +881,27 @@ class PlaylistViewModel @Inject constructor(
         // dedup / group pipeline, cutting cold-launch CPU + GC by a similar
         // fraction. Logan 2026-09-11: the span comes from the playlist's
         // Guide Days setting, not the retired Settings > Network preference.
-        val windowHours = ((resolveGuideDays(playlist.epgRetentionDays) ?: 1) * 24)
-            .coerceAtLeast(24)
-        val now = System.currentTimeMillis()
-        val cachedRaw = run {
-            val fromMillis = now - 60L * 60L * 1000L
-            val toMillis = now + windowHours.toLong() * 60L * 60L * 1000L
-            runCatching {
-                repository.loadCachedEpg(playlist.id, fromMillis, toMillis)
-            }.getOrDefault(emptyList())
-        }
+        //
+        // ONE windowed read for the whole launch: [guideWindow] is the exact
+        // span the catalog will be built over, so the rows read here are
+        // handed straight to [rebuildGuideCatalog] below instead of being
+        // queried again. Before this, launch did a now-1h..+24h read here and
+        // then two more reads for the quick and full catalog rebuilds.
+        val (cacheFromMs, cacheToMs) = guideWindow(playlist)
+        val readStartedAt = android.os.SystemClock.elapsedRealtime()
+        val cachedRaw = runCatching {
+            repository.loadCachedEpg(playlist.id, cacheFromMs, cacheToMs)
+        }.getOrDefault(emptyList())
+        val readMs = android.os.SystemClock.elapsedRealtime() - readStartedAt
         // Off-main, same reason as the network path below: on a 30-day Guide
         // Days setting this is effectively the entire cache, which catch-up
         // depth grew to six figures.
         val channelsNowCached = _state.value.channels
+        val bridgeStartedAt = android.os.SystemClock.elapsedRealtime()
         val cached = withContext(Dispatchers.Default) {
             bridgeChannelIds(cachedRaw, channelsForBridge)
         }
+        val bridgeMs = android.os.SystemClock.elapsedRealtime() - bridgeStartedAt
         val hasCache = cached.isNotEmpty()
         // Identity gate: a cache that does not match the current channel
         // identity is stale regardless of age. Rows are persisted under each
@@ -922,10 +939,16 @@ class PlaylistViewModel @Inject constructor(
                 .onFailure { Log.w(TAG, "identity purge failed", it) }
         }
         if (hasCache && !identityStale) {
-            Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
-            rebuildGuideCatalog(playlist, "cache-quick", quick = true)
+            Log.i(
+                TAG,
+                "loadEpgIfConfigured: painted ${cached.size} cached programmes " +
+                    "(read ${readMs}ms, bridge ${bridgeMs}ms)",
+            )
+            // Single build over the rows just read; no second Room query, and
+            // no separate quick pass, because the window IS the quick window.
+            rebuildGuideCatalog(playlist, "cache", preloadedRows = cached)
             _state.update { it.copy(isEpgLoading = false) }
-            rebuildGuideCatalog(playlist, "cache")
+            AppLaunchTrace.noteGuidePrograms(cached.size)
             publishCachedEpgSpan(playlist)
         }
         // 2. Freshness: skip the network entirely when the cache is recent,

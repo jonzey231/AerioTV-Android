@@ -117,6 +117,7 @@ class AppSettleGate @Inject constructor() {
             if (remaining > 0) delay(remaining)
             _settled.value = true
             Log.i(TAG, "settled (+${SystemClock.elapsedRealtime() - startedAt} ms)")
+            AppLaunchTrace.noteSettled()
         }
     }
 
