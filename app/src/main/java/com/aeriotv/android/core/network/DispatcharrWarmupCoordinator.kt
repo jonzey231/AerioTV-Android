@@ -40,6 +40,11 @@ class DispatcharrWarmupCoordinator @Inject constructor(
     private val dao: PlaylistDao,
     private val client: DispatcharrClient,
     private val tokenStore: DispatcharrTokenStore,
+    // Lazy so the DispatcharrClient -> repository direction stays one-way at
+    // construction time; the cast re-resolve only needs it at ON_START.
+    private val playlistRepository: dagger.Lazy<
+        com.aeriotv.android.core.data.repository.PlaylistRepository,
+        >,
 ) : DefaultLifecycleObserver {
 
     // SupervisorJob so a warmup failure on one playlist doesn't cancel the
@@ -63,7 +68,21 @@ class DispatcharrWarmupCoordinator @Inject constructor(
         // app comes back from the background. Both cases benefit from a
         // token refresh — match iOS scene-phase .active behavior.
         scope.launch { warmupAll() }
+        // Cast audio: re-resolve the stereo AAC output profile at every launch
+        // and every foreground return, independent of the EPG load (the cached
+        // EPG path used to skip it, so a relaunch kept casting with a stale
+        // profile id). Rate limited to once per 15 minutes per playlist inside
+        // the repository, so a user flipping in and out of the app costs one
+        // lookup.
+        scope.launch {
+            val trigger = if (firstStart) "launch" else "foreground"
+            firstStart = false
+            runCatching { playlistRepository.get().refreshCastAacProfilesIfDue(trigger) }
+                .onFailure { Log.w(TAG, "cast profile re-resolve failed: ${it.message}") }
+        }
     }
+
+    private var firstStart = true
 
     private suspend fun warmupAll() {
         val playlists = dao.allOnce()

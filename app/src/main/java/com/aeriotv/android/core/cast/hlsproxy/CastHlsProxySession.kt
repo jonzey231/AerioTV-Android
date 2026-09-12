@@ -75,13 +75,21 @@ class CastHlsProxySession @Inject constructor(
          *  receiver page also starts behind the edge, and is reached by two
          *  segments on a feed like that. */
         const val READY_MEDIA_TICKS = 9L * TsToFmp4Remuxer.TICKS_PER_SECOND
-        const val READY_MIN_SEGMENTS = 2
+        /** FOUR segments, not two (2026-09-12, second pass): Shaka sizes
+         *  its live seek range from the span of the playlist window it
+         *  parses (hls_parser.js determineDuration_ -> getLiveDuration_)
+         *  minus the presentation delay the receiver configures (4 s). A
+         *  two- or three-segment window leaves a seek range barely wider
+         *  than one segment, and the playhead then lives on its edge for
+         *  the whole session. Four segments give the receiver a window it
+         *  can hold a playhead inside from the first load. */
+        const val READY_MIN_SEGMENTS = 4
 
         /** Bound on the wait for [READY_MEDIA_TICKS]: nine seconds of media plus
          *  provider join latency; past this the channel is declared
          *  uncastable and the user told (the sender quotes this number in
          *  the "did not send any data" message, so the two never drift). */
-        const val READY_TIMEOUT_MS = 25_000L
+        const val READY_TIMEOUT_MS = 32_000L
 
         /** Consecutive failed (re)connects before the ingest gives up.
          *  Backoff 1/2/4/8/8 s; the receiver stalls at the live edge in

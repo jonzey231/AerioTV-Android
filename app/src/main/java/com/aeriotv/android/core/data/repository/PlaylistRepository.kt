@@ -158,6 +158,10 @@ class PlaylistRepository @Inject constructor(
     private val xtreamApi: com.aeriotv.android.core.network.XtreamCodesApi,
 ) {
 
+    /** Last successful cast-profile re-resolve per playlist id, so the launch
+     *  and foreground triggers coalesce to one lookup per 15 minutes. */
+    private val castAacReresolvedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     /**
      * Audit task #54: push the active playlist's apiKey + URL prefix set into
      * the synchronous [com.aeriotv.android.core.network.ActivePlaylistCredentials]
@@ -281,6 +285,50 @@ class PlaylistRepository @Inject constructor(
             )
         }
         return resolved
+    }
+
+    /**
+     * Re-resolve the cast AAC output profile for every Dispatcharr playlist,
+     * at most once per [CAST_AAC_RERESOLVE_INTERVAL_MS] per playlist. Called
+     * from the app's launch / foreground observer
+     * ([com.aeriotv.android.core.network.DispatcharrWarmupCoordinator]) so it
+     * is independent of the EPG load: the cached-EPG path used to skip the
+     * re-resolve entirely, which left a relaunched phone casting with a stale
+     * profile id after the user created a stereo AAC profile on the server
+     * (nplogs/session18.txt, 16:28 relaunch still using profile 2 at 16:31).
+     *
+     * Persists with the targeted column update so a concurrent refresh or
+     * guide writer is never clobbered by a stale row snapshot.
+     */
+    suspend fun refreshCastAacProfilesIfDue(trigger: String) {
+        val playlists = runCatching { dao.allOnce() }.getOrNull() ?: return
+        val now = System.currentTimeMillis()
+        for (playlist in playlists) {
+            val sourceType = playlist.resolvedSourceType()
+            if (sourceType != SourceType.DispatcharrApiKey &&
+                sourceType != SourceType.DispatcharrUserPass
+            ) continue
+            val last = castAacReresolvedAt[playlist.id]
+            if (last != null && now - last < CAST_AAC_RERESOLVE_INTERVAL_MS) continue
+            castAacReresolvedAt[playlist.id] = now
+            val base = runCatching { effectiveBaseUrl(playlist) }.getOrNull() ?: continue
+            val resolved = runCatching {
+                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                    reresolveCastAacProfile(base, key, playlist.dispatcharrCastAacProfileId)
+                }
+            }.getOrNull()
+            if (resolved == null) {
+                // Lookup failed: allow the next trigger to try again.
+                castAacReresolvedAt.remove(playlist.id)
+                continue
+            }
+            runCatching { dao.updateCastAacProfileId(playlist.id, resolved) }
+                .onFailure { Log.w("PlaylistRepo", "cast profile persist failed ($trigger)", it) }
+            Log.i(
+                "PlaylistRepo",
+                "[Cast] output profile persisted id=$resolved trigger=$trigger",
+            )
+        }
     }
 
     /** Inputs for creating or updating a playlist row. */
@@ -1774,26 +1822,15 @@ class PlaylistRepository @Inject constructor(
                         Log.i("PlaylistRepo", "[EPG] server version captured $version at EPG load")
                     }
                 }
-                // Cast audio: re-resolve against the current server list on
-                // every EPG load, not just when the persisted value is
-                // missing. A profile the user creates after setup (an
-                // "AerioTV Cast" profile added in Dispatcharr) is therefore
-                // picked up on the next EPG load or launch, as is a stored
-                // id the server no longer has. Nothing is written when the
-                // lookup fails or the stored id is still the right pick.
-                run {
-                    val resolved = runCatching {
-                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                            reresolveCastAacProfile(base, key, gated.dispatcharrCastAacProfileId)
-                        }
-                    }.getOrNull()
-                    if (resolved != null) {
-                        val updated = gated.copy(dispatcharrCastAacProfileId = resolved)
-                        runCatching { dao.update(updated) }
-                            .onFailure { Log.w("PlaylistRepo", "cast profile capture persist failed", it) }
-                        gated = updated
-                    }
-                }
+                // Cast audio: the re-resolve no longer lives here. It runs at
+                // every launch and on every foreground return (rate limited,
+                // see [refreshCastAacProfilesIfDue]) INDEPENDENT of the EPG
+                // load, because the cached-EPG path skipped this block
+                // entirely: measured in nplogs/session18.txt, the phone
+                // relaunched at 16:28 after the profile was created and was
+                // still casting with profile 2 at 16:31. Re-read the row here
+                // so the rest of this pass sees whatever that path persisted.
+                dao.byId(playlist.id)?.let { gated = it }
                 if (gated.dispatcharrVersionAtLeast("0.30.0")) {
                     // Dispatcharr 0.30: the grid serves history and days ahead
                     // itself; no third-party XMLTV layering needed.
@@ -3227,3 +3264,7 @@ private fun Double.formatChannelNumber(): String {
         this.toString()
     }
 }
+
+/** How often the launch / foreground cast-profile re-resolve may hit the
+ *  server per playlist. */
+private const val CAST_AAC_RERESOLVE_INTERVAL_MS = 15L * 60L * 1000L

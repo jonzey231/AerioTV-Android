@@ -127,6 +127,16 @@ interface PlaylistDao {
     @Query("UPDATE playlists SET dispatcharrEpgSourceFingerprint = :fingerprint WHERE id = :id")
     suspend fun updateEpgSourceFingerprint(id: String, fingerprint: String?)
 
+    /**
+     * Targeted write for the cast AAC output-profile id. Deliberately not an
+     * @Update for the same reason as [updateCredentials]: the launch /
+     * foreground re-resolve runs concurrently with guide and refresh work, so
+     * writing a whole row snapshot here would clobber columns another writer
+     * updated in the meantime.
+     */
+    @Query("UPDATE playlists SET dispatcharrCastAacProfileId = :profileId WHERE id = :id")
+    suspend fun updateCastAacProfileId(id: String, profileId: Int?)
+
     @Delete
     suspend fun delete(playlist: PlaylistEntity)
 
