@@ -494,10 +494,10 @@ class AppPreferences @Inject constructor(
     }
 
     /**
-     * Dolby (AC3/EAC3) bitstream passthrough over HDMI. Off by default:
+     * Surround sound (AC-3/E-AC-3) bitstream passthrough over HDMI. Off by default:
      * many TVs decode the bitstream with latency Android reports as zero,
      * which the player cannot compensate, and it shows up as lip-sync drift
-     * on live TV. Off means AerioTV decodes Dolby audio in-app and outputs
+     * on live TV. Off means AerioTV decodes the surround audio in-app and outputs
      * PCM on the latency-compensated path. Device-specific by nature, so
      * deliberately NOT part of the sync snapshot.
      */

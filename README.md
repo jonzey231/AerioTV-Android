@@ -346,10 +346,14 @@ GPL-3.0-or-later.
 ### Third-party components
 
 AerioTV bundles an FFmpeg build (LGPL-2.1-or-later) and depends on a number of
-Apache-2.0 libraries. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for
-the full list, the exact FFmpeg build configuration, and where to obtain the
-corresponding source. The same information is in the app under
-Settings > About > Open Source Licenses.
+Apache-2.0 libraries. The FFmpeg build is configured without `--enable-gpl` and
+enables exactly five audio decoders: `ac3`, `mp2`, `mp3`, `flac` and `alac`.
+Anything outside that set, E-AC-3, DTS, TrueHD and AAC included, relies on the
+device's own hardware decoder; HE-AAC on-demand recordings are handled by the
+hardware AAC decoder. See
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full list, the exact
+FFmpeg build configuration, and where to obtain the corresponding source. The
+same information is in the app under Settings > About > Open Source Licenses.
 
 The Apache-2.0 components include AndroidX and Jetpack Compose, Media3 /
 ExoPlayer, Kotlin with kotlinx.coroutines and kotlinx.serialization, Ktor,

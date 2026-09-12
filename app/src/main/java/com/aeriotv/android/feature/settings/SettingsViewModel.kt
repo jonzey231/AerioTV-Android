@@ -282,7 +282,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setProgramPostersTmdbEnabled(value) }
     }
 
-    // Dolby passthrough (device-specific; off = in-app decode, fixes lip sync
+    // Surround sound passthrough (device-specific; off = in-app decode, fixes lip sync
     // on TVs that decode the bitstream late).
     val audioPassthroughEnabled: Flow<Boolean> = prefs.audioPassthroughEnabled
     fun setAudioPassthroughEnabled(value: Boolean) {

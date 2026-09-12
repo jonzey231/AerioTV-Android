@@ -215,11 +215,11 @@ private fun LicenseIndex(
         item("ffmpeg-body") {
             LicenseBlurb(
                 "This app includes FFmpeg (release/6.0, libavcodec 60.3.100), used " +
-                    "unmodified as the software audio decoder for AC-3, MP2 and AAC " +
+                    "unmodified as the software audio decoder for AC-3 and MP2 " +
                     "on devices with no hardware decoder for them.\n\n" +
                     "FFmpeg is licensed under the GNU Lesser General Public License, " +
                     "version 2.1 or later. It is built WITHOUT --enable-gpl, enabling " +
-                    "only these decoders: ac3, aac, mp2, mp3, flac, alac. No GPL-only " +
+                    "only these decoders: ac3, mp2, mp3, flac, alac. No GPL-only " +
                     "component is linked in.\n\n" +
                     "FFmpeg is loaded as a dynamically linked JNI shared object " +
                     "(libffmpegJNI.so) and can be replaced with a modified build, as " +

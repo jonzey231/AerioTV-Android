@@ -25,7 +25,7 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
  * multiview tiles). Two deviations from stock, each gated by a flag:
  *
  * [audioPassthrough] false (the default preference) builds the audio sink
- * with PCM-only capabilities, so Dolby bitstreams (AC3/EAC3) are decoded
+ * with PCM-only capabilities, so surround bitstreams (AC-3/E-AC-3) are decoded
  * in-app (AC-3 by MediaCodec or the bundled FFmpeg decoder, E-AC-3 by
  * MediaCodec only) and the display receives plain PCM on the standard
  * latency-compensated path. Many TVs decode a passthrough bitstream with
@@ -192,7 +192,9 @@ fun aerioRenderersFactory(
         // MP2 on broadcast (ATSC) channels, which cheaper boxes like the
         // Chromecast with Google TV have no MediaCodec decoder for. E-AC-3, DTS
         // and TrueHD are deliberately NOT in the bundled FFmpeg build (patent
-        // exposure decision 2026-09-11): for those there is no software
+        // exposure decision 2026-09-11), and AAC is not either (dropped
+        // 2026-09-12; every supported device has a hardware AAC decoder). For
+        // those there is no software
         // fallback at all, so a device without a hardware decoder plays them
         // silent and logs the unsupported audio group (GH #8 diagnostic in
         // AerioExoPlayerHolder). Routing ALL
@@ -200,12 +202,25 @@ fun aerioRenderersFactory(
         // hardware handles fine, so live stays hardware-first.
         //
         // EXTENSION_RENDERER_MODE_PREFER (on-demand only, preferSoftwareAudio):
-        // FFmpeg audio renderer goes FIRST, so it claims AAC (incl. HE-AAC/SBR)
-        // and the quirky-hardware-AAC decode failure in GH #45 can't happen. It
-        // changes ORDERING, not membership -- the platform renderer is still in
-        // the list, so any MIME FFmpeg doesn't advertise (Opus/Vorbis, and
-        // E-AC-3/DTS/TrueHD since the 2026-09-11 codec trim) still falls
-        // through to hardware. No passthrough regression because the
+        // FFmpeg audio renderer goes FIRST. This was originally how GH #45 was
+        // fixed: the bundled FFmpeg build enabled `aac`, so the software
+        // renderer claimed AAC (incl. HE-AAC/SBR) ahead of the quirky hardware
+        // AAC decoders that failed to decode those recordings.
+        //
+        // The 2026-09-12 codec trim dropped `aac` from the FFmpeg build, so
+        // that no longer applies: HE-AAC on-demand recordings now rely on the
+        // device's HARDWARE AAC decoder in every case. Every Android device the
+        // app supports has one (AAC is mandatory in the CDD), and the GH #45
+        // hardware failures have not recurred since, so this is the accepted
+        // trade. PREFER is kept rather than reverted to ON because it is now
+        // harmless: it changes ORDERING, not membership, and the software
+        // renderer no longer advertises AAC at all, so AAC falls through to
+        // hardware either way. What PREFER still buys is first claim on the
+        // codecs FFmpeg DOES carry (ac3, mp2, mp3, flac, alac) for on-demand
+        // files, where a software decode is cheap and more predictable than a
+        // marginal hardware one. Everything else FFmpeg does not advertise
+        // (AAC, Opus/Vorbis, and E-AC-3/DTS/TrueHD since the 2026-09-11 trim)
+        // falls through to hardware. No passthrough regression because the
         // on-demand path already forces a PCM sink (audioPassthrough=false); if
         // a "bitstream to receiver" option is ever added to VOD, revisit this.
         .setExtensionRendererMode(

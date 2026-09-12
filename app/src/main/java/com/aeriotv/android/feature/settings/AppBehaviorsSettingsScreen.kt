@@ -440,11 +440,11 @@ fun AppBehaviorsSettingsScreen(
 
             SettingsSection(
                 header = "Audio",
-                footer = "Passthrough sends Dolby audio as a bitstream for your TV or receiver to decode. Some TVs decode it late, which shows up as voices out of sync with lips on live TV. Off, AerioTV decodes audio itself and stays in sync. Takes effect on the next playback.",
+                footer = "Passthrough sends surround sound audio as a bitstream for your TV or receiver to decode. Some TVs decode it late, which shows up as voices out of sync with lips on live TV. Off, AerioTV decodes audio itself and stays in sync. Takes effect on the next playback.",
             ) {
                 SettingsToggleRow(
-                    title = "Dolby passthrough",
-                    subtitle = "Bitstream AC3 to your TV or receiver. Leave off if lip sync drifts.",
+                    title = "Surround sound passthrough",
+                    subtitle = "Send AC-3 and E-AC-3 audio to your receiver untouched. Leave off if lip sync drifts.",
                     checked = audioPassthrough,
                     onCheckedChange = viewModel::setAudioPassthroughEnabled,
                 )

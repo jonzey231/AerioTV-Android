@@ -198,11 +198,13 @@ dependencies {
     // aerioRenderersFactory. Consumed via files() so its base media3 classes
     // resolve against the maven deps above.
     //
-    // Enabled decoders: ac3, aac, mp2, mp3, flac, alac -- only codecs whose
-    // essential patents have EXPIRED. E-AC-3, DTS and TrueHD/MLP were dropped
-    // 2026-09-11 (patent exposure decision) and now have no software decoder at
-    // all; they fall through to the platform MediaCodec only. See
-    // app/libs/README.md for the rationale and the reproducible build steps.
+    // Enabled decoders: ac3, mp2, mp3, flac, alac. E-AC-3, DTS and TrueHD/MLP
+    // were dropped 2026-09-11 (patent exposure decision) and aac was dropped
+    // 2026-09-12 (every supported device has a hardware AAC decoder, so the
+    // software one was never reached). None of those have a software decoder in
+    // the app any more; they fall through to the platform MediaCodec only,
+    // HE-AAC on-demand recordings included. See app/libs/README.md for the
+    // rationale and the reproducible build steps.
     implementation(files("libs/media3-decoder-ffmpeg.aar"))
 
     // Google Cast (GH #33). SENDER: cast-framework gives the phone/tablet the

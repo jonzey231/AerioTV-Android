@@ -1591,7 +1591,7 @@ private fun ExoTile(
     // Hoists the tile's player handle to the screen (per-tile track sheets).
     // Called with the player once from factory, with null from onRelease.
     onPlayer: (ExoPlayer?) -> Unit,
-    // Dolby passthrough pref at player-build time (see aerioRenderersFactory).
+    // Surround sound passthrough pref at player-build time (see aerioRenderersFactory).
     audioPassthrough: Boolean,
     // Phase 3: VOD-tile periodic save (same store as the single VOD player).
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel,
