@@ -76,8 +76,11 @@ object GuidePreviewBanner {
      * guide rows still fit (ChannelListView, Logan 2026-09-05), halved here.
      * GuideScreen applies it; MainScaffold subtracts it to know where the
      * banner's top edge actually lands when it places the remote hint strip.
+     * Reduced from 14 dp to 8 dp (Logan, Streamer 2026-09-11) to open up the
+     * band under the nav bar: the banner and the guide rows below it move down
+     * 6 dp, every other guide inset is unchanged.
      */
-    val tvLift = 14.dp
+    val tvLift = 8.dp
 
     /**
      * How far the banner's FIRST text line (the program title) sits below the

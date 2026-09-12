@@ -962,7 +962,9 @@ fun MainScaffold(
                 // when the band is tight this shrinks the strip's own top
                 // offset toward the bar, never the gap to the banner.
                 val minBannerClear = 6.dp
-                val centeredTop = bandTop + (bannerTop - bandTop - stripHeight) / 2
+                // Fixed 8 dp below the drawn bar rather than centered: dead
+                // center read too close to the nav circles (Logan 2026-09-11).
+                val centeredTop = bandTop + 8.dp
                 val maxTop = bannerFirstText - minBannerClear - stripHeight
                 val stripBandTop = centeredTop.coerceIn(bandTop, maxTop.coerceAtLeast(bandTop))
                 if (maxTop >= bandTop) {
