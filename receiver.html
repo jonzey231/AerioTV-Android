@@ -140,22 +140,36 @@
     // gapDetectionThreshold: jump holes as small as 0.1 s. Our worst case
     // is a sub-frame seam at a segment boundary, far under Shaka's older
     // 0.5 s default, which would leave the renderer parked at it.
-    const playbackConfig = playerManager.getPlaybackConfig();
-    playbackConfig.shakaConfig = {
-      manifest: {
-        hls: { sequenceMode: false },
-        defaultPresentationDelay: LIVE_START_BEHIND_SECONDS,
-      },
-      streaming: {
-        gapDetectionThreshold: 0.1,
-        // Nudge the playhead if it ever does stop advancing, instead of
-        // sitting on one frame forever (these are Shaka's defaults, set
-        // explicitly because the CAF-bundled version is not pinned).
-        stallEnabled: true,
-        stallThreshold: 1,
-        stallSkip: 0.1,
-      },
-    };
+    //
+    // Built with `new cast.framework.PlaybackConfig()` and handed to
+    // context.start() below. getPlaybackConfig() returns null before the
+    // context is started (CAF only materializes the active config at
+    // start/load time), so reading it here and assigning shakaConfig onto
+    // it threw a TypeError at parse-and-run time, start() was never
+    // reached, and the receiver never entered RUNNING.
+    let playbackConfig = null;
+    try {
+      playbackConfig = new cast.framework.PlaybackConfig();
+    } catch (e) {
+      console.warn('AerioTV: PlaybackConfig unavailable, using CAF defaults', e);
+    }
+    if (playbackConfig) {
+      playbackConfig.shakaConfig = {
+        manifest: {
+          hls: { sequenceMode: false },
+          defaultPresentationDelay: LIVE_START_BEHIND_SECONDS,
+        },
+        streaming: {
+          gapDetectionThreshold: 0.1,
+          // Nudge the playhead if it ever does stop advancing, instead of
+          // sitting on one frame forever (these are Shaka's defaults, set
+          // explicitly because the CAF-bundled version is not pinned).
+          stallEnabled: true,
+          stallThreshold: 1,
+          stallSkip: 0.1,
+        },
+      };
+    }
 
     // Unload the <video> element. Cast tears the page down while the media
     // pipeline is still running: on 2026-09-12 the receiver got
@@ -182,12 +196,19 @@
     // before ending the session). Let CAF run its own stop first, then
     // unload on the next task so the element is not left holding a
     // MediaSource.
-    playerManager.setMessageInterceptor(
-      cast.framework.messages.MessageType.STOP,
-      (request) => {
-        setTimeout(unloadMediaElement, 0);
-        return request;
-      });
+    // Registration is optional polish: if this CAF build does not expose the
+    // STOP message type, log and carry on rather than letting a throw here
+    // stop the script before context.start().
+    try {
+      playerManager.setMessageInterceptor(
+        cast.framework.messages.MessageType.STOP,
+        (request) => {
+          setTimeout(unloadMediaElement, 0);
+          return request;
+        });
+    } catch (e) {
+      console.warn('AerioTV: STOP interceptor not registered', e);
+    }
 
     // Normalize each LOAD. Keep the sender's streamType (VOD casting later);
     // for LIVE, duration -1 is the documented contract ("the player instances
@@ -254,7 +275,7 @@
         banner.classList.remove('visible');
       });
 
-    context.start({
+    const receiverOptions = {
       // Required when not using <cast-media-player>, so smart displays don't
       // paint their own default controls/scrim over this page.
       uiConfig: { touchScreenOptimizedApp: true },
@@ -265,7 +286,14 @@
       // a Google TV Streamer); Shaka plays it. Progressive/DASH loads are
       // unaffected by this flag.
       useShakaForHls: true,
-    });
+    };
+    // Shaka tuning above. CastReceiverOptions.playbackConfig is the
+    // documented place to supply it; the player manager has no config to read
+    // from until the context is started, so it is set here and not via
+    // setPlaybackConfig/getPlaybackConfig.
+    if (playbackConfig) receiverOptions.playbackConfig = playbackConfig;
+
+    context.start(receiverOptions);
 
     // touchScreenOptimizedApp makes CAF inject a fullscreen <touch-controls>
     // element into this page. On touch devices (smart displays) it is the
@@ -279,10 +307,14 @@
     // element. SHUTDOWN fires on the app being stopped (the X on the
     // sender's card, the Stop button on the TV) and is the case where the
     // pipeline was still playing.
-    context.addEventListener(cast.framework.system.EventType.SHUTDOWN, () => {
-      try { playerManager.stop(); } catch (e) { /* already stopped */ }
-      unloadMediaElement();
-    });
+    try {
+      context.addEventListener(cast.framework.system.EventType.SHUTDOWN, () => {
+        try { playerManager.stop(); } catch (e) { /* already stopped */ }
+        unloadMediaElement();
+      });
+    } catch (e) {
+      console.warn('AerioTV: SHUTDOWN listener not registered', e);
+    }
 
     context.addEventListener(cast.framework.system.EventType.READY, () => {
       const caps = context.getDeviceCapabilities();
