@@ -389,6 +389,7 @@ class DvrViewModel @Inject constructor(
         viewModelScope.launch {
             val restored = restoreFromCache()
             if (restored > 0) {
+                com.aeriotv.android.core.app.AppLaunchTrace.noteDvrRestored()
                 settleGate.awaitSettled()
                 settleGate.awaitSweepWindow()
             }

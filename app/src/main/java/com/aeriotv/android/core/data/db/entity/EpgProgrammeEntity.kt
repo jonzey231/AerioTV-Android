@@ -23,6 +23,14 @@ import androidx.room.PrimaryKey
         Index(value = ["playlistId"]),
         Index(value = ["playlistId", "channelId"]),
         Index(value = ["endMillis"]),
+        // The launch guide read (EpgProgrammeDao.forPlaylistInWindow) filters
+        // `playlistId = ? AND endMillis > ? AND startMillis < ?`. SQLite uses
+        // one index per table reference, so without this composite it seeks on
+        // playlistId alone and then visits EVERY row the playlist owns: the
+        // Streamer paid 7605 ms for a 2-day window over a 267K-row table
+        // (gtvlogs/session7.txt 14:29:17.640). Equality column first, range
+        // column second, which is the order SQLite can use for both.
+        Index(value = ["playlistId", "endMillis"]),
         // Task #137: one row per (source, channel, start slot). With
         // OnConflictStrategy.REPLACE on insertAll, a fresh feed's copy of an
         // already-cached programme replaces it in place instead of

@@ -27,6 +27,9 @@ object AppLaunchTrace {
     @Volatile private var channelsAtMs = 0L
     @Volatile private var programsAtMs = 0L
     @Volatile private var programRows = 0
+    @Volatile private var vodAtMs = 0L
+    @Volatile private var vodDecodeMs = 0L
+    @Volatile private var dvrAtMs = 0L
     @Volatile private var settledAtMs = 0L
     @Volatile private var printed = false
 
@@ -44,6 +47,24 @@ object AppLaunchTrace {
             programRows = rows
         }
         maybePrint()
+    }
+
+    /**
+     * The saved Movies / TV Shows library is on screen. [decodeMs] is how long
+     * the snapshot file took to read and decode, which is the part a slow box
+     * pays: the Streamer spent 3.1 s on it (gtvlogs/session7.txt, restore at
+     * 14:29:32.223 against a settle at 14:29:29.121).
+     */
+    fun noteVodRestored(decodeMs: Long) {
+        if (vodAtMs == 0L) {
+            vodAtMs = sinceStart()
+            vodDecodeMs = decodeMs
+        }
+    }
+
+    /** The saved DVR recordings are on screen. */
+    fun noteDvrRestored() {
+        if (dvrAtMs == 0L) dvrAtMs = sinceStart()
     }
 
     /** [AppSettleGate] has declared the launch quiet. */
@@ -64,6 +85,12 @@ object AppLaunchTrace {
         val programs =
             if (programsAtMs == 0L) "n/a" else "+${programsAtMs}ms (rows $programRows)"
         val channels = if (channelsAtMs == 0L) "n/a" else "+${channelsAtMs}ms"
-        Log.i(TAG, "[LAUNCH] channels $channels, guide programs $programs, settle +${settledAtMs}ms")
+        val dvr = if (dvrAtMs == 0L) "n/a" else "+${dvrAtMs}ms"
+        val vod = if (vodAtMs == 0L) "n/a" else "+${vodAtMs}ms (decode ${vodDecodeMs}ms)"
+        Log.i(
+            TAG,
+            "[LAUNCH] channels $channels, guide programs $programs, dvr $dvr, " +
+                "movies/tv $vod, settle +${settledAtMs}ms",
+        )
     }
 }

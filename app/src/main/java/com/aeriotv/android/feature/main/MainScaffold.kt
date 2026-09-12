@@ -520,6 +520,25 @@ fun MainScaffold(
         }
     }
 
+    // Companion remote X (GH #33). Popping the player back to MAIN is only
+    // half of "exit to Live TV": the tab shell keeps whatever tab was selected
+    // when playback started, so an X pressed while the shell sat on Movies /
+    // TV Shows landed there. Measured on the Streamer 2026-09-12
+    // (gtvlogs/session7.txt): "companion stop: playback stopped, exiting to
+    // Live TV" at 14:25:23.138 is followed at 14:25:24.016 by
+    // "[PROGRESS] target series=277738 -> s=1 e=1 reason=resume row", which is
+    // the media page's hero recomputing because THAT is what came back up.
+    // Logan: "X did not return the TV to Live TV guide on the first attempt.
+    // It worked correctly on the 2nd attempt" -- the second attempt worked
+    // because by then Live TV was already the selected tab. Selecting the tab
+    // explicitly makes the first X land, from any tab.
+    LaunchedEffect(Unit) {
+        viewModel.liveTvTabRequests.collect {
+            selectedTab = AppTab.LiveTV
+            initialTabApplied = true
+        }
+    }
+
     // Back from any secondary tab returns to the HOME tab instead of exiting
     // the app. Home is the user's Default Tab when it is set and present
     // (GH #81: a Favorites-first user expects Back to land on Favorites,

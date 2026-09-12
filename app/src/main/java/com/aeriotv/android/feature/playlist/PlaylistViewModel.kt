@@ -58,6 +58,10 @@ class PlaylistViewModel @Inject constructor(
     private val exoHolder: com.aeriotv.android.core.playback.AerioExoPlayerHolder,
     private val exoWindowState: com.aeriotv.android.feature.player.ExoWindowState,
     private val miniPlayerSession: com.aeriotv.android.feature.miniplayer.MiniPlayerSession,
+    // Launch ordering only: the guide announces its cached paint here so the
+    // other sections' CACHED restores can start right behind it instead of
+    // waiting out the 20 s settle delay (see AppSettleGate.awaitGuidePainted).
+    private val settleGate: com.aeriotv.android.core.app.AppSettleGate,
 ) : ViewModel() {
 
     enum class Phase { Bootstrapping, NeedsUrl, ChannelsReady }
@@ -256,6 +260,27 @@ class PlaylistViewModel @Inject constructor(
             onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
         )
     val guideJumpRequests: SharedFlow<DeepLinkTarget.GuideProgram> = _guideJumpRequests.asSharedFlow()
+
+    /**
+     * Companion remote X (GH #33): "put the tab shell back on Live TV".
+     *
+     * Separate from [guideJumpRequests] because there is no programme to jump
+     * to and because this one must NOT replay: a replayed value would yank a
+     * later, deliberate tab choice back to Live TV the next time MainScaffold
+     * recomposed its collector.
+     */
+    private val _liveTvTabRequests =
+        kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+            replay = 0,
+            extraBufferCapacity = 1,
+            onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+        )
+    val liveTvTabRequests: SharedFlow<Unit> = _liveTvTabRequests.asSharedFlow()
+
+    /** Select the Live TV tab (companion X / exit-to-Live-TV). */
+    fun requestLiveTvTab() {
+        _liveTvTabRequests.tryEmit(Unit)
+    }
 
     /** Called when a Search EPG result is tapped: stash + broadcast the
      *  jump, and force the group filter back to All so the target channel is
@@ -666,6 +691,11 @@ class PlaylistViewModel @Inject constructor(
             if (_state.value.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog) {
                 rebuildGuideCatalog(playlist, "history")
             }
+            // Belt and braces for the early-return paths inside doLoadEpg (no
+            // EPG configured, read threw): the signal is sticky, so a second
+            // call after the paint already announced it is a no-op, and the
+            // other sections never sit out the 12 s cap for nothing.
+            settleGate.noteGuidePainted()
         }
     }
 
@@ -951,6 +981,10 @@ class PlaylistViewModel @Inject constructor(
             AppLaunchTrace.noteGuidePrograms(cached.size)
             publishCachedEpgSpan(playlist)
         }
+        // Release the other sections' cached restores whether or not there WAS
+        // a cache to paint: a fresh install has no guide rows, and On Demand
+        // must not sit behind a paint that is never coming.
+        settleGate.noteGuidePainted()
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
         // A cache written by a build with a known cache-corrupting defect must

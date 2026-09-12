@@ -59,6 +59,7 @@ class AppSettleGate @Inject constructor() {
     val settled: StateFlow<Boolean> = _settled.asStateFlow()
 
     private val guideRendered = MutableStateFlow(false)
+    private val guidePainted = MutableStateFlow(false)
     private var settleJob: Job? = null
 
     init {
@@ -95,6 +96,43 @@ class AppSettleGate @Inject constructor() {
     }
 
     /**
+     * Called once the guide's CACHED programmes are installed in the catalog
+     * (PlaylistViewModel.doLoadEpg). Sticky for the process.
+     */
+    fun noteGuidePainted() {
+        if (!guidePainted.value) {
+            guidePainted.value = true
+            Log.i(TAG, "guide painted")
+        }
+    }
+
+    /**
+     * Suspends only until the guide's cached paint has landed, capped at
+     * [GUIDE_PAINT_WAIT_MAX_MS].
+     *
+     * This is the gate for restoring OTHER sections' CACHED data, and it is
+     * deliberately NOT [awaitSettled]. Measured on the Streamer 2026-09-12
+     * (gtvlogs/session7.txt): the On Demand snapshot restore waited on the
+     * settle signal, so "[VOD-CACHE] restored 40015 movies, 11780 series"
+     * printed at 14:29:32.223, a full 3.1 s AFTER "settled (+20005 ms)" at
+     * 14:29:29.121 and 25 s after process start. Opening Movies or TV Shows
+     * inside that window showed an empty grid even though the library was
+     * sitting on disk, which is exactly Logan's "loading EPG, DVR, Movies and
+     * TV Shows is a different story". Cached data must be VISIBLE immediately;
+     * only the NETWORK sweep waits for settle (see scheduleBackgroundSweep).
+     *
+     * Waiting for the guide paint rather than starting at zero keeps the
+     * round-2 finding intact: decoding the 30 MB library on top of the guide's
+     * Room read is what starved the guide in session6. The paint lands at
+     * +1.3 s on the phone and +10.9 s on the Streamer, both far short of 20 s,
+     * and the cap keeps a launch straight into Movies from ever waiting on a
+     * guide that is not coming.
+     */
+    suspend fun awaitGuidePainted() {
+        withTimeoutOrNull(GUIDE_PAINT_WAIT_MAX_MS) { guidePainted.first { it } }
+    }
+
+    /**
      * True while a background sweep may do a unit of work: foreground, and no
      * tune still waiting on its first frame. Delegates to [EpgSweepGate],
      * which the player screen and the scaffold already drive, so every
@@ -125,6 +163,9 @@ class AppSettleGate @Inject constructor() {
         const val TAG = "AppSettleGate"
         const val SETTLE_DELAY_MS = 20_000L
         const val GUIDE_WAIT_MAX_MS = 20_000L
+        /** Long enough for a cold Streamer guide paint, short enough that a
+         *  launch which never paints one is not held hostage by it. */
+        const val GUIDE_PAINT_WAIT_MAX_MS = 12_000L
         const val WINDOW_POLL_MS = 500L
     }
 }

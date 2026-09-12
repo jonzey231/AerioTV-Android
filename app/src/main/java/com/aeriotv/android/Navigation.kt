@@ -308,11 +308,29 @@ fun AerioTVNavHost(
                     onDeepLinkConsumed()
                 }
                 is DeepLinkTarget.ExitPlayer -> {
-                    // Companion X: pop the live / VOD / recording player (and any
-                    // detail pushed under it) so the tab shell is on top again,
-                    // which lands the TV back on Live TV. Nothing to do when the
-                    // tabs are already showing.
-                    if (dlCurrentEntry?.destination?.route != Routes.MAIN) {
+                    // Companion X: pop the live / VOD / recording player (and
+                    // any detail pushed under it) so the tab shell is on top
+                    // again, AND put that shell on Live TV.
+                    //
+                    // Popping alone was not enough (Logan 2026-09-12, Streamer:
+                    // "X did not return the TV to Live TV guide on the first
+                    // attempt. It worked correctly on the 2nd attempt"). MAIN
+                    // keeps its own selected tab, so an X pressed while the
+                    // shell sat on Movies / TV Shows came back to that page:
+                    // gtvlogs/session7.txt has "companion stop: playback
+                    // stopped, exiting to Live TV" at 14:25:23.138 followed at
+                    // 14:25:24.016 by "[PROGRESS] target series=277738", the
+                    // media page hero recomputing. The second attempt "worked"
+                    // only because Live TV was the selected tab by then.
+                    //
+                    // Request the tab BEFORE popping so the shell is already on
+                    // Live TV when it becomes visible, rather than flashing the
+                    // page the user left.
+                    dlVm.requestLiveTvTab()
+                    // navController's OWN current destination, not the
+                    // composition snapshot dlCurrentEntry, which can still hold
+                    // the pre-pop entry on the frame this effect runs.
+                    if (navController.currentDestination?.route != Routes.MAIN) {
                         runCatching { navController.popBackStack(Routes.MAIN, false) }
                     }
                     onDeepLinkConsumed()

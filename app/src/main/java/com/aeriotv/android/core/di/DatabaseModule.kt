@@ -376,6 +376,28 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * Composite index for the launch guide read, measured on the Google TV
+     * Streamer 2026-09-12 (gtvlogs/session7.txt): "painted 20171 cached
+     * programmes (read 7605ms, bridge 147ms)" at 14:29:17.640, against the
+     * Nothing Phone's "(read 272ms, bridge 26ms)" for 16693 rows at
+     * 14:29:04.388. SQLite uses ONE index per table reference, so
+     * forPlaylistInWindow's `playlistId = ? AND endMillis > ? AND
+     * startMillis < ?` picked a playlistId-prefixed index, matched every row
+     * the playlist owns (roughly 267K on this box) and filtered the time range
+     * row by row. `(playlistId, endMillis)` makes the equality plus the range
+     * a single index seek, so the rows before the window are never visited.
+     * Index only: no column or table shape changes.
+     */
+    private val MIGRATION_30_31 = object : Migration(30, 31) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_epg_programme_playlistId_endMillis` " +
+                    "ON `epg_programme` (`playlistId`, `endMillis`)"
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -384,7 +406,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 

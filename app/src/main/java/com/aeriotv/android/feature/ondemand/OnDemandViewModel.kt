@@ -376,7 +376,9 @@ class OnDemandViewModel @Inject constructor(
             // open). Playlist switches, Refresh Everything and pull to refresh
             // still sweep unconditionally through refresh()/refreshSeries().
             val playlist = playlistRepository.activePlaylist()
+            val decodeStartedAt = android.os.SystemClock.elapsedRealtime()
             val snap = playlist?.let { snapshotStore.load(snapshotStore.identity(it)) }
+            val decodeMs = android.os.SystemClock.elapsedRealtime() - decodeStartedAt
             if (snap != null) {
                 _state.update {
                     it.copy(
@@ -390,7 +392,12 @@ class OnDemandViewModel @Inject constructor(
                 val now = System.currentTimeMillis()
                 val ageMs = now - snap.savedAtMs
                 val limitMs = appPreferences.vodLibraryRefreshHours.first() * 3_600_000L
-                Log.i(TAG, "[VOD-CACHE] restored ${snap.movies.size} movies, ${snap.series.size} series from ${ageMs / 60_000} min ago")
+                Log.i(
+                    TAG,
+                    "[VOD-CACHE] restored ${snap.movies.size} movies, ${snap.series.size} series " +
+                        "from ${ageMs / 60_000} min ago (decode ${decodeMs}ms)",
+                )
+                com.aeriotv.android.core.app.AppLaunchTrace.noteVodRestored(decodeMs)
                 // Gate each kind on ITS OWN completion stamp: the movie sweep
                 // saves the file while the series sweep is still walking, so
                 // a series sweep killed mid-walk (app update, force stop) left
@@ -611,17 +618,25 @@ class OnDemandViewModel @Inject constructor(
         startLibraryPipeline(isMovie = true)
         startLibraryPipeline(isMovie = false)
         deferredStart = viewModelScope.launch {
-            // Measured on the Streamer 2026-09-12 (gtvlogs/session6.txt): the
-            // old fixed 6 s deferral landed the snapshot restore squarely on
-            // top of the guide's cached EPG paint. Reading and decoding a
-            // 30 MB library JSON allocates well over 100 MB (GC at 14:19:32.219
-            // freed "7(120MB) LOS objects"), and the resulting GC storm starved
-            // the EPG Room read + bridge so the guide stayed empty from
-            // 14:19:24.4 to 14:19:46.9. Nothing about restoring the On Demand
-            // library is urgent unless the user opens that tab, which
-            // [ensureLoaded] still short-circuits, so wait for the settle
-            // signal instead of a wall-clock guess.
-            settleGate.awaitSettled()
+            // Round 2 (gtvlogs/session6.txt) moved this off a fixed 6 s
+            // deferral because reading and decoding the 30 MB library JSON on
+            // top of the guide's EPG read starved the guide for twenty seconds
+            // (GC at 14:19:32.219 freed "7(120MB) LOS objects").
+            //
+            // Round 3 (gtvlogs/session7.txt) shows that waiting for the SETTLE
+            // signal overshot: "[VOD-CACHE] restored 40015 movies, 11780
+            // series" printed at 14:29:32.223, after "settled (+20005 ms)" at
+            // 14:29:29.121, so Movies and TV Shows had nothing on screen for
+            // the first 25 s of the launch (Logan 2026-09-12: "Loading EPG,
+            // DVR, Movies, and TV Shows is a different story"). The settle
+            // signal gates NETWORK sweeps, never a cached restore.
+            //
+            // The guide's cached paint is the real ordering constraint, and it
+            // lands at +1.3 s on the phone and +10.9 s on the Streamer, so
+            // waiting on it keeps round 2's finding and still puts the library
+            // on screen many seconds earlier. [ensureLoaded] short-circuits
+            // this entirely when the user opens the tab first.
+            settleGate.awaitGuidePainted()
             startInitialLoads()
         }
         // React to the active playlist changing (switch) or being deleted.

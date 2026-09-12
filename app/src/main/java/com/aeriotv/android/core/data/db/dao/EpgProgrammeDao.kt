@@ -26,9 +26,14 @@ interface EpgProgrammeDao {
      * window AND end inside it are kept; ones that start inside the window
      * AND end after it are kept; ones fully inside are kept).
      *
-     * The `endMillis > :fromMillis` clause hits the existing index on
-     * `endMillis` (declared on the entity), so the scan stays cheap even on
-     * a 200K-row table.
+     * Served by the composite `(playlistId, endMillis)` index on the entity.
+     * That index is load bearing: SQLite uses ONE index per table reference,
+     * so with only the single-column `playlistId` and `endMillis` indices to
+     * choose from it seeks on playlistId and then visits every row the
+     * playlist owns to filter the time range. Measured on the Google TV
+     * Streamer 2026-09-12 (gtvlogs/session7.txt 14:29:17.640): 7605 ms to
+     * return a two-day window out of a 267K-row table. Do not remove the
+     * composite index without re-measuring this read.
      */
     @Query(
         "SELECT * FROM epg_programme WHERE playlistId = :playlistId " +
