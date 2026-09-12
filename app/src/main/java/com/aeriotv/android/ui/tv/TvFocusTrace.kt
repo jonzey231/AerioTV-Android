@@ -61,9 +61,12 @@ object TvFocusTrace {
         Log.i(TAG, "[KEY] $key consumed=$consumed by=$by")
     }
 
-    /** The return-from-detail restore: what the page put back and where it aimed. */
-    fun restore(returnOffset: String, row: Int, col: Int) {
-        Log.i(TAG, "[RESTORE] returnOffset=$returnOffset row=$row col=$col")
+    /** The return-from-detail restore: what the page put back, where it aimed,
+     *  and WHICH element opened the detail ("hero:Details", "shelf:2",
+     *  "grid r0 c1"). The source is the authority on where focus goes back
+     *  (Logan 2026-09-11: hero Details returned to the grid or to the tab bar). */
+    fun restore(returnOffset: String, row: Int, col: Int, source: String) {
+        Log.i(TAG, "[RESTORE] returnOffset=$returnOffset row=$row col=$col source=$source")
     }
 
     /** Up/Down/Left/Right/Back only; null for every other key so the trace

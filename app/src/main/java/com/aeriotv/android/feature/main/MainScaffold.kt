@@ -165,6 +165,14 @@ val LocalTvTabEntryFocus = staticCompositionLocalOf<androidx.compose.runtime.Mut
     androidx.compose.runtime.mutableStateOf(null)
 }
 
+/** Move focus to the CURRENTLY SELECTED tab's pill, returning whether it
+ *  landed. Back from a TV page's content uses it: the first Back parks focus
+ *  on the page's own pill (Movies / TV Shows / DVR) and only a second Back,
+ *  with the bar focused, reaches the scaffold's "Back goes to the home tab"
+ *  rule (Logan 2026-09-11: Back on the hero jumped straight to Live TV).
+ *  `null` on the phone shell. */
+val LocalTvRequestCurrentTabPill = staticCompositionLocalOf<(() -> Boolean)?> { null }
+
 /**
  * TV chrome-collapse channel. Content screens write `true` while the user is
  * scrolled down a long surface (the On Demand poster grids first) and the top
@@ -698,6 +706,17 @@ fun MainScaffold(
         androidx.compose.runtime.SideEffect {
             focusPill.value = { tab -> runCatching { pillRequesters[tab]?.requestFocus() } }
         }
+        // The same requesters, as a "focus MY tab's pill" call for TV page
+        // content (Back out of a page lands on the bar, not on Live TV).
+        // One stable lambda: a new one each recomposition would invalidate
+        // every reader of this static CompositionLocal.
+        val pillRequestersRef = androidx.compose.runtime.rememberUpdatedState(pillRequesters)
+        val requestCurrentTabPill: () -> Boolean = remember {
+            {
+                val r = pillRequestersRef.value[selectedTab]
+                r != null && runCatching { r.requestFocus() }.isSuccess
+            }
+        }
         // Chrome-collapse channel: long content surfaces (the On Demand grids)
         // set this true while scrolled down so the tab bar shrinks away. See
         // LocalTvChromeCollapsed for why the bar collapses instead of unmounting.
@@ -710,6 +729,7 @@ fun MainScaffold(
             LocalTvTopNavFocusRequester provides topNavRequester,
             LocalTvTopNavHasFocus provides topNavHasFocusState,
             LocalTvTabEntryFocus provides tabEntryFocus,
+            LocalTvRequestCurrentTabPill provides requestCurrentTabPill,
             LocalTvChromeCollapsed provides chromeCollapsed,
             LocalTvChromeScroll provides chromeScroll,
             LocalTvFullScreenOverlay provides fullScreenOverlay,

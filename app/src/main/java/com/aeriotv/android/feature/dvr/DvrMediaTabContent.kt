@@ -705,6 +705,9 @@ private fun TvDvrPage(
         val m = ((rec.endMillis - rec.startMillis) / 60_000L).toInt()
         return if (m >= 60) "${m / 60} h ${m % 60} min" else "$m min"
     }
+    // A hero action opens a ROUTE over MAIN: arm the return state so Back
+    // lands back on the button that was pressed (the page records WHICH one).
+    val armHero: () -> Unit = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.arm("dvr", null, gridState) }
     fun hero(rec: Rec): com.aeriotv.android.feature.movies.tv.TvHeroPage {
         val recording = rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording
         val progress = progressOf(rec)
@@ -716,17 +719,17 @@ private fun TvDvrPage(
         val buttons = buildList {
             if (recording) {
                 if (canPlay) {
-                    add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Watch from Start", Icons.Filled.PlayArrow, primary = true) { onPlayFromStart(rec) })
-                    add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Jump to Live", Icons.Filled.Sensors) { onJumpToLive(rec) })
+                    add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Watch from Start", Icons.Filled.PlayArrow, primary = true, id = "Primary") { armHero(); onPlayFromStart(rec) })
+                    add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Jump to Live", Icons.Filled.Sensors, id = "JumpToLive") { armHero(); onJumpToLive(rec) })
                 }
-                add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Stop Recording", Icons.Filled.Stop) { onStop(rec) })
+                add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Stop Recording", Icons.Filled.Stop, id = "Stop") { onStop(rec) })
             } else {
-                add(com.aeriotv.android.feature.movies.tv.TvHeroButton(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true) { onPlay(rec) })
-                if (progress > 0f) add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Play from Beginning", Icons.Filled.Replay) { onPlayFromStart(rec) })
+                add(com.aeriotv.android.feature.movies.tv.TvHeroButton(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, id = "Primary") { armHero(); onPlay(rec) })
+                if (progress > 0f) add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Play from Beginning", Icons.Filled.Replay, id = "FromStart") { armHero(); onPlayFromStart(rec) })
             }
             // Details is appended after the recording / finished branch, so a
             // recording-now page has it too (DVRView.swift:1620-1625).
-            add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Details", Icons.Outlined.Info) { onInfo(rec) })
+            add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Details", Icons.Outlined.Info, id = "Details") { armHero(); onInfo(rec) })
         }
         return com.aeriotv.android.feature.movies.tv.TvHeroPage(
             key = rec.id, title = rec.title.ifBlank { "Recording" }, artUrl = rec.backdropUrl ?: rec.posterUrl, logoUrl = channelLogo(rec),
@@ -763,7 +766,12 @@ private fun TvDvrPage(
     }
     fun shelf(title: String, items: List<Rec>, onClick: (Rec) -> Unit) = com.aeriotv.android.feature.movies.tv.TvShelf(
         title = title, items = items, key = { it.id }, cardWidth = 170.dp,
-    ) { rec, modifier -> card(rec, modifier) { onClick(rec) } }
+    ) { rec, modifier ->
+        card(rec, modifier) {
+            com.aeriotv.android.feature.movies.tv.TvReturnMemory.arm("dvr", rec.id, gridState)
+            onClick(rec)
+        }
+    }
     // tvOS heroPages: Continue Watching when it has more than one entry,
     // else the single heroRecording pick, which falls through a playable
     // in-progress capture, any in-progress capture, the newest partly-watched
@@ -814,10 +822,9 @@ private fun TvDvrPage(
         gridKey = { it.id },
         cell = { rec, cellScope ->
             card(rec, cellScope.modifier) {
-                com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] = rec.id
-                // Return to the exact offset (tvOS keeps the tab alive).
-                com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingOffset["dvr"] =
-                    gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+                // Return to the exact offset AND to the focusable that opened
+                // it (tvOS keeps the tab alive).
+                com.aeriotv.android.feature.movies.tv.TvReturnMemory.arm("dvr", rec.id, gridState)
                 onPlay(rec)
             }
         },
@@ -837,6 +844,8 @@ private fun TvDvrPage(
         filterOpen = filterOpen,
         returnKey = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending["dvr"] },
         returnOffset = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingOffset["dvr"] },
-        onReturnHandled = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pending.remove("dvr"); com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingOffset.remove("dvr") },
+        returnSource = remember { com.aeriotv.android.feature.movies.tv.TvReturnMemory.pendingSource["dvr"] },
+        onReturnHandled = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.clear("dvr") },
+        pageId = "dvr",
     )
 }

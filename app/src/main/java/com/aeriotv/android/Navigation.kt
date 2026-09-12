@@ -326,6 +326,19 @@ fun AerioTVNavHost(
         }
     }
 
+    // Is MAIN (the tab shell) the TOP destination? A detail or player route
+    // pushed over it leaves the tab composed and still flagged active
+    // (LocalTabIsActive), so the TV media pages' focus watchdog used to
+    // "recover" focus 200 ms into the push and yank it off the hero button
+    // that had just been pressed (Logan 2026-09-11, Streamer: TV Shows hero
+    // Details -> hero:Play S1 E1 by=focus-watchdog). Pages gate the watchdog
+    // on this instead of guessing.
+    val mainIsTopState = remember { mutableStateOf(true) }
+    val mainIsTopNow = dlCurrentEntry?.destination?.route == Routes.MAIN
+    androidx.compose.runtime.SideEffect {
+        if (mainIsTopState.value != mainIsTopNow) mainIsTopState.value = mainIsTopNow
+    }
+    CompositionLocalProvider(LocalMainIsTopDestination provides mainIsTopState) {
     Box(modifier = Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = Routes.PLAYLIST_GRAPH) {
         navigation(startDestination = Routes.BOOTSTRAP, route = Routes.PLAYLIST_GRAPH) {
@@ -1837,7 +1850,16 @@ fun AerioTVNavHost(
             }
         }
     }
+    }
 }
+
+/** True while MAIN (the tab shell) is the TOP nav destination: false the
+ *  instant a detail, player or settings route is pushed over it. TV pages
+ *  read it to tell "the tab lost focus because a route is opening" from
+ *  "focus was lost and nothing holds it" (see the focus watchdog in
+ *  TvMediaPage). Always true on the phone shell's default. */
+val LocalMainIsTopDestination: androidx.compose.runtime.ProvidableCompositionLocal<androidx.compose.runtime.State<Boolean>> =
+    androidx.compose.runtime.staticCompositionLocalOf { mutableStateOf(true) }
 
 @Composable
 private fun BootstrapSplash() {

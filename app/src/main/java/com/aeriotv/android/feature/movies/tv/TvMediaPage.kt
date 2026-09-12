@@ -135,6 +135,28 @@ import kotlinx.coroutines.launch
  */
 
 /**
+ * WHICH focusable on a TV page opened the detail (or player) now on top of
+ * it. Restored verbatim on the way back: a hero button by its STABLE id (the
+ * primary button's LABEL changes, "Play" / "Resume" / "Play S1 E1"), a shelf
+ * card by shelf and index, a grid cell by row and column.
+ */
+sealed interface TvReturnSource {
+    data class Hero(val pageKey: Any, val buttonId: String) : TvReturnSource
+    data class Shelf(val shelf: Int, val index: Int) : TvReturnSource
+    data class Grid(val row: Int, val col: Int) : TvReturnSource
+
+    /** The [TvFocusTrace] spelling: "hero:Details", "shelf:2", "grid r0 c1". */
+    fun label(): String = when (this) {
+        is Hero -> "hero:" + buttonId
+        is Shelf -> "shelf:" + shelf + ":" + index
+        is Grid -> "grid r" + row + " c" + col
+    }
+}
+
+/** The hero-button requester key: the hero PAGE plus the button's stable id. */
+internal fun tvHeroSourceKey(pageKey: Any, buttonId: String): String = "$pageKey|$buttonId"
+
+/**
  * Which cell opened the detail (or player) now on top of a TV page, per
  * page. In-process only: the tab is disposed while the route sits on top,
  * and its rememberSaveable slot did not come back on the Streamer, so the
@@ -142,6 +164,38 @@ import kotlinx.coroutines.launch
  */
 object TvReturnMemory {
     val pending = androidx.compose.runtime.mutableStateMapOf<String, Any>()
+    /** WHERE the detail was opened from, per page: the hero button, the shelf
+     *  card or the grid cell that was focused when it was armed. The offset
+     *  alone is not enough (Logan 2026-09-11: hero Details on Movies came back
+     *  on the tab bar, on TV Shows on grid r0c0); focus goes back to THIS. */
+    val pendingSource = HashMap<String, TvReturnSource>()
+    /** Live focus position on each page, written by every focus gain. [arm]
+     *  freezes it into [pendingSource]. Not observed: plain map writes. */
+    val focusSource = HashMap<String, TvReturnSource>()
+    /** uptimeMillis of the last activation (OK / Select, or an [arm]) on a TV
+     *  page. The focus watchdog ignores the 600 ms after it: a route being
+     *  pushed over MAIN legitimately takes focus away from the page. */
+    @Volatile
+    var lastActivateAtMs: Long = 0L
+
+    /** Arm the return state before navigating away: the opened item's key, the
+     *  grid offset and the focused source. Every TV page call site uses this
+     *  so no route can be pushed without a return target. */
+    fun arm(pageId: String, key: Any?, gridState: LazyGridState) {
+        lastActivateAtMs = android.os.SystemClock.uptimeMillis()
+        if (key != null) pending[pageId] = key else pending.remove(pageId)
+        pendingOffset[pageId] = gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+        val src = focusSource[pageId]
+        if (src != null) pendingSource[pageId] = src else pendingSource.remove(pageId)
+    }
+
+    /** Drop everything armed for [pageId] (the page has restored). */
+    fun clear(pageId: String) {
+        pending.remove(pageId)
+        pendingOffset.remove(pageId)
+        pendingSource.remove(pageId)
+    }
+
     /** The grid's (firstVisibleItemIndex, firstVisibleItemScrollOffset) at the
      *  moment that cell was opened. tvOS never disposes the tab, so the page
      *  comes back at the exact offset (MoviesView.swift:221, 259-279); this is
@@ -162,6 +216,10 @@ data class TvHeroButton(
     val label: String,
     val icon: ImageVector,
     val primary: Boolean = false,
+    /** STABLE across label changes ("Play" / "Resume" / "Play S1 E1" are all
+     *  the primary button): the return-focus source records this, not the
+     *  label. Defaults to the label for buttons whose copy never moves. */
+    val id: String = label,
     val onClick: () -> Unit,
 )
 
@@ -246,6 +304,10 @@ fun <T> TvMediaPage(
     /** Where the grid stood when [returnKey] was opened (index, offset px):
      *  restored verbatim when it is still in range, else the row-park below. */
     returnOffset: Pair<Int, Int>? = null,
+    /** Which focusable opened the detail: focus goes back to exactly this
+     *  (the hero button by id first, else the shelf card, else the grid
+     *  cell). Null = the pre-source behaviour, the grid cell alone. */
+    returnSource: TvReturnSource? = null,
     onReturnHandled: () -> Unit = {},
     /** tvOS Movies gates the rail on an empty search field (MoviesView.swift:1854);
      *  DVR does NOT (DVRView.swift:517), so it is a parameter, not an invariant. */
@@ -258,6 +320,9 @@ fun <T> TvMediaPage(
      *  Filter circle (tvOS fullScreenCover never tore the tab's focus state
      *  down, MoviesView.swift:3503). */
     filterOpen: Boolean = false,
+    /** Stable per-tab id ("Movies", "TVShows", "dvr"): the key this page
+     *  records its focused source under in [TvReturnMemory]. */
+    pageId: String = "",
 ) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -273,6 +338,12 @@ fun <T> TvMediaPage(
     val pillRow = !isSearching && pills.isNotEmpty()
     val leadingCount = headerIndex + 1 + (if (isSearching) searchExtras.size else 0) + (if (pillRow) 1 else 0)
 
+    /** Does anything inside this page's root Box hold focus? Read by the Back
+     *  ladder and by the focus watchdog below. */
+    val pageHasFocus = remember { mutableStateOf(false) }
+    val topNavHasFocus = com.aeriotv.android.feature.main.LocalTvTopNavHasFocus.current
+    /** Move focus to this tab's own pill in the TV nav bar (null on phone). */
+    val requestTabPill = com.aeriotv.android.feature.main.LocalTvRequestCurrentTabPill.current
     val heroPrimary = remember { FocusRequester() }
     val firstCell = remember { FocusRequester() }
     /** The All pill: where the pill row is entered from above or below (Logan 2026-09-10). */
@@ -668,6 +739,13 @@ fun <T> TvMediaPage(
         }
     }
     val cellRequesters = remember { HashMap<Any, FocusRequester>() }
+    /** Hero action buttons by [tvHeroSourceKey] and shelf cards by
+     *  "shelf|index": the return-focus source addresses them directly. Every
+     *  hero page is composed (the carousel is an offset Row, not a pager), so
+     *  a requester for an off-screen page is attached and focusing it slides
+     *  the carousel to that page through the button's own focus callback. */
+    val heroButtonRequesters = remember { HashMap<String, FocusRequester>() }
+    val shelfCardRequesters = remember { HashMap<String, FocusRequester>() }
     var sortOpen by remember { mutableStateOf(false) }
     val menuGuard = rememberTvMenuGuard()
 
@@ -739,6 +817,27 @@ fun <T> TvMediaPage(
         TvFocusTrace.key("Back", true, "page-close-search")
         closeOrToggleSearch()
     }
+    // Back from the page's own content (hero, header, pills, grid, rail) with
+    // the tab bar NOT focused: park focus on THIS tab's pill (Logan
+    // 2026-09-11, case C: Back on the hero went straight to Live TV). A
+    // second Back, with the bar focused, falls through to the scaffold's
+    // "Back returns to the home tab" rule, which is unchanged; Live TV has
+    // its own Back ladder and is not a TvMediaPage.
+    // Composed BEFORE the snap-to-top handler on purpose: the most recently
+    // added enabled callback wins, so while the page is scrolled Back still
+    // snaps to the top first (the guide's ladder) and only then walks out.
+    // The two focus States are read inside TvPageBackToTabBar's OWN
+    // recomposition scope: reading them here would recompose the whole page
+    // every time focus entered or left it.
+    TvPageBackToTabBar(
+        enabled = LocalTabIsActive.current && !(searchEnabled && searchActive) && requestTabPill != null,
+        pageHasFocus = pageHasFocus,
+        topNavHasFocus = topNavHasFocus,
+    ) {
+        val landed = requestTabPill?.invoke() == true
+        TvFocusTrace.key("Back", landed, "page-to-tab-pill")
+        if (!landed) runCatching { topNav?.requestFocus() }
+    }
     androidx.activity.compose.BackHandler(enabled = LocalTabIsActive.current && scrolled && !(searchEnabled && searchActive)) {
         TvFocusTrace.key("Back", true, "page-snap-to-top")
         scope.launch {
@@ -757,8 +856,48 @@ fun <T> TvMediaPage(
     // first, this takes focus back when the cell composes. Bounded at ~5 s.
     val hasItems = gridItems.isNotEmpty()
     val restoreGapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 24.dp.roundToPx() }
-    LaunchedEffect(returnKey, hasItems) {
-        val key = returnKey ?: return@LaunchedEffect
+    // Return from a detail: focus goes back to the SOURCE that opened it
+    // (Logan 2026-09-11). A hero button and a shelf card live above the grid,
+    // so they need no library at all and they send their own anchor; only a
+    // grid source waits for the items and restores the recorded offset.
+    LaunchedEffect(returnKey, returnSource, hasItems) {
+        val source = returnSource
+        val key = returnKey
+        if (source == null && key == null) return@LaunchedEffect
+        /** Try [req] every frame for [frames] frames: the node it addresses is
+         *  composed a few frames after the page comes back. */
+        suspend fun land(frames: Int, req: () -> FocusRequester?): Boolean {
+            repeat(frames) {
+                withFrameNanos { }
+                val r = req()
+                if (r != null && runCatching { r.requestFocus() }.getOrNull() == true) return true
+            }
+            return false
+        }
+        if (source is TvReturnSource.Hero) {
+            TvFocusTrace.restore("hero", -1, -1, source.label())
+            // Hero sits at offset 0: the Hero anchor is the matching move.
+            sendAnchor(TvPageAnchor.Hero, "return-hero")
+            val landed = land(150) {
+                heroButtonRequesters[tvHeroSourceKey(source.pageKey, source.buttonId)]
+                    // The hero pages were rebuilt with different keys (a
+                    // Continue Watching row moved): same button, first page.
+                    ?: heroButtonRequesters.entries
+                        .firstOrNull { it.key.endsWith("|" + source.buttonId) }?.value
+            }
+            if (!landed) runCatching { entry.requestFocus() }
+            onReturnHandled()
+            return@LaunchedEffect
+        }
+        if (source is TvReturnSource.Shelf) {
+            TvFocusTrace.restore("shelf", -1, -1, source.label())
+            sendAnchor(TvPageAnchor.Shelf(source.shelf), "return-shelf")
+            val landed = land(150) { shelfCardRequesters["${source.shelf}|${source.index}"] }
+            if (!landed) runCatching { entry.requestFocus() }
+            onReturnHandled()
+            return@LaunchedEffect
+        }
+        if (key == null) { onReturnHandled(); return@LaunchedEffect }
         if (!hasItems) return@LaunchedEffect
         val idx = gridItems.indexOfFirst { gridKey(it) == key }
         if (idx < 0) { onReturnHandled(); return@LaunchedEffect }
@@ -766,21 +905,16 @@ fun <T> TvMediaPage(
         // the fallback when the recorded index no longer exists after a
         // library change.
         val exact = returnOffset?.takeIf { it.first < leadingCount + gridItems.size }
+        val sourceLabel = (source ?: TvReturnSource.Grid(idx / columns, idx % columns)).label()
         if (exact != null) {
-            TvFocusTrace.restore("${exact.first}/${exact.second}", idx / columns, idx % columns)
+            TvFocusTrace.restore("${exact.first}/${exact.second}", idx / columns, idx % columns, sourceLabel)
             sendAnchor(TvPageAnchor.Restore(exact.first, exact.second), "return-exact")
         } else {
             // tvOS parks the row 24 pt under the top edge, not flush with it.
-            TvFocusTrace.restore("park", idx / columns, idx % columns)
+            TvFocusTrace.restore("park", idx / columns, idx % columns, sourceLabel)
             sendAnchor(TvPageAnchor.Restore(leadingCount + (idx / columns) * columns, -restoreGapPx), "return-park")
         }
-        repeat(150) {
-            withFrameNanos { }
-            if (runCatching { cellRequesters[key]?.requestFocus() }.getOrNull() == true) {
-                onReturnHandled()
-                return@LaunchedEffect
-            }
-        }
+        if (!land(150) { cellRequesters[key] }) runCatching { entry.requestFocus() }
         onReturnHandled()
     }
 
@@ -841,23 +975,32 @@ fun <T> TvMediaPage(
     // which is precisely the broken state, so it would report "focused"
     // exactly when we need it to report nothing.
     // ------------------------------------------------------------------
-    val pageHasFocus = remember { mutableStateOf(false) }
     val lastCellKeyState = remember { mutableStateOf<Any?>(null) }
     val tabActive = LocalTabIsActive.current
     val fullScreenOverlay = com.aeriotv.android.feature.main.LocalTvFullScreenOverlay.current
-    val topNavHasFocus = com.aeriotv.android.feature.main.LocalTvTopNavHasFocus.current
     val hostView = androidx.compose.ui.platform.LocalView.current
     val modalOpen = androidx.compose.runtime.rememberUpdatedState(
         sortOpen || filterOpen || (searchEnabled && searchActive),
     )
-    /** True only when NO focus holder in this window has focus and no modal
-     *  surface is up: the one state a D-pad press cannot recover from. */
+    // A route being PUSHED over MAIN is not a dead D-pad (Logan 2026-09-11,
+    // case B: the TV Shows hero Details press made the watchdog fire 200 ms
+    // later and move focus from hero:Details to hero:Play S1 E1, because the
+    // tab keeps LocalTabIsActive while the detail route sits on top). So the
+    // watchdog also needs MAIN to be the top destination, and it ignores the
+    // first 600 ms after any activation on this page (OK / Select, or an
+    // armed navigation), which is the window a push needs to land.
+    val mainIsTop = com.aeriotv.android.LocalMainIsTopDestination.current
+    /** True only when NO focus holder in this window has focus, no modal
+     *  surface is up and no navigation is in flight: the one state a D-pad
+     *  press cannot recover from. */
     val windowIsIdle: () -> Boolean = {
         !pageHasFocus.value &&
             !topNavHasFocus.value &&
             hostView.hasWindowFocus() &&
             !modalOpen.value &&
-            fullScreenOverlay?.value == null
+            fullScreenOverlay?.value == null &&
+            mainIsTop.value &&
+            android.os.SystemClock.uptimeMillis() - TvReturnMemory.lastActivateAtMs > 600L
     }
     LaunchedEffect(tabActive) {
         if (!tabActive) return@LaunchedEffect
@@ -888,6 +1031,17 @@ fun <T> TvMediaPage(
             // One node, one State write per enter/leave of the whole page:
             // moving focus BETWEEN two children never calls this back.
             .onFocusChanged { pageHasFocus.value = it.hasFocus }
+            // Preview phase: stamp every activation (OK / Select) before the
+            // child that will navigate sees it, so the focus watchdog knows a
+            // route may be going up over MAIN and stands down for 600 ms.
+            .onPreviewKeyEvent { ev ->
+                if (ev.type == KeyEventType.KeyDown &&
+                    (ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter)
+                ) {
+                    TvReturnMemory.lastActivateAtMs = android.os.SystemClock.uptimeMillis()
+                }
+                false
+            }
             // Bubble phase: reached only when nothing at all consumed the
             // key, which is the printed signature of a dead D-pad.
             .onKeyEvent { ev ->
@@ -954,7 +1108,13 @@ fun <T> TvMediaPage(
                         upTarget = topNav,
                         // tvOS: any hero button gaining focus while the page
                         // is scrolled snaps the page back to the top.
-                        onButtonFocused = { sendAnchor(TvPageAnchor.Hero, "hero-button") },
+                        buttonRequesters = heroButtonRequesters,
+                        onButtonFocused = { pageKey, buttonId ->
+                            sendAnchor(TvPageAnchor.Hero, "hero-button")
+                            if (pageId.isNotEmpty()) {
+                                TvReturnMemory.focusSource[pageId] = TvReturnSource.Hero(pageKey, buttonId)
+                            }
+                        },
                         modifier = Modifier.padding(start = TvPage.overscan, end = TvPage.overscan, bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -971,7 +1131,14 @@ fun <T> TvMediaPage(
                         // shelf from below; Left and Right inside it must not
                         // move the page (rapid-press recording 2026-09-10:
                         // each press nudged the page down and snapped it up).
-                        onCardFocused = { sendAnchor(TvPageAnchor.Shelf(si), "shelf-card") },
+                        cardRequesters = shelfCardRequesters,
+                        shelfIndex = si,
+                        onCardFocused = { ci ->
+                            sendAnchor(TvPageAnchor.Shelf(si), "shelf-card")
+                            if (pageId.isNotEmpty()) {
+                                TvReturnMemory.focusSource[pageId] = TvReturnSource.Shelf(si, ci)
+                            }
+                        },
                         modifier = Modifier.padding(bottom = TvPage.sectionSpacing),
                     )
                 }
@@ -1135,6 +1302,10 @@ fun <T> TvMediaPage(
                             lastCellKeyState.value = k
                             TvFocusTrace.focus("grid r${index / columns}c${index % columns} " + gridLabel(item))
                             sendAnchor(TvPageAnchor.GridRow(index / columns), "grid-cell")
+                            if (pageId.isNotEmpty()) {
+                                TvReturnMemory.focusSource[pageId] =
+                                    TvReturnSource.Grid(index / columns, index % columns)
+                            }
                         } else if (focusedCellKeyState.value == k) focusedCellKeyState.value = null
                     }
                     .onPreviewKeyEvent { ev ->
@@ -1293,6 +1464,21 @@ private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(
     }
 }
 
+/** Back out of the page's content onto the tab bar, in its own tiny
+ *  recomposition scope (the focus States change on every trip to the bar). */
+@Composable
+private fun TvPageBackToTabBar(
+    enabled: Boolean,
+    pageHasFocus: androidx.compose.runtime.State<Boolean>,
+    topNavHasFocus: androidx.compose.runtime.State<Boolean>,
+    onBack: () -> Unit,
+) {
+    androidx.activity.compose.BackHandler(
+        enabled = enabled && pageHasFocus.value && !topNavHasFocus.value,
+        onBack = onBack,
+    )
+}
+
 // MARK: hero
 
 @Composable
@@ -1300,7 +1486,9 @@ private fun TvHeroCarousel(
     pages: List<TvHeroPage>,
     primaryRequester: FocusRequester,
     upTarget: FocusRequester?,
-    onButtonFocused: () -> Unit,
+    /** Shared [tvHeroSourceKey] requester table (return focus by button id). */
+    buttonRequesters: HashMap<String, FocusRequester>? = null,
+    onButtonFocused: (pageKey: Any, buttonId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var index by rememberSaveable { mutableIntStateOf(0) }
@@ -1359,7 +1547,8 @@ private fun TvHeroCarousel(
                         width = pageWidth,
                         primaryRequester = if (i == index) primaryRequester else null,
                         upTarget = upTarget,
-                        onButtonFocused = { index = i; onButtonFocused() },
+                        buttonRequesters = buttonRequesters,
+                        onButtonFocused = { id -> index = i; onButtonFocused(page.key, id) },
                     )
                 }
             }
@@ -1388,7 +1577,8 @@ private fun TvHeroCard(
     width: Dp,
     primaryRequester: FocusRequester?,
     upTarget: FocusRequester?,
-    onButtonFocused: () -> Unit,
+    buttonRequesters: HashMap<String, FocusRequester>? = null,
+    onButtonFocused: (buttonId: String) -> Unit,
 ) {
     val bg = MaterialTheme.colorScheme.background
     var menuOpen by remember { mutableStateOf(false) }
@@ -1497,15 +1687,18 @@ private fun TvHeroCard(
                 // The hero menu is the right-most options circle, not a
                 // long press on Resume (Logan 2026-09-10, all platforms).
                 page.buttons.forEachIndexed { i, b ->
+                    val id = b.id.ifEmpty { "button$i" }
+                    val req = buttonRequesters?.getOrPut(tvHeroSourceKey(page.key, id)) { FocusRequester() }
                     TvHeroButtonView(
                         button = b,
                         modifier = Modifier
+                            .then(if (req != null) Modifier.focusRequester(req) else Modifier)
                             .then(if (b.primary && primaryRequester != null) Modifier.focusRequester(primaryRequester) else Modifier)
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     TvFocusTrace.focus("hero:" + b.label.ifEmpty { "button$i" })
-                                    onButtonFocused()
+                                    onButtonFocused(id)
                                 }
                             },
                     )
@@ -1513,14 +1706,16 @@ private fun TvHeroCard(
                 if (page.longPressActions.isNotEmpty()) {
                     // The nav circles' size and shape (30 dp), the hero
                     // pills' colour and ring (Logan 2026-09-10).
+                    val moreReq = buttonRequesters?.getOrPut(tvHeroSourceKey(page.key, "More")) { FocusRequester() }
                     TvHeroButtonView(
-                        button = TvHeroButton("", Icons.Filled.MoreHoriz, onClick = { menuOpen = true }),
+                        button = TvHeroButton("", Icons.Filled.MoreHoriz, id = "More", onClick = { menuOpen = true }),
                         modifier = Modifier
+                            .then(if (moreReq != null) Modifier.focusRequester(moreReq) else Modifier)
                             .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     TvFocusTrace.focus("hero:More")
-                                    onButtonFocused()
+                                    onButtonFocused("More")
                                 }
                             },
                     )
@@ -1579,7 +1774,11 @@ fun TvHeroButtonView(
 private fun <T> TvShelfRow(
     shelf: TvShelf<T>,
     firstCardRequester: FocusRequester?,
-    onCardFocused: (() -> Unit)? = null,
+    /** Shared "shelf|index" requester table: the return-focus source puts
+     *  focus back on the exact card that opened a detail. */
+    cardRequesters: HashMap<String, FocusRequester>? = null,
+    shelfIndex: Int = 0,
+    onCardFocused: ((Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
@@ -1608,12 +1807,14 @@ private fun <T> TvShelfRow(
             contentPadding = PaddingValues(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset, top = 6.dp, bottom = 6.dp),
         ) {
             items(shelf.items.size, key = { shelf.key(shelf.items[it]) }) { i ->
+                val cardRequester = cardRequesters?.getOrPut("$shelfIndex|$i") { FocusRequester() }
                 shelf.card(
                     shelf.items[i],
                     Modifier
                         .width(shelf.cardWidth)
+                        .then(if (cardRequester != null) Modifier.focusRequester(cardRequester) else Modifier)
                         .then(if (i == 0 && firstCardRequester != null) Modifier.focusRequester(firstCardRequester) else Modifier)
-                        .then(if (onCardFocused != null) Modifier.onFocusChanged { if (it.hasFocus) onCardFocused() } else Modifier),
+                        .then(if (onCardFocused != null) Modifier.onFocusChanged { if (it.hasFocus) onCardFocused(i) } else Modifier),
                 )
             }
         }

@@ -92,12 +92,15 @@ internal fun TvMediaTab(
     isSearchBusy: Boolean,
 ) {
     val pageId = kind.name
+    // Come back at the exact offset AND on the exact focusable that opened
+    // the detail (hero button, shelf card or grid cell): arm() freezes both
+    // (tvOS never disposes the tab, MoviesView.swift:221, 259-279).
+    /** Arm the return state for an action that opens a ROUTE but not an item
+     *  detail (the hero Play buttons): the page's focused source is frozen,
+     *  so Back lands on the button that was pressed. */
+    val armHero: () -> Unit = { TvReturnMemory.arm(pageId, null, gridState) }
     val open: (MediaItem) -> Unit = { item ->
-        TvReturnMemory.pending[pageId] = item.key
-        // Come back at the exact offset, not with the row parked at the top
-        // (tvOS never disposes the tab, MoviesView.swift:221, 259-279).
-        TvReturnMemory.pendingOffset[pageId] =
-            gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+        TvReturnMemory.arm(pageId, item.key, gridState)
         onOpen(item)
     }
 
@@ -107,9 +110,10 @@ internal fun TvMediaTab(
         // A watchlisted SERIES has no movieUuid: play its target episode
         // rather than falling through to Details.
         val play: () -> Unit = if (watchlist) ({
+            armHero()
             item?.movieUuid?.let { onPlay(it, page.title) }
                 ?: item?.let { if (it.seriesId != null) onPlaySeries(it) else open(it) }
-        }) else ({ onPlay(videoId, page.title) })
+        }) else ({ armHero(); onPlay(videoId, page.title) })
         val details: () -> Unit = { item?.let(open) }
         val meta = buildList {
             page.year?.let { add(it.toString()) }
@@ -128,13 +132,13 @@ internal fun TvMediaTab(
                 page.hasProgress -> "Resume"
                 else -> "Play"
             }
-            add(TvHeroButton(primaryLabel, Icons.Filled.PlayArrow, primary = true, onClick = play))
+            add(TvHeroButton(primaryLabel, Icons.Filled.PlayArrow, primary = true, id = "Primary", onClick = play))
             // tvOS plays at 0 and LEAVES WatchProgress intact
             // (MoviesView.swift:1507-1511): the row must survive.
             if (page.hasProgress) {
-                add(TvHeroButton("Play from Beginning", Icons.Filled.Replay) { onPlayFromStart(videoId, page.title) })
+                add(TvHeroButton("Play from Beginning", Icons.Filled.Replay, id = "FromStart") { armHero(); onPlayFromStart(videoId, page.title) })
             }
-            add(TvHeroButton("Details", Icons.Outlined.Info, onClick = details))
+            add(TvHeroButton("Details", Icons.Outlined.Info, id = "Details", onClick = details))
         }
         val longPress = buildList {
             if (item != null) add(TvMenuAction(if (item.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") { onToggleWatchlist(item) })
@@ -163,11 +167,13 @@ internal fun TvMediaTab(
                         if (isSeries) seriesLabel ?: "Loading…" else "Play",
                         Icons.Filled.PlayArrow,
                         primary = true,
+                        id = "Primary",
                     ) {
+                        armHero()
                         first.movieUuid?.let { onPlay(it, first.title) }
                             ?: if (isSeries) onPlaySeries(first) else open(first)
                     },
-                    TvHeroButton("Details", Icons.Outlined.Info) { open(first) },
+                    TvHeroButton("Details", Icons.Outlined.Info, id = "Details") { open(first) },
                 ),
                 longPressActions = listOf(
                     TvMenuAction(if (first.key in watchlistKeys) "Remove from Watchlist" else "Add to Watchlist") { onToggleWatchlist(first) },
@@ -280,6 +286,8 @@ internal fun TvMediaTab(
         // key before the detail even opened).
         returnKey = remember { TvReturnMemory.pending[pageId] },
         returnOffset = remember { TvReturnMemory.pendingOffset[pageId] },
-        onReturnHandled = { TvReturnMemory.pending.remove(pageId); TvReturnMemory.pendingOffset.remove(pageId) },
+        returnSource = remember { TvReturnMemory.pendingSource[pageId] },
+        onReturnHandled = { TvReturnMemory.clear(pageId) },
+        pageId = pageId,
     )
 }
