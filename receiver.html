@@ -99,6 +99,96 @@
       bannerTimer = setTimeout(() => banner.classList.remove('visible'), 4000);
     }
 
+    // How far behind the live edge a live load starts, in seconds.
+    // HLS's own rule is three target durations; the proxy's target is 3 s,
+    // so 9 s is three of ours and still inside the proxy's ~25 s window.
+    const LIVE_START_BEHIND_SECONDS = 9;
+
+    // Shaka configuration for the phone-local HLS proxy.
+    //
+    // sequenceMode: Shaka's manifest.hls.sequenceMode defaults to TRUE,
+    // which puts our single muxed (video+audio) SourceBuffer into MSE
+    // 'sequence' AppendMode. Chromium logs the warning on EVERY load
+    // (Google TV Streamer, 2026-09-12 14:22:20.237 and 14:23:27.619):
+    //
+    //   using MSE 'sequence' AppendMode for a SourceBuffer with multiple
+    //   tracks may cause loss of track synchronization. In some cases,
+    //   buffered range gaps and playback stalls can occur. It is
+    //   recommended to instead use 'segments' mode for a multitrack
+    //   SourceBuffer.
+    //
+    // It is not advice to ignore. In sequence mode Chromium re-anchors the
+    // whole append on the presentation timestamp of the first coded frame
+    // it processes and re-times the other track against it: the same load
+    // shows the audio track's bytestream timestamps (22666 us and up) and
+    // the timestamps the audio decoder is handed (5666 us) differing by a
+    // constant offset. The receiver rendered exactly one frame, advanced
+    // 114 ms, and then reported BUFFERING at position 48 ms for the next
+    // 35 s with 12.5 s appended and nothing left to decode at the
+    // playhead. Because playback never advanced, Shaka's buffering goal
+    // stayed satisfied, so it refreshed live.m3u8 on cadence and never
+    // fetched another segment (seg0, seg1, seg2, then playlist polls
+    // only). In 'segments' mode each track is placed at its own honest
+    // timestamps and a hole is an honest hole the gap jumper can cross.
+    //
+    // defaultPresentationDelay: start LIVE_START_BEHIND_SECONDS behind the
+    // edge rather than at it. Starting at the edge is what made the
+    // receiver run the buffer dry and re-sync forward over a segment
+    // (2026-09-12 review), and a skipped segment is the other way into a
+    // stalled renderer.
+    //
+    // gapDetectionThreshold: jump holes as small as 0.1 s. Our worst case
+    // is a sub-frame seam at a segment boundary, far under Shaka's older
+    // 0.5 s default, which would leave the renderer parked at it.
+    const playbackConfig = playerManager.getPlaybackConfig();
+    playbackConfig.shakaConfig = {
+      manifest: {
+        hls: { sequenceMode: false },
+        defaultPresentationDelay: LIVE_START_BEHIND_SECONDS,
+      },
+      streaming: {
+        gapDetectionThreshold: 0.1,
+        // Nudge the playhead if it ever does stop advancing, instead of
+        // sitting on one frame forever (these are Shaka's defaults, set
+        // explicitly because the CAF-bundled version is not pinned).
+        stallEnabled: true,
+        stallThreshold: 1,
+        stallSkip: 0.1,
+      },
+    };
+
+    // Unload the <video> element. Cast tears the page down while the media
+    // pipeline is still running: on 2026-09-12 the receiver got
+    // CastV2.Receiver.Stop.In and the web contents were destroyed under a
+    // playing pipeline, and the audio sink outlived the video surface by
+    // the teardown interval (audible audio after the X on the sender's
+    // card). Pausing and detaching the source first ends the pipeline
+    // before the page goes away.
+    function unloadMediaElement() {
+      const video = document.querySelector('video.castMediaElement');
+      if (!video) return;
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        // load() is what actually releases the MediaSource; without it the
+        // element keeps the old blob and its pipeline alive.
+        video.load();
+      } catch (e) {
+        // Teardown is best-effort: the element may already be gone.
+      }
+    }
+
+    // A media STOP is the normal end of a cast (the sender sends one
+    // before ending the session). Let CAF run its own stop first, then
+    // unload on the next task so the element is not left holding a
+    // MediaSource.
+    playerManager.setMessageInterceptor(
+      cast.framework.messages.MessageType.STOP,
+      (request) => {
+        setTimeout(unloadMediaElement, 0);
+        return request;
+      });
+
     // Normalize each LOAD. Keep the sender's streamType (VOD casting later);
     // for LIVE, duration -1 is the documented contract ("the player instances
     // are responsible for calculating it when the content is LIVE") and it
@@ -185,6 +275,15 @@
     // playback; hiding the element live made it vanish instantly with
     // playback unaffected). Capabilities are readable once the system is
     // ready.
+    // Last chance before the page dies: stop the player and unload the
+    // element. SHUTDOWN fires on the app being stopped (the X on the
+    // sender's card, the Stop button on the TV) and is the case where the
+    // pipeline was still playing.
+    context.addEventListener(cast.framework.system.EventType.SHUTDOWN, () => {
+      try { playerManager.stop(); } catch (e) { /* already stopped */ }
+      unloadMediaElement();
+    });
+
     context.addEventListener(cast.framework.system.EventType.READY, () => {
       const caps = context.getDeviceCapabilities();
       if (!caps || !caps[cast.framework.system.DeviceCapabilities.TOUCH_INPUT_SUPPORTED]) {
