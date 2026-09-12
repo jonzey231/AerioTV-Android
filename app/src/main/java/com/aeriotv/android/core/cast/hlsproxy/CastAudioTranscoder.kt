@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import androidx.media3.decoder.ffmpeg.AerioFfmpegPcmDecoder
 import java.nio.ByteOrder
 import kotlin.math.abs
 import kotlin.math.min
@@ -15,19 +16,30 @@ import kotlin.math.roundToInt
  * "AC-3 audio", and most of the lineup (Dispatcharr raw TS, typical
  * IPTV) carries AC-3 or E-AC-3 or MP2; Chromecast web receivers cannot
  * decode AC-3 themselves (HDMI passthrough only, and unreliably), so the
- * fix is to decode on the phone with the platform MediaCodec decoder
- * (nearly all Samsung/Pixel phones ship AC-3/E-AC-3 decoders, MP2 has a
- * platform decoder), downmix the PCM to stereo, and encode AAC-LC at
- * about 160 kbps. H.264 video stays pure passthrough in the remuxer.
+ * fix is to decode on the phone, downmix the PCM to stereo, and encode
+ * AAC-LC at about 160 kbps. H.264 video stays pure passthrough in the
+ * remuxer.
  *
- * Threading: synchronous MediaCodec driven entirely by the caller. The
+ * Decoder selection: the platform MediaCodec decoder first (nearly all
+ * Samsung/Pixel phones ship AC-3/E-AC-3 decoders, MP2 has a platform
+ * decoder); when the device ships none (Qualcomm "yupik" Nothing Phone:
+ * its vendor media_codecs list has no audio/ac3 or audio/eac3), fall
+ * back to the bundled media3 FFmpeg software decoder through
+ * [AerioFfmpegPcmDecoder] - the same extension that makes local
+ * playback of these muxes work on that phone, so casting must not
+ * refuse where playback succeeds. Only with neither does the session
+ * refuse.
+ *
+ * Threading: synchronous, driven entirely by the caller (the FFmpeg
+ * decoder's own decode thread is hidden behind a non-blocking
+ * queue/drain surface). The
  * remuxer invokes [feed] from the proxy's ingest thread; each call queues
  * one source access unit and opportunistically drains both codecs. No
  * internal threads.
  *
  * PTS flow: the source AU's unwrapped 90 kHz ticks enter the decoder as
- * microseconds via queueInputBuffer, MediaCodec carries them through the
- * PCM buffers to the encoder (chunked PCM re-stamps by sample offset),
+ * microseconds with the access unit, and the decoder (either one)
+ * carries them through the PCM buffers to the encoder (chunked PCM re-stamps by sample offset),
  * and [AacPtsMapper] regularizes the encoder's output stamps onto an
  * exact anchor + n * 1024 / sampleRate ladder so the remuxer's fMP4
  * sample durations and tfdt stay coherent. A stamp past the
@@ -267,42 +279,165 @@ open class CastAudioTranscoder(
         private fun usToTicks(us: Long): Long = us * 9 / 100
     }
 
-    // ---- MediaCodec plumbing (device only; never runs on the JVM) ----
+    // ---- Codec plumbing (device only; never runs on the JVM) ----
 
-    private var decoder: MediaCodec? = null
+    /**
+     * The source-PCM decode step, behind an interface so the platform
+     * MediaCodec path and the bundled FFmpeg software path can share the
+     * downmix and the AAC encoder that follow. Implementations are
+     * private nested classes, so loading [CastAudioTranscoder] itself
+     * still never touches android.media or the media3 decoder on the JVM
+     * test path.
+     */
+    private interface PcmDecoder {
+        /** Milliseconds to sleep per stall retry; 0 when the
+         *  implementation's own queue call already waits. */
+        val stallWaitMs: Long
+
+        /** Queue one access unit; false = no input slot free right now,
+         *  so the caller should drain and retry. */
+        fun queue(frame: ByteArray, offset: Int, length: Int, ptsUs: Long): Boolean
+
+        /** Hand every ready PCM buffer to [sink] as (interleaved 16-bit
+         *  samples, channel count, presentation stamp in microseconds). */
+        fun drain(sink: (ShortArray, Int, Long) -> Unit)
+
+        fun flush()
+        fun release()
+    }
+
+    private inner class MediaCodecPcmDecoder(
+        private val codec: MediaCodec,
+        private var channels: Int,
+    ) : PcmDecoder {
+        /** dequeueInputBuffer already waits DEQUEUE_TIMEOUT_US. */
+        override val stallWaitMs = 0L
+        private val info = MediaCodec.BufferInfo()
+
+        override fun queue(frame: ByteArray, offset: Int, length: Int, ptsUs: Long): Boolean {
+            val idx = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
+            if (idx < 0) return false
+            val bb = codec.getInputBuffer(idx) ?: error("decoder input buffer missing")
+            bb.clear()
+            bb.put(frame, offset, length)
+            codec.queueInputBuffer(idx, 0, length, ptsUs, 0)
+            return true
+        }
+
+        override fun drain(sink: (ShortArray, Int, Long) -> Unit) {
+            while (true) {
+                val idx = codec.dequeueOutputBuffer(info, 0)
+                when {
+                    idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val f = codec.outputFormat
+                        channels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        warnRateMismatch(f.getInteger(MediaFormat.KEY_SAMPLE_RATE))
+                    }
+                    idx >= 0 -> {
+                        if (info.size > 0) {
+                            val bb = codec.getOutputBuffer(idx) ?: error("decoder output buffer missing")
+                            bb.position(info.offset)
+                            bb.limit(info.offset + info.size)
+                            val pcm = ShortArray(info.size / 2)
+                            bb.order(ByteOrder.nativeOrder()).asShortBuffer().get(pcm)
+                            sink(pcm, channels, info.presentationTimeUs)
+                        }
+                        codec.releaseOutputBuffer(idx, false)
+                    }
+                    else -> return // INFO_TRY_AGAIN_LATER
+                }
+            }
+        }
+
+        override fun flush() {
+            runCatching { codec.flush() }
+        }
+
+        override fun release() {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+        }
+    }
+
+    /**
+     * Bundled media3 FFmpeg software decoder. Its SimpleDecoder runs its
+     * own decode thread, so [queue] and [drain] are non-blocking and the
+     * PTS rides along on the buffer: the stamp we put on the access unit
+     * comes straight back out on the PCM buffer, which is exactly what
+     * the encoder leg and [AacPtsMapper] already expect.
+     */
+    private inner class FfmpegPcmDecoder(
+        private val ffmpeg: AerioFfmpegPcmDecoder,
+        private var channels: Int,
+    ) : PcmDecoder {
+        /** Non-blocking queue, so pace the stall loop here instead; the
+         *  same total patience the MediaCodec path has. */
+        override val stallWaitMs = DEQUEUE_TIMEOUT_US / 1000
+
+        private var formatChecked = false
+
+        override fun queue(frame: ByteArray, offset: Int, length: Int, ptsUs: Long): Boolean =
+            ffmpeg.queue(frame, offset, length, ptsUs)
+
+        override fun drain(sink: (ShortArray, Int, Long) -> Unit) {
+            while (true) {
+                val out = ffmpeg.dequeueOutput() ?: return
+                try {
+                    val data = out.data
+                    if (!out.shouldBeSkipped && data != null && data.hasRemaining()) {
+                        if (!formatChecked) {
+                            formatChecked = true
+                            // Authoritative once the first frame decoded;
+                            // the frame header only guessed the layout.
+                            if (ffmpeg.channelCount > 0) channels = ffmpeg.channelCount
+                            warnRateMismatch(ffmpeg.sampleRate)
+                        }
+                        val pcm = ShortArray(data.remaining() / 2)
+                        data.order(ByteOrder.nativeOrder()).asShortBuffer().get(pcm)
+                        sink(pcm, channels, out.timeUs)
+                    }
+                } finally {
+                    out.release()
+                }
+            }
+        }
+
+        override fun flush() {
+            runCatching { ffmpeg.flush() }
+        }
+
+        override fun release() {
+            runCatching { ffmpeg.release() }
+        }
+    }
+
+    private var pcmDecoder: PcmDecoder? = null
     private var encoder: MediaCodec? = null
     private var encoderSampleRate = 0
-    private var pcmChannels = 0
+    private var decoderLabel = ""
     private var mapper: AacPtsMapper? = null
     private var configDelivered = false
     // Lazy so constructing the class (or a JVM-test fake subclass) never
     // touches android.media; only real feed() calls do.
-    private val decInfo by lazy { MediaCodec.BufferInfo() }
     private val encInfo by lazy { MediaCodec.BufferInfo() }
 
     /**
      * Queue one source access unit (a whole AC-3/E-AC-3/MP2 frame) and
      * drain whatever both codecs have ready. Called on the ingest thread.
      *
-     * Throws [UnsupportedCodecException] when the device has no decoder
-     * for [source] (first call only); any other codec failure surfaces
-     * as a runtime exception the session's reconnect path absorbs.
+     * Throws [UnsupportedCodecException] when neither the platform nor
+     * the bundled FFmpeg decoder can handle [source] (first call only);
+     * any other codec failure surfaces as a runtime exception the
+     * session's reconnect path absorbs.
      */
     open fun feed(frame: ByteArray, offset: Int, length: Int, ptsTicks: Long, info: EsFrameInfo) {
-        val dec = decoder ?: initCodecs(info)
+        val dec = pcmDecoder ?: initCodecs(info)
         var attempts = 0
-        while (true) {
-            val idx = dec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
-            if (idx >= 0) {
-                val bb = dec.getInputBuffer(idx) ?: error("decoder input buffer missing")
-                bb.clear()
-                bb.put(frame, offset, length)
-                dec.queueInputBuffer(idx, 0, length, ticksToUs(ptsTicks), 0)
-                break
-            }
+        while (!dec.queue(frame, offset, length, ticksToUs(ptsTicks))) {
             drainDecoder()
             drainEncoder()
             if (++attempts > MAX_STALL_ATTEMPTS) error("audio decoder input stalled")
+            if (dec.stallWaitMs > 0) Thread.sleep(dec.stallWaitMs)
         }
         drainDecoder()
         drainEncoder()
@@ -311,52 +446,72 @@ open class CastAudioTranscoder(
     /** Splice/reconnect: drop in-flight buffers and let the PTS mapper
      *  re-anchor on the next output stamp. */
     open fun flush() {
-        runCatching { decoder?.flush() }
+        pcmDecoder?.flush()
         runCatching { encoder?.flush() }
         mapper?.reset()
     }
 
     open fun release() {
         try {
-            runCatching { decoder?.stop() }
             runCatching { encoder?.stop() }
         } finally {
-            runCatching { decoder?.release() }
+            pcmDecoder?.release()
             runCatching { encoder?.release() }
-            decoder = null
+            pcmDecoder = null
             encoder = null
         }
     }
 
-    private fun initCodecs(info: EsFrameInfo): MediaCodec {
+    /** Platform decoder, or null when this device ships none. */
+    private fun createMediaCodecDecoder(info: EsFrameInfo): PcmDecoder? {
         val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
-        var chosenMime: String? = null
-        var chosenName: String? = null
         for (mime in source.decoderMimes) {
             val fmt = MediaFormat.createAudioFormat(mime, info.sampleRate, info.channels)
-            val name = runCatching { list.findDecoderForFormat(fmt) }.getOrNull()
-            if (name != null) {
-                chosenMime = mime
-                chosenName = name
-                break
+            val name = runCatching { list.findDecoderForFormat(fmt) }.getOrNull() ?: continue
+            val dec = MediaCodec.createByCodecName(name)
+            try {
+                dec.configure(MediaFormat.createAudioFormat(mime, info.sampleRate, info.channels), null, null, 0)
+                dec.start()
+            } catch (t: Throwable) {
+                runCatching { dec.release() }
+                throw t
             }
+            decoderLabel = "$name ($mime)"
+            return MediaCodecPcmDecoder(dec, info.channels)
         }
-        if (chosenMime == null || chosenName == null) {
-            // Same refusal P1 made for every non-AAC codec: with no
-            // device decoder there is nothing to transcode with.
-            throw UnsupportedCodecException("${source.displayName} audio")
+        return null
+    }
+
+    /**
+     * Bundled FFmpeg software decoder, or null when it carries nothing
+     * for [source] either (then there is nothing to transcode with and
+     * the session refuses, as P1 did).
+     */
+    private fun createFfmpegDecoder(info: EsFrameInfo): PcmDecoder? {
+        for (mime in source.decoderMimes) {
+            if (!AerioFfmpegPcmDecoder.isSupported(mime)) continue
+            val ff = try {
+                AerioFfmpegPcmDecoder.create(mime, info.channels, info.sampleRate)
+            } catch (t: Throwable) {
+                log("ffmpeg $mime decoder init failed: $t")
+                continue
+            }
+            decoderLabel = "${ff.name} ($mime, ffmpeg software)"
+            log(
+                "audio transcode active: ${source.displayName} ${info.channels}ch " +
+                    "-> AAC-LC stereo (ffmpeg decoder)",
+            )
+            return FfmpegPcmDecoder(ff, info.channels)
         }
-        val dec = MediaCodec.createByCodecName(chosenName)
-        try {
-            dec.configure(MediaFormat.createAudioFormat(chosenMime, info.sampleRate, info.channels), null, null, 0)
-            dec.start()
-        } catch (t: Throwable) {
-            runCatching { dec.release() }
-            throw t
-        }
-        decoder = dec
-        pcmChannels = info.channels
+        return null
+    }
+
+    private fun initCodecs(info: EsFrameInfo): PcmDecoder {
         encoderSampleRate = info.sampleRate
+        val dec = createMediaCodecDecoder(info)
+            ?: createFfmpegDecoder(info)
+            ?: throw UnsupportedCodecException("${source.displayName} audio")
+        pcmDecoder = dec
         val encFmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, info.sampleRate, 2).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             setInteger(MediaFormat.KEY_BIT_RATE, TARGET_AAC_BITRATE)
@@ -368,49 +523,31 @@ open class CastAudioTranscoder(
             enc.start()
         } catch (t: Throwable) {
             runCatching { enc.release() }
-            runCatching { dec.stop() }
-            runCatching { dec.release() }
-            decoder = null
+            dec.release()
+            pcmDecoder = null
             throw t
         }
         encoder = enc
         mapper = AacPtsMapper(info.sampleRate)
         log(
-            "audio codecs up: decoder=$chosenName ($chosenMime) " +
+            "audio codecs up: decoder=$decoderLabel " +
                 "encoder=AAC-LC stereo ${TARGET_AAC_BITRATE / 1000}kbps @${info.sampleRate}Hz",
         )
         return dec
     }
 
-    private fun drainDecoder() {
-        val dec = decoder ?: return
-        while (true) {
-            val idx = dec.dequeueOutputBuffer(decInfo, 0)
-            when {
-                idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    val f = dec.outputFormat
-                    pcmChannels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                    val rate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                    if (rate != encoderSampleRate) {
-                        // Would need a resampler; log it so a field report
-                        // with chipmunk audio is diagnosable.
-                        log("decoder pcm rate ${rate}Hz differs from encoder ${encoderSampleRate}Hz")
-                    }
-                }
-                idx >= 0 -> {
-                    if (decInfo.size > 0) {
-                        val bb = dec.getOutputBuffer(idx) ?: error("decoder output buffer missing")
-                        bb.position(decInfo.offset)
-                        bb.limit(decInfo.offset + decInfo.size)
-                        val pcm = ShortArray(decInfo.size / 2)
-                        bb.order(ByteOrder.nativeOrder()).asShortBuffer().get(pcm)
-                        feedEncoder(downmixToStereo(pcm, pcmChannels), decInfo.presentationTimeUs)
-                    }
-                    dec.releaseOutputBuffer(idx, false)
-                }
-                else -> return // INFO_TRY_AGAIN_LATER
-            }
+    /** A PCM rate the encoder was not configured for would need a
+     *  resampler; log it so a field report of chipmunk audio is
+     *  diagnosable. */
+    private fun warnRateMismatch(rate: Int) {
+        if (rate > 0 && rate != encoderSampleRate) {
+            log("decoder pcm rate ${rate}Hz differs from encoder ${encoderSampleRate}Hz")
         }
+    }
+
+    private fun drainDecoder() {
+        val dec = pcmDecoder ?: return
+        dec.drain { pcm, channels, ptsUs -> feedEncoder(downmixToStereo(pcm, channels), ptsUs) }
     }
 
     private fun feedEncoder(stereo: ShortArray, ptsUs: Long) {
