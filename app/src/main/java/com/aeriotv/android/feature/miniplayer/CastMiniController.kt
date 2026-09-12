@@ -56,7 +56,7 @@ fun CastMiniController(
     modifier: Modifier = Modifier,
     /** Overrides the "Casting to <device>" line -- the companion transport reuses
      *  this exact card with "Controlling <device>", and a session with nothing
-     *  playing yet reads "Pick a channel below". */
+     *  playing yet reads "Select a Channel". */
     subtitle: String? = null,
     /** Current program on the other screen, shown under the title. */
     programmeTitle: String? = null,

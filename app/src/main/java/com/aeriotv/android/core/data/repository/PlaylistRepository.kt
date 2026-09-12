@@ -1415,7 +1415,11 @@ class PlaylistRepository @Inject constructor(
                 fetchViaTempFile(xmltvUrl, ".xmltv") { XMLTVParser.parseFile(it, knownChannelKeys) }
             }
         }
-        dao.update(playlist.copy(lastEpgRefreshedAt = System.currentTimeMillis()))
+        // Targeted column write, NOT a whole-row update: `playlist` is the
+        // snapshot this run started with, so writing it back here used to
+        // revert everything the run itself had just captured and persisted
+        // (server version, 0.30 permissions, cast AAC output profile id).
+        dao.updateLastEpgRefreshedAt(playlist.id, System.currentTimeMillis())
         programmes
     } }
 

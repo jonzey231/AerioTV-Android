@@ -102,6 +102,21 @@ interface PlaylistDao {
     @Query("UPDATE playlists SET channelCount = :count WHERE id = :id")
     suspend fun updateChannelCount(id: String, count: Int)
 
+    /**
+     * Stamp the EPG refresh time WITHOUT rewriting the rest of the row.
+     * Cast audio 2026-09-12 (Logan, log 00:48 vs 01:00): loadEpg used to end
+     * with `dao.update(playlist.copy(lastEpgRefreshedAt = now))` against the
+     * entity it had read BEFORE the run, so every field the same run captured
+     * and persisted mid-flight -- the Dispatcharr server version, the 0.30
+     * permissions, and the cast AAC output profile id -- was silently reverted
+     * to its pre-run value a second later. The cast path then read null and
+     * cast without `?output_profile=`. Same reasoning as
+     * [updateChannelCount]: a targeted column write cannot lose a concurrent
+     * one.
+     */
+    @Query("UPDATE playlists SET lastEpgRefreshedAt = :at WHERE id = :id")
+    suspend fun updateLastEpgRefreshedAt(id: String, at: Long)
+
     @Delete
     suspend fun delete(playlist: PlaylistEntity)
 

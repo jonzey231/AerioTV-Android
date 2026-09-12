@@ -40,7 +40,7 @@ private const val TAG = "CastCard"
  *
  * Rules it implements:
  *  - Connecting from the picker stays on the current page; the card simply
- *    appears. With nothing playing yet it reads "Pick a channel below", and the
+ *    appears. With nothing playing yet it reads "Select a Channel", and the
  *    next channel tap casts (the tap handler owns that, see Navigation).
  *  - Stop / Disconnect ends the session and hides the card. Playback is NOT
  *    handed back to the phone.
@@ -170,7 +170,7 @@ fun CastTransportCard(
             isPlaying = if (isCompanion) companionIsPlaying else castIsPlaying,
             // Nothing playing yet: the card says where the next tap lands.
             subtitle = when {
-                !hasContent -> "Pick a channel below"
+                !hasContent -> "Select a Channel"
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
                 else -> null
             },

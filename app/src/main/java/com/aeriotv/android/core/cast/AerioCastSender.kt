@@ -20,6 +20,7 @@ import com.google.android.gms.cast.HlsSegmentFormat
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.CastState
@@ -177,16 +178,105 @@ class AerioCastSender @Inject constructor(
         }
     }
 
+    /**
+     * Logged player state of the receiver, so the card reflects what the TV's
+     * player actually reports instead of a local guess. IDLE means the
+     * receiver has no active playback: the transport button must re-issue the
+     * load rather than call play() (which a receiver in IDLE ignores).
+     */
+    private val _receiverIdle = MutableStateFlow(true)
+    /** True while the receiver's player is IDLE (nothing playing/paused). */
+    val receiverIdle: StateFlow<Boolean> = _receiverIdle.asStateFlow()
+
+    /** Last state logged, so a status burst does not spam identical lines. */
+    private var lastLoggedPlayerState: Pair<Int, Int>? = null
+    /** Loads re-issued because the receiver fell back to IDLE, per content. */
+    private var idleReloadAttempts = 0
+    private var lastLoadAtMs = 0L
+    /** mediaId of the last load issued, so a channel flip gets a fresh
+     *  idle-retry budget while a retry of the SAME load does not. */
+    private var lastLoadedMediaId: String? = null
+
     private val remoteClientCallback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
-            _isPlaying.value = runCatching {
-                currentSession()?.remoteMediaClient?.isPlaying
-            }.getOrNull() ?: _isPlaying.value
+            val client = currentSession()?.remoteMediaClient
+            val status = runCatching { client?.mediaStatus }.getOrNull()
+            val playerState = status?.playerState ?: MediaStatus.PLAYER_STATE_UNKNOWN
+            val idleReason = status?.idleReason ?: MediaStatus.IDLE_REASON_NONE
+            if (lastLoggedPlayerState != (playerState to idleReason)) {
+                lastLoggedPlayerState = playerState to idleReason
+                Log.i(
+                    TAG,
+                    "[Cast] remote player state=${playerStateName(playerState)} " +
+                        "idleReason=${idleReasonName(idleReason)}",
+                )
+            }
+            // Receiver-reported, not a local guess: BUFFERING counts as
+            // playing (the TV is working on it), everything else is not.
+            _isPlaying.value = playerState == MediaStatus.PLAYER_STATE_PLAYING ||
+                playerState == MediaStatus.PLAYER_STATE_BUFFERING ||
+                playerState == MediaStatus.PLAYER_STATE_LOADING
+            _receiverIdle.value = playerState == MediaStatus.PLAYER_STATE_IDLE ||
+                playerState == MediaStatus.PLAYER_STATE_UNKNOWN
             // Resumed-session content recovery: mediaInfo is often null at
             // onConnected and only lands with the first status update. No-op once
             // content is known (GH #33).
             currentSession()?.let { recoverContentFromSession(it) }
+            // The load landed but the receiver dropped straight back to IDLE
+            // (Logan 2026-09-12: the TV showed nothing while the proxy served
+            // segments for five minutes). Re-issue the load once instead of
+            // leaving a live proxy feeding a receiver that stopped asking.
+            maybeReloadAfterIdle(playerState, idleReason)
         }
+    }
+
+    /** One automatic re-load when the receiver reports IDLE for a reason that
+     *  means playback did not survive the load (ERROR / FINISHED / an
+     *  un-started load). Bounded and time-gated so it can never loop. */
+    private fun maybeReloadAfterIdle(playerState: Int, idleReason: Int) {
+        if (playerState != MediaStatus.PLAYER_STATE_IDLE) {
+            if (playerState == MediaStatus.PLAYER_STATE_PLAYING) idleReloadAttempts = 0
+            return
+        }
+        val content = _content.value ?: return
+        if (content.webCastUrl == null) return // Cast Connect: the app owns playback
+        if (idleReloadAttempts >= 1) return
+        if (System.currentTimeMillis() - lastLoadAtMs < 5_000L) return
+        val session = currentSession() ?: return
+        idleReloadAttempts++
+        Log.i(TAG, "[Cast] receiver idle after load; re-issuing load (attempt $idleReloadAttempts)")
+        loadOnSession(session, content)
+    }
+
+    private fun playerStateName(state: Int): String = when (state) {
+        MediaStatus.PLAYER_STATE_IDLE -> "IDLE"
+        MediaStatus.PLAYER_STATE_PLAYING -> "PLAYING"
+        MediaStatus.PLAYER_STATE_PAUSED -> "PAUSED"
+        MediaStatus.PLAYER_STATE_BUFFERING -> "BUFFERING"
+        MediaStatus.PLAYER_STATE_LOADING -> "LOADING"
+        else -> "UNKNOWN"
+    }
+
+    private fun idleReasonName(reason: Int): String = when (reason) {
+        MediaStatus.IDLE_REASON_NONE -> "NONE"
+        MediaStatus.IDLE_REASON_FINISHED -> "FINISHED"
+        MediaStatus.IDLE_REASON_CANCELED -> "CANCELED"
+        MediaStatus.IDLE_REASON_INTERRUPTED -> "INTERRUPTED"
+        MediaStatus.IDLE_REASON_ERROR -> "ERROR (the receiver could not play the media)"
+        else -> "reason $reason"
+    }
+
+    /**
+     * Plain-English meaning for the Cast session end codes actually observed
+     * on Logan's devices; [com.google.android.gms.cast.CastStatusCodes]
+     * stringifies most of the 20xx range as a bare number.
+     */
+    private fun castStatusMeaning(code: Int): String = when (code) {
+        2055 -> "the receiver application stopped or was replaced " +
+            "(receiver-side error or the Cast page went away)"
+        2155 -> "the receiver could not be reached (network loss or the device went away)"
+        2161 -> "the session was ended deliberately (Stop Casting)"
+        else -> com.google.android.gms.cast.CastStatusCodes.getStatusCodeString(code)
     }
 
     /** Set by onSessionEnding, which the Cast SDK only calls for a deliberate,
@@ -243,7 +333,7 @@ class AerioCastSender @Inject constructor(
                 val device = session.castDevice?.friendlyName ?: lastDeviceName
                 val what = _content.value?.title
                 Log.w(TAG, "cast session ended involuntarily: error=$error " +
-                    com.google.android.gms.cast.CastStatusCodes.getStatusCodeString(error))
+                    castStatusMeaning(error))
                 _involuntaryEnd.tryEmit(InvoluntaryEnd(device, what))
                 surfaceCastFailure(
                     if (device.isNullOrBlank()) "Casting disconnected"
@@ -370,11 +460,34 @@ class AerioCastSender @Inject constructor(
 
     // --- Cast remote controls (GH #33), all no-ops when not connected. ---
 
-    fun play() { runCatching { currentSession()?.remoteMediaClient?.play() } }
+    /**
+     * Start playback on the receiver. A receiver whose player is IDLE has
+     * nothing to resume and IGNORES play() (Logan 2026-09-12: the card's Play
+     * button did nothing visible while the proxy was serving segments), so in
+     * that state this re-issues the load with autoplay instead.
+     */
+    fun play() {
+        val session = currentSession() ?: return
+        val content = _content.value
+        if (_receiverIdle.value && content != null) {
+            Log.i(TAG, "[Cast] play pressed while receiver idle; re-issuing load")
+            loadOnSession(session, content)
+            return
+        }
+        runCatching { session.remoteMediaClient?.play() }
+    }
+
     fun pause() { runCatching { currentSession()?.remoteMediaClient?.pause() } }
+
     fun togglePlayPause() {
         val rmc = currentSession()?.remoteMediaClient ?: return
-        runCatching { if (rmc.isPlaying) rmc.pause() else rmc.play() }
+        // Drive off the receiver's reported player state, not rmc.isPlaying
+        // alone: an IDLE receiver is neither playing nor pausable.
+        if (_receiverIdle.value) {
+            play()
+            return
+        }
+        runCatching { if (rmc.isPlaying) rmc.pause() else play() }
     }
 
     /** Ask the receiver to (re)send its full audio/subtitle/speed/aspect snapshot. */
@@ -662,7 +775,12 @@ class AerioCastSender @Inject constructor(
         controlSession = session
         runCatching { session.setMessageReceivedCallbacks(CastControl.NAMESPACE, controlChannel) }
         runCatching { session.remoteMediaClient?.registerCallback(remoteClientCallback) }
-        _isPlaying.value = runCatching { session.remoteMediaClient?.isPlaying }.getOrNull() ?: true
+        val state = runCatching { session.remoteMediaClient?.mediaStatus?.playerState }.getOrNull()
+        _isPlaying.value = state == MediaStatus.PLAYER_STATE_PLAYING ||
+            state == MediaStatus.PLAYER_STATE_BUFFERING
+        _receiverIdle.value = state == null ||
+            state == MediaStatus.PLAYER_STATE_IDLE ||
+            state == MediaStatus.PLAYER_STATE_UNKNOWN
         requestRemoteState()
     }
 
@@ -689,6 +807,10 @@ class AerioCastSender @Inject constructor(
      *  receiver keeps fetching segments across the blip and resumes cleanly. */
     private fun endCleanup() {
         _content.value = null
+        _receiverIdle.value = true
+        lastLoggedPlayerState = null
+        lastLoadedMediaId = null
+        idleReloadAttempts = 0
         proxyLoadJob?.cancel()
         proxyLoadJob = null
         hlsProxy.stop()
@@ -771,9 +893,37 @@ class AerioCastSender @Inject constructor(
         val info = builder.build()
         val request = MediaLoadRequestData.Builder()
             .setMediaInfo(info)
+            // Autoplay: a channel tap must start playback on the TV with no
+            // second gesture. The receiver still reports its own player state
+            // (see remoteClientCallback) and an IDLE fallback re-loads once.
             .setAutoplay(true)
             .build()
-        runCatching { client.load(request) }
+        if (lastLoadedMediaId != content.mediaId) {
+            lastLoadedMediaId = content.mediaId
+            idleReloadAttempts = 0
+        }
+        lastLoadAtMs = System.currentTimeMillis()
+        _receiverIdle.value = true // until the receiver says otherwise
+        Log.i(
+            TAG,
+            "[Cast] load sent channel=${content.title} autoplay=true " +
+                "contentUrl=${if (content.webCastUrl != null) "proxy" else "none"} " +
+                "mime=${content.webCastMime}",
+        )
+        runCatching {
+            client.load(request).setResultCallback { result ->
+                val status = result.status
+                if (status.isSuccess) {
+                    Log.i(TAG, "[Cast] load accepted by the receiver")
+                } else {
+                    Log.w(
+                        TAG,
+                        "[Cast] load REJECTED code=${status.statusCode} " +
+                            castStatusMeaning(status.statusCode),
+                    )
+                }
+            }
+        }
     }
 }
 

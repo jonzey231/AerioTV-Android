@@ -422,12 +422,30 @@ class CastHlsProxySession @Inject constructor(
         }.getOrNull()
     }
 
-    /** Strip credentials/query from a URL for the log (house rule: no
-     *  identifiers or secrets in shareable logs). */
-    private fun sanitize(url: String): String = url.substringBefore('?').let { base ->
-        runCatching {
+    /**
+     * Strip credentials/query from a URL for the log (house rule: no
+     * identifiers or secrets in shareable logs).
+     *
+     * The port is echoed ONLY when the URL carries one explicitly. The old
+     * `if (u.port > 0) u.port else 80` default printed
+     * "https://host:80/proxy/ts/stream/..." for a plain https base (Logan's
+     * 2026-09-12 log), which reads as a real misconfiguration; https without
+     * an explicit port is 443, and either way the log must not invent one.
+     *
+     * `output_profile` is kept (it is a server-side profile id, not a
+     * secret) because it is the one query parameter the cast audio path is
+     * diagnosed by; every other parameter is dropped.
+     */
+    private fun sanitize(url: String): String {
+        val base = url.substringBefore('?')
+        val query = url.substringAfter('?', "")
+        val profile = query.split('&')
+            .firstOrNull { it.startsWith("output_profile=") }
+        val host = runCatching {
             val u = java.net.URI(base)
-            "${u.scheme}://${u.host}:${if (u.port > 0) u.port else 80}${u.path}"
+            val port = if (u.port > 0) ":${u.port}" else ""
+            "${u.scheme}://${u.host}$port${u.path}"
         }.getOrDefault(base)
+        return if (profile != null) "$host?$profile" else host
     }
 }

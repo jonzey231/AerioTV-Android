@@ -87,6 +87,9 @@ class EncryptingPlaylistDao(
     override suspend fun updateChannelCount(id: String, count: Int) =
         delegate.updateChannelCount(id, count)
 
+    override suspend fun updateLastEpgRefreshedAt(id: String, at: Long) =
+        delegate.updateLastEpgRefreshedAt(id, at)
+
     override suspend fun upsertAsActive(entity: PlaylistEntity) =
         delegate.upsertAsActive(entity.encrypted())
 
