@@ -1394,10 +1394,46 @@ fun AerioTVNavHost(
                 val selectedVersion = parentSeriesId
                     ?.let { epOnDemandState.selectedSeriesVersion[it] }
 
+                // Progress identity for this episode (2026-09-11). The route
+                // used to hand the player nothing but the uuid, so the saved
+                // row was vodType "movie" with seriesId null: the hero label,
+                // seriesTarget and Continue Watching all query by
+                // vodType = 'episode' AND seriesId, and therefore never saw
+                // it. Same up-next queue the series detail page builds (rest
+                // of the series by season then episode, capped at 50).
+                val epUpNextQueue = remember(parentSeriesId, episodeUuid, epOnDemandState.episodesBySeries) {
+                    val ordered = parentSeriesId
+                        ?.let { epOnDemandState.episodesBySeries[it] }
+                        .orEmpty()
+                        .sortedWith(compareBy({ it.seasonNumber ?: 0 }, { it.episodeNumber ?: Int.MAX_VALUE }))
+                    val idx = ordered.indexOfFirst { it.uuid == episodeUuid }
+                    if (idx < 0) {
+                        null
+                    } else {
+                        com.aeriotv.android.feature.watchprogress.WatchProgressViewModel.encodeQueue(
+                            ordered.drop(idx + 1).take(50).map {
+                                com.aeriotv.android.feature.watchprogress.UpNextEntry(
+                                    vodId = it.uuid,
+                                    title = it.displayName,
+                                    posterUrl = it.stillImageUrl,
+                                    streamUrl = null, // re-resolved by uuid at play time
+                                    seasonNumber = it.seasonNumber ?: 0,
+                                    episodeNumber = it.episodeNumber ?: 0,
+                                )
+                            },
+                        )
+                    }
+                }
+
                 VODPlayerScreen(
                     streamUrl = resolved?.url.orEmpty(),
                     title = episode?.displayName ?: "Episode",
                     startFromBeginning = epFromStart,
+                    progressVodType = "episode",
+                    progressSeriesId = parentSeriesId?.toString(),
+                    progressSeasonNumber = episode?.seasonNumber ?: 0,
+                    progressEpisodeNumber = episode?.episodeNumber ?: 0,
+                    progressUpNextQueue = epUpNextQueue,
                     // Audit #53/#38: never replay the API key to a session URL
                     // that resolved OFF the server's origin.
                     httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,

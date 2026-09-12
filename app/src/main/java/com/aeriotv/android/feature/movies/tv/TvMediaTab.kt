@@ -127,8 +127,12 @@ internal fun TvMediaTab(
         }
         val seriesLabel = item?.takeIf { it.movieUuid == null && it.seriesId != null }?.let(seriesPlayLabel)
         val buttons = buildList {
+            // A series hero always carries the season / episode of the
+            // target ("Resume S1 E1"), on the Continue Watching hero as well
+            // as the watchlist one; bare "Resume" hid which episode would
+            // play (Logan 2026-09-11). Movies keep Play / Resume.
             val primaryLabel = when {
-                watchlist && seriesLabel != null -> seriesLabel
+                seriesLabel != null -> seriesLabel
                 page.hasProgress -> "Resume"
                 else -> "Play"
             }

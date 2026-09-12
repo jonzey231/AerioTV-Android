@@ -1,7 +1,9 @@
 package com.aeriotv.android.feature.ondemand
 
+import android.util.Log
 import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
 import com.aeriotv.android.core.network.DispatcharrVODEpisode
+import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 
 /**
  * The episode a series' primary Play button launches, plus the label that
@@ -40,13 +42,31 @@ fun seriesTarget(
     if (newest != null && index >= 0) {
         if (!newest.isFinished) {
             return SeriesTarget(ordered[index], resuming = true, label = playLabel(ordered[index], "Resume"))
+                .also { logTarget(newest.seriesId, it, "resume row pos=${newest.positionMs}") }
         }
         ordered.getOrNull(index + 1)?.let { next ->
             return SeriesTarget(next, resuming = false, label = playLabel(next, "Play"))
+                .also { logTarget(newest.seriesId, it, "next after finished") }
         }
     }
     val first = ordered.first()
     return SeriesTarget(first, resuming = false, label = playLabel(first, "Play"))
+        .also {
+            logTarget(
+                newest?.seriesId,
+                it,
+                if (newest == null) "no progress rows (${progress.size})" else "row videoId=${newest.videoId} not in ${ordered.size} episodes",
+            )
+        }
+}
+
+/** Proves which row (if any) the hero / detail label came from. */
+private fun logTarget(seriesId: String?, target: SeriesTarget, reason: String) {
+    Log.i(
+        WatchProgressViewModel.PROGRESS_TAG,
+        "[PROGRESS] target series=$seriesId -> s=${target.episode.seasonNumber ?: 0} " +
+            "e=${target.episode.episodeNumber ?: 0} reason=$reason",
+    )
 }
 
 private fun playLabel(episode: DispatcharrVODEpisode, verb: String): String =

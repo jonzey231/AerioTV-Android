@@ -185,6 +185,18 @@ fun VODPlayerScreen(
      *  "episode", or "recording"). Recordings must not land in the
      *  movie Continue Watching rail, and the type now syncs. */
     progressVodType: String? = null,
+    /** Episode progress identity (2026-09-11): the series id / season /
+     *  episode every save must carry so the series-scoped queries
+     *  (observeEpisodesForSeries, seriesTarget, Continue Watching) can find
+     *  the row. Non-null only for episode playback. Before this, the episode
+     *  route saved a bare row keyed by the episode uuid with vodType "movie"
+     *  and seriesId null, so nothing series-scoped ever saw it. */
+    progressSeriesId: String? = null,
+    progressSeasonNumber: Int = 0,
+    progressEpisodeNumber: Int = 0,
+    /** JSON up-next queue (WatchProgressViewModel.encodeQueue) stashed on the
+     *  row at launch so finishing this episode advances Continue Watching. */
+    progressUpNextQueue: String? = null,
     posterUrl: String? = null,
     /** Hero "Play from Beginning" (tvOS MoviesView:1507-1511): ignore the
      *  saved position and start at 0. The WatchProgress row is left alone,
@@ -754,6 +766,26 @@ fun VODPlayerScreen(
         player.addListener(listener)
         evaluate(player.currentTracks)
         onDispose { player.removeListener(listener) }
+    }
+
+    // Episode metadata annotate (2026-09-11). Every path into episode
+    // playback lands here -- the TV hero, a companion deep link, the series
+    // detail page -- so the row carries series / season / episode and the
+    // up-next queue from the first moment, not only when the detail page
+    // happened to annotate it first. Metadata only: the position is never
+    // reset, so this cannot wipe a resume point.
+    LaunchedEffect(videoId, progressSeriesId, title) {
+        if (videoId.isNullOrBlank() || progressSeriesId.isNullOrBlank()) return@LaunchedEffect
+        watchVm.captureEpisodePlay(
+            videoId = videoId,
+            title = title,
+            posterUrl = posterUrl,
+            seriesId = progressSeriesId,
+            seasonNumber = progressSeasonNumber,
+            episodeNumber = progressEpisodeNumber,
+            streamUrl = null,
+            upNextQueue = progressUpNextQueue,
+        )
     }
 
     // Saved progress lookup. Null while loading; -1L after a confirmed "no
@@ -1430,6 +1462,9 @@ fun VODPlayerScreen(
                     positionMs = pos,
                     durationMs = dur,
                     vodType = progressVodType,
+                    seriesId = progressSeriesId,
+                    seasonNumber = progressSeriesId?.let { progressSeasonNumber },
+                    episodeNumber = progressSeriesId?.let { progressEpisodeNumber },
                 )
             }
         }
@@ -1457,6 +1492,9 @@ fun VODPlayerScreen(
                         positionMs = pos,
                         durationMs = dur,
                         vodType = progressVodType,
+                        seriesId = progressSeriesId,
+                        seasonNumber = progressSeriesId?.let { progressSeasonNumber },
+                        episodeNumber = progressSeriesId?.let { progressEpisodeNumber },
                     )
                 }
                 com.aeriotv.android.core.sync.DriveSyncWorker

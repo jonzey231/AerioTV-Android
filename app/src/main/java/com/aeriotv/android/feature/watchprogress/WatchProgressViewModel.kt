@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.watchprogress
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
@@ -157,6 +158,7 @@ class WatchProgressViewModel @Inject constructor(
                     playlistId = existing.playlistId ?: playlistDao.firstActive()?.id,
                 )
                 dao.upsert(merged)
+                logSave(merged)
                 if (!wasFinished && finished && merged.vodType == "episode") {
                     advanceUpNext(merged, now)
                 }
@@ -178,6 +180,7 @@ class WatchProgressViewModel @Inject constructor(
                     upNextQueue = upNextQueue,
                 )
                 dao.upsert(row)
+                logSave(row)
                 if (finished && row.vodType == "episode") advanceUpNext(row, now)
             }
         }
@@ -280,11 +283,24 @@ class WatchProgressViewModel @Inject constructor(
         }
     }
 
+    /** One line per persisted row: the saved key next to the series-scoped
+     *  fields the hero / Continue Watching queries match on. */
+    private fun logSave(row: WatchProgressEntity) {
+        Log.i(
+            PROGRESS_TAG,
+            "[PROGRESS] save videoId=${row.videoId} series=${row.seriesId} " +
+                "s=${row.seasonNumber} e=${row.episodeNumber} pos=${row.positionMs} " +
+                "dur=${row.durationMs} type=${row.vodType} finished=${row.isFinished}",
+        )
+    }
+
     fun delete(videoId: String) {
         viewModelScope.launch { dao.delete(videoId) }
     }
 
     companion object {
+        /** Shared tag with [seriesTarget] so one grep proves the key matches. */
+        const val PROGRESS_TAG = "AerioProgress"
         private const val FINISHED_THRESHOLD_MS = 5 * 60 * 1000L
         private val json = Json { ignoreUnknownKeys = true }
         private val listSerializer = ListSerializer(UpNextEntry.serializer())
