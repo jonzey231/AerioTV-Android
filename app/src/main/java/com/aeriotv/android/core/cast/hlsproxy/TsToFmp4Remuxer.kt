@@ -598,11 +598,7 @@ class TsToFmp4Remuxer(
             if (initSent) {
                 if (framePts < 0) framePts = audioClock.unwrap(pts33)
                 val durationTicks = info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
-                if (timelineBasePts >= 0 && framePts >= timelineBasePts) {
-                    audioQueue.add(
-                        AudioSample(data.copyOfRange(p, next), framePts, durationTicks),
-                    )
-                }
+                queueAudio(data.copyOfRange(p, next), framePts, durationTicks)
                 framePts += durationTicks
             }
             p = next
@@ -767,20 +763,28 @@ class TsToFmp4Remuxer(
                 // the next segment's audio tfdt was 348000). Chromium
                 // gets a backwards audio append one segment in, which is
                 // the IDLE/ERROR a second after the first playlist fetch.
-                if (timelineBasePts >= 0 && framePts >= timelineBasePts) {
-                    audioQueue.add(
-                        AudioSample(
-                            data.copyOfRange(payloadStart, p + frameLen),
-                            framePts,
-                            audioFrameTicks,
-                        ),
-                    )
-                }
+                queueAudio(data.copyOfRange(payloadStart, p + frameLen), framePts, audioFrameTicks)
                 framePts += audioFrameTicks
             }
             p += frameLen
         }
         if (p < data.size) adtsCarry = data.copyOfRange(p, data.size)
+    }
+
+    /** Queue one audio frame if it belongs on this generation's timeline.
+     *
+     *  The gate is the first video PRESENTATION time, not [timelineBase]:
+     *  a frame below it is dropped outright, because Chromium drops and
+     *  truncates audio that lands before a sequence-mode append's anchor
+     *  and the truncated frame then costs the load a decoder swap (see
+     *  [timelineBasePts] for the measured log). That leaves a generation's
+     *  audio starting up to one frame after its video, which is the
+     *  irreducible part of the splice seam: the rest of it, the whole 100+
+     *  ms, was the missing tail that [flushGenerationTail] now emits. */
+    private fun queueAudio(data: ByteArray, framePts: Long, durationTicks: Long) {
+        if (!initSent || timelineBasePts < 0) return
+        if (framePts < timelineBasePts) return
+        audioQueue.add(AudioSample(data, framePts, durationTicks))
     }
 
     // ---- segmenter ----
@@ -801,10 +805,59 @@ class TsToFmp4Remuxer(
     }
 
     /** Per-connection teardown hook the session calls once per ingest
-     *  connection. Nothing to release since the audio transcode went
-     *  away (everything here is plain Kotlin state, dropped with the
-     *  instance); kept so the ingest loop's contract is unchanged. */
-    fun release() = Unit
+     *  connection, before the next generation begins. Nothing to free
+     *  since the audio transcode went away (everything here is plain
+     *  Kotlin state, dropped with the instance), but the pending TAIL
+     *  must still be emitted: see [flushGenerationTail]. */
+    fun release() {
+        flushGenerationTail()
+    }
+
+    /** Emit this generation's pending tail as one last segment, with both
+     *  tracks ending together.
+     *
+     *  Measured at two channel changes (session22.txt 17:23:50 and
+     *  17:25:14): the receiver reported a 122-123 ms hole in its buffered
+     *  range at every splice, then flapped between seeking and BUFFERING
+     *  and gap-jumped. Provider audio trails its video in the mux, so when
+     *  the cut keyframe arrived the audio for the last ~120 ms of the
+     *  outgoing segment had not been demuxed yet; it stayed queued for a
+     *  segment that the channel change then threw away. Generation 7's
+     *  last segment therefore declared 4.004 s of EXTINF while its audio
+     *  covered only 3.901 s (gen 7 seg 10: t=40.04, audio 39.927 plus 188
+     *  frames of 21.33 ms = 43.938 against a playlist end of 44.044), and
+     *  Shaka placed generation 8 at the PLAYLIST position, 103 ms past
+     *  where the audio actually stopped. Chromium reports a two-track
+     *  SourceBuffer as the INTERSECTION of its tracks, so that shortfall
+     *  plus the new generation's own start offset is the hole.
+     *
+     *  The fix is to declare only what both tracks carry: trim the video
+     *  tail back to the audio end, emit the held audio with it, and let
+     *  the segment's EXTINF be that common end. The next generation then
+     *  starts where this one really stopped. */
+    private fun flushGenerationTail() {
+        if (!initSent || videoQueue.isEmpty()) return
+        val videoEnd = videoQueue.last().dts + lastVideoDuration
+        val audioEnd = audioQueue.lastOrNull()?.let { it.pts + it.durationTicks } ?: -1L
+        var cut = videoEnd
+        if (audioEnd in 0 until videoEnd) {
+            // Video samples that begin at or after the audio end carry no
+            // audio at all; dropping them is what keeps the declared
+            // duration honest for BOTH tracks. One sample always stays so
+            // the segment still opens on its keyframe.
+            while (videoQueue.size > 1 && videoQueue.last().dts >= audioEnd) {
+                videoQueue.removeAt(videoQueue.size - 1)
+            }
+            cut = maxOf(audioEnd, videoQueue.last().dts + 1)
+        }
+        val ticks = TICKS_PER_SECOND.toDouble()
+        log(
+            "splice tail: video end ${"%.3f".format((videoEnd - timelineBase) / ticks)} " +
+                "audio end ${"%.3f".format(if (audioEnd < 0) -1.0 else (audioEnd - timelineBase) / ticks)} " +
+                "trimmed ${"%.1f".format((videoEnd - cut) * 1000.0 / ticks)} ms",
+        )
+        finalizeSegment(cutDts = cut)
+    }
 
     private fun finalizeSegment(cutDts: Long) {
         if (videoQueue.isEmpty()) return
@@ -950,7 +1003,7 @@ class TsToFmp4Remuxer(
                     // for every AAC and AC-3 frame.
                     fullBox("tfhd", 0, 0x020020, u32(AUDIO_TRACK_ID), u32(0x02000000)),
                     // No clamp: samples earlier than timelineBasePts are
-                    // dropped at queue time (see onAdtsAudioPes), and
+                    // dropped at queue time (see queueAudio), and
                     // timelineBasePts >= timelineBase, so this is always
                     // >= 0 and always the truth. Clamping here is what
                     // overlapped consecutive segments' audio.

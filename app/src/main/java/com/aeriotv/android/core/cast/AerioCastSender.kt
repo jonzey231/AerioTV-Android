@@ -250,12 +250,34 @@ class AerioCastSender @Inject constructor(
             } else {
                 "none"
             }
-            Log.i(
-                TAG,
-                "[Cast] receiver: ev=${str("ev")} t=${num("t", 3)} buffered=$buffered " +
-                    "ready=${str("ready")} state=${str("state")} rate=${str("rate")} " +
-                    "seek=$seek bufTime=${num("bufTime", 2)} bw=$bw hist=${str("hist")} err=$err",
+            // Anything the receiver adds later still reaches logcat: the known
+            // keys keep their order and formatting, then every remaining
+            // top-level key prints generically. "type"/"mse" belong to the caps
+            // path above and would only repeat it here.
+            val known = setOf(
+                "ev", "t", "buffered", "ready", "state", "rate",
+                "seek", "bufTime", "bw", "hist", "err", "type", "mse",
             )
+            val extras = buildString {
+                val it = j.keys()
+                while (it.hasNext()) {
+                    val key = it.next()
+                    if (key in known) continue
+                    val v = j.opt(key)
+                    val text = when {
+                        v == null || v === JSONObject.NULL -> "null"
+                        v is JSONObject || v is org.json.JSONArray -> v.toString()
+                        else -> v.toString()
+                    }
+                    append(' ').append(key).append('=').append(text)
+                }
+            }
+            var line = "[Cast] receiver: ev=${str("ev")} t=${num("t", 3)} buffered=$buffered " +
+                "ready=${str("ready")} state=${str("state")} rate=${str("rate")} " +
+                "seek=$seek bufTime=${num("bufTime", 2)} bw=$bw hist=${str("hist")} err=$err" +
+                extras
+            if (line.length > 1000) line = line.take(997) + "..."
+            Log.i(TAG, line)
         }
     }
 

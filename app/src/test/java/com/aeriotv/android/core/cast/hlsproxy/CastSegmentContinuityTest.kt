@@ -47,8 +47,15 @@ class CastSegmentContinuityTest {
     private class Capture : TsToFmp4Remuxer.Listener {
         var init: ByteArray? = null
         val segments = ArrayList<ByteArray>()
+        /** Declared segment durations, i.e. the EXTINF values the playlist
+         *  will carry. Shaka anchors the generation AFTER a discontinuity
+         *  on their accumulated sum, so the splice arithmetic needs them. */
+        val durations = ArrayList<Long>()
         override fun onInitSegment(data: ByteArray) { init = data }
-        override fun onMediaSegment(data: ByteArray, durationTicks: Long) { segments.add(data) }
+        override fun onMediaSegment(data: ByteArray, durationTicks: Long) {
+            segments.add(data)
+            durations.add(durationTicks)
+        }
     }
 
     // ---- minimal box reader, enough for moof/traf/tfhd/tfdt/trun ----
@@ -208,6 +215,110 @@ class CastSegmentContinuityTest {
             previousVideoEnd = video.end
             previousAudioEnd = audio.end
         }
+    }
+
+    /** A transport stream whose AUDIO timestamps trail its video by
+     *  [audioLagSeconds] at the same position in the mux, which is what
+     *  every measured provider feed looks like (session22.txt, gen 7:
+     *  a segment starting at video dts 40.040 carried audio from 39.927).
+     *  Built by offsetting the VIDEO input, so no timestamp is negative.
+     *
+     *  That lag is what opens the hole at a channel change: when the cut
+     *  keyframe arrives, the audio that belongs to the last 120 ms of the
+     *  segment's video has not been demuxed yet, so it stays queued for a
+     *  segment that the channel change then throws away. */
+    private fun buildLaggedTs(audioLagSeconds: Double = 0.12): File {
+        val out = File(workDir, "audiolag60.ts")
+        if (out.isFile && out.length() > 0) return out
+        val p = ProcessBuilder(
+            ffmpeg.path, "-y", "-v", "error",
+            "-itsoffset", audioLagSeconds.toString(),
+            // 60 fps with one B-frame of reorder, matching the measured
+            // feed: its first video presentation time sat 16 to 34 ms
+            // above its decode time, and its audio 2 to 21 ms above that.
+            // That pair is the irreducible part of the seam (a generation
+            // cannot present media it has not decoded, and audio is
+            // quantized to 21.33 ms frames), so the fixture carries the
+            // same magnitude rather than an exaggerated one.
+            "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=60:duration=30",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=30",
+            "-c:v", "libx264", "-preset", "veryfast", "-bf", "1", "-g", "120", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", "48000",
+            "-f", "mpegts", out.path,
+        ).redirectErrorStream(true).start()
+        p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        return out
+    }
+
+    /** One ingest connection: feed [limit] bytes in wire-sized chunks,
+     *  then the per-connection teardown the session always runs. */
+    private fun ingest(bytes: ByteArray, limit: Int): Capture {
+        val cap = Capture()
+        val remuxer = TsToFmp4Remuxer(listener = cap, log = {}, allowAc3Passthrough = false)
+        var off = 0
+        while (off < limit) {
+            val n = minOf(64 * 1024, limit - off)
+            remuxer.feed(bytes, off, n)
+            off += n
+        }
+        remuxer.release()
+        return cap
+    }
+
+    @Test
+    fun `a channel-change splice leaves one contiguous range in both tracks`() {
+        assumeTrue("ffmpeg present", ffmpeg.canExecute())
+        val bytes = buildLaggedTs().readBytes()
+        val frameTicks = 1024L * TsToFmp4Remuxer.TICKS_PER_SECOND / 48_000L
+
+        // The channel change lands mid-segment: the ingest stops partway
+        // through the stream, the session begins a new generation, and a
+        // fresh remuxer serves it (one remuxer per ingest connection).
+        val genA = ingest(bytes, limit = (bytes.size * 0.6).toInt())
+        val genB = ingest(bytes, limit = (bytes.size * 0.4).toInt())
+        assertTrue("gen A produced segments", genA.segments.size >= 3)
+        assertTrue("gen B produced segments", genB.segments.size >= 2)
+
+        // Shaka parses our EXT-X-DISCONTINUITY with sequenceMode false, so
+        // generation B is placed at the accumulated EXTINF position of
+        // generation A (its tfdt values restart at 0 and ride on top of
+        // that offset). Chromium then reports a two-track SourceBuffer's
+        // buffered range as the INTERSECTION of the tracks, so the old
+        // range ends at min(video end, audio end) and the new one starts
+        // at max(video start, audio start).
+        val playlistEndA = genA.durations.sum()
+        val lastA = spans(genA.segments.last())
+        val videoEndA = (lastA[1] ?: error("gen A tail has no video")).end
+        val audioEndA = (lastA[2] ?: error("gen A tail has no audio")).end
+        val firstB = spans(genB.segments.first())
+        val videoStartB = (firstB[1] ?: error("gen B seg0 has no video")).minPts
+        val audioStartB = (firstB[2] ?: error("gen B seg0 has no audio")).start
+
+        val oldEnd = minOf(videoEndA, audioEndA)
+        val newStart = playlistEndA + maxOf(videoStartB, audioStartB)
+        val holeTicks = newStart - oldEnd
+        val holeMs = holeTicks * 1000.0 / TsToFmp4Remuxer.TICKS_PER_SECOND
+        println(
+            "SPLICE HOLE ${"%.1f".format(holeMs)} ms " +
+                "(playlist end ${playlistEndA}, video end ${videoEndA}, " +
+                "audio end ${audioEndA}, new start +${maxOf(videoStartB, audioStartB)})",
+        )
+
+        // The generation's tail must end both tracks together, or the
+        // playlist promises media one of them does not have.
+        assertTrue(
+            "gen A ends video at $videoEndA but audio at $audioEndA, " +
+                "more than one $frameTicks-tick frame apart",
+            Math.abs(videoEndA - audioEndA) <= frameTicks,
+        )
+        // ONE contiguous range across the splice: 40 ms is well inside the
+        // quantum a single video frame and a single audio frame allow, and
+        // far below the 122 ms hole the receiver flapped on.
+        assertTrue(
+            "splice hole ${"%.1f".format(holeMs)} ms between the generations",
+            holeTicks < TsToFmp4Remuxer.TICKS_PER_SECOND * 40 / 1000,
+        )
     }
 
     /** default_sample_flags of one traf's tfhd, or null when the box does
