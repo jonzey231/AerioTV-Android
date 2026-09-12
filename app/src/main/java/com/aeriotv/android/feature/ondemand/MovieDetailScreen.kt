@@ -321,8 +321,8 @@ fun MovieDetailScreen(
                             ?: movie.plot?.takeIf { it.isNotBlank() }
                         val genreToken = (info?.effectiveGenre ?: movie.genre ?: tmdbDetails?.genres)
                             ?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                        val runtimeSecs = info?.durationSecs?.takeIf { it > 0 }
-                            ?: movie.durationSecs?.takeIf { it > 0 }
+                        val runtimeSecs = info?.durationSeconds?.takeIf { it > 0 }
+                            ?: movie.durationSeconds?.takeIf { it > 0 }
                         val playFocus = remember { FocusRequester() }
                         LaunchedEffect(Unit) {
                             repeat(10) {
@@ -489,8 +489,8 @@ fun MovieDetailScreen(
                             ?: movie.genre?.takeIf { it.isNotBlank() } ?: tmdbDetails?.genres
                         val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
                         val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
-                        val runtimeSecs = info?.durationSecs?.takeIf { it > 0 }
-                            ?: movie.durationSecs?.takeIf { it > 0 }
+                        val runtimeSecs = info?.durationSeconds?.takeIf { it > 0 }
+                            ?: movie.durationSeconds?.takeIf { it > 0 }
                         // tvOS tvFacts order (VODDetailView.swift:1124-1147)
                         // laid into a 2-column row-major grid: left column
                         // Genre then Runtime, right column Released then
@@ -655,7 +655,7 @@ private fun HeroSection(
         ?.let { runCatching { String.format("%.1f", it.toDouble()) }.getOrDefault(it) }
         ?.takeIf { it.isNotBlank() && it != "0.0" }
         ?: tmdbDetails?.voteAverage
-    val durationSecs = info?.durationSecs?.takeIf { it > 0 } ?: movie.durationSecs?.takeIf { it > 0 }
+    val durationSecs = info?.durationSeconds?.takeIf { it > 0 } ?: movie.durationSeconds?.takeIf { it > 0 }
 
     // On TV land focus on Play the moment the screen opens; without this the
     // screen had no focused control at all and the D-pad appeared dead.
@@ -749,13 +749,14 @@ private fun HeroSection(
             }
 
             Column(modifier = Modifier.weight(1f)) {
-                // iOS VODDetailView line 312 sets the title directly to
-                // `item.name` without appending the year; the year already
-                // shows on the meta strip below. Dispatcharr often serves
-                // titles that already embed "(YYYY)" - appending the
-                // resolved year on top of that gives "'Til Death (2006) (2006)".
+                // iOS VODDetailView heroSection (line 1231) renders
+                // `item.displayName`, i.e. VODDisplayItem.cleanDisplayName,
+                // which STRIPS every trailing "(YYYY)" group
+                // (VODModels.swift:1278). The year already shows on the meta
+                // strip below, so the phone hero uses the same cleaned name
+                // the TV hero does instead of the raw provider title.
                 Text(
-                    text = movie.displayName,
+                    text = displayTitle(movie.displayName, null),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.Bold,

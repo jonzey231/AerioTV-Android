@@ -2631,6 +2631,7 @@ class OnDemandViewModel @Inject constructor(
                         episodeNumber = e.episodeNum,
                         plot = e.plot,
                         durationSecs = e.durationSecs,
+                        duration = e.durationText?.let { JsonPrimitive(it) },
                         // Episode still: the screen reads stillImageUrl from
                         // custom_properties.movie_image, so stash the XC image there.
                         customProperties = e.imageUrl?.let { img ->

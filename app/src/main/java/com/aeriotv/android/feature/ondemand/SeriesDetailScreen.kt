@@ -692,7 +692,7 @@ fun SeriesDetailScreen(
                                 TvEpisodeCard(
                                     title = episodeTitle(ep),
                                     meta = listOfNotNull(
-                                        ep.durationSecs?.takeIf { it > 0 }?.let { formatEpisodeDuration(it) },
+                                        ep.durationSeconds?.takeIf { it > 0 }?.let { formatEpisodeDuration(it) },
                                         ep.airDate?.let { formatAirDate(it) }?.takeIf { it.isNotBlank() },
                                     ).joinToString(" · ").takeIf { it.isNotBlank() },
                                     episodeNumber = ep.episodeNumber,
@@ -1002,12 +1002,13 @@ private fun SeriesHeroSection(
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
-                // iOS VODDetailView line 312 sets the title to `item.name`
-                // without appending the year; the year already shows on the
-                // meta strip below. Dispatcharr often serves titles that
-                // already embed "(YYYY)" so appending duplicates it.
+                // iOS VODDetailView heroSection (line 1231) renders
+                // `item.displayName` = cleanDisplayName, which strips every
+                // trailing "(YYYY)" group (VODModels.swift:1278); the year
+                // already shows on the meta strip below. Same cleaned name
+                // the TV hero uses.
                 Text(
-                    text = series.displayName.ifBlank { "Untitled" },
+                    text = displayTitle(series.displayName, null).ifBlank { "Untitled" },
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.Bold,
@@ -1484,7 +1485,7 @@ private fun EpisodeRow(
                 overflow = TextOverflow.Ellipsis,
             )
             val pieces = listOfNotNull(
-                episode.durationSecs?.takeIf { it > 0 }?.let { formatEpisodeDuration(it) },
+                episode.durationSeconds?.takeIf { it > 0 }?.let { formatEpisodeDuration(it) },
                 episode.airDate?.let { formatAirDate(it) }?.takeIf { it.isNotBlank() },
                 episode.rating?.takeIf { it.isNotBlank() && it != "0.0" }
                     ?.let { runCatching { String.format("%.1f", it.toDouble()) }.getOrDefault(it) }

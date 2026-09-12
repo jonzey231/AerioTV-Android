@@ -574,6 +574,18 @@ class PlaybackTracer {
         }
         if (judderGaps > 0) {
             val n = now()
+            // Startup is NOT judder: the first second after the first rendered
+            // frame legitimately contains one huge gap (decoder priming, the
+            // surface's first buffers) and fired "[JUDDER] max frame gap
+            // 2071ms fps=2/s pos=1933ms" on literally every tune. Drop the
+            // frame-gap verdict until the pipeline has been rendering for
+            // JUDDER_FIRST_FRAME_GRACE_MS. Audio-underrun judder lines stay
+            // unconditional; they are never a startup artifact.
+            val ff = firstFrameAtMs
+            if (ff == 0L || n - ff < JUDDER_FIRST_FRAME_GRACE_MS) {
+                judderGaps = 0
+                return
+            }
             if (n - lastJudderLogAtMs < JUDDER_LOG_COOLDOWN_MS) return
             lastJudderLogAtMs = n
             val gapMs = judderGapUs / 1_000L
@@ -767,6 +779,9 @@ class PlaybackTracer {
          *  counts as a visible hitch (50 fps -> 50ms interval -> 125ms). */
         private const val FRAME_GAP_FACTOR = 2.5f
         private const val JUDDER_LOG_COOLDOWN_MS = 2_000L
+        /** Frame-gap judder is not evaluated until the pipeline has been
+         *  rendering this long past the tune's first frame. */
+        private const val JUDDER_FIRST_FRAME_GRACE_MS = 2_000L
 
         /** Classify a play URL for the [TUNE] playUrl line. Never logs the
          *  URL itself (it can embed credentials). */

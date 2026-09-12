@@ -114,7 +114,7 @@ fun MediaTabContent(
             )
             MediaHeroPage(
                 key = "wl:" + e.key, title = item.title, artUrl = item.posterUrl, year = item.year, season = null, episode = null,
-                durationSecs = m?.durationSecs, genre = m?.genre ?: sr?.genre, rating = item.rating,
+                durationSecs = m?.durationSeconds, genre = m?.genre ?: sr?.genre, rating = item.rating,
                 positionMs = 0L, durationMs = 0L, item = item, tmdbId = m?.tmdbId ?: sr?.tmdbId, isMovie = e.isMovie,
                 plot = m?.plot ?: sr?.plot,
             )
@@ -137,7 +137,7 @@ fun MediaTabContent(
                 MediaHeroPage(
                     key = "cw:" + r.videoId, title = m?.let { displayTitle(it.displayName, it.year) } ?: displayTitle(r.title, null),
                     artUrl = m?.posterUrl ?: r.posterUrl, year = m?.year, season = null, episode = null,
-                    durationSecs = m?.durationSecs ?: (r.durationMs / 1000L).toInt().takeIf { it > 0 },
+                    durationSecs = m?.durationSeconds ?: (r.durationMs / 1000L).toInt().takeIf { it > 0 },
                     genre = m?.genre, rating = m?.rating, positionMs = r.positionMs, durationMs = r.durationMs,
                     item = m?.toMediaItem() ?: MediaItem(key = "m:" + r.videoId, title = r.title, year = null, rating = null,
                         posterUrl = r.posterUrl, category = null, movieUuid = r.videoId),

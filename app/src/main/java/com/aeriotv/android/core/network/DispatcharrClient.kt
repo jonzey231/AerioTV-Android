@@ -2351,6 +2351,49 @@ data class VODCustomProps(
         (get(name) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
 }
 
+/**
+ * Ceiling (in the raw `duration_secs` units) under which a VOD runtime is read
+ * as MINUTES rather than seconds. See [resolveDurationSeconds].
+ */
+private const val MINUTES_LIKE_DURATION_CEILING = 600
+
+/**
+ * Normalize a VOD runtime to SECONDS.
+ *
+ * `duration_secs` is documented as seconds, but Dispatcharr copies whatever the
+ * upstream panel put under that key straight into the column
+ * (apps/vod/tasks.py extract_duration_from_data only multiplies by 60 when the
+ * value arrives under the separate `duration` key), so a panel that stores
+ * MINUTES in `duration_secs` poisons it: "3000 Miles to Graceland" (125 min)
+ * landed as 125 and the detail meta line rendered "2m".
+ *
+ * Resolution order matches the iOS side: an unambiguous "HH:MM:SS" / "MM:SS"
+ * `duration` string wins (iOS reads that field for XC episodes,
+ * VODService.swift:449), then the raw int. A raw int at or below
+ * [MINUTES_LIKE_DURATION_CEILING] is read as minutes: no movie or episode in a
+ * VOD library runs under 10 minutes, while every mis-united feature film lands
+ * in the 40-240 band, so the heuristic cannot misfire on real content.
+ */
+internal fun resolveDurationSeconds(rawSecs: Int?, durationField: JsonElement?): Int? {
+    hmsDurationSeconds(durationField)?.let { return it }
+    val raw = rawSecs?.takeIf { it > 0 } ?: return null
+    return if (raw <= MINUTES_LIKE_DURATION_CEILING) raw * 60 else raw
+}
+
+/** "01:45:00" / "45:00" to seconds. Null for anything without a ':' separator
+ *  (a bare number is the ambiguous shape [resolveDurationSeconds] handles). */
+private fun hmsDurationSeconds(el: JsonElement?): Int? {
+    val text = (el as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim() ?: return null
+    if (!text.contains(':')) return null
+    val parts = text.split(':').map { it.trim().toIntOrNull() ?: return null }
+    val secs = when (parts.size) {
+        3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+        2 -> parts[0] * 60 + parts[1]
+        else -> return null
+    }
+    return secs.takeIf { it > 0 }
+}
+
 @Serializable
 data class DispatcharrVODEpisode(
     val id: Int,
@@ -2369,6 +2412,10 @@ data class DispatcharrVODEpisode(
     val rating: String? = null,
     @SerialName("duration_secs")
     val durationSecs: Int? = null,
+    /** "HH:MM:SS" runtime some panels send next to `duration_secs` (the XC
+     *  shim emits both, apps/output/views.py:2853). JsonElement? because the
+     *  unified-content endpoint aliases a raw seconds Int to the same key. */
+    val duration: JsonElement? = null,
     @SerialName("tmdb_id")
     val tmdbId: String? = null,
     @SerialName("imdb_id")
@@ -2378,6 +2425,8 @@ data class DispatcharrVODEpisode(
     val streams: List<DispatcharrVODStreamOption> = emptyList(),
 ) {
     val displayName: String get() = title.ifBlank { name.orEmpty() }
+    /** Runtime in SECONDS; see [resolveDurationSeconds]. */
+    val durationSeconds: Int? get() = resolveDurationSeconds(durationSecs, duration)
     /** Mirrors iOS DispatcharrVODEpisode plot resolution (StreamingAPIs line 3701):
      *  prefer `description`, fall back to `plot`, then `overview`. */
     val effectivePlot: String? get() = description ?: plot ?: overview
@@ -2440,6 +2489,8 @@ data class DispatcharrVODProviderInfo(
     val youtubeTrailer: JsonElement? = null,
     @SerialName("duration_secs")
     val durationSecs: Int? = null,
+    /** See DispatcharrVODEpisode.duration. */
+    val duration: JsonElement? = null,
     val age: String? = null,
     @SerialName("backdrop_path")
     val backdropPath: JsonElement? = null,
@@ -2451,6 +2502,9 @@ data class DispatcharrVODProviderInfo(
     @SerialName("custom_properties")
     val customProperties: VODCustomProps? = null,
 ) {
+    /** Runtime in SECONDS; see [resolveDurationSeconds]. */
+    val durationSeconds: Int? get() = resolveDurationSeconds(durationSecs, duration)
+
     /** Plot copy. Movies set `plot` at root, series nest it as `description`.
      *  Episodes occasionally use `overview`. */
     val effectivePlot: String?
@@ -2613,6 +2667,8 @@ data class DispatcharrVODMovie(
     val year: Int? = null,
     @SerialName("duration_secs")
     val durationSecs: Int? = null,
+    /** See DispatcharrVODEpisode.duration. */
+    val duration: JsonElement? = null,
     @SerialName("tmdb_id")
     val tmdbId: String? = null,
     @SerialName("imdb_id")
@@ -2634,6 +2690,8 @@ data class DispatcharrVODMovie(
     val displayName: String get() = title.ifBlank { name.orEmpty() }
     val posterUrl: String? get() = logo?.url
     val firstStreamId: Int? get() = streams.firstOrNull()?.streamId
+    /** Runtime in SECONDS; see [resolveDurationSeconds]. */
+    val durationSeconds: Int? get() = resolveDurationSeconds(durationSecs, duration)
 
     /** `custom_properties.category_id`, Int-or-String tolerant.
      *  See DispatcharrVODSeries.vodCategoryId. */

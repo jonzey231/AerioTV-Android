@@ -149,6 +149,9 @@ class XtreamCodesApi @Inject constructor() {
         val plot: String?,
         val imageUrl: String?,
         val durationSecs: Int?,
+        /** Panel `info.duration`, usually "HH:MM:SS". Unambiguous, so it wins
+         *  over durationSecs in resolveDurationSeconds. */
+        val durationText: String?,
     )
 
     // ─────────────────────────── Fetches ──────────────────────────
@@ -292,6 +295,7 @@ class XtreamCodesApi @Inject constructor() {
                     imageUrl = info?.str("movie_image"),
                     durationSecs = info?.str("duration_secs")?.toIntOrNull()
                         ?: info?.flexInt("duration_secs"),
+                    durationText = info?.str("duration")?.takeIf { it.contains(':') },
                 )
             }
         }
