@@ -129,6 +129,31 @@
     // sent) and the two have to move together.
     const LIVE_START_BEHIND_SECONDS = 4;
 
+    // EXT-X-TARGETDURATION the proxy publishes is the longest segment in the
+    // window (our cuts land on keyframes, measured 3 to 6 s). Used as the
+    // guard band around the live seek range end: a playhead within one
+    // target duration of the end is at the edge by design, not stuck.
+    const TARGET_DURATION_SECONDS = 6;
+
+    // manifest.availabilityWindowOverride, below. Shaka derives a live HLS
+    // stream's segmentAvailabilityDuration from the playlist window itself
+    // (hls_parser.js determineDuration_ -> getLiveDuration_, which is
+    // maxTimestamp - minTimestamp of the CURRENT segment index), and it then
+    // evicts that same index at getSegmentAvailabilityStart() =
+    // availabilityEnd - segmentAvailabilityDuration. The two feed each
+    // other: every eviction raises minTimestamp, which shrinks the duration,
+    // which raises the eviction point, and the window ratchets down to a
+    // single segment. Measured on the Google TV Streamer at 16:30:52 with
+    // our 5 s segments and a 4 s presentation delay:
+    // seek=[51.368-52.373], exactly 5.005 - 4 seconds wide, one segment of
+    // availability minus the delay, sitting on the buffered end. Pinning the
+    // duration to a constant (hls_parser.js:1383, "The app can override that
+    // with a longer duration, to allow seeking") breaks the loop: the seek
+    // range becomes [availEnd - 20, availEnd - 4], 16 s wide. Deliberately
+    // under the proxy's published window (5 segments, 15 to 25 s) plus its
+    // ring, so we never claim availability for media the proxy has dropped.
+    const AVAILABILITY_WINDOW_SECONDS = 20;
+
     // ---- receiver telemetry (urn:x-cast:com.aeriotv.receiver.debug) ----
     //
     // Nothing this page prints is readable from the devices we debug with:
@@ -348,8 +373,39 @@
       // buffered range the whole time, so a gap jump was never going to
       // help and neither is a test for one.
       if (stuckTicks < 3) return;
-      resyncPlayhead('nudge');
+      // Three seconds of a motionless playhead is NOT on its own a reason to
+      // move it. On 2026-09-12 at 16:30 it was the reason the receiver threw
+      // the picture away: Shaka's live seek range had collapsed to one
+      // segment minus the presentation delay (seek=[51.368-52.373], see
+      // AVAILABILITY_WINDOW_SECONDS), the playhead sat a few milliseconds
+      // below its start in permanent BUFFERING, and this watchdog then
+      // seeked BACKWARD out of the buffer entirely (err=nudge 45.411 ->
+      // 39.185), which is the handful of frames Logan saw. Three rules now
+      // bound it:
+      //
+      //  1. Never within one target duration of the seek range end. That is
+      //     where a live playhead belongs; waiting there for the next
+      //     segment is normal and a seek cannot make the segment arrive.
+      //  2. Only act when the playhead is BEHIND the buffered media (it will
+      //     never be reached by playback) or when the element has nothing
+      //     decodable at the playhead (readyState < 2) while media IS
+      //     buffered ahead of it.
+      //  3. Never seek backward; see resyncPlayhead.
       stuckTicks = 0;
+      const ranges = bufferedRanges();
+      if (!ranges.length) return;
+      const head = ranges[0][0];
+      const tail = ranges[ranges.length - 1][1];
+      const range = seekRange();
+      if (range && range[1] !== null &&
+          video.currentTime >= range[1] - TARGET_DURATION_SECONDS) {
+        // At the live edge by design.
+        return;
+      }
+      const behindBuffer = video.currentTime < head;
+      const starvedWithMediaAhead = video.readyState < 2 && tail > video.currentTime + 0.1;
+      if (!behindBuffer && !starvedWithMediaAhead) return;
+      resyncPlayhead('nudge');
     }, 1000);
 
     // Put the media element where Shaka believes the playhead is.
@@ -397,7 +453,13 @@
         range[1] - LIVE_START_BEHIND_SECONDS : head;
       target = Math.min(Math.max(target, head + 0.05), Math.max(tail - 0.05, head));
       const now = roundTo(video.currentTime, 3);
-      if (Math.abs(target - video.currentTime) < 0.5) return;
+      // FORWARD ONLY. A backward seek discards decoded media the renderer
+      // was about to show and, when the seek range itself is the thing that
+      // is wrong, lands outside the buffer: 16:30:52 went 45.411 -> 39.185
+      // and the picture died. Playback's own job is to move forward, so a
+      // rescue that moves back is never the right answer; if the target is
+      // behind us there is nothing to rescue.
+      if (target <= video.currentTime + 0.5) return;
       lastReceiverError = ev + ' ' + now + ' -> ' + roundTo(target, 3);
       sendReceiverSnapshot(ev);
       try {
@@ -461,6 +523,7 @@
         manifest: {
           hls: { sequenceMode: false },
           defaultPresentationDelay: LIVE_START_BEHIND_SECONDS,
+          availabilityWindowOverride: AVAILABILITY_WINDOW_SECONDS,
         },
         streaming: {
           gapDetectionThreshold: 0.1,
