@@ -228,6 +228,22 @@ class AerioCastSender @Inject constructor(
             // leaving a live proxy feeding a receiver that stopped asking.
             maybeReloadAfterIdle(playerState, idleReason)
         }
+
+        /**
+         * The receiver NAMING the failure. Added 2026-09-12: an IDLE with
+         * idleReason=ERROR says only "the receiver could not play the
+         * media", while MediaError carries the detailed error code (Cast
+         * MEDIA_ERROR_MESSAGE / Shaka code) that distinguishes a manifest
+         * parse failure from an MSE append failure from a decode failure.
+         * Without it a cast diagnosis has to guess between them.
+         */
+        override fun onMediaError(error: com.google.android.gms.cast.MediaError) {
+            Log.w(
+                TAG,
+                "[Cast] media error code=${error.detailedErrorCode} " +
+                    "reason=${error.reason} type=${error.type}",
+            )
+        }
     }
 
     /** One automatic re-load when the receiver reports IDLE for a reason that

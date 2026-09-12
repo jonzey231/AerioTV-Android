@@ -394,4 +394,116 @@ class TsToFmp4RemuxerTest {
         assertTrue(thrown is UnsupportedCodecException)
         assertEquals("MP2 audio", (thrown as UnsupportedCodecException).codecName)
     }
+
+    @Test
+    fun `aac latm is refused loudly rather than parsed as adts`() {
+        // stream_type 0x11 is LATM/LOAS, NOT the ADTS 0x0F this remux
+        // strips headers from. Treating it as ADTS would queue garbage
+        // samples into an mp4a track and fail on the receiver with no
+        // explanation, so the PMT refuses it by name (2026-09-12).
+        val thrown = refusalFor(videoType = 0x1B, audioType = 0x11)
+        assertTrue(thrown is UnsupportedCodecException)
+        thrown as UnsupportedCodecException
+        assertEquals("AAC-LATM audio", thrown.codecName)
+        assertTrue("refusal is flagged as audio", !thrown.isVideo)
+    }
+
+    /** ADTS frame WITH the CRC word: protection_absent is 0, so the
+     *  header is 9 bytes, not 7, and the raw AAC payload starts later. */
+    private fun adtsFrameWithCrc(payloadSize: Int): ByteArray {
+        val frameLen = 9 + payloadSize
+        return byteArrayOf(
+            0xFF.toByte(), 0xF0.toByte(), // MPEG-4, layer 0, protection_absent 0
+            0x4C, // profile LC, freqIndex 3 (48 kHz)
+            0x80.toByte(), // channel config 2
+            ((frameLen shr 3) and 0xFF).toByte(),
+            (((frameLen and 0x07) shl 5) or 0x1F).toByte(),
+            0xFC.toByte(),
+            0x00, 0x00, // CRC word
+        ) + ByteArray(payloadSize) { (it * 3).toByte() }
+    }
+
+    @Test
+    fun `adts with crc strips the full nine byte header`() {
+        val cap = Capture()
+        val remuxer = TsToFmp4Remuxer(cap)
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x0F)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+
+        val t0 = 900_000L
+        val payloadSize = 32
+        // Warm the AAC config with a CRC-bearing frame, then run a normal
+        // GOP pattern whose audio PES also carries CRC frames.
+        fun crcPes(pts: Long): ByteArray {
+            val body = ByteArrayOutputStream().apply { repeat(2) { write(adtsFrameWithCrc(payloadSize)) } }
+            return packetize(0x0102, pes(0xC0, body.toByteArray(), pts))
+        }
+        val warm = crcPes(t0 - frameTicks)
+        remuxer.feed(warm, 0, warm.size)
+        for (f in 0 until 121) {
+            val pts = t0 + f * frameTicks
+            val keyframe = f % 30 == 0
+            val au = videoAu(pts, pts, keyframe, withParamSets = keyframe)
+            remuxer.feed(au, 0, au.size)
+            if (f % 3 == 0) {
+                val ap = crcPes(pts)
+                remuxer.feed(ap, 0, ap.size)
+            }
+        }
+
+        assertTrue("init emitted", cap.init != null)
+        assertTrue("segments produced", cap.segments.isNotEmpty())
+        // Every audio sample must be exactly the payload: a 7-byte
+        // assumption would leave the 2-byte CRC word prefixed to each
+        // frame and the decoder would reject the whole track.
+        val sizes = audioSampleSizes(cap.segments[0])
+        assertTrue("audio samples present", sizes.isNotEmpty())
+        assertTrue(
+            "every audio sample is the raw payload, got $sizes",
+            sizes.all { it == payloadSize },
+        )
+    }
+
+    /** Sample sizes from the SECOND traf's trun (the audio track). */
+    private fun audioSampleSizes(seg: ByteArray): List<Int> {
+        var i = 0
+        while (i + 8 <= seg.size) {
+            val size = be32(seg, i)
+            if (size <= 0) return emptyList()
+            if (String(seg, i + 4, 4, Charsets.US_ASCII) == "moof") {
+                val trafs = ArrayList<Pair<Int, Int>>()
+                var j = i + 8
+                while (j + 8 <= i + size) {
+                    val s = be32(seg, j)
+                    if (s <= 0) break
+                    if (String(seg, j + 4, 4, Charsets.US_ASCII) == "traf") trafs.add(Pair(j, s))
+                    j += s
+                }
+                if (trafs.size < 2) return emptyList()
+                val (off, sz) = trafs[1]
+                var k = off + 8
+                while (k + 8 <= off + sz) {
+                    val s = be32(seg, k)
+                    if (s <= 0) break
+                    if (String(seg, k + 4, 4, Charsets.US_ASCII) == "trun") {
+                        val count = be32(seg, k + 12)
+                        // trun body: sample_count(4) data_offset(4) then
+                        // duration/size pairs (flags 0x000301, version 0).
+                        return (0 until count).map { n -> be32(seg, k + 24 + n * 8) }
+                    }
+                    k += s
+                }
+                return emptyList()
+            }
+            i += size
+        }
+        return emptyList()
+    }
+
+    private fun be32(b: ByteArray, off: Int): Int =
+        ((b[off].toInt() and 0xFF) shl 24) or ((b[off + 1].toInt() and 0xFF) shl 16) or
+            ((b[off + 2].toInt() and 0xFF) shl 8) or (b[off + 3].toInt() and 0xFF)
+
 }

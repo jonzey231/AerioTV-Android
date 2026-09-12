@@ -58,6 +58,16 @@ class CastHlsProxyServer(
          *  every ~3 s, so 6 s covers a slow cut without pinning threads. */
         private const val NEXT_SEGMENT_WAIT_MS = 6_000L
 
+        /** Requests logged verbatim at the start of a session before the
+         *  rate limit kicks in (enough to cover master + playlist + init
+         *  + the first handful of segments, which is the whole startup
+         *  handshake a failed cast has to be diagnosed from). */
+        private const val VERBOSE_REQUESTS = 12
+
+        /** After [VERBOSE_REQUESTS], only non-200 responses and every
+         *  Nth request are logged, so a long cast does not flood. */
+        private const val REQUEST_LOG_EVERY = 50
+
         private const val MIME_PLAYLIST = "application/vnd.apple.mpegurl"
         private const val MIME_MP4 = "video/mp4"
         private const val MIME_SEGMENT = "video/iso.segment"
@@ -93,6 +103,12 @@ class CastHlsProxyServer(
     /** Diagnostic: log the receiver's FIRST playlist fetch loudly; it is
      *  the proof the Cast device reached the phone at all. */
     private val firstPlaylistServed = AtomicBoolean(false)
+    /** Diagnostic: dump the master and media playlist TEXT once each, so
+     *  a failing cast can be read back from the log without the device. */
+    private val masterTextLogged = AtomicBoolean(false)
+    private val playlistTextLogged = AtomicBoolean(false)
+    /** Requests served this session, for the log rate limit. */
+    private val requestsServed = java.util.concurrent.atomic.AtomicInteger(0)
 
     private val _segmentsInGeneration = MutableStateFlow(0)
     /** Segments committed since the last [beginGeneration]; the sender
@@ -133,6 +149,9 @@ class CastHlsProxyServer(
             lock.notifyAll()
         }
         firstPlaylistServed.set(false)
+        masterTextLogged.set(false)
+        playlistTextLogged.set(false)
+        requestsServed.set(0)
     }
 
     val isRunning: Boolean get() = running.get()
@@ -359,16 +378,29 @@ class CastHlsProxyServer(
             }
             val body: ByteArray?
             val mime: String
+            // Wait time is only meaningful for a segment fetch that was
+            // held at the live edge; it is the single most useful number
+            // when the receiver errors out (a long wait means the ingest,
+            // not the receiver, is the problem).
+            var waitMs = -1L
             when {
                 path == "/master.m3u8" -> {
-                    body = masterPlaylistText().toByteArray(Charsets.UTF_8)
+                    val text = masterPlaylistText()
+                    body = text.toByteArray(Charsets.UTF_8)
                     mime = MIME_PLAYLIST
+                    if (masterTextLogged.compareAndSet(false, true)) {
+                        log("master playlist: ${escaped(text)}")
+                    }
                 }
                 path == "/live.m3u8" -> {
-                    body = playlistText().toByteArray(Charsets.UTF_8)
+                    val text = playlistText()
+                    body = text.toByteArray(Charsets.UTF_8)
                     mime = MIME_PLAYLIST
                     if (firstPlaylistServed.compareAndSet(false, true)) {
                         log("receiver fetched the playlist for the first time (${sock.inetAddress?.hostAddress})")
+                    }
+                    if (playlistTextLogged.compareAndSet(false, true)) {
+                        log("media playlist: ${escaped(text)}")
                     }
                 }
                 path.startsWith("/init") && path.endsWith(".mp4") -> {
@@ -380,7 +412,9 @@ class CastHlsProxyServer(
                     val seq = path.removePrefix("/seg").removeSuffix(".m4s").toIntOrNull()
                     // Thread-per-connection, so holding the live-edge
                     // fetch here blocks nobody else.
+                    val began = System.currentTimeMillis()
                     body = seq?.let { s -> awaitSegment(s) }
+                    waitMs = System.currentTimeMillis() - began
                     mime = MIME_SEGMENT
                 }
                 else -> {
@@ -388,6 +422,8 @@ class CastHlsProxyServer(
                     mime = "text/plain"
                 }
             }
+            val status = if (body == null) 404 else 200
+            logRequest(method, path, status, body?.size ?: 0, waitMs)
             if (body == null) {
                 respond(out, 404, "Not Found", "text/plain", "not found".toByteArray())
             } else {
@@ -395,6 +431,28 @@ class CastHlsProxyServer(
             }
         }
     }
+
+    /**
+     * One line per request: the only record of what the Cast receiver
+     * actually asked for and got. Added 2026-09-12 after a cast went
+     * IDLE/ERROR one second after the first playlist fetch with no way to
+     * tell whether init or the first segment had even been fetched.
+     *
+     * Rate limit: the first [VERBOSE_REQUESTS] of a session verbatim
+     * (master, playlist, init, the opening segments), then only non-200s
+     * and every [REQUEST_LOG_EVERY]th request.
+     */
+    private fun logRequest(method: String, path: String, status: Int, bytes: Int, waitMs: Long) {
+        val n = requestsServed.incrementAndGet()
+        val verbose = n <= VERBOSE_REQUESTS || status != 200 || n % REQUEST_LOG_EVERY == 0
+        if (!verbose) return
+        val wait = if (waitMs > 0) " wait=${waitMs}ms" else ""
+        log("$method $path $status $bytes B$wait")
+    }
+
+    /** Playlist text on ONE log line: newlines escaped so logcat and the
+     *  in-app log both keep it as a single readable record. */
+    private fun escaped(text: String): String = text.replace("\n", "\\n")
 
     private fun respond(
         out: OutputStream,

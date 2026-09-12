@@ -220,6 +220,7 @@ class CastHlsProxySession @Inject constructor(
         // alive once the activity stops.
         CastHlsProxyService.start(context)
         startIngest(rawTsUrl, headers, gen, allowAc3Passthrough, failFastOnHttpError)
+        val readyWaitBegan = System.currentTimeMillis()
         try {
             withTimeout(READY_TIMEOUT_MS) {
                 // First terminal error wins; otherwise wait for segments.
@@ -238,6 +239,15 @@ class CastHlsProxySession @Inject constructor(
             if (activeUrl == rawTsUrl) stop()
             throw t
         }
+        // How long the gate actually took and what it proceeded with. A
+        // wait near the segment cadence (keyframe interval, not the 3 s
+        // target) is normal; zero segments here would mean finalizeSegment
+        // never ran at all.
+        debugLog(
+            context, TAG,
+            "ready after ${System.currentTimeMillis() - readyWaitBegan}ms with " +
+                "${server.segmentsInGeneration.value} segments (gate $READY_SEGMENTS)",
+        )
         // Load the MASTER playlist: its CLOSED-CAPTIONS=NONE keeps Shaka's
         // Mp4CeaParser away from our muxed segments (fatal Error 3000
         // otherwise; see masterPlaylistText).
@@ -286,15 +296,36 @@ class CastHlsProxySession @Inject constructor(
                     private var segmentsLogged = 0
                     private var rollupBytes = 0L
                     private var rollupTicks = 0L
+                    /** Census of the segment currently being handed over,
+                     *  for the first-segment detail line below. */
+                    private var videoSamples = 0
+                    private var audioSamples = 0
 
                     override fun onInitSegment(data: ByteArray) {
                         server.setInitSegment(currentGen, data)
                         debugLog(context, TAG, "init segment ready gen=$currentGen (${data.size} B)")
                     }
 
+                    override fun onSegmentComposition(videoSamples: Int, audioSamples: Int) {
+                        this.videoSamples = videoSamples
+                        this.audioSamples = audioSamples
+                    }
+
                     override fun onMediaSegment(data: ByteArray, durationTicks: Long) {
                         server.addSegment(currentGen, data, durationTicks)
                         segmentsLogged++
+                        if (segmentsLogged == 1) {
+                            // The FIRST segment of a generation is the one
+                            // the receiver starts on, so its shape is what
+                            // a one-second IDLE/ERROR has to be read from.
+                            val seconds = durationTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+                            debugLog(
+                                context, TAG,
+                                "first segment gen=$currentGen seq=0 " +
+                                    "dur=${"%.2f".format(seconds)}s ${data.size} B " +
+                                    "video=$videoSamples audio=$audioSamples samples",
+                            )
+                        }
                         rollupBytes += data.size
                         rollupTicks += durationTicks
                         if (segmentsLogged % LOG_EVERY_SEGMENTS == 0) {

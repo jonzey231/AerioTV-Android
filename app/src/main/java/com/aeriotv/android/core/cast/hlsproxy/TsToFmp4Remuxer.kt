@@ -76,6 +76,14 @@ class TsToFmp4Remuxer(
         /** [durationTicks] is the segment's video span in 90 kHz ticks. */
         fun onMediaSegment(data: ByteArray, durationTicks: Long)
 
+        /** Sample census of the segment about to be handed to
+         *  [onMediaSegment], fired immediately before it. Exists purely
+         *  so the session can log what the FIRST segment of a generation
+         *  contained: a segment with zero audio samples, or a video-only
+         *  one where the PMT promised audio, is the shape a receiver
+         *  rejects silently. Default no-op so tests need not care. */
+        fun onSegmentComposition(videoSamples: Int, audioSamples: Int) {}
+
         /** The mux's audio codec as soon as the PMT is parsed ("AAC",
          *  "AC-3", "E-AC-3", "none"), for the cast load log line. */
         fun onAudioCodec(name: String) {}
@@ -510,7 +518,7 @@ class TsToFmp4Remuxer(
             if (initSent) {
                 if (framePts < 0) framePts = audioClock.unwrap(pts33)
                 val durationTicks = info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
-                if (timelineBase >= 0) {
+                if (timelineBase >= 0 && framePts >= timelineBase) {
                     audioQueue.add(
                         AudioSample(data.copyOfRange(p, next), framePts, durationTicks),
                     )
@@ -554,7 +562,19 @@ class TsToFmp4Remuxer(
                 // by the fixed 1024-sample frame duration. Re-anchoring on
                 // every PES keeps drift bounded to one PES worth of frames.
                 if (framePts < 0) framePts = audioClock.unwrap(pts33)
-                if (timelineBase >= 0) {
+                // Frames BEFORE the video timeline base are dropped, not
+                // clamped (2026-09-12 ffprobe run): audio commonly leads
+                // the first kept video keyframe by tens of ms, and the
+                // unsigned tfdt cannot express a negative start. The old
+                // coerceAtLeast(0) in buildMoof pretended such a segment
+                // started at 0, which shifted its whole audio track
+                // forward by that lead and made it OVERLAP the next
+                // segment's honest tfdt by the same amount (measured: 185
+                // samples spanning 355200 ticks declared from 0, while
+                // the next segment's audio tfdt was 348000). Chromium
+                // gets a backwards audio append one segment in, which is
+                // the IDLE/ERROR a second after the first playlist fetch.
+                if (timelineBase >= 0 && framePts >= timelineBase) {
                     audioQueue.add(
                         AudioSample(
                             data.copyOfRange(p + headerLen, p + frameLen),
@@ -614,6 +634,7 @@ class TsToFmp4Remuxer(
         }
         val segment = buildMediaSegment(videoQueue, durations, segAudio)
         val durationTicks = cutDts - segStart
+        listener.onSegmentComposition(videoQueue.size, segAudio.size)
         videoQueue.clear()
         audioQueue.clear()
         audioQueue.addAll(keepAudio)
@@ -632,7 +653,10 @@ class TsToFmp4Remuxer(
         if (hasAudio) traks.add(audioTrak())
         val trexes = ArrayList<ByteArray>()
         trexes.add(trex(VIDEO_TRACK_ID))
-        if (hasAudio) trexes.add(trex(AUDIO_TRACK_ID))
+        // sample_depends_on = 2 (independent) with sample_is_non_sync
+        // clear: every audio frame IS a sync sample, the same flag value
+        // videoTrun writes for a keyframe.
+        if (hasAudio) trexes.add(trex(AUDIO_TRACK_ID, defaultSampleFlags = 0x02000000))
         val moov = box(
             "moov",
             mvhd(nextTrackId = if (hasAudio) 3 else 2),
@@ -697,7 +721,11 @@ class TsToFmp4Remuxer(
                 box(
                     "traf",
                     fullBox("tfhd", 0, 0x020000, u32(AUDIO_TRACK_ID)),
-                    fullBox("tfdt", 1, 0, u64((audio.first().pts - timelineBase).coerceAtLeast(0))),
+                    // No clamp: samples earlier than timelineBase are
+                    // dropped at queue time (see onAdtsAudioPes), so this
+                    // is always >= 0 and always the truth. Clamping here
+                    // is what overlapped consecutive segments' audio.
+                    fullBox("tfdt", 1, 0, u64(audio.first().pts - timelineBase)),
                     audioTrun(audio, audioDataOffset),
                 ),
             )
@@ -980,9 +1008,19 @@ class TsToFmp4Remuxer(
         return box("trak", tkhd, mdia)
     }
 
-    private fun trex(trackId: Int): ByteArray = fullBox(
+    /**
+     * [defaultSampleFlags] matters only for a track whose trun omits
+     * per-sample flags, which is exactly the audio track ([audioTrun]
+     * writes duration and size only). The old shared 0x00010000 default
+     * sets sample_is_non_sync_sample on EVERY audio sample, so the audio
+     * track advertised no random access point at all and a Chromium MSE
+     * append had nothing to start from (caught by ffprobe-backed test
+     * 2026-09-12). Video keeps that default because [videoTrun] overrides
+     * the flags per sample anyway.
+     */
+    private fun trex(trackId: Int, defaultSampleFlags: Int = 0x00010000): ByteArray = fullBox(
         "trex", 0, 0,
-        u32(trackId), u32(1), u32(0), u32(0), u32(0x00010000),
+        u32(trackId), u32(1), u32(0), u32(0), u32(defaultSampleFlags),
     )
 
     // ---- box plumbing ----
