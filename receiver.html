@@ -454,6 +454,100 @@
       return out;
     }
 
+    // ---- decoded / dropped frame accounting ----
+    //
+    // 2026-09-12: Logan reports the cast picture "looks like the frame rate
+    // isn't correct, or dropping frames" on 720p60 and 1080i channels while
+    // the telemetry reports a steady PLAYING with a playhead that advances.
+    // A state machine cannot see that: a receiver that decodes 60 fps and
+    // presents 30, or drops every other frame, reports exactly the same
+    // state. So every snapshot now carries the element's own frame counters
+    // plus per-second deltas, which is the only number that distinguishes
+    // "presenting fewer frames than the stream carries" from "not playing".
+    let lastQualityAt = 0;
+    let lastTotalFrames = null;
+    let lastDroppedFrames = null;
+
+    // Estimated display refresh, measured once per load over 1 s of
+    // requestAnimationFrame callbacks. A 60 fps stream on a 30 Hz output
+    // cannot look right no matter how healthy the pipeline is, and the
+    // receiver is the only place that can see the output's cadence.
+    let rafHz = null;
+
+    function measureRefreshRate() {
+      if (typeof requestAnimationFrame !== 'function') return;
+      let frames = 0;
+      let start = null;
+      const step = (ts) => {
+        if (start === null) {
+          start = ts;
+        } else {
+          frames++;
+          if (ts - start >= 1000) {
+            rafHz = roundTo(frames * 1000 / (ts - start), 1);
+            sendReceiverSnapshot('raf');
+            return;
+          }
+        }
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+
+    // video.getVideoPlaybackQuality() plus deltas over the interval since the
+    // previous snapshot. Deltas are computed here rather than on the sender so
+    // a single log line is self-contained: fps is DECODED frames per second
+    // (totalVideoFrames delta / elapsed), drop is dropped frames per second.
+    function videoQuality(video) {
+      const out = {
+        tvf: null, dvf: null, cvf: null, fps: null, drop: null,
+        res: null,
+      };
+      if (!video) return out;
+      if (video.videoWidth || video.videoHeight) {
+        out.res = (video.videoWidth || 0) + 'x' + (video.videoHeight || 0);
+      }
+      let q = null;
+      try {
+        if (typeof video.getVideoPlaybackQuality === 'function') {
+          q = video.getVideoPlaybackQuality();
+        }
+      } catch (e) {
+        q = null;
+      }
+      if (!q) {
+        // Pre-spec builds expose the webkit counters only.
+        if (typeof video.webkitDecodedFrameCount === 'number') {
+          q = {
+            totalVideoFrames: video.webkitDecodedFrameCount,
+            droppedVideoFrames: video.webkitDroppedFrameCount,
+            corruptedVideoFrames: null,
+          };
+        } else {
+          return out;
+        }
+      }
+      const total = typeof q.totalVideoFrames === 'number' ? q.totalVideoFrames : null;
+      const dropped = typeof q.droppedVideoFrames === 'number' ? q.droppedVideoFrames : null;
+      out.tvf = total;
+      out.dvf = dropped;
+      out.cvf = typeof q.corruptedVideoFrames === 'number' ? q.corruptedVideoFrames : null;
+      const now = Date.now();
+      const elapsed = lastQualityAt ? (now - lastQualityAt) / 1000 : 0;
+      if (elapsed >= 0.2 && elapsed <= 10) {
+        if (total !== null && lastTotalFrames !== null) {
+          out.fps = roundTo((total - lastTotalFrames) / elapsed, 1);
+        }
+        if (dropped !== null && lastDroppedFrames !== null) {
+          out.drop = roundTo((dropped - lastDroppedFrames) / elapsed, 1);
+        }
+      }
+      lastQualityAt = now;
+      lastTotalFrames = total;
+      lastDroppedFrames = dropped;
+      return out;
+    }
+
     // Shaka's own counters. CAF bundles Shaka but does not document a getter
     // for the instance, so this is best effort: whatever is reachable is
     // reported and the rest comes through as absent rather than as a guess.
@@ -482,12 +576,40 @@
             '+' + roundTo(last.duration, 1) + 's';
         }
       }
+      const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
       return {
         bufTime: roundTo(stats.bufferingTime, 2),
         bw: typeof stats.estimatedBandwidth === 'number' ?
           Math.round(stats.estimatedBandwidth) : null,
         hist: hist,
+        // Shaka's view of the same frames the element reports. When the two
+        // disagree the loss is downstream of Shaka (renderer / output), and
+        // when they agree it is the stream or the decoder.
+        sdec: num(stats.decodedFrames),
+        sdrop: num(stats.droppedFrames),
+        stalls: num(stats.stallsDetected),
+        gaps: num(stats.gapsJumped),
       };
+    }
+
+    // Frame rate of the variant Shaka is actually playing, when the bundled
+    // version exposes the track list. Compared against fps= this says whether
+    // the receiver is presenting every frame the stream declares.
+    function variantFrameRate() {
+      try {
+        const player = playerManager.getPlayer && playerManager.getPlayer();
+        const tracks = player && player.getVariantTracks ?
+          player.getVariantTracks() : null;
+        if (!Array.isArray(tracks)) return null;
+        for (const t of tracks) {
+          if (t && t.active && typeof t.frameRate === 'number') {
+            return roundTo(t.frameRate, 3);
+          }
+        }
+      } catch (e) {
+        return null;
+      }
+      return null;
     }
 
     // The live window Shaka believes it has. A playhead outside this range
@@ -506,6 +628,7 @@
     function sendReceiverSnapshot(ev) {
       const video = mediaElement();
       const stats = shakaStats();
+      const vq = videoQuality(video);
       const payload = {
         type: 'state',
         ev: ev,
@@ -529,6 +652,20 @@
         bufTime: stats.bufTime === undefined ? null : stats.bufTime,
         bw: stats.bw === undefined ? null : stats.bw,
         hist: stats.hist === undefined ? null : stats.hist,
+        // Frame accounting (see videoQuality): element counters, their
+        // per-second deltas, the decoded size, and Shaka's own counters.
+        tvf: vq.tvf,
+        dvf: vq.dvf,
+        cvf: vq.cvf,
+        fps: vq.fps,
+        drop: vq.drop,
+        res: vq.res,
+        vfr: variantFrameRate(),
+        sdec: stats.sdec === undefined ? null : stats.sdec,
+        sdrop: stats.sdrop === undefined ? null : stats.sdrop,
+        stalls: stats.stalls === undefined ? null : stats.stalls,
+        gaps: stats.gaps === undefined ? null : stats.gaps,
+        rafHz: rafHz,
         err: lastReceiverError,
       };
       try {
@@ -537,6 +674,25 @@
       } catch (e) {
         payload.state = null;
         payload.cafState = null;
+      }
+      // Hard 1.5 KB budget. The frame counters added room for growth, and a
+      // live stream with many buffered ranges or a long Shaka error string is
+      // the case that would blow it: trim the parts that are summaries
+      // (ranges between the first and the last, the error text) rather than
+      // drop a numeric field.
+      try {
+        let json = JSON.stringify(payload);
+        if (json.length > 1500 && typeof payload.err === 'string' &&
+            payload.err.length > 120) {
+          payload.err = payload.err.slice(0, 120);
+          json = JSON.stringify(payload);
+        }
+        while (json.length > 1500 && payload.buffered.length > 2) {
+          payload.buffered.splice(1, payload.buffered.length - 2);
+          json = JSON.stringify(payload);
+        }
+      } catch (e) {
+        // Never let the budget check stop the snapshot.
       }
       try {
         // Broadcast: no sender id, so whichever phone is connected gets it.
@@ -572,7 +728,12 @@
         return;
       }
       if (advanced && !loadingOrBuffering) {
+        // Healthy playback still reports, once per second. The dropped-frame
+        // complaint only exists while the playhead IS advancing, so a
+        // snapshot limited to stalls could never measure it; ev=tick is the
+        // per-second row that carries fps / drop / res for a PLAYING stream.
         stuckTicks = 0;
+        sendReceiverSnapshot('tick');
         return;
       }
       if (!advanced) stuckTicks++;
@@ -957,6 +1118,14 @@
         renderingSince = 0;
         bufferingSince = 0;
         lastRenderTime = null;
+        // Frame counters belong to the previous media; a delta across a tune
+        // would read as a huge fps spike.
+        lastQualityAt = 0;
+        lastTotalFrames = null;
+        lastDroppedFrames = null;
+        rafHz = null;
+        // One 1 s rAF measurement per load, reported as ev=raf.
+        measureRefreshRate();
         showLoading();
         const media = loadRequestData.media;
         if (media) {
