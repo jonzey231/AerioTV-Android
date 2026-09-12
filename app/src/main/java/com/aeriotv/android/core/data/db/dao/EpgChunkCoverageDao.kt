@@ -39,4 +39,19 @@ interface EpgChunkCoverageDao {
             "AND (chunkStartMs < :fromMs OR chunkEndMs > :toMs)"
     )
     suspend fun pruneOutside(playlistId: String, fromMs: Long, toMs: Long)
+
+    /**
+     * Catch-up reach prune: forget the day chunks that are older than the
+     * playlist's maximum catch-up reach. Their programmes are deleted (nothing
+     * can replay them any more), so a coverage row vouching for them would
+     * break the cache-identity rule, and dropping the row is also what keeps
+     * the grid walk from treating those days as cached. The walk and the
+     * background sweep clamp their own history bound to the same reach, so
+     * neither re-fetches what this forgets.
+     */
+    @Query(
+        "DELETE FROM epg_chunk_coverage WHERE playlistId = :playlistId " +
+            "AND chunkEndMs <= :beforeMs"
+    )
+    suspend fun pruneOlderThan(playlistId: String, beforeMs: Long): Int
 }

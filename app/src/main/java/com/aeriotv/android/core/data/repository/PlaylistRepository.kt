@@ -17,6 +17,7 @@ import com.aeriotv.android.core.data.db.entity.dispatcharrAccountProfileIdList
 import com.aeriotv.android.core.data.db.entity.EPG_CHUNK_TTL_MS
 import com.aeriotv.android.core.data.db.entity.EpgChunkCoverage
 import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
+import com.aeriotv.android.core.guide.guideChannelId
 import com.aeriotv.android.core.data.db.entity.resolveGuideDays
 import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_BACK
 import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_AHEAD
@@ -864,6 +865,123 @@ class PlaylistRepository @Inject constructor(
     }
 
     /**
+     * Maximum catch-up reach of a playlist, in MILLIS, floored at 24 h.
+     *
+     * This is how far back cached history can still be WATCHED: past that, a
+     * programme row is dead weight (the "Watch" action has nothing to resolve
+     * against). The per-channel value comes from Dispatcharr's `catchup_days`
+     * or an XC panel's `tv_archive_duration`, persisted on the channel
+     * snapshot, and is capped at 30 days exactly as `M3UChannel.canReplay`
+     * caps it (Dispatcharr clamps server side at 30).
+     *
+     * The 24 h floor is the no-catch-up case: a playlist whose channels have
+     * no archive at all still keeps the last day of history, which is what
+     * feeds "what was just on" in the guide.
+     */
+    private suspend fun maxCatchupReachMs(playlistId: String): Long {
+        val days = runCatching { channelSnapshotDao.maxCatchupDays(playlistId) }
+            .getOrNull() ?: 0
+        return maxOf(1, minOf(days, GUIDE_DAYS_ALL_MAX_BACK)) * 86_400_000L
+    }
+
+    /**
+     * Delete the EPG history that is no longer reachable for catch-up
+     * (Logan 2026-09-12).
+     *
+     * Per channel, a programme survives only while its end is inside that
+     * channel's own catch-up window; channels with no archive keep just the
+     * last 24 h. Channels are BUCKETED by catch-up days so this costs one
+     * indexed DELETE per bucket (a panel where every channel has the same
+     * retention is therefore a single statement), not one per channel and
+     * certainly not one per row.
+     *
+     * A final playlist-wide sweep at the maximum reach catches rows whose
+     * channelId belongs to no cached channel at all (an EPG-only key, or a
+     * channel the provider dropped): nothing can ever replay those, and
+     * enumerating them is not possible, so the widest bucket bounds them.
+     *
+     * Coverage rows for fully-expired UTC days go too, so the incremental walk
+     * and the background sweep never re-fetch the days this just emptied (both
+     * clamp their history bound to the same reach).
+     *
+     * Runs on the background-priority EPG dispatcher; the future side of Guide
+     * Days is untouched.
+     */
+    suspend fun pruneEpgBeyondCatchupReach(playlistId: String) = withContext(layeringDispatcher) {
+        val now = System.currentTimeMillis()
+        val dayMs = 86_400_000L
+        val snapshot = runCatching { channelSnapshotDao.forPlaylist(playlistId) }
+            .getOrElse {
+                Log.w("PlaylistRepo", "[EPG] catch-up reach prune: channel snapshot unreadable", it)
+                return@withContext
+            }
+        if (snapshot.isEmpty()) return@withContext
+        // Bucket the guide keys by the retention that applies to them. The key
+        // is the canonical guide channel id, which is what cached programmes
+        // carry after the ingest bridge rewrote their channelId.
+        val keysByDays = HashMap<Int, MutableList<String>>()
+        for (row in snapshot) {
+            val days = minOf(maxOf(row.catchupDays, 0), GUIDE_DAYS_ALL_MAX_BACK)
+            val key = row.toChannel().guideChannelId().value
+            keysByDays.getOrPut(days) { mutableListOf() }.add(key)
+        }
+        var deleted = 0
+        for ((days, keys) in keysByDays) {
+            // days == 0 means no archive: keep only the last 24 h.
+            val cutoff = now - maxOf(days, 1) * dayMs
+            keys.chunked(900).forEach { chunk ->
+                deleted += runCatching {
+                    epgProgrammeDao.deleteEndedBeforeForChannels(playlistId, cutoff, chunk)
+                }.getOrElse {
+                    Log.w("PlaylistRepo", "[EPG] catch-up reach prune chunk failed", it)
+                    0
+                }
+            }
+        }
+        val reachMs = maxOf(1, keysByDays.keys.maxOrNull() ?: 0) * dayMs
+        // Orphan rows: no cached channel claims their key, so no bucket above
+        // could name them. Bounded by the widest reach on the playlist.
+        deleted += runCatching {
+            epgProgrammeDao.deleteEndedBeforeForPlaylist(playlistId, now - reachMs)
+        }.getOrElse {
+            Log.w("PlaylistRepo", "[EPG] catch-up reach orphan prune failed", it)
+            0
+        }
+        runCatching { epgChunkCoverageDao.pruneOlderThan(playlistId, dayFloorMs(now - reachMs)) }
+            .onFailure { Log.w("PlaylistRepo", "[EPG] catch-up reach coverage prune failed", it) }
+        Log.i(
+            "PlaylistRepo",
+            "[EPG] pruned $deleted programmes older than catch-up reach " +
+                "(max ${reachMs / dayMs} days)",
+        )
+    }
+
+    /** Playlists whose launch catch-up reach prune has already run this
+     *  process, so a second guide load does not repeat a sweep whose result
+     *  cannot have changed in the same minute. The sweep's own end-of-run
+     *  prune is separate and always runs. */
+    private val catchupReachPrunedAtLaunch =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    /**
+     * Launch-time trigger: once the guide has painted from cache, prune the
+     * unreachable history in the background. Deliberately AFTER the paint and
+     * on the low-priority EPG dispatcher, so a delete over a 267K-row table
+     * can never sit in front of the first frame of the guide or of a tune.
+     */
+    fun startCatchupReachPruneAfterGuidePainted(
+        playlistId: String,
+        awaitGuidePainted: suspend () -> Unit,
+    ) {
+        if (!catchupReachPrunedAtLaunch.add(playlistId)) return
+        layeringScope.launch {
+            awaitGuidePainted()
+            runCatching { pruneEpgBeyondCatchupReach(playlistId) }
+                .onFailure { Log.w("PlaylistRepo", "[EPG] launch catch-up reach prune failed", it) }
+        }
+    }
+
+    /**
      * Fingerprint of a Dispatcharr server's EPG sources list: the sorted
      * "id:updated_at" pairs, comma joined.
      *
@@ -959,15 +1077,19 @@ class PlaylistRepository @Inject constructor(
      * walk uses, so a swept chunk refreshes the very row the coverage map
      * vouches for instead of minting a parallel one.
      */
-    private fun sweepChunkOrder(playlist: PlaylistEntity, now: Long): List<Pair<Long, Long>> {
+    private suspend fun sweepChunkOrder(playlist: PlaylistEntity, now: Long): List<Pair<Long, Long>> {
         val dayMs = 86_400_000L
         val guideDays = resolveGuideDays(playlist.epgRetentionDays) ?: GUIDE_DAYS_ALL_MAX_BACK
         val hugePanel = playlist.channelCount > 5_000
         val today = dayFloorMs(now)
         val forward = (1..guideDays).map { today + it * dayMs }
         // Huge panels only ever FETCH 6 h of history, so there is no point
-        // sweeping days that were never downloaded.
-        val historyDays = if (hugePanel) 0 else guideDays
+        // sweeping days that were never downloaded. History is also clamped to
+        // the playlist's maximum catch-up reach: a day nothing can replay is a
+        // day the reach prune deletes, so re-fetching it would only rebuild
+        // rows the next prune drops again.
+        val reachDays = (maxCatchupReachMs(playlist.id) / dayMs).toInt()
+        val historyDays = if (hugePanel) 0 else minOf(guideDays, reachDays)
         val history = (1..historyDays).map { today - it * dayMs }
         return (listOf(today) + forward + history).map { it to (it + dayMs) }
     }
@@ -1050,6 +1172,12 @@ class PlaylistRepository @Inject constructor(
                     "PlaylistRepo",
                     "[EPG] background sweep complete: $refreshed of ${chunks.size} chunk(s) refreshed",
                 )
+                // End of every sweep: drop the history that is no longer
+                // reachable for catch-up, including the coverage rows for those
+                // days, so the cache does not keep growing a past nothing can
+                // play back.
+                runCatching { pruneEpgBeyondCatchupReach(playlistId) }
+                    .onFailure { Log.w("PlaylistRepo", "[EPG] sweep catch-up reach prune failed", it) }
             }
         }
     }
@@ -1110,6 +1238,13 @@ class PlaylistRepository @Inject constructor(
                 // any say here. Huge panels still clamp HISTORY to 6h only.
                 val guideDays = resolveGuideDays(playlist.epgRetentionDays)
                 val hugePanel = playlist.channelCount > 5_000
+                // Catch-up reach clamp (Logan 2026-09-12): never FETCH history
+                // older than the furthest back any channel on this playlist can
+                // replay. Those days are deleted by the reach prune, so the 30
+                // day (All Available) or Guide Days history bound below must not
+                // reach past them or the walk would refetch rows on every launch
+                // only for the prune to delete them again.
+                val reachMs = maxCatchupReachMs(playlist.id)
                 val baseStart = now - 3_600_000L
                 val baseEnd = now + dayMs
                 // Record the aligned day chunks the live window FULLY covers.
@@ -1154,7 +1289,7 @@ class PlaylistRepository @Inject constructor(
                     var fetched = 0
                     var cached = 0
                     val historyMs = if (hugePanel) 6L * 3_600_000L
-                        else GUIDE_DAYS_ALL_MAX_BACK * dayMs
+                        else minOf(GUIDE_DAYS_ALL_MAX_BACK * dayMs, reachMs)
                     val historyFloor = dayFloorMs(now - historyMs)
                     var stopped = false
                     var cursor = dayFloorMs(baseStart) + dayMs
@@ -1207,7 +1342,8 @@ class PlaylistRepository @Inject constructor(
                     }
                     return@launch
                 }
-                val historyMs = if (hugePanel) 6L * 3_600_000L else guideDays * dayMs
+                val historyMs = if (hugePanel) 6L * 3_600_000L
+                    else minOf(guideDays * dayMs, reachMs)
                 val forwardEnd = now + guideDays * dayMs
                 val chunks = mutableListOf<Pair<Long, Long>>()
                 var cursor = dayFloorMs(now - historyMs)

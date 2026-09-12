@@ -985,6 +985,14 @@ class PlaylistViewModel @Inject constructor(
         // a cache to paint: a fresh install has no guide rows, and On Demand
         // must not sit behind a paint that is never coming.
         settleGate.noteGuidePainted()
+        // Catch-up reach prune (Logan 2026-09-12): once the cached guide has
+        // painted, delete the history no channel can replay any more. The
+        // repository runs it on its low-priority EPG dispatcher and once per
+        // process per playlist, so it never competes with the first frame of
+        // the guide or of a tune.
+        repository.startCatchupReachPruneAfterGuidePainted(playlist.id) {
+            settleGate.awaitGuidePainted()
+        }
         // 2. Freshness: skip the network entirely when the cache is recent,
         // unless the caller forced a refresh (e.g. Refresh Playlist).
         // A cache written by a build with a known cache-corrupting defect must

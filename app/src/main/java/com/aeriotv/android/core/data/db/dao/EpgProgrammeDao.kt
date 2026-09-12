@@ -83,9 +83,33 @@ interface EpgProgrammeDao {
 
     /** Prune one source's programmes that ended before its retention cutoff
      *  (catch-up task #135: retention is per playlist now, so the old blanket
-     *  cross-source ended-1h-ago delete is gone). */
+     *  cross-source ended-1h-ago delete is gone). Returns the row count so the
+     *  catch-up reach prune can report what it dropped; existing callers
+     *  ignore it. */
     @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId AND endMillis < :before")
-    suspend fun deleteEndedBeforeForPlaylist(playlistId: String, before: Long)
+    suspend fun deleteEndedBeforeForPlaylist(playlistId: String, before: Long): Int
+
+    /**
+     * Catch-up reach prune (Logan 2026-09-12: "delete EPG from the previous
+     * days that are no longer reachable for catch-up").
+     *
+     * One indexed DELETE per CHANNEL GROUP, never per row and never per
+     * channel: the caller buckets channels by their catch-up days and issues
+     * one statement per bucket (chunked at 900 ids for SQLite's host-parameter
+     * cap). Served by the `(playlistId, channelId)` index, with `endMillis`
+     * filtered on the rows that index already narrows to.
+     *
+     * Returns the number of rows deleted.
+     */
+    @Query(
+        "DELETE FROM epg_programme WHERE playlistId = :playlistId " +
+            "AND endMillis < :before AND channelId IN (:channelIds)"
+    )
+    suspend fun deleteEndedBeforeForChannels(
+        playlistId: String,
+        before: Long,
+        channelIds: List<String>,
+    ): Int
 
     /** Delete the airing-and-future region the fresh feed owns outright, for
      *  the CHANNELS it actually carries; [mergeForPlaylist]'s helper. */

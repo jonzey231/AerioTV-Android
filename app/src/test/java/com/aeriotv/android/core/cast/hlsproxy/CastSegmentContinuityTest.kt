@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.cast.hlsproxy
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -207,5 +208,55 @@ class CastSegmentContinuityTest {
             previousVideoEnd = video.end
             previousAudioEnd = audio.end
         }
+    }
+
+    /** default_sample_flags of one traf's tfhd, or null when the box does
+     *  not carry the field at all. */
+    private fun tfhdDefaultSampleFlags(segment: ByteArray, trackId: Int): Long? {
+        for ((t, s, e) in children(segment, 0, segment.size)) {
+            if (t != "moof") continue
+            for ((t2, s2, e2) in children(segment, s, e)) {
+                if (t2 != "traf") continue
+                for ((t3, s3, e3) in children(segment, s2, e2)) {
+                    if (t3 != "tfhd" || e3 - s3 < 8) continue
+                    val boxFlags = (u32(segment, s3) and 0xFFFFFF).toInt()
+                    if (u32(segment, s3 + 4).toInt() != trackId) continue
+                    // Optional fields in ISO order; we never set the
+                    // earlier ones, but skip them properly anyway.
+                    var p = s3 + 8
+                    if (boxFlags and 0x01 != 0) p += 8
+                    if (boxFlags and 0x02 != 0) p += 4
+                    if (boxFlags and 0x08 != 0) p += 4
+                    if (boxFlags and 0x10 != 0) p += 4
+                    if (boxFlags and 0x20 == 0 || p + 4 > e3) return null
+                    return u32(segment, p)
+                }
+            }
+        }
+        return null
+    }
+
+    @Test
+    fun `every audio sample is declared a sync sample`() {
+        // Chromium reads sample flags from the trun, then the tfhd default,
+        // then the trex default. Our audio trun carries no per-sample
+        // flags, so the tfhd default is what decides whether the receiver
+        // treats an AAC frame as a random access point. Without it
+        // Chromium logs, once per frame, "indicated the frame is not a
+        // random access point (key frame)" and the first packet after the
+        // load's seek fails to decode, costing every load a decoder swap
+        // (Google TV Streamer, 2026-09-12 14:22:20.237 and .246).
+        assumeTrue("ffmpeg present", ffmpeg.canExecute())
+        val segment = remux(buildTs()).segments.firstOrNull()
+            ?: error("no media segment produced")
+        val flags = tfhdDefaultSampleFlags(segment, trackId = 2)
+            ?: error("the audio tfhd does not set default-sample-flags")
+        // bit 16 is sample_is_non_sync_sample; it must be clear.
+        assertTrue(
+            "audio default_sample_flags 0x${flags.toString(16)} marks non-sync samples",
+            flags and 0x00010000L == 0L,
+        )
+        // bits 25-24 are sample_depends_on; 2 is "does not depend on others".
+        assertEquals(2L, (flags shr 24) and 0x03L)
     }
 }

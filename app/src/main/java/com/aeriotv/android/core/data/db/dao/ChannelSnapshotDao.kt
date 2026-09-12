@@ -20,6 +20,15 @@ interface ChannelSnapshotDao {
     @Query("SELECT MAX(fetchedAt) FROM channel_snapshot WHERE playlistId = :playlistId")
     suspend fun newestFetchedAt(playlistId: String): Long?
 
+    /**
+     * Largest catch-up window any channel of this playlist exposes, in days
+     * (null when nothing is cached, 0 when no channel has an archive). The
+     * EPG catch-up reach prune and the grid history clamp both need only this
+     * one number, so they ask for it instead of reading the whole snapshot.
+     */
+    @Query("SELECT MAX(catchupDays) FROM channel_snapshot WHERE playlistId = :playlistId")
+    suspend fun maxCatchupDays(playlistId: String): Int?
+
     @Query("DELETE FROM channel_snapshot WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: String)
 

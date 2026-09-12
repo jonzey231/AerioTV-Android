@@ -56,23 +56,28 @@ class CastHlsProxySession @Inject constructor(
     internal companion object {
         const val TAG = "CAST-HLS"
 
-        /** loadMedia is gated on this many segments so the receiver starts
-         *  a safe distance BEHIND the live edge.
+        /** loadMedia is gated on this much MEDIA DURATION so the receiver
+         *  starts a safe distance BEHIND the live edge, and on at least
+         *  [READY_MIN_SEGMENTS] segments so a single long segment cannot
+         *  satisfy it on its own.
          *
-         *  Raised from 2 to 3 on 2026-09-12. With two ~4 s segments the
-         *  receiver began 8 s from the live edge, HLS's own rule is three
-         *  target durations, and the Google TV Streamer ran the buffer dry
-         *  8 s in (02:28:44 BUFFERING_HAVE_ENOUGH, 02:28:52 dry). It then
-         *  re-synced to the live edge instead of fetching the next segment
-         *  (fetched seg0, seg1, then seg4) and never fetched another
-         *  segment again, because a skipped segment in MSE 'sequence'
-         *  AppendMode leaves a 0.147 s hole the video renderer will not
-         *  cross while the audio track plays straight through it: Logan's
-         *  "launches now but it's frozen". Starting three segments back
-         *  removes the underrun that starts the whole chain. */
-        const val READY_SEGMENTS = 3
+         *  A duration, not a segment count (2026-09-12). Two ~4 s segments
+         *  started the receiver 8 s from the edge and the Google TV
+         *  Streamer ran the buffer dry 8 s in (02:28:44
+         *  BUFFERING_HAVE_ENOUGH, 02:28:52 dry), then re-synced to the live
+         *  edge instead of fetching the next segment and stalled on the
+         *  skip. A 3-SEGMENT gate fixed that but overshot the other way:
+         *  our cuts land on keyframes, and a real broadcast feed's first
+         *  three segments were 5.005 s, 4.338 s and 3.170 s, so the gate
+         *  held the load for 11.5 s after the ingest connected (iPhone
+         *  proxy log 14:22:07.382 init ready, 14:22:18.879 load sent).
+         *  Nine seconds of media is three of our 3 s targets, is what the
+         *  receiver page also starts behind the edge, and is reached by two
+         *  segments on a feed like that. */
+        const val READY_MEDIA_TICKS = 9L * TsToFmp4Remuxer.TICKS_PER_SECOND
+        const val READY_MIN_SEGMENTS = 2
 
-        /** Bound on the wait for [READY_SEGMENTS]: three 3 s segments plus
+        /** Bound on the wait for [READY_MEDIA_TICKS]: nine seconds of media plus
          *  provider join latency; past this the channel is declared
          *  uncastable and the user told (the sender quotes this number in
          *  the "did not send any data" message, so the two never drift). */
@@ -132,7 +137,7 @@ class CastHlsProxySession @Inject constructor(
      * Point the proxy at [rawTsUrl] (the SAME URL + headers the local
      * player would use, plus `?output_profile=<id>` when the sender
      * resolved Dispatcharr's AAC profile) and suspend until the playlist
-     * has [READY_SEGMENTS] segments.
+     * has [READY_MEDIA_TICKS] of media.
      *
      * [fallbackUrl] is the same channel WITHOUT the output_profile
      * parameter. When it is non-null the first connection fails fast on
@@ -238,11 +243,12 @@ class CastHlsProxySession @Inject constructor(
                 // First terminal error wins; otherwise wait for segments.
                 kotlinx.coroutines.flow.combine(
                     server.segmentsInGeneration,
+                    server.mediaTicksInGeneration,
                     sessionError,
-                ) { count, err -> Pair(count, err) }
-                    .first { (count, err) ->
+                ) { count, ticks, err -> Triple(count, ticks, err) }
+                    .first { (count, ticks, err) ->
                         err?.let { throw it }
-                        count >= READY_SEGMENTS
+                        count >= READY_MIN_SEGMENTS && ticks >= READY_MEDIA_TICKS
                     }
             }
         } catch (t: Throwable) {
@@ -258,7 +264,13 @@ class CastHlsProxySession @Inject constructor(
         debugLog(
             context, TAG,
             "ready after ${System.currentTimeMillis() - readyWaitBegan}ms with " +
-                "${server.segmentsInGeneration.value} segments (gate $READY_SEGMENTS)",
+                "${server.segmentsInGeneration.value} segments, " +
+                "%.2fs media (gate %.0fs / $READY_MIN_SEGMENTS segments)".format(
+                    java.util.Locale.US,
+                    server.mediaTicksInGeneration.value.toDouble() /
+                        TsToFmp4Remuxer.TICKS_PER_SECOND,
+                    READY_MEDIA_TICKS.toDouble() / TsToFmp4Remuxer.TICKS_PER_SECOND,
+                ),
         )
         // Load the MASTER playlist: its CLOSED-CAPTIONS=NONE keeps Shaka's
         // Mp4CeaParser away from our muxed segments (fatal Error 3000

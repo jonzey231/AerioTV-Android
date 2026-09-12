@@ -122,9 +122,18 @@ class CastHlsProxyServer(
     private val requestsServed = java.util.concurrent.atomic.AtomicInteger(0)
 
     private val _segmentsInGeneration = MutableStateFlow(0)
-    /** Segments committed since the last [beginGeneration]; the sender
-     *  gates loadMedia on this reaching 2. */
+    /** Segments committed since the last [beginGeneration]. */
     val segmentsInGeneration: StateFlow<Int> = _segmentsInGeneration.asStateFlow()
+
+    private val _mediaTicksInGeneration = MutableStateFlow(0L)
+    /** MEDIA DURATION committed since the last [beginGeneration], in 90 kHz
+     *  ticks. The load gate is a duration, not a segment count: our cuts
+     *  land on keyframes, not on the 3 s target, and on a real broadcast
+     *  feed the first three segments were 5.005 s, 4.338 s and 3.170 s
+     *  (iPhone proxy log, 2026-09-12 14:22:19.361), so a 3-segment gate
+     *  made the user wait 11.5 s for 12.5 s of media where 9 s would do.
+     *  Logan: "it also takes a while for that single frame to appear". */
+    val mediaTicksInGeneration: StateFlow<Long> = _mediaTicksInGeneration.asStateFlow()
 
     @Volatile var boundPort: Int = 0
         private set
@@ -156,6 +165,7 @@ class CastHlsProxyServer(
             ring.clear()
             inits.clear()
             _segmentsInGeneration.value = 0
+            _mediaTicksInGeneration.value = 0
             storeOpen = false
             lock.notifyAll()
         }
@@ -183,6 +193,7 @@ class CastHlsProxyServer(
         generation++
         pendingDiscontinuity = ring.isNotEmpty()
         _segmentsInGeneration.value = 0
+        _mediaTicksInGeneration.value = 0
         if (oldGen > 0) {
             log(
                 "splice oldGen=$oldGen newGen=$generation " +
@@ -219,6 +230,7 @@ class CastHlsProxyServer(
                 }
             }
             _segmentsInGeneration.value += 1
+            _mediaTicksInGeneration.value += durationTicks
             // Wake any held fetch for the sequence just published.
             lock.notifyAll()
         }
