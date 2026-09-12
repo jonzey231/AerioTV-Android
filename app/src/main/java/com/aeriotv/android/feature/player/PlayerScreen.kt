@@ -319,6 +319,21 @@ fun PlayerScreen(
     // reads this once on cold boot to decide whether to auto-launch into the
     // player. Also seeds the mini-player session so a system back can promote
     // it without losing channel context.
+    // Quiet EPG sweep (Logan 2026-09-12): release the hold taken at tune press
+    // as soon as this tune is actually playing, so the background guide sweep
+    // never competes with a cold start. Polled, not a Player.Listener: the
+    // sweep only reads the flag every couple of seconds anyway, and the gate
+    // ceilings itself so a failed tune cannot hold it forever.
+    LaunchedEffect(currentChannel?.id) {
+        while (true) {
+            if (exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_READY) {
+                com.aeriotv.android.core.data.repository.EpgSweepGate.onTunePlaying()
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
     LaunchedEffect(currentChannel?.id) {
         // Catch-up replays never become the resume target / recents entry /
         // mini-player session (task #148 milestone B).
@@ -537,8 +552,9 @@ fun PlayerScreen(
             // link / mini-player hand-off), so start press->firstFrame here.
             // session2.txt had no [TUNE] press line for either tune because
             // this path never called it.
+            // Quiet EPG sweep holds off until this tune reaches its first frame.
             com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
-                exoHolder.markTunePress(ch.name)
+            exoHolder.markTunePress(ch.name)
             // Refresh headers each switch -- some Dispatcharr deployments
             // rotate the API key per stream.
             exoHolder.httpHeaders = httpHeaders
@@ -721,6 +737,7 @@ fun PlayerScreen(
             recentsOverlayVisible = false
             if (idx != currentIndex) {
                 // Trace: the digit-entry commit IS the press that starts this tune.
+                // Quiet EPG sweep holds off until this tune reaches its first frame.
                 com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
                 exoHolder.markTunePress(channels[idx].name)
                 currentIndex = idx
@@ -1541,8 +1558,9 @@ fun PlayerScreen(
                                 val next = (currentIndex + direction)
                                     .coerceIn(0, channels.lastIndex)
                                 if (next != currentIndex) {
+                                    // Quiet EPG sweep holds off until this tune reaches its first frame.
                                     com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
-                exoHolder.markTunePress(channels[next].name)
+                                    exoHolder.markTunePress(channels[next].name)
                                     currentIndex = next
                                     chromeVisible = true
                                 }
@@ -1762,6 +1780,7 @@ fun PlayerScreen(
             if (next != cur) {
                 lastFlipAt = now
                 // Trace: stamp the real D-pad press for press->firstFrame.
+                // Quiet EPG sweep holds off until this tune reaches its first frame.
                 com.aeriotv.android.core.data.repository.EpgSweepGate.onTuneStart()
                 exoHolder.markTunePress(list[next].name)
                 currentIndex = next

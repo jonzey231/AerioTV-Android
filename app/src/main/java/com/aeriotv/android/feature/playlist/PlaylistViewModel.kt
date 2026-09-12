@@ -1360,6 +1360,24 @@ class PlaylistViewModel @Inject constructor(
     }
 
     /**
+     * Quiet EPG sweep gate (Logan 2026-09-12). Asks the server whether its EPG
+     * sources were re-ingested since the cached guide was stored and, if so,
+     * lets the repository sweep the day chunks in the background. Nothing here
+     * blocks or clears the cache: the guide keeps painting from it while the
+     * sweep quietly replaces one day at a time.
+     *
+     * Called on a 15 minute foreground tick and on return to the foreground;
+     * the repository rate-limits both to one check per 15 minutes per playlist.
+     */
+    fun checkEpgSourcesForChanges() {
+        viewModelScope.launch {
+            val active = repository.activePlaylist() ?: return@launch
+            runCatching { repository.maybeSweepEpgForSourceChanges(active.id) }
+                .onFailure { Log.w(TAG, "checkEpgSourcesForChanges failed: $it") }
+        }
+    }
+
+    /**
      * Apply user edits to the active playlist. Reuses [PlaylistRepository.loadAndPersist]
      * with `existingId` so the row's UUID stays stable. Mirrors iOS Edit Playlist
      * Save action — connection details + auth credentials + EPG URL can change

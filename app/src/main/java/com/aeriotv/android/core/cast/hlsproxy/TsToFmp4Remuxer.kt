@@ -155,6 +155,10 @@ class TsToFmp4Remuxer(
     private var aacObjectType = 0
     private var aacFreqIndex = -1
     private var aacChannelConfig = 0
+
+    /** Latched once so a sanitized ADTS config is explained a single time
+     *  instead of per frame for the life of the connection. */
+    private var adtsConfigSanitized = false
     private var initSent = false
 
     // ---- AC-3 / E-AC-3 passthrough ----
@@ -540,6 +544,13 @@ class TsToFmp4Remuxer(
                 p++ // scan to syncword (junk between frames happens on splices)
                 continue
             }
+            // Layer must be 00 in ADTS. A nonzero layer is the cheapest
+            // proof that these two bytes are audio payload that merely
+            // looks like 0xFFFx, not a real header.
+            if ((data[p + 1].toInt() shr 1) and 0x03 != 0) {
+                p++
+                continue
+            }
             val protectionAbsent = data[p + 1].toInt() and 0x01 != 0
             val profile = (data[p + 2].toInt() shr 6) and 0x03
             val freqIndex = (data[p + 2].toInt() shr 2) and 0x0F
@@ -547,14 +558,43 @@ class TsToFmp4Remuxer(
             val frameLen = ((data[p + 3].toInt() and 0x03) shl 11) or
                 ((data[p + 4].toInt() and 0xFF) shl 3) or
                 ((data[p + 5].toInt() shr 5) and 0x07)
-            if (frameLen < 7 || p + frameLen > data.size) break // partial frame: carry
             val headerLen = if (protectionAbsent) 7 else 9
+            if (frameLen <= headerLen) {
+                p++ // a real frame always carries payload after its header
+                continue
+            }
+            if (p + frameLen > data.size) break // partial frame: carry
+            // False sync inside frame data: the next frame must itself
+            // start on a syncword when it is already in the buffer. The
+            // AC-3 path has always done this; the ADTS path did not, and
+            // a single false 0xFFFx hit was enough to latch the codec
+            // config below from random payload bytes forever.
+            if (p + frameLen + 1 < data.size &&
+                (
+                    data[p + frameLen].toInt() and 0xFF != 0xFF ||
+                        data[p + frameLen + 1].toInt() and 0xF0 != 0xF0
+                    )
+            ) {
+                p++
+                continue
+            }
             if (aacFreqIndex < 0) {
-                aacObjectType = profile + 1 // ADTS profile is MPEG-4 audioObjectType - 1
-                aacFreqIndex = freqIndex
-                aacChannelConfig = chanConfig
-                val rate = ADTS_SAMPLE_RATES.getOrElse(freqIndex) { 48_000 }
-                audioFrameTicks = 1024L * TICKS_PER_SECOND / rate
+                // The esds ASC is built from these three fields, and
+                // Chromium's MP4StreamParser VALIDATES it (AAC::Parse,
+                // then SkipDecoderGASpecificConfig) while ffprobe never
+                // looks at it. Sanitize ONCE here so the ASC, the mp4a
+                // sample entry and [audioFrameTicks] all come from the
+                // same legal config; see [sanitizeAacConfig] for which
+                // raw values cannot survive into an ASC and why.
+                val safe = sanitizeAacConfig(
+                    objectType = profile + 1, // ADTS profile is audioObjectType - 1
+                    freqIndex = freqIndex,
+                    chanConfig = chanConfig,
+                )
+                aacObjectType = safe.objectType
+                aacFreqIndex = safe.freqIndex
+                aacChannelConfig = safe.chanConfig
+                audioFrameTicks = 1024L * TICKS_PER_SECOND / ADTS_SAMPLE_RATES[safe.freqIndex]
                 maybeEmitInit()
             }
             if (initSent && frameLen > headerLen) {
@@ -834,11 +874,87 @@ class TsToFmp4Remuxer(
         )
     }
 
+    /**
+     * The AAC config as it will appear in the AudioSpecificConfig, with
+     * every raw ADTS value a two-byte ASC cannot carry replaced by the
+     * closest legal one. [channels] is the real channel COUNT for the
+     * mp4a sample entry, which is not the same number as
+     * [chanConfig] above 6 (ISO 14496-3 Table 1.19: config 7 is 8
+     * channels).
+     */
+    private class SafeAacConfig(
+        val objectType: Int,
+        val freqIndex: Int,
+        val chanConfig: Int,
+        val channels: Int,
+    )
+
+    /**
+     * Clamp a raw ADTS header triple into something Chromium's AAC parser
+     * accepts, logging once what was changed.
+     *
+     * Measured against a real Chromium MediaSource on 2026-09-12: appending
+     * an init whose ASC breaks any of these rules fails the WHOLE append
+     * ("Append: stream parsing failed. Data size=1116", pipeline_error 16),
+     * and ffprobe reads the same file without complaint.
+     *
+     *  - channel_configuration 0 means the layout lives in a Program
+     *    Config Element. Chromium's SkipDecoderGASpecificConfig requires a
+     *    nonzero channel_config, so a 0 fails outright. Dispatcharr's
+     *    ffmpeg AAC encoder emits exactly this whenever the AC-3 source
+     *    layout is outside Table 1.19 (2.1, 3.1, 6.1, 7.0): it logs "Using
+     *    a PCE to encode channel layout". Stereo is the honest default
+     *    because the web receiver downmixes anyway.
+     *  - sampling_frequency_index 13 and 14 are reserved, so Chromium
+     *    resolves a 0 Hz rate and the decoder config is invalid; index 15
+     *    means a 24-bit explicit rate follows, which a two-byte ASC has no
+     *    room for, so Chromium reads off the end.
+     *  - audioObjectType outside 1..4 is refused by AAC::Parse unless it
+     *    is one of the HE/xHE signals we never synthesize.
+     *
+     * The old code latched the raw values and papered over them ONLY in
+     * the sample entry, with getOrElse { 48_000 } and coerceAtLeast(1), so
+     * the mp4a box advertised a plausible 48 kHz stereo track wrapped
+     * around an unparseable esds. One sanitized config for both is the fix.
+     */
+    private fun sanitizeAacConfig(objectType: Int, freqIndex: Int, chanConfig: Int): SafeAacConfig {
+        val safeObjectType = if (objectType in 1..4) objectType else 2 // AAC-LC
+        val safeFreqIndex = if (freqIndex in ADTS_SAMPLE_RATES.indices) freqIndex else 3 // 48 kHz
+        val safeChanConfig = if (chanConfig in 1..7) chanConfig else 2 // stereo
+        if (!adtsConfigSanitized &&
+            (safeObjectType != objectType || safeFreqIndex != freqIndex || safeChanConfig != chanConfig)
+        ) {
+            adtsConfigSanitized = true
+            log(
+                "ADTS audio config sanitized for the receiver: " +
+                    "audioObjectType $objectType -> $safeObjectType, " +
+                    "sampling_frequency_index $freqIndex -> $safeFreqIndex, " +
+                    "channel_configuration $chanConfig -> $safeChanConfig " +
+                    "(an AudioSpecificConfig cannot carry the original and Chromium " +
+                    "rejects the whole init segment when it tries)",
+            )
+        }
+        return SafeAacConfig(
+            objectType = safeObjectType,
+            freqIndex = safeFreqIndex,
+            chanConfig = safeChanConfig,
+            channels = AAC_CHANNEL_COUNTS[safeChanConfig],
+        )
+    }
+
     /** mp4a + esds for ADTS AAC passthrough (config from the first ADTS
      *  header; the frames themselves go in raw, headers stripped). */
     private fun aacSampleEntry(): ByteArray {
-        val sampleRate = ADTS_SAMPLE_RATES.getOrElse(aacFreqIndex) { 48_000 }
-        val channels = aacChannelConfig.coerceAtLeast(1)
+        // Both the mp4a AudioSampleEntry fields and the esds ASC come
+        // from the SAME latched indices, which onAdtsAudioPes has already
+        // validated as expressible in a two-byte ASC. They used to be
+        // derived independently, with getOrElse { 48_000 } and
+        // coerceAtLeast(1) sanitizing only the sample entry, so a bad
+        // index produced a plausible-looking mp4a box wrapped around an
+        // esds Chromium refuses to parse. Keeping one source means the
+        // two can never disagree, and Chromium compares them.
+        val sampleRate = ADTS_SAMPLE_RATES[aacFreqIndex]
+        val channels = AAC_CHANNEL_COUNTS[aacChannelConfig]
         val asc = byteArrayOf(
             ((aacObjectType shl 3) or (aacFreqIndex shr 1)).toByte(),
             (((aacFreqIndex and 1) shl 7) or (aacChannelConfig shl 3)).toByte(),
@@ -891,7 +1007,12 @@ class TsToFmp4Remuxer(
         body.write(ByteArray(8)) // reserved
         body.write(u16(channels.coerceIn(1, 8))); body.write(u16(16)) // channels, samplesize
         body.write(u32(0)) // pre_defined/reserved
-        body.write(u32(sampleRate shl 16)) // 16.16 sample rate
+        // AudioSampleEntry version 0 holds the rate as unsigned 16.16, so
+        // the integer part cannot exceed 65535 and `rate shl 16` overflows
+        // a 32-bit value above that (96000 shl 16 wrapped to 30464 Hz).
+        // Clamp instead of wrapping; Chromium takes the real rate from the
+        // ASC / dac3 config box beside this field anyway.
+        body.write(u32((sampleRate.coerceAtMost(65_535) shl 16))) // 16.16 sample rate
         body.write(configBox)
         return body.toByteArray()
     }
@@ -1170,6 +1291,14 @@ class TsToFmp4Remuxer(
 private val AC3_BIT_RATE_CODES = intArrayOf(
     32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640,
 )
+
+/**
+ * Channel COUNT per ISO 14496-3 Table 1.19 channel_configuration, indexed
+ * by the configuration value. Config 7 is 7.1, which is EIGHT channels,
+ * so the count is not interchangeable with the configuration number. Slot
+ * 0 holds 2 because a sanitized config never stays 0.
+ */
+private val AAC_CHANNEL_COUNTS = intArrayOf(2, 1, 2, 3, 4, 5, 6, 8)
 
 private val ADTS_SAMPLE_RATES = intArrayOf(
     96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050,

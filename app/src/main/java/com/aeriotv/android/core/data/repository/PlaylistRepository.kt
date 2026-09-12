@@ -115,6 +115,22 @@ private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 12L * 60L * 1000L
  *  report of a 4GB app cache was exactly this, repeated. */
 private const val ORPHAN_TEMP_MAX_AGE_MS = 60L * 60L * 1000L
 
+/**
+ * Quiet EPG sweep pacing (Logan 2026-09-12). The sweep exists to correct a
+ * cache that is still being served, so every number here is chosen to be
+ * unnoticeable rather than fast:
+ *  - settle: how long after launch / foreground return before the first
+ *    request, giving the guide time to paint from cache and any tune time to
+ *    reach its first frame,
+ *  - gap: the pause between two day chunks,
+ *  - poll: how often a paused sweep re-asks [EpgSweepGate],
+ *  - interval: the foreground re-check gate on the sources fingerprint.
+ */
+const val EPG_SWEEP_SETTLE_MS: Long = 20_000L
+const val EPG_SWEEP_CHUNK_GAP_MS: Long = 1_500L
+const val EPG_SWEEP_PAUSE_POLL_MS: Long = 2_000L
+const val EPG_SOURCES_CHECK_INTERVAL_MS: Long = 15L * 60L * 1000L
+
 /** E-6: minimum gap between EPG retention sweeps for one playlist. Upstream
  *  layering saves once per source; the cutoff is days out, so re-pruning
  *  seconds later only costs a full-table DELETE scan. */
@@ -760,6 +776,14 @@ class PlaylistRepository @Inject constructor(
         base: String,
         start: Long,
         end: Long,
+        /** True only when the server told us its EPG sources were refreshed
+         *  since this cache was built. The merge then REPLACES the window it
+         *  covers for every channel it touches instead of only inserting, so a
+         *  programme the server moved to another day cannot survive as a
+         *  ghost row at its old time. A normal incremental fill stays
+         *  non-authoritative: each chunk is a fragment of the guide and must
+         *  not delete what the neighbouring chunks put there. */
+        authoritative: Boolean = false,
     ): Int? {
         val programmes = runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -771,7 +795,7 @@ class PlaylistRepository @Inject constructor(
             return null
         }
         if (programmes.isEmpty()) return 0
-        runCatching { saveEpgToCache(playlist.id, programmes, authoritative = false) }
+        runCatching { saveEpgToCache(playlist.id, programmes, authoritative = authoritative) }
             .onFailure { Log.w("PlaylistRepo", "grid window merge failed", it) }
         return programmes.size
     }
@@ -837,6 +861,222 @@ class PlaylistRepository @Inject constructor(
         runCatching {
             epgChunkCoverageDao.pruneOutside(playlistId, coverageFromMs, coverageToMs)
         }.onFailure { Log.w("PlaylistRepo", "grid window coverage prune failed", it) }
+    }
+
+    /**
+     * Fingerprint of a Dispatcharr server's EPG sources list: the sorted
+     * "id:updated_at" pairs, comma joined.
+     *
+     * Dispatcharr's ProgramData rows carry NO updated_at, so there is nothing
+     * per-programme to diff against. EPGSource.updated_at, though, is "time
+     * when this source was last successfully refreshed", and a refresh
+     * replaces that source's programs wholesale. So the sources list answers
+     * the only question worth asking -- "has the server re-ingested its guide
+     * since I stored mine?" -- in ONE cheap request, instead of redownloading
+     * 90 day-chunks to find out.
+     *
+     * Sorted so the server's own list order can never fake a change. Sources
+     * with no updated_at (dummy sources, which never refresh) contribute
+     * "id:none" rather than dropping out, so adding or removing one still
+     * registers as a change.
+     */
+    private fun epgSourcesFingerprint(sources: List<DispatcharrEpgSource>): String =
+        sources
+            .map { "${it.id}:${it.updatedAt?.takeIf { u -> u.isNotBlank() } ?: "none"}" }
+            .sorted()
+            .joinToString(",")
+
+    /** Playlists we have already logged an unreadable sources list for, so the
+     *  "falling back to the TTL" line is logged once per process instead of on
+     *  every check. */
+    private val epgSourcesUnreadableLogged = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>(),
+    )
+
+    /** Last time the sources gate was evaluated per playlist; the 15 min
+     *  foreground re-check gate. */
+    private val lastEpgSourcesCheckAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** One background sweep per playlist. A second trigger while one is still
+     *  walking reuses it instead of double-fetching every chunk. */
+    private val epgSweepJobs = ConcurrentHashMap<String, Job>()
+
+    /**
+     * Read the server's EPG sources list and compare it against the
+     * fingerprint the cached guide was built from.
+     *
+     * Returns the new fingerprint when it DIFFERS (so the caller can store it
+     * once its sweep finishes), null when it is identical or the list could not
+     * be read. Read-only on purpose: nothing here drops the cache. Logan
+     * 2026-09-12 refreshes EPG in Dispatcharr every few hours, so a stamp
+     * change must never make the user wait for a download; it only decides
+     * whether the quiet background sweep below is worth running at all.
+     */
+    private suspend fun changedEpgSourcesFingerprint(
+        playlist: PlaylistEntity,
+        base: String,
+    ): String? {
+        val sources = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.listEpgSources(base, key)
+            }
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            // Degraded servers (sources list unreadable): the 12 h per-chunk
+            // TTL stays the only staleness signal, exactly as before this
+            // check existed. Logged once per process per playlist.
+            if (epgSourcesUnreadableLogged.add(playlist.id)) {
+                Log.w(
+                    "PlaylistRepo",
+                    "[EPG] sources list unreadable; falling back to the " +
+                        "${EPG_CHUNK_TTL_MS / 3_600_000}h chunk TTL: $it",
+                )
+            }
+            return null
+        }
+        val fingerprint = epgSourcesFingerprint(sources)
+        if (fingerprint == playlist.dispatcharrEpgSourceFingerprint) {
+            Log.i("PlaylistRepo", "[EPG] sources unchanged, background sweep skipped")
+            Log.i("PlaylistRepo", "[EPG] sources fingerprint unchanged (${sources.size} sources)")
+            return null
+        }
+        val storedPairs = playlist.dispatcharrEpgSourceFingerprint
+            ?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+        val refreshed = fingerprint.split(",").count { it.isNotBlank() && it !in storedPairs }
+        Log.i(
+            "PlaylistRepo",
+            "[EPG] sources changed ($refreshed refreshed since cache): background sweep queued",
+        )
+        return fingerprint
+    }
+
+    /**
+     * The chunk order the background sweep walks: today first, then forward
+     * days, then history. The user is looking at today and tomorrow; the past
+     * is catch-up browsing and can wait several minutes for its turn.
+     *
+     * Same fixed UTC day grid and the same Guide Days bounds the incremental
+     * walk uses, so a swept chunk refreshes the very row the coverage map
+     * vouches for instead of minting a parallel one.
+     */
+    private fun sweepChunkOrder(playlist: PlaylistEntity, now: Long): List<Pair<Long, Long>> {
+        val dayMs = 86_400_000L
+        val guideDays = resolveGuideDays(playlist.epgRetentionDays) ?: GUIDE_DAYS_ALL_MAX_BACK
+        val hugePanel = playlist.channelCount > 5_000
+        val today = dayFloorMs(now)
+        val forward = (1..guideDays).map { today + it * dayMs }
+        // Huge panels only ever FETCH 6 h of history, so there is no point
+        // sweeping days that were never downloaded.
+        val historyDays = if (hugePanel) 0 else guideDays
+        val history = (1..historyDays).map { today - it * dayMs }
+        return (listOf(today) + forward + history).map { it to (it + dayMs) }
+    }
+
+    /**
+     * Very low resource background EPG sweep (Logan 2026-09-12).
+     *
+     * The foreground path NEVER waits on this and NEVER drops coverage: launch
+     * and guide open keep serving every covered chunk from cache ("0 of 90
+     * chunk(s) fetched"). Once the app has SETTLED -- the guide has painted
+     * from cache, a tune (if any) is past its first frame, and
+     * [EPG_SWEEP_SETTLE_MS] has passed -- this walks the day chunks one at a
+     * time, [EPG_SWEEP_CHUNK_GAP_MS] apart, on the background-priority EPG
+     * dispatcher. Each chunk REPLACES the cached programs for its day as it
+     * lands (authoritative merge), so the open guide corrects itself quietly
+     * and a sporting event the provider moved to another day cannot keep
+     * showing its old time.
+     *
+     * Pauses while a tune is in flight (before first frame) and while the app
+     * is backgrounded, resuming at the chunk it stopped on: a guide refresh is
+     * never worth a frame of playback. The sources fingerprint is stored only
+     * when the sweep COMPLETES, so an interrupted sweep is retried rather than
+     * being remembered as done.
+     *
+     * Note on request priority: okhttp exposes no per-request network priority
+     * here, so "low resource" is the dispatcher (THREAD_PRIORITY_BACKGROUND,
+     * two threads), the one-at-a-time pacing, and the inter-chunk gap.
+     */
+    fun startEpgBackgroundSweep(playlistId: String) {
+        epgSweepJobs.compute(playlistId) { _, existing ->
+            if (existing?.isActive == true) return@compute existing
+            layeringScope.launch {
+                // Settle window: the guide paints from cache, the cold-launch
+                // channel load finishes, and a tune started from the launch
+                // screen reaches its first frame before we touch the network.
+                delay(EPG_SWEEP_SETTLE_MS)
+                val playlist = dao.byId(playlistId) ?: return@launch
+                val sourceType = playlist.resolvedSourceType()
+                val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+                    sourceType == SourceType.DispatcharrUserPass
+                if (!isDispatcharr || playlist.apiKey.isNullOrBlank()) return@launch
+                if (!playlist.dispatcharrVersionAtLeast("0.30.0")) return@launch
+                val base = effectiveBaseUrl(playlist)
+                // The GATE: no server-side re-ingest, no sweep at all.
+                val fingerprint = changedEpgSourcesFingerprint(playlist, base) ?: return@launch
+                val now = System.currentTimeMillis()
+                val chunks = sweepChunkOrder(playlist, now)
+                var refreshed = 0
+                for ((start, end) in chunks) {
+                    awaitSweepWindow()
+                    val n = fetchGridChunk(playlist, base, start, end, authoritative = true)
+                    if (n == null) {
+                        // A failed chunk stops the sweep exactly like the
+                        // incremental walk stops: the fingerprint is NOT
+                        // stored, so the next 15 min gate retries from the top.
+                        Log.w("PlaylistRepo", "[EPG] background sweep stopped after $refreshed chunk(s)")
+                        return@launch
+                    }
+                    // Keep the coverage map honest: this day was just
+                    // re-fetched, so its TTL clock restarts here.
+                    runCatching {
+                        epgChunkCoverageDao.upsert(
+                            EpgChunkCoverage(
+                                playlistId = playlist.id,
+                                chunkStartMs = start,
+                                chunkEndMs = end,
+                                fetchedAtMs = System.currentTimeMillis(),
+                                programCount = n,
+                            ),
+                        )
+                    }.onFailure { Log.w("PlaylistRepo", "[EPG] sweep coverage upsert failed", it) }
+                    refreshed++
+                    delay(EPG_SWEEP_CHUNK_GAP_MS)
+                }
+                // Completed: remember this server state so the gate skips the
+                // sweep until Dispatcharr re-ingests again.
+                runCatching { dao.updateEpgSourceFingerprint(playlistId, fingerprint) }
+                    .onFailure { Log.w("PlaylistRepo", "[EPG] sources fingerprint persist failed", it) }
+                Log.i(
+                    "PlaylistRepo",
+                    "[EPG] background sweep complete: $refreshed of ${chunks.size} chunk(s) refreshed",
+                )
+            }
+        }
+    }
+
+    /**
+     * Block until the sweep is allowed to spend a request: the app is in the
+     * foreground and no tune is waiting on its first frame. Polls rather than
+     * subscribing, because the whole point is to be cheap and late.
+     */
+    private suspend fun awaitSweepWindow() {
+        while (!EpgSweepGate.sweepAllowed) {
+            delay(EPG_SWEEP_PAUSE_POLL_MS)
+        }
+    }
+
+    /**
+     * Periodic foreground gate re-check (Logan 2026-09-12): every 15 minutes,
+     * and on return to the foreground after 15 minutes, ask the server whether
+     * its EPG sources moved and start the quiet sweep if they did. Rate limited
+     * per playlist so the caller can fire it from both places.
+     */
+    suspend fun maybeSweepEpgForSourceChanges(playlistId: String) {
+        val now = System.currentTimeMillis()
+        val last = lastEpgSourcesCheckAtMs[playlistId] ?: 0L
+        if (now - last < EPG_SOURCES_CHECK_INTERVAL_MS) return
+        lastEpgSourcesCheckAtMs[playlistId] = now
+        startEpgBackgroundSweep(playlistId)
     }
 
     /**
@@ -1387,6 +1627,13 @@ class PlaylistRepository @Inject constructor(
                     // Dispatcharr 0.30: the grid serves history and days ahead
                     // itself; no third-party XMLTV layering needed.
                     extendGridWindowInBackground(gated, base, grid.size)
+                    // Logan 2026-09-12: the cache is NEVER dropped on the
+                    // foreground path. Once the app has settled, a very low
+                    // resource sweep re-fetches the day chunks one at a time
+                    // IF the server's EPG sources moved since this cache was
+                    // built; the fingerprint is only that gate. Rate limited
+                    // inside, so a second guide load is free.
+                    layeringScope.launch { maybeSweepEpgForSourceChanges(playlist.id) }
                 } else {
                     layerUpstreamInBackground(playlist.id, base, customXmltv, knownChannelKeys)
                 }

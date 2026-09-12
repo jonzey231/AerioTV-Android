@@ -188,6 +188,25 @@ data class PlaylistEntity(
      * SQL default, like [dispatcharrProfileId]).
      */
     val dispatcharrCastAacProfileId: Int? = null,
+
+    /**
+     * Fingerprint of this server's EPG sources list the cached guide was built
+     * from (Logan 2026-09-12): the sorted "id:updated_at" pairs from
+     * /api/epg/sources/, joined with commas, with sources that carry no
+     * updated_at (dummy sources) contributing "id:none".
+     *
+     * Dispatcharr's ProgramData rows have no updated_at of their own, so this
+     * list is the only way to learn that the guide changed WITHOUT
+     * redownloading it: a source refresh replaces that source's programs
+     * wholesale and bumps its updated_at. When the fingerprint differs from
+     * the stored one, the grid coverage map is dropped so the window refetches
+     * (a sporting event moved to another day must never keep showing the old
+     * time); when it matches, every covered chunk is served from cache.
+     *
+     * Null means "never captured" (a new playlist, or a server whose sources
+     * list is unreadable), which always reads as a change. Added in DB v30.
+     */
+    val dispatcharrEpgSourceFingerprint: String? = null,
 )
 
 /** Stored sentinel for "this server has no AAC output profile", so the

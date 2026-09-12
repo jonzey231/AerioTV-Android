@@ -2043,7 +2043,65 @@ class DispatcharrClient @Inject constructor() {
      */
     fun logoUrl(baseUrl: String, logoId: Int): String =
         "${baseUrl.trimEnd('/')}/api/channels/logos/$logoId/cache/"
+
+    /**
+     * Cheap "did the VOD library change?" probe:
+     * GET /api/vod/movies/?page_size=1&ordering=-created_at (and the series
+     * counterpart). One row, so it costs a single tiny response, and it
+     * answers both questions the background sweep gate asks: how many items
+     * the server holds now, and when the newest one was added. Either value
+     * differing from what the saved snapshot recorded means a sweep is worth
+     * running before the user's cadence is up (Logan 2026-09-12).
+     *
+     * Nothing throws on a missing field: a server that omits created_at still
+     * yields a usable count, and an empty newest stamp simply makes the count
+     * the only signal.
+     */
+    suspend fun getVODMoviesChangeProbe(baseUrl: String, apiKey: String): VODChangeProbe =
+        getVODChangeProbe("${baseUrl.trimEnd('/')}/api/vod/movies/?page_size=1&ordering=-created_at", apiKey)
+
+    /** Series counterpart of [getVODMoviesChangeProbe]. */
+    suspend fun getVODSeriesChangeProbe(baseUrl: String, apiKey: String): VODChangeProbe =
+        getVODChangeProbe("${baseUrl.trimEnd('/')}/api/vod/series/?page_size=1&ordering=-created_at", apiKey)
+
+    private suspend fun getVODChangeProbe(url: String, apiKey: String): VODChangeProbe =
+        withContext(vodDecodeDispatcher) {
+            val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
+            unauthorizedCheck(response, url)
+            if (!response.status.isSuccess()) {
+                throw DispatcharrError.Transport("VOD change probe failed: HTTP ${response.status.value}")
+            }
+            val raw: JsonElement = response.body()
+            val results = when (raw) {
+                is JsonArray -> raw
+                is JsonObject -> raw["results"] as? JsonArray ?: JsonArray(emptyList())
+                else -> JsonArray(emptyList())
+            }
+            val count = (raw as? JsonObject)?.get("count")?.toString()?.trim('"')?.toIntOrNull()
+                ?: results.size
+            val newest = (results.firstOrNull() as? JsonObject)?.let { row ->
+                // created_at is what the ordering above sorts on; updated_at
+                // and the primary key are accepted as fallbacks so a server
+                // build that hides created_at still gives a usable signal.
+                listOf("created_at", "updated_at", "id")
+                    .firstNotNullOfOrNull { field ->
+                        (row[field] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                    }
+            }.orEmpty()
+            VODChangeProbe(count = count, newest = newest)
+        }
 }
+
+/**
+ * Result of [DispatcharrClient.getVODMoviesChangeProbe]: the server's current
+ * item count plus an opaque "newest item" stamp. Compared field-for-field
+ * against the values the VOD snapshot recorded; any difference means the
+ * library moved.
+ */
+data class VODChangeProbe(
+    val count: Int,
+    val newest: String,
+)
 
 @Serializable
 data class VersionResponse(
@@ -2352,6 +2410,16 @@ data class DispatcharrEpgSource(
     val isActive: Boolean = true,
     @SerialName("has_channels")
     val hasChannels: Boolean? = null,
+    /**
+     * "Time when this source was last successfully refreshed" (Dispatcharr's
+     * own field doc). A refresh replaces that source's programs wholesale, so
+     * this is the ONLY server-side signal that the cached guide is out of
+     * date: ProgramData itself carries no updated_at. Drives the EPG source
+     * fingerprint in PlaylistRepository. Null on dummy sources, which never
+     * refresh.
+     */
+    @SerialName("updated_at")
+    val updatedAt: String? = null,
 )
 
 @Serializable

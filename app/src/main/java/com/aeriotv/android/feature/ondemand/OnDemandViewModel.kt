@@ -3,6 +3,8 @@ package com.aeriotv.android.feature.ondemand
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aeriotv.android.core.app.AppSettleGate
+import com.aeriotv.android.core.app.BackgroundSweep
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.data.VodLearnedStream
 import com.aeriotv.android.core.data.repository.PlaylistRepository
@@ -80,6 +82,7 @@ class OnDemandViewModel @Inject constructor(
     private val versionSelectionStore: VodVersionSelectionStore,
     private val snapshotStore: VodLibrarySnapshotStore,
     private val tmdbArtCache: TmdbArtCache,
+    private val settleGate: AppSettleGate,
 ) : ViewModel() {
 
     data class UiState(
@@ -398,25 +401,111 @@ class OnDemandViewModel @Inject constructor(
                 val fresh = { at: Long -> limitMs > 0 && (now - at) in 0 until limitMs }
                 val moviesFresh = fresh(snap.moviesCompletedAtMs)
                 val seriesFresh = fresh(snap.seriesCompletedAtMs)
-                if (moviesFresh && seriesFresh) {
-                    Log.i(TAG, "[VOD-CACHE] both sweeps younger than ${limitMs / 3_600_000} h; skipping launch sweep")
-                    restoredFromSnapshot = true
-                    // No sweep will run, so the restored library is what the
-                    // art pass has to work from (Apple enriches on restore too).
-                    enrichArt(isMovie = true)
-                    enrichArt(isMovie = false)
-                    return@launch
-                }
-                Log.i(TAG, "[VOD-CACHE] launch sweep: movies=${if (moviesFresh) "fresh" else "stale"} series=${if (seriesFresh) "fresh" else "stale"}")
-                // The stale kinds re-enrich when their sweep lands; the fresh
-                // ones only ever get the pass from here.
-                if (moviesFresh) enrichArt(isMovie = true) else refresh()
-                if (seriesFresh) enrichArt(isMovie = false) else refreshSeries()
+                // Change-probe baseline travels with the snapshot.
+                moviesProbeCount = snap.moviesProbeCount
+                moviesProbeNewest = snap.moviesProbeNewest
+                seriesProbeCount = snap.seriesProbeCount
+                seriesProbeNewest = snap.seriesProbeNewest
+                restoredFromSnapshot = true
+                // The restored library is on screen NOW and is what the art
+                // pass works from (Apple enriches on restore too). Nothing
+                // sweeps on the foreground launch path any more (Logan
+                // 2026-09-12): the refresh is a quiet background sweep that
+                // starts only once the app has settled.
+                enrichArt(isMovie = true)
+                enrichArt(isMovie = false)
+                Log.i(TAG, "[VOD-CACHE] launch cadence: movies=${if (moviesFresh) "fresh" else "stale"} series=${if (seriesFresh) "fresh" else "stale"}")
+                scheduleBackgroundSweep(moviesStale = !moviesFresh, seriesStale = !seriesFresh)
                 return@launch
             }
+            // No snapshot: there is nothing to show instantly, so this one
+            // sweep stays on the launch path.
             refresh()
             refreshSeries()
         }
+    }
+
+    /**
+     * Quiet background refresh of the saved library (Logan 2026-09-12).
+     * Starts only once [AppSettleGate] reports the app settled (guide
+     * rendered, past first frame if anything is playing, ~20 s after launch or
+     * a foreground return), runs on [BackgroundSweep.dispatcher], paces itself
+     * at [BG_WALK_PACE_MS] per page, and publishes state only at the end so
+     * the Compose grids do not recompose once per page.
+     *
+     * Two gates open it:
+     *  - cadence: the user's "Refresh Movies and TV Shows" window has expired
+     *    for that kind. Applies to every provider.
+     *  - changed: Dispatcharr only. The cheap count + newest-created_at probe
+     *    disagrees with the baseline the snapshot recorded, so the library
+     *    plainly moved and waiting out the cadence would serve stale rows.
+     */
+    private fun scheduleBackgroundSweep(moviesStale: Boolean, seriesStale: Boolean) {
+        viewModelScope.launch {
+            settleGate.awaitSettled()
+            var gate = if (moviesStale || seriesStale) "cadence" else null
+            var sweepMovies = moviesStale
+            var sweepSeries = seriesStale
+            if (gate == null) {
+                val changed = probeLibraryChange()
+                if (changed != null && (changed.first || changed.second)) {
+                    gate = "changed"
+                    sweepMovies = changed.first
+                    sweepSeries = changed.second
+                }
+            }
+            if (gate == null) {
+                Log.i(TAG, "[VOD] background sweep: gate=skipped movies=fresh series=fresh probe=unchanged")
+                return@launch
+            }
+            Log.i(TAG, "[VOD] background sweep: gate=$gate movies=$sweepMovies series=$sweepSeries")
+            if (sweepMovies) startMovieSweep(background = true)
+            if (sweepSeries) startSeriesSweep(background = true)
+        }
+    }
+
+    /**
+     * One tiny request per kind (page_size=1, newest first). Returns
+     * (moviesChanged, seriesChanged), or null when the probe does not apply
+     * (not Dispatcharr) or failed. When no baseline was recorded yet the probe
+     * only stores one, so the very next launch can compare.
+     */
+    private suspend fun probeLibraryChange(): Pair<Boolean, Boolean>? {
+        val playlist = playlistRepository.activePlaylist() ?: return null
+        val sourceType = playlist.sourceType.let { st -> SourceType.entries.firstOrNull { it.name == st } }
+        val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
+                sourceType == SourceType.DispatcharrUserPass
+        if (!isDispatcharr || playlist.apiKey.isNullOrBlank()) return null
+        val base = playlistRepository.effectiveBaseUrl(playlist)
+        val movieProbe = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getVODMoviesChangeProbe(base, key)
+            }
+        }.onFailure { warnUnlessCancelled("VOD movies change probe failed", it) }.getOrNull()
+        val seriesProbe = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getVODSeriesChangeProbe(base, key)
+            }
+        }.onFailure { warnUnlessCancelled("VOD series change probe failed", it) }.getOrNull()
+        if (movieProbe == null && seriesProbe == null) return null
+        val hadMovieBaseline = moviesProbeCount > 0 || moviesProbeNewest.isNotBlank()
+        val hadSeriesBaseline = seriesProbeCount > 0 || seriesProbeNewest.isNotBlank()
+        val moviesChanged = movieProbe != null && hadMovieBaseline &&
+                (movieProbe.count != moviesProbeCount || movieProbe.newest != moviesProbeNewest)
+        val seriesChanged = seriesProbe != null && hadSeriesBaseline &&
+                (seriesProbe.count != seriesProbeCount || seriesProbe.newest != seriesProbeNewest)
+        Log.i(
+            TAG,
+            "[VOD] change probe: movies ${moviesProbeCount}/${moviesProbeNewest} -> " +
+                "${movieProbe?.count}/${movieProbe?.newest}, series ${seriesProbeCount}/${seriesProbeNewest} -> " +
+                "${seriesProbe?.count}/${seriesProbe?.newest}",
+        )
+        movieProbe?.let { moviesProbeCount = it.count; moviesProbeNewest = it.newest }
+        seriesProbe?.let { seriesProbeCount = it.count; seriesProbeNewest = it.newest }
+        // Record the (possibly first) baseline so a later launch can compare
+        // even when nothing is swept now.
+        if (!moviesChanged && !seriesChanged) persistSnapshot()
+        return moviesChanged to seriesChanged
     }
 
     /** True when the launch served the saved library and skipped the sweep. */
@@ -425,6 +514,13 @@ class OnDemandViewModel @Inject constructor(
     // Completion stamps carried into every save (see the launch gate).
     private var moviesCompletedAtMs = 0L
     private var seriesCompletedAtMs = 0L
+
+    // Dispatcharr change-probe baseline carried into every save: what the
+    // server reported the last time we probed it (see probeLibraryChange).
+    private var moviesProbeCount = 0
+    private var moviesProbeNewest = ""
+    private var seriesProbeCount = 0
+    private var seriesProbeNewest = ""
 
     /**
      * Background TMDB art pass over a library once its sweep completes
@@ -501,6 +597,8 @@ class OnDemandViewModel @Inject constructor(
                     movies = st.movies, series = st.series,
                     movieGroupNames = st.movieGroupNames, seriesGroupNames = st.seriesGroupNames,
                     moviesCompletedAtMs = moviesCompletedAtMs, seriesCompletedAtMs = seriesCompletedAtMs,
+                    moviesProbeCount = moviesProbeCount, moviesProbeNewest = moviesProbeNewest,
+                    seriesProbeCount = seriesProbeCount, seriesProbeNewest = seriesProbeNewest,
                 ),
             )
         }
@@ -954,12 +1052,26 @@ class OnDemandViewModel @Inject constructor(
     private var movieSweepJob: kotlinx.coroutines.Job? = null
     private var seriesSweepJob: kotlinx.coroutines.Job? = null
 
-    fun refresh() {
+    /** Foreground sweep (pull to refresh, playlist switch, Refresh Everything). */
+    fun refresh() = startMovieSweep(background = false)
+
+    // True while the ACTIVE movie sweep is the quiet background one, so a
+    // foreground request can preempt it instead of being swallowed by the
+    // single-flight guard.
+    private var movieSweepIsBackground = false
+    private var seriesSweepIsBackground = false
+
+    private fun startMovieSweep(background: Boolean) {
         if (movieSweepJob?.isActive == true) {
-            Log.i(TAG, "[VOD] movie sweep already running; ignoring refresh()")
-            return
+            if (background || !movieSweepIsBackground) {
+                Log.i(TAG, "[VOD] movie sweep already running; ignoring refresh(background=$background)")
+                return
+            }
+            Log.i(TAG, "[VOD] foreground refresh preempts the background movie sweep")
+            movieSweepJob?.cancel()
         }
-        movieSweepJob = viewModelScope.launch {
+        movieSweepIsBackground = background
+        movieSweepJob = viewModelScope.launch(sweepContext(background)) {
             val playlist = playlistRepository.activePlaylist()
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
@@ -1023,7 +1135,10 @@ class OnDemandViewModel @Inject constructor(
             // screen (with the refresh spinner) until the walk completes:
             // publishing the growing list emptied the grid to "No Movies"
             // and regrew it, and the header count ran up from 0 again.
-            val progressive = _state.value.movies.isEmpty()
+            // A background sweep NEVER paints progressively: the restored
+            // library is already on screen, and a per-page publish would
+            // recompose the grid dozens of times behind the user.
+            val progressive = _state.value.movies.isEmpty() && !background
             // Categories that have >=1 movie for THIS account are the real
             // groups for this playlist; Manage Groups is published from here.
             // Presence is recorded from the category's OWN first-page response
@@ -1041,7 +1156,7 @@ class OnDemandViewModel @Inject constructor(
             val groupsWithContent = LinkedHashSet<String>()
             var firstPainted = false
             for (catName in cats) {
-                kotlinx.coroutines.delay(WALK_PACE_MS)
+                pace(background)
                 val capped = merged.size >= totalCap
                 var nextUrl: String? = null
                 var fetchedForCat = 0
@@ -1078,7 +1193,7 @@ class OnDemandViewModel @Inject constructor(
                 // Walk this category's cursor up to its fair share (skipped once
                 // capped: nextUrl stays null above).
                 while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
-                    kotlinx.coroutines.delay(WALK_PACE_MS)
+                    pace(background)
                     val captured = nextUrl
                     val p = runCatching {
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -1177,12 +1292,20 @@ class OnDemandViewModel @Inject constructor(
         )
     }
 
-    fun refreshSeries() {
+    /** Foreground series sweep; see [refresh]. */
+    fun refreshSeries() = startSeriesSweep(background = false)
+
+    private fun startSeriesSweep(background: Boolean) {
         if (seriesSweepJob?.isActive == true) {
-            Log.i(TAG, "[VOD] series sweep already running; ignoring refreshSeries()")
-            return
+            if (background || !seriesSweepIsBackground) {
+                Log.i(TAG, "[VOD] series sweep already running; ignoring refreshSeries(background=$background)")
+                return
+            }
+            Log.i(TAG, "[VOD] foreground refresh preempts the background series sweep")
+            seriesSweepJob?.cancel()
         }
-        seriesSweepJob = viewModelScope.launch {
+        seriesSweepIsBackground = background
+        seriesSweepJob = viewModelScope.launch(sweepContext(background)) {
             val playlist = playlistRepository.activePlaylist()
             val sourceType = playlist?.sourceType?.let { SourceType.entries.firstOrNull { st -> st.name == it } }
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
@@ -1231,7 +1354,8 @@ class OnDemandViewModel @Inject constructor(
             val perCatCap = VOD_PER_CATEGORY_CAP
             val base = playlistRepository.effectiveBaseUrl(playlist)
             val merged = mutableListOf<DispatcharrVODSeries>()
-            val progressive = _state.value.series.isEmpty()
+            // See the movie sweep: background sweeps publish once, at the end.
+            val progressive = _state.value.series.isEmpty() && !background
             val seen = HashSet<Int>()
             // Presence is recorded from each category's own first-page response,
             // independent of the row cap and the shared `seen` de-dup set. See
@@ -1241,7 +1365,7 @@ class OnDemandViewModel @Inject constructor(
             val groupsWithContent = LinkedHashSet<String>()
             var firstPainted = false
             for (catName in cats) {
-                kotlinx.coroutines.delay(WALK_PACE_MS)
+                pace(background)
                 val capped = merged.size >= totalCap
                 var nextUrl: String? = null
                 var fetchedForCat = 0
@@ -1268,7 +1392,7 @@ class OnDemandViewModel @Inject constructor(
                     }
                 }
                 while (nextUrl != null && fetchedForCat < perCatCap && merged.size < totalCap) {
-                    kotlinx.coroutines.delay(WALK_PACE_MS)
+                    pace(background)
                     val captured = nextUrl
                     val p = runCatching {
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -2679,8 +2803,34 @@ class OnDemandViewModel @Inject constructor(
         return Result.success(build(base, user, pass, id, ext))
     }
 
+    /**
+     * Dispatcher for a sweep: the shared low-priority background lane for a
+     * quiet refresh, the ViewModel's own (main) context for a user-triggered
+     * one, where the page-by-page paint is the point.
+     */
+    private fun sweepContext(background: Boolean) =
+        if (background) BackgroundSweep.dispatcher else kotlin.coroutines.EmptyCoroutineContext
+
+    /**
+     * Pause between catalog pages. A background sweep also waits out any tune
+     * that has not reached its first frame and any time spent backgrounded, so
+     * it never competes with channel start time.
+     */
+    private suspend fun pace(background: Boolean) {
+        if (background) {
+            settleGate.awaitSweepWindow()
+            kotlinx.coroutines.delay(BG_WALK_PACE_MS)
+        } else {
+            kotlinx.coroutines.delay(WALK_PACE_MS)
+        }
+    }
+
     private companion object {
         private const val STARTUP_DEFER_MS = 6_000L
+        /** Pace for the quiet background sweep: twice the pause of the
+         *  foreground walk, so a full library refresh costs the box almost
+         *  nothing while the user watches TV. */
+        private const val BG_WALK_PACE_MS = 500L
         /** Pause between catalog pages (Streamer 2026-09-03): the unpaced walk
          *  ran at ~7 pages/s across both passes and held the box at 30%+ CPU
          *  for minutes, which starved the tabs' rendering. */

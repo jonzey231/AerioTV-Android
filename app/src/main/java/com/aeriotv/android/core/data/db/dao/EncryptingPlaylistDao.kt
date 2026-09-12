@@ -90,6 +90,9 @@ class EncryptingPlaylistDao(
     override suspend fun updateLastEpgRefreshedAt(id: String, at: Long) =
         delegate.updateLastEpgRefreshedAt(id, at)
 
+    override suspend fun updateEpgSourceFingerprint(id: String, fingerprint: String?) =
+        delegate.updateEpgSourceFingerprint(id, fingerprint)
+
     override suspend fun upsertAsActive(entity: PlaylistEntity) =
         delegate.upsertAsActive(entity.encrypted())
 

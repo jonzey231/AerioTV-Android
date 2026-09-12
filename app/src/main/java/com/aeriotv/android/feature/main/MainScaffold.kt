@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.invisibleToUser
@@ -652,11 +653,41 @@ fun MainScaffold(
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
-                if (sawFirstStart) viewModel.refreshEpgIfStale() else sawFirstStart = true
+                // Quiet EPG sweep (Logan 2026-09-12): the sweep only spends
+                // requests while the app is in the foreground, and a return to
+                // the foreground is also when the sources gate is re-checked
+                // (rate limited to once per 15 min in the repository).
+                com.aeriotv.android.core.data.repository.EpgSweepGate.appInForeground = true
+                if (sawFirstStart) {
+                    viewModel.refreshEpgIfStale()
+                    viewModel.checkEpgSourcesForChanges()
+                } else {
+                    sawFirstStart = true
+                }
+            }
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                // Backgrounded: the sweep pauses where it is and resumes at the
+                // same chunk on the next ON_START.
+                com.aeriotv.android.core.data.repository.EpgSweepGate.appInForeground = false
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Periodic foreground gate re-check: every 15 minutes, ask the server
+    // whether its EPG sources moved and let the repository sweep the grid in
+    // the background if they did. repeatOnLifecycle(STARTED) so the tick does
+    // not fire while the app is backgrounded.
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(
+            androidx.lifecycle.Lifecycle.State.STARTED,
+        ) {
+            while (true) {
+                kotlinx.coroutines.delay(15L * 60L * 1000L)
+                viewModel.checkEpgSourcesForChanges()
+            }
+        }
     }
 
     // Android TV / Google TV: a 10-foot top tab bar instead of the phone

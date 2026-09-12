@@ -506,4 +506,487 @@ class TsToFmp4RemuxerTest {
         ((b[off].toInt() and 0xFF) shl 24) or ((b[off + 1].toInt() and 0xFF) shl 16) or
             ((b[off + 2].toInt() and 0xFF) shl 8) or (b[off + 3].toInt() and 0xFF)
 
+    // ---- Chromium init-segment requirements (2026-09-12) ----
+
+    /**
+     * An ADTS frame with an arbitrary sampling_frequency_index and
+     * channel_configuration, so a test can present the header shapes that
+     * no two-byte AudioSpecificConfig can express.
+     */
+    private fun adtsFrameCfg(freqIndex: Int, chanConfig: Int, payloadSize: Int): ByteArray {
+        val frameLen = 7 + payloadSize
+        return byteArrayOf(
+            0xFF.toByte(), 0xF1.toByte(), // MPEG-4, layer 0, no CRC
+            (((1 shl 6) or (freqIndex shl 2)) or ((chanConfig shr 2) and 0x01)).toByte(),
+            (((chanConfig and 0x03) shl 6)).toByte(),
+            ((frameLen shr 3) and 0xFF).toByte(),
+            (((frameLen and 0x07) shl 5) or 0x1F).toByte(),
+            0xFC.toByte(),
+        ) + ByteArray(payloadSize) { (it * 3).toByte() }
+    }
+
+    /** One box in a walked tree: type, total size, and payload bounds. */
+    private class Mp4Box(val type: String, val start: Int, val size: Int, val bodyStart: Int) {
+        val end get() = start + size
+    }
+
+    /**
+     * Children of the box body [from, to), asserting they tile it exactly.
+     * Chromium's BoxReader::ScanChildren walks until pos == box_size and
+     * fails on any child whose declared size runs past the parent, so a
+     * parent whose children do not exactly fill it is a parse failure, not
+     * a cosmetic flaw.
+     */
+    private fun childBoxes(d: ByteArray, from: Int, to: Int, parent: String): List<Mp4Box> {
+        val out = ArrayList<Mp4Box>()
+        var off = from
+        while (off < to) {
+            assertTrue("$parent: child header truncated at $off", off + 8 <= to)
+            val size = be32(d, off)
+            assertTrue("$parent: child at $off declares size $size", size >= 8 && off + size <= to)
+            out.add(Mp4Box(String(d, off + 4, 4, Charsets.US_ASCII), off, size, off + 8))
+            off += size
+        }
+        assertEquals("$parent children must tile the box exactly", to, off)
+        return out
+    }
+
+    private fun child(boxes: List<Mp4Box>, type: String, parent: String): Mp4Box =
+        boxes.firstOrNull { it.type == type } ?: error("$parent is missing a required $type box")
+
+    /**
+     * Every structural rule Chromium's media/formats/mp4 parser enforces
+     * on an init segment, read off the bytes the remuxer actually emits.
+     * Read against box_definitions.cc, box_reader.cc, es_descriptor.cc,
+     * aac.cc and mp4_stream_parser.cc and confirmed against a real
+     * Chromium MSE SourceBuffer on 2026-09-12: every rule below, when
+     * broken, turns into the receiver's "Append: stream parsing failed" on
+     * the init segment while ffprobe still reads the file happily.
+     */
+    private fun assertChromiumParsableInit(init: ByteArray, expectAudio: Boolean) {
+        val top = childBoxes(init, 0, init.size, "init")
+        assertEquals("init must be ftyp then moov", listOf("ftyp", "moov"), top.map { it.type })
+
+        val moov = top[1]
+        val moovKids = childBoxes(init, moov.bodyStart, moov.end, "moov")
+        // Movie::Parse: mvhd and mvex are both REQUIRED, and mvex absent
+        // is reported as "Detected unfragmented MP4".
+        val mvhd = child(moovKids, "mvhd", "moov")
+        assertEquals("mvhd must be version 0 here", 0, init[mvhd.bodyStart].toInt())
+        assertTrue("MovieHeader timescale must not be 0", be32(init, mvhd.bodyStart + 12) > 0)
+        val traks = moovKids.filter { it.type == "trak" }
+        assertEquals("one video track plus audio when present", if (expectAudio) 2 else 1, traks.size)
+
+        val mvex = child(moovKids, "mvex", "moov")
+        val trexes = childBoxes(init, mvex.bodyStart, mvex.end, "mvex").filter { it.type == "trex" }
+        assertEquals("one trex per trak", traks.size, trexes.size)
+        val trexTracks = HashSet<Int>()
+        for (trex in trexes) {
+            val trackId = be32(init, trex.bodyStart + 4)
+            // ParseMoov: RCHECK(desc_idx > 0) on the trex's
+            // default_sample_description_index, which is one-based.
+            assertTrue(
+                "trex default_sample_description_index must be >= 1",
+                be32(init, trex.bodyStart + 8) >= 1,
+            )
+            assertTrue("duplicate trex track id $trackId", trexTracks.add(trackId))
+        }
+
+        val seenTrackIds = HashSet<Int>()
+        var sawAudio = false
+        for (trak in traks) {
+            val trakKids = childBoxes(init, trak.bodyStart, trak.end, "trak")
+            val tkhd = child(trakKids, "tkhd", "trak")
+            val trackId = be32(init, tkhd.bodyStart + 12)
+            // ParseMoov rejects a duplicate track ID outright.
+            assertTrue("duplicate track id $trackId in moov", seenTrackIds.add(trackId))
+            assertTrue("track $trackId has no trex", trexTracks.contains(trackId))
+
+            val mdia = child(trakKids, "mdia", "trak")
+            val mdiaKids = childBoxes(init, mdia.bodyStart, mdia.end, "mdia")
+            // Media::Parse requires mdhd, hdlr and minf, in any order.
+            val mdhd = child(mdiaKids, "mdhd", "mdia")
+            assertTrue(
+                "MediaHeader timescale must not be 0",
+                be32(init, mdhd.bodyStart + 12) > 0,
+            )
+            val hdlr = child(mdiaKids, "hdlr", "mdia")
+            val handler = String(init, hdlr.bodyStart + 8, 4, Charsets.US_ASCII)
+            assertTrue("handler must be vide or soun, got $handler", handler == "vide" || handler == "soun")
+            // HandlerReference::Parse reads the rest of the box as the
+            // name and, when the last byte is NOT zero, re-reads byte 0 as
+            // a Pascal length that must equal size - 1. A name that is
+            // neither NUL-terminated nor correctly counted fails there.
+            assertEquals(
+                "hdlr name must be NUL-terminated",
+                0,
+                init[hdlr.end - 1].toInt(),
+            )
+
+            val minf = child(mdiaKids, "minf", "mdia")
+            val minfKids = childBoxes(init, minf.bodyStart, minf.end, "minf")
+            val stbl = child(minfKids, "stbl", "minf")
+            val stblKids = childBoxes(init, stbl.bodyStart, stbl.end, "stbl")
+            val stsd = child(stblKids, "stsd", "stbl")
+            // SampleDescription::Parse: full box header, entry count, then
+            // the entries as children filling the rest of the box.
+            assertEquals("one sample entry", 1, be32(init, stsd.bodyStart + 4))
+            val entries = childBoxes(init, stsd.bodyStart + 8, stsd.end, "stsd")
+            assertEquals("stsd entry count must match its children", 1, entries.size)
+            val entry = entries[0]
+
+            if (handler == "vide") {
+                assertEquals("video sample entry format", "avc1", entry.type)
+                // VideoSampleEntry::Parse consumes a fixed 78-byte
+                // preamble before scanning children, so avcC must begin at
+                // body + 78 and width/height sit at body + 24.
+                val width = ((init[entry.bodyStart + 24].toInt() and 0xFF) shl 8) or
+                    (init[entry.bodyStart + 25].toInt() and 0xFF)
+                val height = ((init[entry.bodyStart + 26].toInt() and 0xFF) shl 8) or
+                    (init[entry.bodyStart + 27].toInt() and 0xFF)
+                // coded_size feeds VideoDecoderConfig::IsValidConfig.
+                assertTrue("avc1 width must be 1..32767, got $width", width in 1..32767)
+                assertTrue("avc1 height must be 1..32767, got $height", height in 1..32767)
+                // tkhd width/height are read as 16.16 and become the
+                // display aspect ratio, so they must agree with the entry.
+                assertEquals("tkhd width matches avc1", width, be32(init, tkhd.end - 8) ushr 16)
+                assertEquals("tkhd height matches avc1", height, be32(init, tkhd.end - 4) ushr 16)
+
+                val avcC = child(
+                    childBoxes(init, entry.bodyStart + 78, entry.end, "avc1"),
+                    "avcC",
+                    "avc1",
+                )
+                assertEquals("avcC configurationVersion must be 1", 1, init[avcC.bodyStart].toInt())
+                val profileIdc = init[avcC.bodyStart + 1].toInt() and 0xFF
+                // Anything outside this set maps to
+                // VIDEO_CODEC_PROFILE_UNKNOWN and VideoSampleEntry::Parse
+                // then fails with "Unrecognized video codec profile".
+                assertTrue(
+                    "avcC profile_indication $profileIdc is not one Chromium maps",
+                    profileIdc in setOf(66, 77, 88, 100, 110, 122, 244),
+                )
+                // lengthSizeMinusOne: Chromium computes
+                // length_size = (value & 3) + 1 and rejects a length_size
+                // of 3, so the encoded value 2 is the illegal one. We emit
+                // 0xFF, which is the usual "reserved bits set" spelling of
+                // a 4-byte NAL length.
+                assertTrue(
+                    "avcC NAL length size must be 1, 2 or 4",
+                    (init[avcC.bodyStart + 4].toInt() and 0x03) != 2,
+                )
+                val numSps = init[avcC.bodyStart + 5].toInt() and 0x1F
+                assertTrue("avcC must carry at least one SPS", numSps >= 1)
+                val spsLen = ((init[avcC.bodyStart + 6].toInt() and 0xFF) shl 8) or
+                    (init[avcC.bodyStart + 7].toInt() and 0xFF)
+                assertTrue("avcC SPS must not be empty", spsLen > 0)
+                assertTrue("avcC SPS must fit the box", avcC.bodyStart + 8 + spsLen <= avcC.end)
+            } else {
+                sawAudio = true
+                assertTrue(
+                    "audio sample entry format ${entry.type}",
+                    entry.type in setOf("mp4a", "ac-3", "ec-3"),
+                )
+                // AudioSampleEntry::Parse consumes a fixed 28-byte
+                // preamble, so the config box starts at body + 28.
+                val channels = ((init[entry.bodyStart + 16].toInt() and 0xFF) shl 8) or
+                    (init[entry.bodyStart + 17].toInt() and 0xFF)
+                val sampleSize = ((init[entry.bodyStart + 18].toInt() and 0xFF) shl 8) or
+                    (init[entry.bodyStart + 19].toInt() and 0xFF)
+                val sampleRate = be32(init, entry.bodyStart + 24) ushr 16
+                // ParseMoov maps samplesize to a SampleFormat and rejects
+                // anything but 8, 16, 24 or 32.
+                assertTrue("samplesize $sampleSize has no SampleFormat", sampleSize in setOf(8, 16, 24, 32))
+                assertTrue("audio channelcount must be 1..8, got $channels", channels in 1..8)
+                assertTrue("audio samplerate must be > 0", sampleRate > 0)
+
+                val configKids = childBoxes(init, entry.bodyStart + 28, entry.end, entry.type)
+                if (entry.type == "mp4a") {
+                    val esds = child(configKids, "esds", "mp4a")
+                    // ESDescriptor::Parse walks ES_Descriptor(0x03) >
+                    // DecoderConfigDescriptor(0x04) >
+                    // DecoderSpecificInfo(0x05). Tags and the one-byte
+                    // sizes we emit must line up exactly or it bails.
+                    var q = esds.bodyStart + 4 // past version/flags
+                    assertEquals("ES_Descriptor tag", 0x03, init[q].toInt() and 0xFF)
+                    val esSize = init[q + 1].toInt() and 0xFF
+                    assertTrue("ES_Descriptor size must be a single byte here", esSize < 0x80)
+                    assertEquals("ES_Descriptor size must reach the box end", esds.end, q + 2 + esSize)
+                    q += 2 + 3 // ES_ID(2) + flags(1)
+                    assertEquals("DecoderConfigDescriptor tag", 0x04, init[q].toInt() and 0xFF)
+                    val dcdSize = init[q + 1].toInt() and 0xFF
+                    assertTrue("DecoderConfigDescriptor size must be a single byte", dcdSize < 0x80)
+                    assertEquals(
+                        "objectTypeIndication must be 0x40 (MPEG-4 audio)",
+                        0x40,
+                        init[q + 2].toInt() and 0xFF,
+                    )
+                    q += 2 + 13 // the 13 fixed DecoderConfigDescriptor bytes
+                    assertEquals("DecoderSpecificInfo tag", 0x05, init[q].toInt() and 0xFF)
+                    val ascLen = init[q + 1].toInt() and 0xFF
+                    assertEquals("a two-byte AudioSpecificConfig", 2, ascLen)
+                    val a0 = init[q + 2].toInt() and 0xFF
+                    val a1 = init[q + 3].toInt() and 0xFF
+                    val objectType = a0 shr 3
+                    val freqIndex = ((a0 and 0x07) shl 1) or (a1 shr 7)
+                    val chanConfig = (a1 shr 3) and 0x0F
+                    // AAC::Parse: profile outside 1..4 (plus the HE and
+                    // xHE signals we never emit) is refused outright.
+                    assertTrue("ASC audioObjectType $objectType is not AAC 1..4", objectType in 1..4)
+                    // A two-byte ASC has room for exactly
+                    // 5 + 4 + 4 + 3 GASpecificConfig bits = 16. Index 15
+                    // would need 24 more bits, 13 and 14 are reserved and
+                    // resolve to a 0 Hz rate, and channel_config 0 sends
+                    // Chromium looking for a Program Config Element that
+                    // is not there. Each case fails the append.
+                    assertTrue("ASC sampling_frequency_index $freqIndex is not 0..12", freqIndex in 0..12)
+                    assertTrue("ASC channel_configuration $chanConfig is not 1..7", chanConfig in 1..7)
+                    // Chromium derives the decoder config from the ASC and
+                    // compares it with the sample entry. The mp4a box must
+                    // not advertise a rate or layout the ASC contradicts.
+                    val ascRates = intArrayOf(
+                        96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000,
+                        22_050, 16_000, 12_000, 11_025, 8_000, 7_350,
+                    )
+                    // 16.16 cannot hold an integer part above 65535, so
+                    // the sample entry carries the clamped rate; Chromium
+                    // takes the real one from the ASC.
+                    assertEquals(
+                        "mp4a samplerate must match the ASC",
+                        ascRates[freqIndex].coerceAtMost(65_535),
+                        sampleRate,
+                    )
+                    // Table 1.19: the channel COUNT, which differs from the
+                    // configuration number at config 7 (7.1 is 8 channels).
+                    val ascChannels = intArrayOf(2, 1, 2, 3, 4, 5, 6, 8)[chanConfig]
+                    assertEquals("mp4a channelcount must match the ASC", ascChannels, channels)
+                } else {
+                    // ETSI TS 102 366 Annex F: without its config box the
+                    // AC-3 / E-AC-3 sample entry has no channel layout and
+                    // ParseMoov refuses a zero channelcount fallback.
+                    child(configKids, if (entry.type == "ac-3") "dac3" else "dec3", entry.type)
+                }
+            }
+        }
+        assertEquals("audio track present", expectAudio, sawAudio)
+    }
+
+    /** The AAC init the AAC path emits, against every Chromium rule. */
+    @Test
+    fun `aac init segment satisfies every chromium mp4 parser rule`() {
+        val cap = Capture()
+        val remuxer = TsToFmp4Remuxer(cap)
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x0F)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+        feedGops(remuxer, startPts = 900_000L, frames = 61, withAudio = true)
+        assertChromiumParsableInit(cap.init!!, expectAudio = true)
+    }
+
+    /** The same rules over the AC-3 passthrough entry, which must keep its
+     *  dac3 box and a nonzero channel count. */
+    @Test
+    fun `ac3 init segment satisfies every chromium mp4 parser rule`() {
+        val cap = Capture()
+        val remuxer = TsToFmp4Remuxer(cap, allowAc3Passthrough = true)
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x81)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+        val t0 = 900_000L
+        val warm = ac3AudioPes(t0 - frameTicks)
+        remuxer.feed(warm, 0, warm.size)
+        for (f in 0 until 61) {
+            val pts = t0 + f * frameTicks
+            val au = videoAu(pts, pts, f % 30 == 0, withParamSets = f % 30 == 0)
+            remuxer.feed(au, 0, au.size)
+            if (f % 3 == 0) {
+                val ap = ac3AudioPes(pts)
+                remuxer.feed(ap, 0, ap.size)
+            }
+        }
+        assertChromiumParsableInit(cap.init!!, expectAudio = true)
+    }
+
+    /** The ASC fields the emitted init actually carries. */
+    private fun ascOf(init: ByteArray): Triple<Int, Int, Int> {
+        val i = init.indices.first { k ->
+            k + 4 <= init.size && String(init, k, 4, Charsets.US_ASCII) == "esds"
+        }
+        val q = init.indexOfFirst2(0x05, 0x02, from = i) + 2
+        val a0 = init[q].toInt() and 0xFF
+        val a1 = init[q + 1].toInt() and 0xFF
+        return Triple(a0 shr 3, ((a0 and 0x07) shl 1) or (a1 shr 7), (a1 shr 3) and 0x0F)
+    }
+
+    private fun ByteArray.indexOfFirst2(a: Int, b: Int, from: Int): Int {
+        for (i in from until size - 1) {
+            if ((this[i].toInt() and 0xFF) == a && (this[i + 1].toInt() and 0xFF) == b) return i
+        }
+        error("no $a $b pair after $from")
+    }
+
+    /** Feed a GOP stream whose audio PES carries the given ADTS config. */
+    private fun feedWithAdtsConfig(
+        remuxer: TsToFmp4Remuxer,
+        freqIndex: Int,
+        chanConfig: Int,
+    ) {
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x0F)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+        val t0 = 900_000L
+        for (f in 0 until 61) {
+            val pts = t0 + f * frameTicks
+            val au = videoAu(pts, pts, f % 30 == 0, withParamSets = f % 30 == 0)
+            remuxer.feed(au, 0, au.size)
+            if (f % 3 == 0) {
+                val body = ByteArrayOutputStream().apply {
+                    repeat(3) { write(adtsFrameCfg(freqIndex, chanConfig, payloadSize = 32)) }
+                }.toByteArray()
+                val ap = packetize(0x0102, pes(0xC0, body, pts))
+                remuxer.feed(ap, 0, ap.size)
+            }
+        }
+    }
+
+    /**
+     * Dispatcharr's ffmpeg AAC encoder emits channel_configuration 0 (it
+     * logs "Using a PCE to encode channel layout") whenever the AC-3 source
+     * layout is outside Table 1.19: 2.1, 3.1, 6.1 and 7.0 all do it. A zero
+     * copied into the ASC fails Chromium's SkipDecoderGASpecificConfig and
+     * takes the whole init append down, which the old coerceAtLeast(1) on
+     * the sample entry hid without fixing.
+     */
+    @Test
+    fun `adts channel configuration zero is sanitized to stereo in the asc`() {
+        val logs = ArrayList<String>()
+        val cap = Capture()
+        feedWithAdtsConfig(TsToFmp4Remuxer(cap, log = { logs.add(it) }), freqIndex = 3, chanConfig = 0)
+        val init = cap.init!!
+        assertChromiumParsableInit(init, expectAudio = true)
+        val (objectType, freqIndex, chanConfig) = ascOf(init)
+        assertEquals("AAC-LC preserved", 2, objectType)
+        assertEquals("48 kHz preserved", 3, freqIndex)
+        assertEquals("channel config 0 becomes stereo", 2, chanConfig)
+        assertTrue(
+            "the substitution must be logged once: $logs",
+            logs.any { it.contains("channel_configuration 0 -> 2") },
+        )
+    }
+
+    /** A reserved sampling_frequency_index resolves to 0 Hz in Chromium, so
+     *  it cannot reach the ASC either. */
+    @Test
+    fun `reserved adts sampling frequency index is sanitized in the asc`() {
+        val logs = ArrayList<String>()
+        val cap = Capture()
+        feedWithAdtsConfig(TsToFmp4Remuxer(cap, log = { logs.add(it) }), freqIndex = 13, chanConfig = 2)
+        val init = cap.init!!
+        assertChromiumParsableInit(init, expectAudio = true)
+        val (_, freqIndex, chanConfig) = ascOf(init)
+        assertEquals("reserved index 13 becomes 48 kHz", 3, freqIndex)
+        assertEquals("stereo preserved", 2, chanConfig)
+        assertTrue(
+            "the substitution must be logged once: $logs",
+            logs.any { it.contains("sampling_frequency_index 13 -> 3") },
+        )
+    }
+
+    /** Index 15 would need a 24-bit explicit rate that a two-byte ASC has
+     *  no room for, so Chromium reads past the end of the descriptor. */
+    @Test
+    fun `explicit rate sampling frequency index is sanitized in the asc`() {
+        val cap = Capture()
+        feedWithAdtsConfig(TsToFmp4Remuxer(cap), freqIndex = 15, chanConfig = 2)
+        assertChromiumParsableInit(cap.init!!, expectAudio = true)
+        assertEquals("index 15 becomes 48 kHz", 3, ascOf(cap.init!!).second)
+    }
+
+    /**
+     * 96 kHz is index 0, and `96000 shl 16` overflows a 32-bit 16.16 value
+     * (it wrapped to 30464 Hz). The sample entry must carry the clamped
+     * 65535 rather than a wrapped one; Chromium reads the true rate from
+     * the ASC next to it.
+     */
+    @Test
+    fun `96 kHz audio does not wrap the 16 16 sample rate`() {
+        val cap = Capture()
+        feedWithAdtsConfig(TsToFmp4Remuxer(cap), freqIndex = 0, chanConfig = 2)
+        val init = cap.init!!
+        assertChromiumParsableInit(init, expectAudio = true)
+        assertEquals("96 kHz survives into the ASC", 0, ascOf(init).second)
+        val mp4a = init.indices.first { i ->
+            i + 4 <= init.size && String(init, i, 4, Charsets.US_ASCII) == "mp4a"
+        }
+        assertEquals(
+            "16.16 sample rate clamped, not wrapped",
+            65_535,
+            be32(init, mp4a + 4 + 24) ushr 16,
+        )
+    }
+
+    /** Table 1.19 config 7 is 7.1: EIGHT channels, not seven. The sample
+     *  entry's channelcount must be the count, not the config number. */
+    @Test
+    fun `channel configuration seven reports eight channels`() {
+        val cap = Capture()
+        feedWithAdtsConfig(TsToFmp4Remuxer(cap), freqIndex = 3, chanConfig = 7)
+        val init = cap.init!!
+        assertChromiumParsableInit(init, expectAudio = true)
+        assertEquals("config 7 survives into the ASC", 7, ascOf(init).third)
+    }
+
+    /**
+     * The codec config is latched from the FIRST ADTS header seen and then
+     * never revisited, so a single false 0xFFFx hit inside frame payload
+     * used to poison the esds for the whole session. The next frame must
+     * start on a syncword before a header is believed, the same rule the
+     * AC-3 path has always applied.
+     */
+    @Test
+    fun `a false adts syncword does not latch the codec config`() {
+        val cap = Capture()
+        val remuxer = TsToFmp4Remuxer(cap)
+        val pat = patPacket()
+        val pmt = pmtPacket(videoType = 0x1B, audioType = 0x0F)
+        remuxer.feed(pat, 0, pat.size)
+        remuxer.feed(pmt, 0, pmt.size)
+        // A header-shaped 7 bytes claiming index 13 and a 30-byte frame:
+        // offset 30 lands inside the FIRST real frame's payload, so the
+        // confirmation fails and the scan walks on to the real header.
+        val falseSync = byteArrayOf(
+            0xFF.toByte(), 0xF1.toByte(),
+            (((1 shl 6) or (13 shl 2))).toByte(), 0x80.toByte(),
+            ((30 shr 3) and 0xFF).toByte(), (((30 and 0x07) shl 5) or 0x1F).toByte(),
+            0xFC.toByte(),
+        )
+        val t0 = 900_000L
+        for (f in 0 until 61) {
+            val pts = t0 + f * frameTicks
+            val au = videoAu(pts, pts, f % 30 == 0, withParamSets = f % 30 == 0)
+            remuxer.feed(au, 0, au.size)
+            if (f % 3 == 0) {
+                val body = ByteArrayOutputStream().apply {
+                    if (f == 0) write(falseSync)
+                    repeat(2) { write(adtsFrame(32)) }
+                }.toByteArray()
+                val ap = packetize(0x0102, pes(0xC0, body, pts))
+                remuxer.feed(ap, 0, ap.size)
+            }
+        }
+        val init = cap.init!!
+        assertChromiumParsableInit(init, expectAudio = true)
+        // The real frames are 48 kHz stereo; the false header claimed a
+        // reserved index, which would have refused the audio entirely.
+        val mp4a = init.indices.first { i ->
+            i + 4 <= init.size && String(init, i, 4, Charsets.US_ASCII) == "mp4a"
+        }
+        val body = mp4a + 4
+        assertEquals("channelcount latched from the real header", 2, init[body + 17].toInt())
+        assertEquals("samplerate latched from the real header", 48_000, be32(init, body + 24) ushr 16)
+    }
+
 }

@@ -41,6 +41,16 @@ class VodLibrarySnapshotStore @Inject constructor(
         // Pre-field snapshots decode as 0 and re-sweep once.
         val moviesCompletedAtMs: Long = 0L,
         val seriesCompletedAtMs: Long = 0L,
+        // Cheap Dispatcharr change-probe baseline recorded alongside the
+        // library: the server's item count and newest-item stamp at the time
+        // this snapshot was written (see DispatcharrClient.getVODMoviesChangeProbe).
+        // The background sweep gate compares a fresh probe against these and
+        // sweeps early when either moved, even though the cadence window is
+        // still open. 0 / blank = no baseline yet (the first probe records one).
+        val moviesProbeCount: Int = 0,
+        val moviesProbeNewest: String = "",
+        val seriesProbeCount: Int = 0,
+        val seriesProbeNewest: String = "",
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

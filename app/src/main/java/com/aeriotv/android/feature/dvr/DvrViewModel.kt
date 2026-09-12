@@ -49,11 +49,18 @@ class DvrViewModel @Inject constructor(
     private val appPreferences: AppPreferences,
     private val tmdbService: com.aeriotv.android.core.network.TMDBService,
     private val epgProgrammeDao: com.aeriotv.android.core.data.db.dao.EpgProgrammeDao,
+    private val recordingsCache: DvrRecordingsCache,
+    private val settleGate: com.aeriotv.android.core.app.AppSettleGate,
 ) : ViewModel() {
 
     enum class Filter { Scheduled, Recording, Completed }
+
+    // Serializable because the recordings list is cached on disk per playlist
+    // (DvrRecordingsCache) so the DVR tab opens populated.
+    @kotlinx.serialization.Serializable
     enum class Source { Server, Local }
 
+    @kotlinx.serialization.Serializable
     data class Recording(
         val id: String,
         val source: Source,
@@ -138,6 +145,7 @@ class DvrViewModel @Inject constructor(
         val audioCodec: String? = null,
         val audioChannels: String? = null,
     ) {
+        @kotlinx.serialization.Serializable
         enum class Status { Scheduled, Recording, Completed, Failed, Stopped, Unknown }
 
         private val isTerminal: Boolean
@@ -373,7 +381,21 @@ class DvrViewModel @Inject constructor(
     private var authoritativeLoaded = false
 
     init {
-        refresh()
+        // Cached list first, network second (Logan 2026-09-12): the tab paints
+        // the last known recordings instantly, and the first network refresh is
+        // a quiet background one once the app has settled (guide rendered, past
+        // first frame if anything is playing, ~20 s in). Nothing cached means
+        // there is nothing to show, so that launch refreshes straight away.
+        viewModelScope.launch {
+            val restored = restoreFromCache()
+            if (restored > 0) {
+                settleGate.awaitSettled()
+                settleGate.awaitSweepWindow()
+            }
+            refresh()
+            refreshJob?.join()
+            Log.i(TAG, "[DVR] background refresh: ${_state.value.recordings.size} recordings")
+        }
         // tvOS reconciles the DVR list immediately and then every 30 s while
         // the tab is mounted (DVRView.swift:395-402); without it an
         // in-progress recording's elapsed time freezes and a finished capture
@@ -470,6 +492,37 @@ class DvrViewModel @Inject constructor(
     }
 
     private var refreshJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Publish the cached server recordings for the active playlist. Returns how
+     * many rows were restored (0 when there is no cache, or the source is not
+     * Dispatcharr-backed). Local rows already on screen are kept.
+     */
+    private suspend fun restoreFromCache(): Int {
+        val playlist = playlistRepository.activePlaylist() ?: return 0
+        val snap = recordingsCache.load(recordingsCache.identity(playlist)) ?: return 0
+        if (snap.recordings.isEmpty()) return 0
+        _state.update { st ->
+            val local = st.recordings.filter { it.source == Source.Local }
+            st.copy(
+                recordings = (snap.recordings + local).sortedBy { it.startMillis },
+                // Cached rows are real rows: keep the DVR tab visible and the
+                // list painted rather than showing a spinner over them.
+                isLoading = false,
+                hasRecordingsHint = true,
+            )
+        }
+        Log.i(TAG, "[DVR] restored ${snap.recordings.size} recordings from cache")
+        return snap.recordings.size
+    }
+
+    /** Write the current server rows as this playlist's cached list. */
+    private fun persistRecordingsCache(rows: List<Recording>) {
+        viewModelScope.launch {
+            val playlist = playlistRepository.activePlaylist() ?: return@launch
+            recordingsCache.save(recordingsCache.identity(playlist), rows)
+        }
+    }
 
     fun refresh() {
         refreshJob = viewModelScope.launch {
@@ -571,6 +624,7 @@ class DvrViewModel @Inject constructor(
                             hasRecordingsHint = false,
                         )
                     }
+                    persistRecordingsCache(fromCache)
                     resolveArtAsync(playlist, fromCache)
                     // Persist this session's verdict so the next launch (or a
                     // switch back to this source) shows the DVR tab from the

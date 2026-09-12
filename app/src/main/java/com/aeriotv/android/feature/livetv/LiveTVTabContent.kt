@@ -52,6 +52,10 @@ fun LiveTVTabContent(
     viewModel: PlaylistViewModel,
     settingsVm: SettingsViewModel = hiltViewModel(),
 ) {
+    // Shared settle signal for the quiet background refreshes (EPG, VOD, DVR):
+    // the guide has had its first composition.
+    val settleGate = com.aeriotv.android.core.app.rememberAppSettleGate()
+    androidx.compose.runtime.LaunchedEffect(Unit) { settleGate.noteGuideRendered() }
     val formFactor = rememberLiveTvFormFactor()
     val stored by settingsVm.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
     val scale by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)

@@ -117,6 +117,16 @@ interface PlaylistDao {
     @Query("UPDATE playlists SET lastEpgRefreshedAt = :at WHERE id = :id")
     suspend fun updateLastEpgRefreshedAt(id: String, at: Long)
 
+    /**
+     * Store the EPG sources fingerprint the cached guide was built from.
+     * Targeted column write for the same reason as
+     * [updateLastEpgRefreshedAt]: the EPG load holds a playlist snapshot it
+     * read before the run, and writing that snapshot back would revert every
+     * column the run itself captured.
+     */
+    @Query("UPDATE playlists SET dispatcharrEpgSourceFingerprint = :fingerprint WHERE id = :id")
+    suspend fun updateEpgSourceFingerprint(id: String, fingerprint: String?)
+
     @Delete
     suspend fun delete(playlist: PlaylistEntity)
 
