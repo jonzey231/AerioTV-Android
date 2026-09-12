@@ -2,31 +2,23 @@ package com.aeriotv.android.feature.cast
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -46,7 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -57,8 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.core.cast.CastControl
@@ -69,16 +60,22 @@ import com.aeriotv.android.feature.player.SubtitleTrack
 import com.aeriotv.android.feature.player.SubtitlesSheet
 
 /**
- * The phone's "Now Casting" remote (GH #33 full-parity). Shown over the (locally
- * suspended) player while a Cast Connect session is live, it turns the phone into
- * a remote for the TV: transport (play/pause), channel up/down, stop casting, and
- * the same audio-track / subtitle / playback-speed / aspect controls as the local
- * player -- driven by [CastControl.RemoteState] the receiver reports and committed
- * back over the custom channel. The pickers are the exact local sheets, fed from
- * the remote state, so they read identically.
+ * The phone's remote controls for whatever is playing on another screen
+ * (Cast card UX, Logan 2026-09-12): ONE sheet, two transports. It is opened by
+ * tapping the cast card above the tab bar and never replaces the page the user
+ * is on -- the old full-screen presentation inside the player is gone, along
+ * with the "pick a channel" cover.
+ *
+ * Contents: transport (play/pause), channel up/down for live, live-rewind
+ * scrubbing when the other screen reports a buffer, the Options the transport
+ * supports (audio track, subtitles, speed, aspect, stream info, Switch Stream on
+ * a Dispatcharr channel, sleep timer) and Disconnect. Driven by
+ * [CastControl.RemoteState] the receiver reports and committed back over the
+ * control channel; the pickers are the exact local player sheets so they read
+ * identically.
  */
 @Composable
-fun CastRemoteOverlay(
+fun CastRemoteSheet(
     deviceName: String?,
     channelTitle: String,
     programmeTitle: String?,
@@ -87,29 +84,31 @@ fun CastRemoteOverlay(
     onTogglePlayPause: () -> Unit,
     onChannelUp: () -> Unit,
     onChannelDown: () -> Unit,
+    /** Ends the session (and hides the card). Never resumes playback locally. */
     onStopCasting: () -> Unit,
-    /** Label for the stop button: "Stop casting" for Cast, "Disconnect" for the
-     *  companion remote (where it stops controlling + exits, GH #33). */
-    stopLabel: String = "Stop casting",
     onSetAudioTrack: (String) -> Unit,
     onSetTextTrack: (String?) -> Unit,
     onSetSpeed: (Float) -> Unit,
     onSetAspect: (CastControl.AspectMode) -> Unit,
     onSetAudioOnly: (Boolean) -> Unit,
     onSwitchStream: () -> Unit,
-    onRecord: () -> Unit,
     onSleepMinutes: (Int) -> Unit,
     onSeekBy: (Long) -> Unit,
     onSeekToWall: (Long) -> Unit,
     onGoLive: () -> Unit,
-    onMinimize: () -> Unit,
+    onDismiss: () -> Unit,
     position: CastControl.PositionSnapshot,
     canSwitchStream: Boolean,
-    canRecord: Boolean,
+    /** Channel up/down only apply to a live channel on the other screen. */
+    canChangeChannel: Boolean = true,
     onRefreshState: () -> Unit = {},
-    modifier: Modifier = Modifier,
-    /** "Casting to" (Cast) vs "Controlling" (LAN companion remote, GH #33). */
+    /** Cast glyph for Google Cast, TV glyph for the AerioTV Remote transport. */
+    transportIcon: ImageVector = Icons.Filled.Cast,
+    /** "Casting to" (Cast) vs "Controlling" (LAN companion remote). */
     statusVerb: String = "Casting to",
+    /** Label for the stop action: "Stop casting" for Cast, "Disconnect" for the
+     *  companion transport. */
+    stopLabel: String = "Stop casting",
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -118,100 +117,55 @@ fun CastRemoteOverlay(
     var sleepOpen by remember { mutableStateOf(false) }
     var infoOpen by remember { mutableStateOf(false) }
 
-    // Pull a fresh snapshot when the remote appears; each command reply keeps it
+    // Pull a fresh snapshot when the sheet appears; each command reply keeps it
     // current thereafter, and re-opening Options re-pulls after a channel change.
     androidx.compose.runtime.LaunchedEffect(Unit) { onRefreshState() }
 
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        // Top bar: minimize back to browsing, by tap OR a downward drag. The
-        // cast keeps playing; the Now-Casting mini controller reappears on the
-        // tabs so a new channel can be picked (GH #33 - Stop below ends the cast).
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .pointerInput(Unit) {
-                    var draggedDown = 0f
-                    detectVerticalDragGestures(
-                        onDragEnd = {
-                            if (draggedDown > 100f) onMinimize()
-                            draggedDown = 0f
-                        },
-                        onDragCancel = { draggedDown = 0f },
-                    ) { _, dy -> if (dy > 0) draggedDown += dy }
-                }
-                .clickable(onClick = onMinimize)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
-                contentDescription = null,
-                tint = Color.White,
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = "Tap/Drag here to return to Guide",
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White.copy(alpha = 0.85f),
-            )
-        }
-        // Centered "casting to" panel.
+    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
         Column(
-            modifier = Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(
-                imageVector = Icons.Filled.Cast,
+                imageVector = transportIcon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(32.dp),
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             Text(
-                text = channelTitle,
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White,
+                text = channelTitle.ifBlank { "Nothing playing" },
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             programmeTitle?.takeIf { it.isNotBlank() }?.let {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
                 Text(
                     text = it,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White.copy(alpha = 0.75f),
-                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = "$statusVerb ${deviceName ?: "your TV"}",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
-                textAlign = TextAlign.Center,
             )
-        }
+            Spacer(Modifier.height(14.dp))
 
-        // Bottom transport + options bar.
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(horizontal = 20.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // Live-rewind controls (GH #33): a draggable scrubber + 30s FF/RW +
-            // LIVE pill. Shown as soon as the receiver reports a rewind buffer via
-            // EITHER the getState echo's canSeek or the ~1Hz position tick, so the
-            // buttons never wait a tick to appear; the draggable scrubber needs the
-            // tick's window, so it renders once position data arrives.
+            // Live-rewind controls: a draggable scrubber + 30s FF/RW + LIVE pill.
+            // Shown as soon as the receiver reports a rewind buffer via EITHER the
+            // getState echo's canSeek or the ~1Hz position tick, so the buttons
+            // never wait a tick to appear; the draggable scrubber needs the tick's
+            // window, so it renders once position data arrives.
             val rewindActive = position.canSeek || remoteState.canSeek
             val atLive = if (position.canSeek) position.isLive else remoteState.isLive
             if (rewindActive) {
@@ -241,7 +195,7 @@ fun CastRemoteOverlay(
                         ((position.positionWallMs - position.windowStartMs).toFloat() / span).coerceIn(0f, 1f)
                     val shownFraction = dragFraction ?: liveFraction
                     val behindMs = (span - (shownFraction * span).toLong()).coerceAtLeast(0L)
-                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         Slider(
                             value = shownFraction,
                             onValueChange = { dragFraction = it },
@@ -260,14 +214,14 @@ fun CastRemoteOverlay(
                                 "-${formatBehindLive(behindMs)} behind live"
                             },
                             style = MaterialTheme.typography.labelMedium,
-                            color = Color.White.copy(alpha = 0.8f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
+                    modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
                 ) {
                     RemoteButton(Icons.Filled.Replay30, "Back 30 seconds", { onSeekBy(-30_000L) })
                     if (!atLive) {
@@ -281,14 +235,18 @@ fun CastRemoteOverlay(
                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RemoteButton(Icons.Filled.KeyboardArrowDown, "Channel down", onChannelDown)
+                if (canChangeChannel) {
+                    RemoteButton(Icons.Filled.KeyboardArrowDown, "Channel down", onChannelDown)
+                }
                 RemoteButton(
                     icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                     desc = if (isPlaying) "Pause" else "Play",
                     onClick = onTogglePlayPause,
                     emphasized = true,
                 )
-                RemoteButton(Icons.Filled.KeyboardArrowUp, "Channel up", onChannelUp)
+                if (canChangeChannel) {
+                    RemoteButton(Icons.Filled.KeyboardArrowUp, "Channel up", onChannelUp)
+                }
                 Spacer(Modifier.width(6.dp))
                 RemoteButton(Icons.Filled.Tune, "Options", {
                     onRefreshState()
@@ -296,6 +254,7 @@ fun CastRemoteOverlay(
                 })
                 RemoteButton(Icons.Filled.Close, stopLabel, onStopCasting)
             }
+            Spacer(Modifier.height(18.dp))
         }
     }
 
@@ -307,7 +266,7 @@ fun CastRemoteOverlay(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    text = "Cast controls",
+                    text = "Options",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.SemiBold,
@@ -333,12 +292,6 @@ fun CastRemoteOverlay(
                 }
                 OptionRow(Icons.Outlined.AspectRatio, "Aspect Ratio", remoteState.aspect.label) {
                     onSetAspect(remoteState.aspect.next())
-                }
-                if (canRecord) {
-                    OptionRow(Icons.Filled.FiberManualRecord, "Record Current Program", null) {
-                        optionsOpen = false
-                        onRecord()
-                    }
                 }
                 OptionRow(Icons.Filled.Timer, "Sleep Timer", null) {
                     optionsOpen = false
@@ -450,25 +403,32 @@ private fun speedLabel(speed: Float): String =
 
 @Composable
 private fun RemoteButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     desc: String,
     onClick: () -> Unit,
     emphasized: Boolean = false,
 ) {
-    val size = if (emphasized) 64.dp else 52.dp
+    val size = if (emphasized) 60.dp else 48.dp
     Box(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
-            .background(if (emphasized) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.14f)),
+            .background(
+                if (emphasized) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         IconButton(onClick = onClick) {
             Icon(
                 imageVector = icon,
                 contentDescription = desc,
-                tint = if (emphasized) MaterialTheme.colorScheme.onPrimary else Color.White,
-                modifier = Modifier.size(if (emphasized) 32.dp else 26.dp),
+                tint = if (emphasized) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(if (emphasized) 30.dp else 24.dp),
             )
         }
     }
@@ -512,7 +472,7 @@ private fun formatBehindLive(ms: Long): String {
 
 @Composable
 private fun OptionRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     value: String?,
     onClick: () -> Unit,

@@ -214,10 +214,6 @@ val LocalTvFullScreenOverlay =
 @Composable
 fun MainScaffold(
     onChannelClick: (M3UChannel) -> Unit,
-    /** Companion "Controlling <TV>" card tap: open the remote-controls screen
-     *  for this channel even when "tap stays on list" (GH #85) would otherwise
-     *  re-tune in place; the card is the way BACK to the controls. */
-    onOpenCompanionRemote: (M3UChannel) -> Unit = onChannelClick,
     onMovieClick: (String) -> Unit = {},
     onSeriesClick: (Int) -> Unit = {},
     onEpisodeResume: (String) -> Unit = {},
@@ -393,8 +389,6 @@ fun MainScaffold(
         ).castSender()
     }
     val castState by castSender.state.collectAsStateWithLifecycle()
-    val castContent by castSender.content.collectAsStateWithLifecycle()
-    val castIsPlaying by castSender.isPlaying.collectAsStateWithLifecycle()
     // GH #33 companion remote: same-pattern "Controlling <TV>" indicator card +
     // tap-to-reopen-the-remote, mirroring the Now-Casting card below.
     val companionRemote = remember {
@@ -404,8 +398,6 @@ fun MainScaffold(
         ).companionRemote()
     }
     val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
-    val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
-    val companionNowPlaying by companionRemote.nowPlaying.collectAsStateWithLifecycle()
     val companionChannelId by companionRemote.currentChannelId.collectAsStateWithLifecycle()
     // Enrich the companion's channel anchor with name/logo/current programme
     // for the media notification and the card; re-evaluated each minute so
@@ -430,7 +422,6 @@ fun MainScaffold(
             kotlinx.coroutines.delay(60_000L)
         }
     }
-    val companionDetails by companionRemote.details.collectAsStateWithLifecycle()
     // GH #33: browse for controllable AerioTV TVs at the SCAFFOLD level (phone
     // only; the TV is a host, not a client) so the floating "Control TV" pill
     // can appear without opening a channel first. Refcounted with the in-player
@@ -1146,62 +1137,45 @@ fun MainScaffold(
                     .padding(bottom = 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // GH #33 re-entry: while a Cast Connect session is active, show a
-                // "Now Casting" card above the tab bar (phone only -- TV is the
-                // receiver). Tapping it re-enters the player for the cast channel,
-                // which renders the full CastRemoteOverlay. The local mini-player
-                // is suppressed while casting (casting stops local playback), so
-                // these two cards never stack.
+                // THE cast card (Logan 2026-09-12): ONE card above the tab bar
+                // for whichever transport this phone is driving (Google Cast or
+                // the AerioTV Remote companion link). It appears the moment a
+                // session connects -- even with nothing playing yet -- and a tap
+                // opens the remote controls as a sheet over the current page,
+                // never a full-screen takeover. The local mini-player is
+                // suppressed while casting, so the cards never stack.
                 val casting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
-                val activeCastContent = castContent
-                // Only LIVE content has a re-entry target today (the live cast
-                // remote). VOD casting has no phone remote yet, so don't show a
-                // card whose tap would dead-end (wire this on when VOD cast lands).
-                val castReentrySupported = activeCastContent?.kind ==
-                    com.aeriotv.android.core.cast.AerioCastReceiverController.Kind.LIVE
-                if (casting && activeCastContent != null && castReentrySupported && !isTv) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .border(
-                                1.dp,
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                                RoundedCornerShape(20.dp),
-                            ),
-                    ) {
-                        com.aeriotv.android.feature.miniplayer.CastMiniController(
-                            title = activeCastContent.title,
-                            deviceName = (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName,
-                            artUri = activeCastContent.artUri,
-                            isPlaying = castIsPlaying,
-                            onTap = {
-                                // Match by id first; fall back to name because a
-                                // cast resumed after an app restart only recovers
-                                // the channel TITLE as mediaId (the receiver's
-                                // bridged MediaSession drops our id/customData) --
-                                // GH #33, so the tap still re-enters the right
-                                // channel instead of dead-ending.
-                                val mediaId = activeCastContent.mediaId
-                                val bare = mediaId.substringAfter(':', mediaId)
-                                val ch = state.channels.firstOrNull { it.id == mediaId }
-                                    ?: state.channels.firstOrNull { it.id.substringAfter(':', it.id) == bare }
-                                    ?: state.channels.firstOrNull { it.name == mediaId }
-                                    ?: state.channels.firstOrNull { it.name.equals(activeCastContent.title, ignoreCase = true) }
-                                if (ch != null) onChannelClick(ch)
-                                else android.widget.Toast.makeText(
-                                    context,
-                                    // GH #86: the tap used to do nothing when the
-                                    // cast channel is not in the active playlist.
-                                    "That channel isn't in the current playlist",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                            },
-                            onTogglePlayPause = { castSender.togglePlayPause() },
-                            onStop = { castSender.stopCasting() },
-                        )
-                    }
+                val companionTv = companionConn
+                    as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
+                if ((casting || companionTv != null) && !isTv) {
+                    com.aeriotv.android.feature.cast.CastTransportCard(
+                        castSender = castSender,
+                        companionRemote = companionRemote,
+                        channels = state.channels,
+                        nowProgrammeTitle = { ch ->
+                            state.epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title
+                        },
+                        onCastChannel = onChannelClick,
+                        loadChannelStreams = { channelIntPk ->
+                            val m3uNames = viewModel.loadM3uAccountNames()
+                            viewModel.loadChannelStreams(channelIntPk).map { st ->
+                                com.aeriotv.android.feature.player.StreamOption(
+                                    id = st.id,
+                                    name = st.name.orEmpty(),
+                                    resolution = st.resolution,
+                                    fps = st.sourceFps,
+                                    bitrateKbps = st.outputBitrateKbps,
+                                    videoCodec = st.videoCodec,
+                                    audioCodec = st.audioCodec,
+                                    sourceName = st.m3uAccount?.let { m3uNames[it] },
+                                )
+                            }
+                        },
+                        loadCurrentStreamId = { uuid -> viewModel.loadCurrentStreamId(uuid) },
+                        switchChannelStream = { uuid, streamId ->
+                            viewModel.switchChannelStream(uuid, streamId).getOrThrow()
+                        },
+                    )
                     Spacer(Modifier.height(8.dp))
                 }
                 // GH #33: round floating "Control a TV" button above the right
@@ -1228,48 +1202,6 @@ fun MainScaffold(
                         )
                     }
                     Spacer(Modifier.height(10.dp))
-                }
-                // GH #33 companion remote: "Controlling <TV>" card, same chrome as
-                // the Now-Casting card above. Tap -> reopen the remote; play/pause
-                // -> TV transport; x -> disconnect from the TV. Local playback is
-                // independent of controlling a TV, so this may coexist with the
-                // local mini-player card below (they stack).
-                val companionTv = companionConn
-                    as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
-                if (companionTv != null && !isTv) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .border(
-                                1.dp,
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                                RoundedCornerShape(20.dp),
-                            ),
-                    ) {
-                        com.aeriotv.android.feature.miniplayer.CastMiniController(
-                            title = companionDetails?.programmeTitle?.takeIf { it.isNotBlank() }
-                                ?: companionDetails?.channelName
-                                ?: companionNowPlaying.ifBlank { companionTv.name ?: "AerioTV" },
-                            deviceName = companionTv.name,
-                            artUri = companionDetails?.logoUrl,
-                            isPlaying = companionIsPlaying,
-                            onTap = {
-                                // Same re-entry as the cast card: open the player
-                                // for the channel this phone last sent to the TV;
-                                // PlayerScreen renders the full remote overlay in
-                                // companion mode. Falls back to the tracked title.
-                                val ch = state.channels.firstOrNull { it.id == companionChannelId }
-                                    ?: state.channels.firstOrNull { it.name == companionNowPlaying }
-                                if (ch != null) onOpenCompanionRemote(ch)
-                            },
-                            onTogglePlayPause = { companionRemote.togglePlayPause() },
-                            onStop = { companionRemote.disconnect() },
-                            subtitle = "Controlling ${companionTv.name ?: "TV"}",
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right

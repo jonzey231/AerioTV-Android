@@ -97,7 +97,6 @@ fun AppBehaviorsSettingsScreen(
     val showEpgBadges by viewModel.showEpgBadges(isTv).collectAsStateWithLifecycle(initialValue = true)
     val hiddenEpgBadges by viewModel.hiddenEpgBadges.collectAsStateWithLifecycle(initialValue = emptySet())
     // GH #47: phone-only cast behavior toggle.
-    val castTapStaysOnList by viewModel.castTapStaysOnList.collectAsStateWithLifecycle(initialValue = true)
     // GH #38/#40: TV-only display-mode controls.
     val startupRefreshRate by viewModel.startupRefreshRate.collectAsStateWithLifecycle(initialValue = "off")
     val vodRefreshHours by viewModel.vodLibraryRefreshHours.collectAsStateWithLifecycle(initialValue = 24)
@@ -424,21 +423,6 @@ fun AppBehaviorsSettingsScreen(
                             onClick = { viewModel.setStartupRefreshRate(wire) },
                         )
                     }
-                }
-            }
-
-            // GH #47: casting flow is phone/tablet-only (the TV IS the receiver).
-            if (!isTv) {
-                SettingsSection(
-                    header = "Casting & Remote Control",
-                    footer = "While casting or controlling a TV, tapping a channel changes it on the TV and keeps you on the channel list. Turn off to open the playback controls screen on every tap instead; the Now Casting and Controlling cards always open the controls either way.",
-                ) {
-                    SettingsToggleRow(
-                        title = "Stay on channel list",
-                        subtitle = "Channel taps switch the TV (cast or remote control) without opening the controls screen.",
-                        checked = castTapStaysOnList,
-                        onCheckedChange = viewModel::setCastTapStaysOnList,
-                    )
                 }
             }
 

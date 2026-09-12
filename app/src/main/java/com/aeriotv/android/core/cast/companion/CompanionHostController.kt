@@ -572,7 +572,7 @@ class CompanionHostController @Inject constructor(
                     Log.i(TAG, "companion audioOnly=$on (video ${if (on) "disabled" else "enabled"})")
                 }
                 // Options parity with the Cast receiver (GH #33): the phone's full
-                // CastRemoteOverlay drives the companion path too, so mirror the
+                // The cast remote sheet drives the companion path too, so mirror the
                 // receiver's audio/subtitle/speed/aspect handlers verbatim.
                 CastControl.CMD_SET_AUDIO -> runCatching {
                     controlPlayer()?.selectAudioTrack(

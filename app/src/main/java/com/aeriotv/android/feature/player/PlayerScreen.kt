@@ -189,8 +189,8 @@ fun PlayerScreen(
     val isCasting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
     // GH #33 companion remote (second-screen): while connected to an AerioTV TV
     // over the LAN, this screen behaves EXACTLY like the cast flow -- local
-    // playback is suspended and the same CastRemoteOverlay drives the TV's native
-    // player over the companion socket. A live Cast session wins when both exist.
+    // playback is suspended, the channel is mirrored to the TV and the screen
+    // closes (the cast card owns the controls). Cast wins when both exist.
     val companionRemote = remember { playerEntry.companionRemote() }
     val companionDiscovery = remember { playerEntry.companionDiscovery() }
     val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
@@ -426,6 +426,20 @@ fun PlayerScreen(
             }
         } else {
             runCatching { exoWindowState.requestFullscreen() }
+        }
+    }
+
+    // Cast card UX (Logan 2026-09-12): the player is NEVER the remote screen any
+    // more. A session that starts while this player is open (the chrome's cast
+    // button) mirrors the current channel to the other screen -- the tune effect
+    // below does that -- and then hands the user back to the page they came from,
+    // where THE cast card is the one control surface (tap it for the remote
+    // sheet). The short delay lets that tune land before this screen pops; no
+    // local playback is resumed on the way out.
+    LaunchedEffect(isRemote) {
+        if (isRemote) {
+            delay(600)
+            onClose()
         }
     }
 
@@ -1622,35 +1636,6 @@ fun PlayerScreen(
             onClose = onClose,
         )
 
-        // GH #33 full-parity cast remote: while a Cast Connect session is live the
-        // local codec is stopped, so replace the (black) player with the phone
-        // remote -- transport, channel up/down, stop, and the same audio/subtitle/
-        // speed/aspect controls, all driving the Android-TV receiver over the
-        // custom control channel. Drawn last = on top of the (now-idle) chrome.
-        if (isRemote) {
-            CastRemoteSection(
-                isCompanion = isCompanion,
-                castState = castState,
-                companionConn = companionConn,
-                castSender = castSender,
-                companionRemote = companionRemote,
-                currentChannel = currentChannel,
-                nowProgramme = nowProgramme,
-                channels = channels,
-                currentIndexState = currentIndexState,
-                remoteStoppingState = remoteStoppingState,
-                switchStreamState = switchStreamState,
-                switchedStreamIdState = switchedStreamIdState,
-                recordTargetState = recordTargetState,
-                sleepEndsAtState = sleepEndsAtState,
-                isDispatcharrLive = isDispatcharrLive,
-                scope = scope,
-                onLoadChannelStreams = onLoadChannelStreams,
-                onLoadCurrentStreamId = onLoadCurrentStreamId,
-                onClose = onClose,
-            )
-        }
-
         // Remote Control: Left-press Channels overlay (GH #54), drawn above
         // the video and all chrome.
         if (channelListVisible) {
@@ -1966,165 +1951,6 @@ fun PlayerScreen(
     }
 }
 
-
-// GH #33 full-parity cast remote (task #257 extraction): while a Cast
-// Connect session is live the local codec is stopped, so replace the
-// (black) player with the phone remote -- transport, channel up/down,
-// stop, and the same audio/subtitle/speed/aspect controls, all driving
-// the Android-TV receiver over the custom control channel.
-@Composable
-private fun CastRemoteSection(
-    isCompanion: Boolean,
-    castState: com.aeriotv.android.core.cast.AerioCastSender.State,
-    companionConn: com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn,
-    castSender: com.aeriotv.android.core.cast.AerioCastSender,
-    companionRemote: com.aeriotv.android.core.cast.companion.CompanionRemoteController,
-    currentChannel: M3UChannel?,
-    nowProgramme: EPGProgramme?,
-    channels: List<M3UChannel>,
-    currentIndexState: MutableIntState,
-    remoteStoppingState: MutableState<Boolean>,
-    switchStreamState: MutableState<SwitchStreamState?>,
-    switchedStreamIdState: MutableState<Int?>,
-    recordTargetState: MutableState<ProgramInfoTarget?>,
-    sleepEndsAtState: MutableState<Long?>,
-    isDispatcharrLive: Boolean,
-    scope: kotlinx.coroutines.CoroutineScope,
-    onLoadChannelStreams: suspend (Int) -> List<StreamOption>,
-    onLoadCurrentStreamId: suspend (String) -> Int?,
-    onClose: () -> Unit,
-) {
-    var currentIndex by currentIndexState
-    var remoteStopping by remoteStoppingState
-    var switchStream by switchStreamState
-    var switchedStreamId by switchedStreamIdState
-    var recordTarget by recordTargetState
-    var sleepEndsAt by sleepEndsAtState
-    // One overlay, two transports (GH #33): the SAME full remote drives a
-    // Cast Connect session or a LAN companion-paired AerioTV TV; only the
-    // command sink + state source switch.
-    val remoteState by (if (isCompanion) companionRemote.remoteState else castSender.remoteState)
-        .collectAsStateWithLifecycle()
-    val remoteIsPlaying by (if (isCompanion) companionRemote.isPlaying else castSender.isPlaying)
-        .collectAsStateWithLifecycle()
-    val companionPosition by companionRemote.position.collectAsStateWithLifecycle()
-    val castPosition by castSender.position.collectAsStateWithLifecycle()
-    com.aeriotv.android.feature.cast.CastRemoteOverlay(
-        deviceName = if (isCompanion) {
-            (companionConn as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected)?.name
-        } else {
-            (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName
-        },
-        channelTitle = currentChannel?.name.orEmpty(),
-        programmeTitle = nowProgramme?.title,
-        remoteState = remoteState,
-        isPlaying = remoteIsPlaying,
-        statusVerb = if (isCompanion) "Controlling" else "Casting to",
-        stopLabel = if (isCompanion) "Disconnect" else "Stop casting",
-        onTogglePlayPause = {
-            if (isCompanion) companionRemote.togglePlayPause() else castSender.togglePlayPause()
-        },
-        onChannelUp = {
-            if (channels.isNotEmpty() && currentIndex >= 0) {
-                currentIndex = (currentIndex + 1).coerceIn(0, channels.lastIndex)
-            }
-        },
-        onChannelDown = {
-            if (channels.isNotEmpty() && currentIndex >= 0) {
-                currentIndex = (currentIndex - 1).coerceIn(0, channels.lastIndex)
-            }
-        },
-        onStopCasting = {
-            if (isCompanion) {
-                // Companion Disconnect: stop controlling the TV and LEAVE
-                // the player. Do NOT resume local playback (remoteStopping
-                // gates the prime effect) -- resuming here left the channel
-                // playing on BOTH the phone and the TV (device report). The
-                // TV keeps playing (it's the user's own device); the
-                // scaffold's card is gone once disconnected.
-                remoteStopping = true
-                companionRemote.disconnect()
-                onClose()
-            } else {
-                // Cast: end the session; local playback resumes via the
-                // isRemote effects (standard "bring it back to my phone").
-                castSender.stopCasting()
-            }
-        },
-        onSetAudioTrack = { id ->
-            if (isCompanion) companionRemote.setRemoteAudioTrack(id) else castSender.setRemoteAudioTrack(id)
-        },
-        onSetTextTrack = { id ->
-            if (isCompanion) companionRemote.setRemoteTextTrack(id) else castSender.setRemoteTextTrack(id)
-        },
-        onSetSpeed = { s ->
-            if (isCompanion) companionRemote.setRemoteSpeed(s) else castSender.setRemoteSpeed(s)
-        },
-        onSetAspect = { mode ->
-            if (isCompanion) companionRemote.setRemoteAspect(mode) else castSender.setRemoteAspect(mode)
-        },
-        onSetAudioOnly = { on ->
-            if (isCompanion) companionRemote.setRemoteAudioOnly(on) else castSender.setRemoteAudioOnly(on)
-        },
-        onSwitchStream = {
-            // Reuse the live Switch Stream flow: it POSTs change_stream
-            // server-side (works while casting); the sheet's onSelect also
-            // re-tunes the receiver when casting (see below).
-            val ch = currentChannel
-            val chPk = ch?.dispatcharrChannelId
-            if (ch != null && chPk != null) {
-                val uuid = ch.id.removePrefix("disp:")
-                scope.launch {
-                    val streams = onLoadChannelStreams(chPk)
-                    val current = onLoadCurrentStreamId(uuid)
-                    switchStream = SwitchStreamState(
-                        streams = streams,
-                        currentStreamId = switchedStreamId ?: current,
-                    )
-                }
-            }
-        },
-        onRecord = {
-            // Server-side scheduling: works whether playing locally or cast.
-            // A default 1-hour live window (the sheet lets the user adjust);
-            // the current programme title is used when known.
-            currentChannel?.let { ch ->
-                val now = System.currentTimeMillis()
-                recordTarget = ProgramInfoTarget(
-                    channelName = ch.name,
-                    title = nowProgramme?.title?.takeIf { it.isNotBlank() }
-                        ?: "${ch.name} live recording",
-                    startMillis = now,
-                    endMillis = now + 3_600_000L,
-                    description = "",
-                    category = "",
-                    channelDispatcharrId = ch.dispatcharrChannelId,
-                )
-            }
-        },
-        onSleepMinutes = { minutes ->
-            sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
-        },
-        onSeekBy = { delta ->
-            if (isCompanion) companionRemote.seekBy(delta) else castSender.seekBy(delta)
-        },
-        onSeekToWall = { target ->
-            if (isCompanion) companionRemote.seekToWall(target) else castSender.seekToWall(target)
-        },
-        onGoLive = {
-            if (isCompanion) companionRemote.goLiveRemote() else castSender.goLiveRemote()
-        },
-        // GH #33: minimize returns to the tabs (the session stays alive;
-        // the Now-Casting / Controlling mini controller is the re-entry).
-        onMinimize = { onClose() },
-        position = if (isCompanion) companionPosition else castPosition,
-        canSwitchStream = isDispatcharrLive,
-        canRecord = currentChannel?.dispatcharrChannelId != null,
-        onRefreshState = {
-            if (isCompanion) companionRemote.requestRemoteState() else castSender.requestRemoteState()
-        },
-    )
-}
 
 // Remote Control: Left-press Channels overlay (GH #54), drawn above
 // the video and all chrome (task #257 extraction).

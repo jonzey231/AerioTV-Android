@@ -30,7 +30,7 @@ import javax.inject.Singleton
  * Phone-side companion-remote client (GH #33 second-screen). Opens a WebSocket to a
  * discovered TV ([CompanionDiscovery.Tv]), performs the [CompanionProtocol] pairing
  * handshake (remembered token, else a 6-digit code the user reads off the TV), then
- * exposes the SAME command surface + state flows that [CastRemoteOverlay] already
+ * exposes the SAME command surface + state flows that the cast remote sheet already
  * consumes from the Cast sender -- so the exact same remote UI drives a paired TV.
  *
  * Player-control messages are [CastControl] `cmd` frames (channel / play-pause /
@@ -242,7 +242,7 @@ class CompanionRemoteController @Inject constructor(
         }
     }
 
-    // ---- command surface (mirrors AerioCastSender; bound by CastRemoteOverlay) ----
+    // ---- command surface (mirrors AerioCastSender; bound by CastRemoteSheet) ----
 
     fun setRemoteChannel(channelId: String, title: String? = null) {
         title?.takeIf { it.isNotBlank() }?.let { _nowPlaying.value = it }

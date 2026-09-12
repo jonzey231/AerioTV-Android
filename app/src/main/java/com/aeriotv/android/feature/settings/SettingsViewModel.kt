@@ -239,14 +239,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setGuideTuneInMini(value) }
     }
 
-    /** GH #47: while casting, a channel tap re-tunes the TV and stays on the
-     *  list (true, default) instead of opening the cast-controls screen. */
-    val castTapStaysOnList: StateFlow<Boolean> = prefs.castTapStaysOnList
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    fun setCastTapStaysOnList(value: Boolean) {
-        viewModelScope.launch { prefs.setCastTapStaysOnList(value) }
-    }
-
     /** GH #38: refresh rate requested at app startup ("off"/"50"/"59.94"/"60"). */
     val startupRefreshRate: Flow<String> = prefs.startupRefreshRate
     fun setStartupRefreshRate(value: String) {

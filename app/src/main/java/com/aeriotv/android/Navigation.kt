@@ -779,10 +779,6 @@ fun AerioTVNavHost(
                     hiltViewModel()
                 val tuneStartsInMini by tuneSettingsVm.guideTuneInMini
                     .collectAsStateWithLifecycle(initialValue = false)
-                // GH #47: while casting, a channel tap re-tunes the TV in place
-                // and stays on the list (no cast-controls screen). Toggleable.
-                val castTapStaysOnList by tuneSettingsVm.castTapStaysOnList
-                    .collectAsStateWithLifecycle(initialValue = true)
                 val playerEntryNav = remember {
                     dagger.hilt.android.EntryPointAccessors.fromApplication(
                         context.applicationContext,
@@ -828,18 +824,12 @@ fun AerioTVNavHost(
                     androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner provides parent,
                 ) {
                 MainScaffold(
-                    // Companion card: always the controls screen, never the
-                    // stay-on-list re-tune (Logan 2026-09-02: could not get back
-                    // to the remote while controlling).
-                    onOpenCompanionRemote = { channel ->
-                        navController.navigate(Routes.player(channel.id))
-                    },
                     onChannelClick = { channel ->
-                        // GH #47: while casting with stay-on-list enabled, flip
-                        // the TV in place (same dedup + control-channel path as
-                        // PlayerScreen's cast mode) and DON'T open the player
-                        // (cast-controls) screen. Controls stay reachable via
-                        // the Now-Casting mini controller card.
+                        // Cast card UX rule 5 (Logan 2026-09-12): while a session
+                        // is active a channel tap CASTS it and stays on the page.
+                        // No player, no controls screen; the cast card above the
+                        // tab bar is the one control surface (tap it for the
+                        // remote sheet).
                         val castDevice = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
                             ?.deviceName
                         // Casting rework P1: the URL now feeds the phone-local
@@ -859,15 +849,14 @@ fun AerioTVNavHost(
                                 )
                             } else emptyMap()
                         }
-                        // GH #85: the same stay-on-list rule for the companion
-                        // remote (phone controlling an AerioTV TV): a channel
-                        // tap re-tunes the TV in place, no controls screen.
-                        if (castTapStaysOnList && companionTvName != null) {
+                        // Same rule for the companion transport (this phone
+                        // driving an AerioTV TV over the LAN).
+                        if (companionTvName != null) {
                             companionRemoteNav.setRemoteChannel(channel.id, channel.name)
                             toastPlayingOnTv()
                             return@MainScaffold
                         }
-                        if (castTapStaysOnList && castDevice != null &&
+                        if (castDevice != null &&
                             castSenderNav.tuneLiveChannel(
                                 channelId = channel.id,
                                 title = channel.name,
@@ -949,10 +938,9 @@ fun AerioTVNavHost(
                             miniVmNav.showMiniPlayer()
                             return@MainScaffold
                         }
-                        // GH #33: while companion-connected or casting, this route
-                        // IS the remote -- PlayerScreen's remote mode mirrors the
-                        // channel to the TV (no local playback) and renders the
-                        // full CastRemoteOverlay, exactly like the cast flow.
+                        // No remote session: play it here. (A session connecting
+                        // while this player is open mirrors the channel to the
+                        // other screen and then closes the player.)
                         // launchSingleTop: a rapid double-tap (e.g. of a mini
                         // controller card) can't stack two identical player
                         // destinations on the back stack.

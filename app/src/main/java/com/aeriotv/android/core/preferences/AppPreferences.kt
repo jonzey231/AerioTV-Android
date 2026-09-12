@@ -436,20 +436,6 @@ class AppPreferences @Inject constructor(
     }
 
     /**
-     * GH #47: while a cast session is active, tapping a channel in the list
-     * re-tunes the TV in place and STAYS on the list instead of opening the
-     * player (cast-controls) screen. Controls stay one tap away on the
-     * Now-Casting mini controller. Default true - the navigate-to-controls
-     * behavior is what the issue asked to escape; the toggle keeps it
-     * available for users who prefer it.
-     */
-    val castTapStaysOnList: Flow<Boolean> =
-        store.data.map { it[KEY_CAST_TAP_STAYS_ON_LIST] ?: true }
-    suspend fun setCastTapStaysOnList(value: Boolean) {
-        store.edit { it[KEY_CAST_TAP_STAYS_ON_LIST] = value }
-    }
-
-    /**
      * Decoded map with the LEGACY MIGRATION applied: a user who had
      * turned "Apple TV Channel Flip" off and has never customized the
      * new map gets upShort/downShort seeded to NONE so their Up/Down
@@ -1170,7 +1156,6 @@ class AppPreferences @Inject constructor(
         data[KEY_PHONE_GROUP_SELECTOR]?.let { out["phoneGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
         data[KEY_SHOW_REMOTE_HINTS]?.let { out["showRemoteHints"] = it.toString() }
-        data[KEY_CAST_TAP_STAYS_ON_LIST]?.let { out["castTapStaysOnList"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
         data[KEY_SHOW_EPG_BADGES_TV]?.let { out["showEpgBadgesTv"] = it.toString() }
@@ -1223,7 +1208,6 @@ class AppPreferences @Inject constructor(
             keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
             keys["showRemoteHints"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_REMOTE_HINTS] = it }
-            keys["castTapStaysOnList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CAST_TAP_STAYS_ON_LIST] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
             keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
             keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
@@ -1605,7 +1589,6 @@ class AppPreferences @Inject constructor(
         val KEY_PHONE_GROUP_SELECTOR = stringPreferencesKey("phone_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
         val KEY_SHOW_REMOTE_HINTS = booleanPreferencesKey("show_remote_hints")
-        val KEY_CAST_TAP_STAYS_ON_LIST = booleanPreferencesKey("cast_tap_stays_on_list")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
         val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")
         val KEY_MOVIES_SORT_ORDER = stringPreferencesKey("movies_sort_order")
