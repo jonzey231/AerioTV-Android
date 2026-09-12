@@ -294,6 +294,11 @@ class CompanionRemoteController @Inject constructor(
         send(CastControl.command(CastControl.CMD_SET_AUDIO_ONLY) { put(CastControl.KEY_AUDIO_ONLY, on) })
     fun requestRemoteState() = send(CastControl.command(CastControl.CMD_GET_STATE))
 
+    /** Stop playback on the TV without dropping the link (the card's X sends this
+     *  and then [disconnect]s; "Disconnect" in the remote sheet skips it so the TV
+     *  keeps playing). */
+    fun stopRemotePlayback() = send(CastControl.command(CastControl.CMD_STOP))
+
     private fun send(text: String) {
         // GH #33 diagnostics: log the command name (not the full frame -- avoids
         // leaking ids into logs) so a user's captured log shows what the phone

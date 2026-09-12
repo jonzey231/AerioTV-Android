@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
@@ -69,7 +70,8 @@ import com.aeriotv.android.feature.player.SubtitlesSheet
  * Contents: transport (play/pause), channel up/down for live, live-rewind
  * scrubbing when the other screen reports a buffer, the Options the transport
  * supports (audio track, subtitles, speed, aspect, stream info, Switch Stream on
- * a Dispatcharr channel, sleep timer) and Disconnect. Driven by
+ * a Dispatcharr channel, sleep timer, and Disconnect on the companion transport)
+ * plus stop. Driven by
  * [CastControl.RemoteState] the receiver reports and committed back over the
  * control channel; the pickers are the exact local player sheets so they read
  * identically.
@@ -109,6 +111,10 @@ fun CastRemoteSheet(
     /** Label for the stop action: "Stop casting" for Cast, "Disconnect" for the
      *  companion transport. */
     stopLabel: String = "Stop casting",
+    /** Companion transport only (Logan 2026-09-12): drop the AerioTV Remote link
+     *  and hide the card while the TV keeps playing. Null for Google Cast, where
+     *  there is nothing to leave behind once the session ends. */
+    onDisconnect: (() -> Unit)? = null,
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -303,6 +309,14 @@ fun CastRemoteSheet(
                 }
                 OptionRow(Icons.Filled.VideocamOff, "Audio Only", if (remoteState.audioOnly) "On" else "Off") {
                     onSetAudioOnly(!remoteState.audioOnly)
+                }
+                // Companion only: the X above stops the TV, this one just lets go
+                // of the remote. Both hide the card.
+                onDisconnect?.let { disconnect ->
+                    OptionRow(Icons.Filled.LinkOff, "Disconnect", "Leaves the TV playing") {
+                        optionsOpen = false
+                        disconnect()
+                    }
                 }
             }
         }

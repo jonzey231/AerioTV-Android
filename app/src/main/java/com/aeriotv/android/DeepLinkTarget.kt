@@ -34,4 +34,12 @@ sealed interface DeepLinkTarget {
     /** GH #33 companion remote: play a DVR recording / catch-up by its resolved
      *  playback URL on this TV. */
     data class RecordingPlay(val playbackUrl: String, val title: String) : DeepLinkTarget
+
+    /**
+     * Companion remote X (Logan 2026-09-12), Apple parity with
+     * PlayerSession.shared.exit(): close whatever player is on top of the tab
+     * shell so the TV lands back on Live TV instead of sitting on a stopped
+     * player. The host already stopped playback before emitting this.
+     */
+    data object ExitPlayer : DeepLinkTarget
 }

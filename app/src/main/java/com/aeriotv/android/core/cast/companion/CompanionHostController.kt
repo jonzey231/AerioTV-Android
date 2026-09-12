@@ -137,6 +137,11 @@ class CompanionHostController @Inject constructor(
     sealed interface PlayRequest {
         data class Vod(val videoId: String, val isEpisode: Boolean) : PlayRequest
         data class Recording(val url: String, val title: String) : PlayRequest
+
+        /** Not a play: the phone card's X asked this TV to leave the player and
+         *  go back to Live TV (Apple parity, PlayerSession.shared.exit()). It
+         *  rides the SAME one-shot channel so it can never overtake a play. */
+        data object Exit : PlayRequest
     }
     private val _playRequests = Channel<PlayRequest>(Channel.BUFFERED)
     val playRequests: Flow<PlayRequest> = _playRequests.receiveAsFlow()
@@ -545,6 +550,16 @@ class CompanionHostController @Inject constructor(
                 CastControl.CMD_PAUSE -> runCatching { controlPlayer()?.pause() }
                 CastControl.CMD_TOGGLE -> runCatching {
                     controlPlayer()?.let { if (it.isPlaying) it.pause() else it.play() }
+                }
+                // The phone card's X: stop what is playing here AND exit the
+                // player so the TV lands back on Live TV, the same end state
+                // Apple's PlayerSession.shared.exit() leaves. Stopping the
+                // ExoPlayer alone would strand the TV on a dead player screen.
+                // The phone disconnects right after, so no state reply matters.
+                CastControl.CMD_STOP -> runCatching {
+                    controlPlayer()?.stop()
+                    _playRequests.trySend(PlayRequest.Exit)
+                    Log.i(TAG, "companion stop: playback stopped, exiting to Live TV")
                 }
                 CastControl.CMD_GO_LIVE -> runCatching { holder.goLive() }
                 CastControl.CMD_SEEK_BY -> runCatching {

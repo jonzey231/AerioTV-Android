@@ -42,8 +42,10 @@ private const val TAG = "CastCard"
  *  - Connecting from the picker stays on the current page; the card simply
  *    appears. With nothing playing yet it reads "Select a Channel", and the
  *    next channel tap casts (the tap handler owns that, see Navigation).
- *  - Stop / Disconnect ends the session and hides the card. Playback is NOT
- *    handed back to the phone.
+ *  - The X stops playback on the other screen AND hides the card, for Cast and
+ *    the companion remote alike. Playback is NOT handed back to the phone.
+ *  - Companion only: "Disconnect" in the remote sheet drops the link and hides
+ *    the card while the TV keeps playing.
  *  - Only ONE card is possible: the picker keeps the two transports mutually
  *    exclusive, and a live Cast session wins if both somehow exist.
  */
@@ -146,10 +148,29 @@ fun CastTransportCard(
             ?.let(onCastChannel)
     }
 
+    // The card's X: stop playback on the other screen AND close the card, for both
+    // transports (Logan 2026-09-12). Google Cast gets that for free because ending
+    // the session stops the receiver and the HLS proxy; the companion link would
+    // otherwise leave the TV playing, so it is told to stop first and only then
+    // disconnected.
     fun endSession() {
-        Log.i(TAG, "[Cast] stop: session ended, no local resume")
+        if (isCompanion) {
+            Log.i(TAG, "[Remote] X: stop + close")
+            companionRemote.stopRemotePlayback()
+            companionRemote.disconnect()
+        } else {
+            Log.i(TAG, "[Cast] stop: session ended, no local resume")
+            castSender.stopCasting()
+        }
         sheetOpen = false
-        if (isCompanion) companionRemote.disconnect() else castSender.stopCasting()
+    }
+
+    // Companion only: give up the remote without touching the TV, which keeps
+    // playing whatever it is on. Hides the card the same way a stop does.
+    fun disconnectCompanionOnly() {
+        Log.i(TAG, "[Remote] disconnect, TV keeps playing")
+        sheetOpen = false
+        companionRemote.disconnect()
     }
 
     Box(
@@ -177,7 +198,7 @@ fun CastTransportCard(
             programmeTitle = programmeTitle,
             transportIcon = if (isCompanion) Icons.Filled.Tv else Icons.Filled.Cast,
             showTransport = hasContent,
-            stopDescription = if (isCompanion) "Disconnect" else "Stop casting",
+            stopDescription = if (isCompanion) "Stop playback" else "Stop casting",
             onTap = {
                 Log.i(TAG, "[Cast] card tap")
                 sheetOpen = true
@@ -207,7 +228,9 @@ fun CastTransportCard(
             position = position,
             transportIcon = if (isCompanion) Icons.Filled.Tv else Icons.Filled.Cast,
             statusVerb = if (isCompanion) "Controlling" else "Casting to",
-            stopLabel = if (isCompanion) "Disconnect" else "Stop casting",
+            stopLabel = if (isCompanion) "Stop" else "Stop casting",
+            // Only the companion transport can be dropped while the TV plays on.
+            onDisconnect = if (isCompanion) ({ disconnectCompanionOnly() }) else null,
             canChangeChannel = currentChannel != null,
             canSwitchStream = canSwitchStream,
             onTogglePlayPause = {

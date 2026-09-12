@@ -56,6 +56,11 @@ object CastControl {
     const val CMD_PLAY = "play"
     const val CMD_PAUSE = "pause"
     const val CMD_TOGGLE = "toggle"
+    // Stop playback on the other screen (Logan 2026-09-12). The companion card's X
+    // must leave the TV idle, not just drop the LAN link, so the phone sends this
+    // before it disconnects. Google Cast needs no equivalent: ending the Cast
+    // session already stops the receiver.
+    const val CMD_STOP = "stop"
     // Companion VOD/DVR (GH #33): play a movie/episode (by uuid) or a DVR
     // recording (by resolved playback URL) on the TV's own VOD player.
     const val CMD_PLAY_VOD = "playVod"

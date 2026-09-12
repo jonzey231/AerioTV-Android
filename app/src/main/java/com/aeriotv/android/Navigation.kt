@@ -307,6 +307,16 @@ fun AerioTVNavHost(
                     ) { launchSingleTop = true }
                     onDeepLinkConsumed()
                 }
+                is DeepLinkTarget.ExitPlayer -> {
+                    // Companion X: pop the live / VOD / recording player (and any
+                    // detail pushed under it) so the tab shell is on top again,
+                    // which lands the TV back on Live TV. Nothing to do when the
+                    // tabs are already showing.
+                    if (dlCurrentEntry?.destination?.route != Routes.MAIN) {
+                        runCatching { navController.popBackStack(Routes.MAIN, false) }
+                    }
+                    onDeepLinkConsumed()
+                }
                 is DeepLinkTarget.GuideProgram -> {
                     // Resolve by guideMatchKey (search results carry that key,
                     // NOT M3UChannel.id); re-emit through the VM so MainScaffold

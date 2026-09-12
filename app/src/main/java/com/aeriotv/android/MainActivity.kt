@@ -945,6 +945,9 @@ class MainActivity : ComponentActivity() {
                             DeepLinkTarget.VodPlay(req.videoId, req.isEpisode)
                         is com.aeriotv.android.core.cast.companion.CompanionHostController.PlayRequest.Recording ->
                             DeepLinkTarget.RecordingPlay(req.url, req.title)
+                        // The phone card's X: not a play, an exit back to Live TV.
+                        com.aeriotv.android.core.cast.companion.CompanionHostController.PlayRequest.Exit ->
+                            DeepLinkTarget.ExitPlayer
                     }
                 }
             }
