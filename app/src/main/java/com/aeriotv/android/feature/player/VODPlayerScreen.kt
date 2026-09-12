@@ -179,6 +179,68 @@ data class VodProgressMeta(
 )
 
 /**
+ * Persist one position sample. Both save sites (the 5 s loop and the exit
+ * flush) funnel through here so the flattening of [VodProgressMeta] happens
+ * outside VODPlayerScreen's verifier-straining body. Season / episode ride
+ * along only for an episode row, so a movie save never stamps 0 / 0.
+ */
+private fun saveVodProgress(
+    watchVm: WatchProgressViewModel,
+    videoId: String,
+    title: String,
+    posterUrl: String?,
+    positionMs: Long,
+    durationMs: Long,
+    meta: VodProgressMeta?,
+) {
+    val seriesId = meta?.seriesId
+    watchVm.save(
+        videoId = videoId,
+        title = title,
+        posterUrl = posterUrl,
+        positionMs = positionMs,
+        durationMs = durationMs,
+        vodType = meta?.vodType,
+        seriesId = seriesId,
+        seasonNumber = if (seriesId != null) meta.seasonNumber else null,
+        episodeNumber = if (seriesId != null) meta.episodeNumber else null,
+    )
+}
+
+/**
+ * Episode metadata annotate (2026-09-11). Every path into episode playback
+ * lands here -- the TV hero, a companion deep link, the series detail page --
+ * so the row carries series / season / episode and the up-next queue from the
+ * first moment, not only when the detail page annotated it first. Metadata
+ * only: the position is never reset, so this cannot wipe a resume point. Its
+ * own composable so none of it lands in VODPlayerScreen's already
+ * verifier-straining body.
+ */
+@Composable
+private fun EpisodeProgressAnnotate(
+    videoId: String?,
+    title: String,
+    posterUrl: String?,
+    meta: VodProgressMeta?,
+    watchVm: WatchProgressViewModel,
+) {
+    val seriesId = meta?.seriesId
+    LaunchedEffect(videoId, meta, title) {
+        if (videoId.isNullOrBlank() || seriesId.isNullOrBlank()) return@LaunchedEffect
+        watchVm.captureEpisodePlay(
+            videoId = videoId,
+            title = title,
+            posterUrl = posterUrl,
+            seriesId = seriesId,
+            seasonNumber = meta.seasonNumber,
+            episodeNumber = meta.episodeNumber,
+            streamUrl = null,
+            upNextQueue = meta.upNextQueue,
+        )
+    }
+}
+
+/**
  * VOD playback. Task #62: rebuilt on Media3 ExoPlayer.
  *
  * The earlier libmpv version owned a per-screen MPVPlayerView and
@@ -778,26 +840,7 @@ fun VODPlayerScreen(
         onDispose { player.removeListener(listener) }
     }
 
-    // Episode metadata annotate (2026-09-11). Every path into episode
-    // playback lands here -- the TV hero, a companion deep link, the series
-    // detail page -- so the row carries series / season / episode and the
-    // up-next queue from the first moment, not only when the detail page
-    // happened to annotate it first. Metadata only: the position is never
-    // reset, so this cannot wipe a resume point.
-    LaunchedEffect(videoId, progressMeta, title) {
-        val seriesId = progressMeta?.seriesId
-        if (videoId.isNullOrBlank() || seriesId.isNullOrBlank()) return@LaunchedEffect
-        watchVm.captureEpisodePlay(
-            videoId = videoId,
-            title = title,
-            posterUrl = posterUrl,
-            seriesId = seriesId,
-            seasonNumber = progressMeta.seasonNumber,
-            episodeNumber = progressMeta.episodeNumber,
-            streamUrl = null,
-            upNextQueue = progressMeta.upNextQueue,
-        )
-    }
+    EpisodeProgressAnnotate(videoId, title, posterUrl, progressMeta, watchVm)
 
     // Saved progress lookup. Null while loading; -1L after a confirmed "no
     // saved progress" read. Drives the resume-seek LaunchedEffect.
@@ -1466,17 +1509,7 @@ fun VODPlayerScreen(
                 val pos = player.contentPosition
                 val dur = player.contentDuration
                 if (pos <= 0L || dur <= 0L) continue
-                watchVm.save(
-                    videoId = videoId,
-                    title = latestTitle,
-                    posterUrl = latestPosterUrl,
-                    positionMs = pos,
-                    durationMs = dur,
-                    vodType = progressMeta?.vodType,
-                    seriesId = progressMeta?.seriesId,
-                    seasonNumber = progressMeta?.seriesId?.let { progressMeta.seasonNumber },
-                    episodeNumber = progressMeta?.seriesId?.let { progressMeta.episodeNumber },
-                )
+                saveVodProgress(watchVm, videoId, latestTitle, latestPosterUrl, pos, dur, progressMeta)
             }
         }
 
@@ -1496,17 +1529,7 @@ fun VODPlayerScreen(
                 if (pos > 0L && dur > 0L &&
                     player.playbackState != androidx.media3.common.Player.STATE_ENDED
                 ) {
-                    watchVm.save(
-                        videoId = videoId,
-                        title = latestTitle,
-                        posterUrl = latestPosterUrl,
-                        positionMs = pos,
-                        durationMs = dur,
-                        vodType = progressMeta?.vodType,
-                        seriesId = progressMeta?.seriesId,
-                        seasonNumber = progressMeta?.seriesId?.let { progressMeta.seasonNumber },
-                        episodeNumber = progressMeta?.seriesId?.let { progressMeta.episodeNumber },
-                    )
+                    saveVodProgress(watchVm, videoId, latestTitle, latestPosterUrl, pos, dur, progressMeta)
                 }
                 com.aeriotv.android.core.sync.DriveSyncWorker
                     .enqueueOneShotPush(flushContext.applicationContext)
