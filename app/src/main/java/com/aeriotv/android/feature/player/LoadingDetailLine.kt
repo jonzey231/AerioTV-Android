@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,6 +35,7 @@ import com.aeriotv.android.core.playback.AerioExoPlayerHolder
 import com.aeriotv.android.core.playback.LiveStreamFailover
 import com.aeriotv.android.core.playback.PlaybackTracer
 import com.aeriotv.android.ui.LocalIsDispatcharrAdmin
+import com.aeriotv.android.ui.theme.LocalAppTheme
 import kotlinx.coroutines.delay
 
 /**
@@ -109,6 +113,32 @@ private fun loadingDetail(
     return detail
 }
 
+/**
+ * The one loading spinner either player may draw (tvOS parity: the native
+ * circular ProgressView centered on the video). Theme accent, 24 dp on TV and
+ * 32 dp on phone, 3 dp stroke. Nothing else in a player may draw a second one.
+ */
+@Composable
+private fun LoadingSpinner(isTv: Boolean) {
+    CircularProgressIndicator(
+        color = LocalAppTheme.current.accentPrimary,
+        strokeWidth = 3.dp,
+        modifier = Modifier.size(if (isTv) 24.dp else 32.dp),
+    )
+}
+
+/** The status line under the spinner: caption style, white 80 percent. */
+@Composable
+private fun LoadingStatusText(status: String) {
+    Text(
+        text = status,
+        style = MaterialTheme.typography.bodySmall,
+        color = Color.White.copy(alpha = 0.8f),
+        maxLines = 1,
+        textAlign = TextAlign.Center,
+    )
+}
+
 /** 9 sp on TV, 11 sp on phone, white 55 percent, monospaced digits, one line. */
 @Composable
 private fun DetailLineText(detail: String?, isTv: Boolean) {
@@ -146,10 +176,33 @@ fun VodLoadingDetail(
     }
     val active = loadingMessage != null || streamUrl.isBlank() || buffering
     val detail = loadingDetail(active = active, restartKey = streamUrl) { tracer.loadingSnapshot() }
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Box(modifier = Modifier.offset(y = 22.dp)) {
-            DetailLineText(detail = detail, isTv = isTv)
+    if (!active) return
+    // The screen body already centers its own status text ("Loading...", a
+    // version-switch message) while it is resolving a URL, so in that phase we
+    // place the SAME stack around it: spinner above, detail line below. Once the
+    // player is mounted and merely buffering, this composable owns the whole
+    // stack and draws the status text itself. Either way: one spinner, one
+    // status line, one detail line, centered on the video.
+    val bodyOwnsStatus = loadingMessage != null || streamUrl.isBlank()
+    if (bodyOwnsStatus) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.offset(y = (-30).dp)) {
+                LoadingSpinner(isTv = isTv)
+            }
+            Box(modifier = Modifier.offset(y = 22.dp)) {
+                DetailLineText(detail = detail, isTv = isTv)
+            }
         }
+        return
+    }
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        LoadingSpinner(isTv = isTv)
+        LoadingStatusText(status = "Buffering...")
+        DetailLineText(detail = detail, isTv = isTv)
     }
 }
 
@@ -210,19 +263,16 @@ fun LiveFailoverStatusOverlay(
         exoHolder.tracer.loadingSnapshot()
     }
     if (!active) return
+    // tvOS parity stack (TSHLSRemuxer.swift ~2147): spinner, 8 dp, status text,
+    // 8 dp, detail line -- centered on the video and the ONLY loading indicator
+    // the live player draws (PlayerView's own spinner is SHOW_BUFFERING_NEVER).
     Column(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        statusText?.let {
-            Text(
-                text = it,
-                fontSize = if (isTv) 14.sp else 13.sp,
-                color = Color.White.copy(alpha = 0.85f),
-                maxLines = 1,
-            )
-        }
+        LoadingSpinner(isTv = isTv)
+        LoadingStatusText(status = statusText ?: "Buffering...")
         DetailLineText(detail = detail, isTv = isTv)
     }
 }

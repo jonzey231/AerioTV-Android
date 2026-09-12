@@ -423,6 +423,7 @@ fun BoxScope.PersistentExoWindow(
                             fpsMatch.handle = DisplayFrameRateMatcher.attach(player, sv)
                             fpsMatch.player = player
                             fpsMatch.surfaceView = sv
+                            chainFramePacing(holder, player, fpsMatch.handle)
                         }
                     }
                 }
@@ -457,6 +458,7 @@ fun BoxScope.PersistentExoWindow(
                     DisplayFrameRateMatcher.detach(fpsMatch.player, fpsMatch.handle, matchSv)
                     fpsMatch.handle = DisplayFrameRateMatcher.attach(current, matchSv)
                     fpsMatch.player = current
+                    chainFramePacing(holder, current, fpsMatch.handle)
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -470,6 +472,11 @@ fun BoxScope.PersistentExoWindow(
                 // the SurfaceView is destroyed on this epoch swap.
                 fpsMatch.surfaceView?.let { sv ->
                     DisplayFrameRateMatcher.detach(fpsMatch.player, fpsMatch.handle, sv)
+                    // detach() only clears the matcher's own listener, and our
+                    // chain wraps it, so re-register the tracer alone: frame
+                    // pacing keeps being measured and the dead matcher closure
+                    // stops being called.
+                    chainFramePacing(holder, fpsMatch.player, null)
                 }
                 fpsMatch.player = null
                 fpsMatch.handle = null
@@ -478,6 +485,28 @@ fun BoxScope.PersistentExoWindow(
             },
         )
         }
+    }
+}
+
+/**
+ * Put the always-on frame-pacing tracer in the player's single
+ * video-frame-metadata slot, chained in front of the frame-rate matcher's
+ * listener ([handle]) so both keep running. Observational only.
+ */
+@OptIn(UnstableApi::class)
+private fun chainFramePacing(
+    holder: AerioExoPlayerHolder,
+    player: androidx.media3.exoplayer.ExoPlayer?,
+    handle: Any?,
+) {
+    val p = player ?: return
+    holder.tracer.contentFpsProvider = { DisplayFrameRateMatcher.contentFps.value }
+    runCatching {
+        p.setVideoFrameMetadataListener(
+            holder.tracer.frameMetadataListener(
+                handle as? androidx.media3.exoplayer.video.VideoFrameMetadataListener,
+            ),
+        )
     }
 }
 

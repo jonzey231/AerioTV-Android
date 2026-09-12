@@ -1304,7 +1304,9 @@ fun VODPlayerScreen(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
                     useController = false
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    // Never PlayerView's own spinner: VodLoadingDetail draws the
+                    // single tvOS-parity stack (spinner + status + detail line).
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setPlayer(player)
                 }

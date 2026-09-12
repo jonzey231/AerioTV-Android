@@ -238,22 +238,27 @@ class AerioExoPlayerHolder @Inject constructor(
      * Dispatcharr progressive TS: 6.9-7.5 s gaps every ~40 s at a steady
      * 10-15 Mbps average, 3 stalls in 3 min). Raise THIS channel's start gate
      * so the NEXT tune begins with enough buffered media to ride the gap out.
-     * A feed that is below its own running average is simply starved upstream,
-     * which a deeper start buffer cannot fix, so that case is only logged.
+     * A feed that is gaining media time slower than the wall clock is simply
+     * starved upstream, which a deeper start buffer cannot fix, so that case is
+     * only logged.
      *
      * Never touches the running playback.
      */
     private fun learnStartBuffer(snapshot: PlaybackTracer.FeedStallSnapshot) {
         if (!snapshot.isLive) return
         val channelId = currentChannelIdForRebuild ?: return
-        if (snapshot.tuneKbps <= 0L) return
-        // At real time = the 30 s window holds at least 90 percent of the
-        // tune's own average since the first frame.
-        if (snapshot.windowKbps * 100L < snapshot.tuneKbps * 90L) {
+        // Real time is a MEDIA-time question, not a bitrate one: a live
+        // picture's bitrate swings with its content, so comparing the trailing
+        // byte rate against the tune's own byte rate ignored two genuinely
+        // bursty ESPNU HD stalls as "feed below real time" (session11
+        // 22:24:19 and 22:25:33). The tracer's ring measures how much buffered
+        // media the feed gained per unit of wall clock instead.
+        val ratio = snapshot.feedMediaRatio
+        if (ratio != null && ratio < HOLDBACK_MEDIA_RATIO_MIN) {
             Log.i(
                 TAG,
                 "[HOLDBACK] ch=${snapshot.channelName} stall ignored: feed below real time " +
-                    "(${snapshot.windowKbps}kbps vs ${snapshot.tuneKbps}kbps)",
+                    "(media ratio ${"%.2f".format(ratio)})",
             )
             return
         }
@@ -263,12 +268,12 @@ class AerioExoPlayerHolder @Inject constructor(
             .toInt()
             .coerceAtLeast(learned)
         if (next <= learned) return
+        val ratioText = if (ratio == null) "n/a" else "%.2f".format(ratio)
         Log.i(
             TAG,
             "[HOLDBACK] ch=${snapshot.channelName} bursty feed " +
-                "(avg ${snapshot.windowKbps}kbps vs tune ${snapshot.tuneKbps}kbps, " +
-                "worst gap ${snapshot.worstGapMs}ms): start buffer $learned -> $next ms " +
-                "for the NEXT tune",
+                "(media ratio $ratioText, worst gap ${snapshot.worstGapMs} ms): " +
+                "start buffer $learned -> $next ms for the NEXT tune",
         )
         // Update the cache immediately so a tune that beats the DataStore write
         // still applies the new gate; the write returns the stored map.
@@ -988,6 +993,12 @@ class AerioExoPlayerHolder @Inject constructor(
                 addAnalyticsListener(LoadErrorDiagnosticsListener)
                 // Always-on tune/stall/feed tracer (tag AerioTrace).
                 addAnalyticsListener(tracer.analyticsListener)
+                // Always-on frame-pacing timer ([JUDDER] / [PERF] render=).
+                // The single video-frame-metadata slot is shared with
+                // DisplayFrameRateMatcher: PersistentExoWindow re-registers
+                // this listener CHAINED in front of the matcher's when it
+                // attaches, so whichever registers last carries both.
+                setVideoFrameMetadataListener(tracer.frameMetadataListener())
                 // Debug-only rich diagnostics firehose (codec / hwdec path,
                 // input format changes, dropped frames, audio underruns) -- the
                 // Android analog of iOS's libmpv log bridge. Read with
@@ -2266,6 +2277,10 @@ class AerioExoPlayerHolder @Inject constructor(
         /** Ceiling on the learned hold-back: past 10 s the tap-to-motion cost
          *  outweighs riding out the gap. */
         private const val LIVE_START_GATE_MAX_MS = 10_000
+        /** At or above this media-time ratio the feed is keeping up with real
+         *  time, so a stall means the bytes arrived in bursts and the start
+         *  cushion was too shallow. */
+        private const val HOLDBACK_MEDIA_RATIO_MIN = 0.9
         private const val TAG_DIAG = "AerioPlayerDiag"
 
         /** How long after a tune a decoder failure still counts as the codec

@@ -16,6 +16,8 @@ import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
+import android.media.MediaFormat
 import android.net.Uri
 
 /**
@@ -77,12 +79,51 @@ class PlaybackTracer {
     private var lastByteAtMs = 0L
     /** (stamp, gapMs) pairs, pruned to the rolling window by [worstGapMs]. */
     private val feedGaps = ArrayDeque<Pair<Long, Long>>()
-    /** Bytes delivered on this tune, and the total as of the first frame, so the
-     *  30 s window can be compared against the tune's own running average
-     *  (the "is this feed still at real time" test the hold-back learner uses). */
+    /** Bytes delivered on this tune. */
     private var feedBytesTotal = 0L
-    private var feedBytesAtFirstFrame = 0L
     private var lastGapWarnAtMs = 0L
+
+    // ---- media-time progress window ----
+    // Logan 2026-09-11 (session11, ESPNU HD): comparing the trailing byte rate
+    // against the tune's own byte rate said nothing about real time, because a
+    // live picture's bitrate swings with its content, so two genuinely bursty
+    // stalls were ignored as "feed below real time". The only honest real-time
+    // test is MEDIA time: how many ms of media the feed buffered per ms of wall
+    // clock. This ring holds (wallMs, bufferedPosition) samples over
+    // [MEDIA_WINDOW_MS] and is cleared on every tune, because bufferedPosition
+    // jumps when a stream is re-primed.
+    private val mediaLock = Any()
+    private val mediaSamples = ArrayDeque<Pair<Long, Long>>()
+
+    // ---- frame pacing (render cadence) ----
+    // Logan 2026-09-11: a visible stutter on a 4K50 HEVC live channel with NO
+    // [STALL], dropped +0, 5-8 s buffered and a 3.5 s worst feed gap. The feed
+    // and the decoder were both fine, so the judder has to be in the RENDER
+    // cadence (frames released late / unevenly) or the audio sink. This window
+    // times every rendered frame so the log can say so.
+    private val frameLock = Any()
+    /** System.nanoTime of the previous rendered frame, 0 before the first. */
+    private var lastFrameAtNs = 0L
+    private var frameSecondStartedAtNs = 0L
+    private var framesThisSecond = 0
+    private var maxGapThisSecondUs = 0L
+    private var bigGapsThisSecond = 0
+    /** Rolling medians of the frame PTS delta, for content fps when the
+     *  container signals none (live MPEG-TS usually does not). */
+    private val ptsDeltasUs = ArrayDeque<Long>()
+    private var lastPtsUs = -1L
+    private var measuredFps = 0f
+    /** Container-signaled frame rate, -1 when absent. */
+    @Volatile private var formatFps = -1f
+    /** Optional content-fps source (DisplayFrameRateMatcher), wired by the UI. */
+    @Volatile var contentFpsProvider: (() -> Float)? = null
+    // accumulators drained by the 15 s [PERF] line
+    private var framesSincePerf = 0L
+    private var frameSecondsSincePerf = 0
+    private var maxGapSincePerfUs = 0L
+    private var procOffsetSumUs = 0L
+    private var procOffsetFrames = 0L
+    @Volatile private var lastJudderLogAtMs = 0L
 
     private fun now() = SystemClock.elapsedRealtime()
 
@@ -128,6 +169,23 @@ class PlaybackTracer {
         droppedTotal = 0
         droppedAtLastPerf = 0
         lastPerfAtMs = n
+        synchronized(frameLock) {
+            lastFrameAtNs = 0L
+            frameSecondStartedAtNs = 0L
+            framesThisSecond = 0
+            maxGapThisSecondUs = 0L
+            bigGapsThisSecond = 0
+            ptsDeltasUs.clear()
+            lastPtsUs = -1L
+            measuredFps = 0f
+            formatFps = -1f
+            framesSincePerf = 0L
+            frameSecondsSincePerf = 0
+            maxGapSincePerfUs = 0L
+            procOffsetSumUs = 0L
+            procOffsetFrames = 0L
+        }
+        lastJudderLogAtMs = 0L
         synchronized(feedLock) {
             feedBuckets.fill(0L)
             feedBucketIndex = 0
@@ -136,8 +194,8 @@ class PlaybackTracer {
             feedGaps.clear()
             lastGapWarnAtMs = 0L
             feedBytesTotal = 0L
-            feedBytesAtFirstFrame = 0L
         }
+        synchronized(mediaLock) { mediaSamples.clear() }
         Log.i(TAG, "[TUNE] playUrl ch=$channelName +${sincePress(n)}ms url-kind=$kind")
     }
 
@@ -214,6 +272,7 @@ class PlaybackTracer {
     }
 
     private fun onFormat(format: Format) {
+        if (format.frameRate > 1f) formatFps = format.frameRate
         if (formatLogged) return
         pendingFormat = format
         // The decoder name matters: session2.txt 19:56:48 is a MediaTek AVC
@@ -252,7 +311,6 @@ class PlaybackTracer {
     fun onFirstFrame() {
         if (summaryLogged || summaryPending) return
         firstFrameAtMs = now()
-        synchronized(feedLock) { feedBytesAtFirstFrame = feedBytesTotal }
         if (readyAtMs == 0L) {
             summaryPending = true
             val tune = playUrlAtMs
@@ -312,12 +370,14 @@ class PlaybackTracer {
     data class FeedStallSnapshot(
         val channelName: String,
         val isLive: Boolean,
-        /** Average kbps over the trailing 30 s feed window. */
-        val windowKbps: Long,
-        /** Average kbps over this tune since the first frame. */
-        val tuneKbps: Long,
         /** Longest stretch without bytes inside the 30 s window. */
         val worstGapMs: Long,
+        /** Buffered MEDIA time gained per unit of wall clock over the trailing
+         *  [MEDIA_WINDOW_MS], clamped to 0..2, or null until the ring covers at
+         *  least [MEDIA_WINDOW_MIN_MS]. At or above 1.0 the feed is keeping up
+         *  with real time; well below it the feed is starved upstream, which a
+         *  deeper start buffer cannot fix. */
+        val feedMediaRatio: Double?,
     )
 
     /** Set by the holder; invoked on the main thread once per [STALL]. */
@@ -329,24 +389,27 @@ class PlaybackTracer {
     /** Longest stretch without bytes inside the trailing 30 s window. */
     fun worstGapMs(): Long = feedSnapshot(now()).second
 
-    /** Average kbps over this tune since the first frame (0 before it). */
-    fun tuneKbps(): Long {
-        val frame = firstFrameAtMs
-        if (frame == 0L) return 0L
-        val elapsedMs = (now() - frame).coerceAtLeast(1_000L)
-        val bytes = synchronized(feedLock) { feedBytesTotal - feedBytesAtFirstFrame }
-        if (bytes <= 0L) return 0L
-        return bytes * 8L / elapsedMs
+    /**
+     * Buffered media time gained per unit of wall clock over the trailing
+     * [MEDIA_WINDOW_MS]. Null until the ring spans [MEDIA_WINDOW_MIN_MS], so an
+     * early stall is never judged on a half-filled window.
+     */
+    private fun feedMediaRatio(): Double? = synchronized(mediaLock) {
+        val oldest = mediaSamples.firstOrNull() ?: return null
+        val newest = mediaSamples.last()
+        val wallDelta = newest.first - oldest.first
+        if (wallDelta < MEDIA_WINDOW_MIN_MS) return null
+        val mediaDelta = newest.second - oldest.second
+        (mediaDelta.toDouble() / wallDelta.toDouble()).coerceIn(0.0, 2.0)
     }
 
     private fun stallSnapshot(): FeedStallSnapshot {
-        val (kbps, worst) = feedSnapshot(now())
+        val (_, worst) = feedSnapshot(now())
         return FeedStallSnapshot(
             channelName = channelName,
             isLive = tuneKind == "live",
-            windowKbps = kbps,
-            tuneKbps = tuneKbps(),
             worstGapMs = worst,
+            feedMediaRatio = feedMediaRatio(),
         )
     }
 
@@ -373,16 +436,32 @@ class PlaybackTracer {
         val p = player ?: return
         if (!p.isPlaying) return
         val n = now()
+        // Media-time progress ring (see [mediaSamples]). Sampled on every tick,
+        // not only on the [PERF] cadence, so the window is dense.
+        val bufferedPosition = p.bufferedPosition
+        if (bufferedPosition != C.TIME_UNSET) {
+            synchronized(mediaLock) {
+                mediaSamples.addLast(n to bufferedPosition)
+                while (mediaSamples.size > 1 &&
+                    n - mediaSamples.first().first > MEDIA_WINDOW_MS
+                ) {
+                    mediaSamples.removeFirst()
+                }
+            }
+        }
         if (n - lastPerfAtMs < PERF_INTERVAL_MS) return
         lastPerfAtMs = n
         val droppedDelta = droppedTotal - droppedAtLastPerf
         droppedAtLastPerf = droppedTotal
         val buffered = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0L)
+        val render = drainRenderStats()
         Log.i(
             TAG,
             "[PERF] ch=$channelName stalls=$stallCount dropped=+$droppedDelta($droppedTotal) " +
                 "buffered=${buffered}ms liveOffset=${liveOffsetMs(p)}ms " +
-                "bw=${bitrateEstimateBps / 1000}kbps pos=${p.currentPosition}ms",
+                "bw=${bitrateEstimateBps / 1000}kbps pos=${p.currentPosition}ms " +
+                "render=${"%.1f".format(render.fps)}fps maxGap=${render.maxGapMs}ms " +
+                "procOffset=${render.procOffsetUs}us",
         )
         val (kbps, worstGap) = feedSnapshot(n)
         Log.i(TAG, "[FEED] ${kbps}kbps avg over 30s, worst gap ${worstGap}ms without bytes")
@@ -398,6 +477,132 @@ class PlaybackTracer {
         val liveGap = nowMs - lastByteAtMs
         val worst = (feedGaps.maxOfOrNull { it.second } ?: 0L).coerceAtLeast(liveGap)
         kbps to worst
+    }
+
+
+    // ---- frame pacing ----
+
+    /** Content frame interval in ms: container fps, else the measured median,
+     *  else the 50 Hz assumption (the channel Logan saw juddering). */
+    private fun contentFps(): Float {
+        val signaled = formatFps
+        if (signaled > 1f) return signaled
+        val provided = contentFpsProvider?.invoke() ?: 0f
+        if (provided > 1f) return provided
+        if (measuredFps > 1f) return measuredFps
+        return 50f
+    }
+
+    /**
+     * Chain the tracer's frame timer in front of [downstream] (the seamless
+     * frame-rate matcher's listener, when there is one). ExoPlayer has a
+     * SINGLE video-frame-metadata slot, so whoever registers last must carry
+     * the other. Register the result with setVideoFrameMetadataListener.
+     */
+    fun frameMetadataListener(downstream: VideoFrameMetadataListener? = null): VideoFrameMetadataListener =
+        object : VideoFrameMetadataListener {
+            override fun onVideoFrameAboutToBeRendered(
+                presentationTimeUs: Long,
+                releaseTimeNs: Long,
+                format: Format,
+                mediaFormat: MediaFormat?,
+            ) {
+                onFrameRendered(presentationTimeUs)
+                downstream?.onVideoFrameAboutToBeRendered(
+                    presentationTimeUs,
+                    releaseTimeNs,
+                    format,
+                    mediaFormat,
+                )
+            }
+        }
+
+    /** Called once per rendered frame, on the video renderer thread. Must stay
+     *  allocation-free and lock-cheap: it runs 50-60 times a second. */
+    private fun onFrameRendered(presentationTimeUs: Long) {
+        val nowNs = System.nanoTime()
+        var judderGapUs = 0L
+        var judderGaps = 0
+        var judderFps = 0
+        var thresholdMs = 0L
+        synchronized(frameLock) {
+            // Measured content fps (median PTS delta), used only when the
+            // container signals no frame rate.
+            if (lastPtsUs >= 0L) {
+                val d = presentationTimeUs - lastPtsUs
+                if (d < 0L || d > 1_000_000L) {
+                    ptsDeltasUs.clear()
+                    measuredFps = 0f
+                } else if (d in 4_000L..210_000L) {
+                    ptsDeltasUs.addLast(d)
+                    if (ptsDeltasUs.size > 60) ptsDeltasUs.removeFirst()
+                    if (ptsDeltasUs.size >= 30) {
+                        val sorted = ptsDeltasUs.sorted()
+                        measuredFps = (1_000_000.0 / sorted[sorted.size / 2]).toFloat()
+                    }
+                }
+            }
+            lastPtsUs = presentationTimeUs
+
+            val fps = contentFps()
+            val frameIntervalUs = (1_000_000f / fps).toLong().coerceAtLeast(1L)
+            val gapThresholdUs = (frameIntervalUs * FRAME_GAP_FACTOR).toLong()
+            if (lastFrameAtNs != 0L) {
+                val gapUs = (nowNs - lastFrameAtNs) / 1_000L
+                if (gapUs > maxGapThisSecondUs) maxGapThisSecondUs = gapUs
+                if (gapUs > gapThresholdUs) bigGapsThisSecond += 1
+            }
+            lastFrameAtNs = nowNs
+            framesThisSecond += 1
+            if (frameSecondStartedAtNs == 0L) frameSecondStartedAtNs = nowNs
+
+            if (nowNs - frameSecondStartedAtNs >= 1_000_000_000L) {
+                framesSincePerf += framesThisSecond
+                frameSecondsSincePerf += 1
+                if (maxGapThisSecondUs > maxGapSincePerfUs) maxGapSincePerfUs = maxGapThisSecondUs
+                if (bigGapsThisSecond > 0) {
+                    judderGapUs = maxGapThisSecondUs
+                    judderGaps = bigGapsThisSecond
+                    judderFps = framesThisSecond
+                    thresholdMs = gapThresholdUs / 1_000L
+                }
+                frameSecondStartedAtNs = nowNs
+                framesThisSecond = 0
+                maxGapThisSecondUs = 0L
+                bigGapsThisSecond = 0
+            }
+        }
+        if (judderGaps > 0) {
+            val n = now()
+            if (n - lastJudderLogAtMs < JUDDER_LOG_COOLDOWN_MS) return
+            lastJudderLogAtMs = n
+            val gapMs = judderGapUs / 1_000L
+            // currentPosition must be read on the player's app thread.
+            summaryHandler.post {
+                val pos = tracedPlayer?.currentPosition ?: 0L
+                Log.w(
+                    TAG,
+                    "[JUDDER] max frame gap ${gapMs}ms ($judderGaps gaps > ${thresholdMs}ms) " +
+                        "fps=$judderFps/s pos=${pos}ms",
+                )
+            }
+        }
+    }
+
+    /** Drain the render accumulators for the 15 s [PERF] line. */
+    private data class RenderSnapshot(val fps: Float, val maxGapMs: Long, val procOffsetUs: Long)
+
+    private fun drainRenderStats(): RenderSnapshot = synchronized(frameLock) {
+        val seconds = frameSecondsSincePerf
+        val fps = if (seconds > 0) framesSincePerf.toFloat() / seconds else 0f
+        val maxGapMs = maxGapSincePerfUs / 1_000L
+        val offset = if (procOffsetFrames > 0L) procOffsetSumUs / procOffsetFrames else 0L
+        framesSincePerf = 0L
+        frameSecondsSincePerf = 0
+        maxGapSincePerfUs = 0L
+        procOffsetSumUs = 0L
+        procOffsetFrames = 0L
+        RenderSnapshot(fps, maxGapMs, offset)
     }
 
     // ---- recovery visibility ----
@@ -470,6 +675,33 @@ class PlaybackTracer {
             droppedTotal += droppedFrames
         }
 
+        override fun onAudioUnderrun(
+            eventTime: AnalyticsListener.EventTime,
+            bufferSize: Int,
+            bufferSizeMs: Long,
+            elapsedSinceLastFeedMs: Long,
+        ) {
+            // An audio-sink underrun is heard as a hitch even when video never
+            // stalls and no frames are dropped.
+            Log.w(
+                TAG,
+                "[JUDDER] audio underrun buffer=${bufferSizeMs}ms sinceFeed=${elapsedSinceLastFeedMs}ms " +
+                    "bytes=$bufferSize ch=$channelName",
+            )
+        }
+
+        override fun onVideoFrameProcessingOffset(
+            eventTime: AnalyticsListener.EventTime,
+            totalProcessingOffsetUs: Long,
+            frameCount: Int,
+        ) {
+            if (frameCount <= 0) return
+            synchronized(frameLock) {
+                procOffsetSumUs += totalProcessingOffsetUs
+                procOffsetFrames += frameCount.toLong()
+            }
+        }
+
         override fun onBandwidthEstimate(
             eventTime: AnalyticsListener.EventTime,
             totalLoadTimeMs: Int,
@@ -522,10 +754,19 @@ class PlaybackTracer {
         private const val SUMMARY_DEFER_MS = 2_000L
         private const val PERF_INTERVAL_MS = 15_000L
         private const val FEED_WINDOW_MS = 30_000L
+        /** Span of the media-time progress ring. */
+        private const val MEDIA_WINDOW_MS = 30_000L
+        /** The ring has to cover this much wall clock before its ratio means
+         *  anything. */
+        private const val MEDIA_WINDOW_MIN_MS = 20_000L
         private const val FEED_BUCKET_MS = 1_000L
         private const val FEED_WINDOW_BUCKETS = (FEED_WINDOW_MS / FEED_BUCKET_MS).toInt()
         private const val FEED_GAP_RECORD_MS = 2_000L
         private const val FEED_GAP_WARN_COOLDOWN_MS = 10_000L
+        /** A rendered-frame gap this many times the content frame interval
+         *  counts as a visible hitch (50 fps -> 50ms interval -> 125ms). */
+        private const val FRAME_GAP_FACTOR = 2.5f
+        private const val JUDDER_LOG_COOLDOWN_MS = 2_000L
 
         /** Classify a play URL for the [TUNE] playUrl line. Never logs the
          *  URL itself (it can embed credentials). */
