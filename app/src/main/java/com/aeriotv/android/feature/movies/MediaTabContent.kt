@@ -475,6 +475,9 @@ fun MediaTabContent(
         railIndexOf = { letter -> library.indexOfFirst { it.bucket == letter } },
         isRefreshing = isLoading && gridItems.isNotEmpty(),
         onRefresh = { if (kind == MediaKind.Movies) viewModel.refresh() else viewModel.refreshSeries() },
+        // TMDB's terms ask for the logo and wording wherever their data and
+        // images are shown; the posters in this grid are TMDB art.
+        footer = { com.aeriotv.android.ui.TmdbAttribution(long = true, isTv = false) },
     )
 
     if (showManageGroups && groupNames.isNotEmpty()) {

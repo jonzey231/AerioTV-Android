@@ -103,6 +103,11 @@ fun <T> MediaPageScaffold(
     railIndexOf: (Char) -> Int = { -1 },
     isRefreshing: Boolean = false,
     onRefresh: () -> Unit = {},
+    /** Full-width content under the grid (the TMDB attribution on the pages
+     *  that render TMDB art and metadata). Not focusable, and placed AFTER the
+     *  cells so it never shifts the leading-item indices the rail and the
+     *  search scroll depend on. */
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val bottomInset = LocalTabBarBottomInset.current
@@ -214,6 +219,11 @@ fun <T> MediaPageScaffold(
                     }
                 }
                 items(gridItems, key = gridKey) { item -> cell(item) }
+                if (footer != null) {
+                    item(key = "footer", span = { GridItemSpan(maxLineSpan) }) {
+                        Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) { footer() }
+                    }
+                }
             }
         }
         if (railVisible) {

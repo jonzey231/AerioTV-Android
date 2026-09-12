@@ -275,7 +275,10 @@ private fun LicenseIndex(
                 "Google Cast (sender and receiver), Play services Auth and the Google " +
                     "Identity library are not open source. They are used under the " +
                     "Android Software Development Kit License Agreement and the Google " +
-                    "APIs Terms of Service.",
+                    "APIs Terms of Service.\n\n" +
+                    "The four-color Google \"G\" on the Sign in with Google button is a " +
+                    "trademark of Google LLC, used per the Google Sign-In branding " +
+                    "guidelines. AerioTV claims no rights in it.",
             )
         }
         item("tail") { Spacer(Modifier.height(28.dp)) }
@@ -293,6 +296,7 @@ private val APACHE_COMPONENTS = listOf(
     "Ktor (JetBrains)",
     "Dagger and Hilt (Google)",
     "OkHttp (Square)",
+    "Okio (Square)",
     "Coil (Coil Contributors)",
     "ZXing Core (ZXing Authors)",
     "Reorderable (Calvin Liang)",

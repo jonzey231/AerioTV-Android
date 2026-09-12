@@ -68,6 +68,7 @@ Kotlin standard library, `kotlinx.coroutines`, `kotlinx.serialization`, Ktor
 **Others**
 - Dagger and Hilt (Google) https://github.com/google/dagger
 - OkHttp (Square) https://github.com/square/okhttp
+- Okio (Square) https://github.com/square/okio
 - Coil 3 (Coil Contributors) https://github.com/coil-kt/coil
 - ZXing Core (ZXing Authors) https://github.com/zxing/zxing
 - Reorderable (Calvin Liang) https://github.com/Calvin-LL/Reorderable

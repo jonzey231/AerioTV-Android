@@ -296,5 +296,8 @@ internal fun TvMediaTab(
         returnSource = remember { TvReturnMemory.pendingSource[pageId] },
         onReturnHandled = { TvReturnMemory.clear(pageId) },
         pageId = pageId,
+        // TMDB's terms ask for the logo and wording wherever their data and
+        // images are shown; the posters in this grid are TMDB art.
+        footer = { com.aeriotv.android.ui.TmdbAttribution(long = true, isTv = true) },
     )
 }

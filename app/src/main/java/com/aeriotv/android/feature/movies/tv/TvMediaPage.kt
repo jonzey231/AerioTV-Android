@@ -329,6 +329,11 @@ fun <T> TvMediaPage(
      *  so the row's measured height carries it and every rest top below the
      *  hero shifts down by itself: no scroll target needs a new constant. */
     heroSectionTitle: String? = null,
+    /** Full-width content appended as the LAST row of the grid (the TMDB
+     *  attribution on the pages that render TMDB art and metadata). It carries
+     *  no focusable and is placed after the cells, so it reports no leading
+     *  height and no scroll-owner target changes (Logan 2026-09-11). */
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -1392,6 +1397,11 @@ fun <T> TvMediaPage(
                         }
                     }
                 cell(item, TvCellScope(modifier = cellModifier, focusRequester = cellReturnRequester(item)))
+            }
+            if (footer != null) {
+                fullSpan("footer") {
+                    Box(modifier = Modifier.fillMaxWidth().padding(top = 28.dp)) { footer() }
+                }
             }
         }
         }

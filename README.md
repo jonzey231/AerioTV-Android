@@ -351,6 +351,37 @@ the full list, the exact FFmpeg build configuration, and where to obtain the
 corresponding source. The same information is in the app under
 Settings > About > Open Source Licenses.
 
+The Apache-2.0 components include AndroidX and Jetpack Compose, Media3 /
+ExoPlayer, Kotlin with kotlinx.coroutines and kotlinx.serialization, Ktor,
+Dagger and Hilt, OkHttp, Okio (Square), Coil, ZXing Core and Reorderable. They
+are used under the Apache License, Version 2.0, whose full text is at
+https://www.apache.org/licenses/LICENSE-2.0 and is also bundled in the app.
+
+FFmpeg is loaded as a dynamically linked JNI shared object (`libffmpegJNI.so`)
+inside `app/libs/media3-decoder-ffmpeg.aar`, and can be replaced with a modified
+build, as section 6 of the LGPL requires. Build steps are in
+[app/libs/README.md](app/libs/README.md). To receive the corresponding FFmpeg
+source directly, open an issue at
+[github.com/jonzey231/AerioTV-Android/issues](https://github.com/jonzey231/AerioTV-Android/issues).
+
+The Google Play services client libraries (Cast sender, Cast Connect receiver,
+Play services Auth, Google Identity) are proprietary and are used under the
+Android Software Development Kit License Agreement and the Google APIs Terms of
+Service. Linking them with this GPL-licensed program is permitted by an
+additional permission under GPL section 7; see
+[LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).
+
+The four-color Google "G" on the Sign in with Google button
+(`res/drawable/ic_google_g.xml`) is a trademark of Google LLC, used per the
+Google Sign-In branding guidelines.
+
+### TMDB attribution
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
+
+TMDB data and images are used only after a TMDB API key is configured in
+Settings > App Behaviors.
+
 ## Support
 
 To report bugs or request features, open an issue at [github.com/jonzey231/AerioTV-Android/issues](https://github.com/jonzey231/AerioTV-Android/issues).
