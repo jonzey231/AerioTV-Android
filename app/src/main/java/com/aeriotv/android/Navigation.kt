@@ -1425,15 +1425,21 @@ fun AerioTVNavHost(
                     }
                 }
 
+                val epProgressMeta = remember(parentSeriesId, episode, epUpNextQueue) {
+                    com.aeriotv.android.feature.player.VodProgressMeta(
+                        vodType = "episode",
+                        seriesId = parentSeriesId?.toString(),
+                        seasonNumber = episode?.seasonNumber ?: 0,
+                        episodeNumber = episode?.episodeNumber ?: 0,
+                        upNextQueue = epUpNextQueue,
+                    )
+                }
+
                 VODPlayerScreen(
                     streamUrl = resolved?.url.orEmpty(),
                     title = episode?.displayName ?: "Episode",
                     startFromBeginning = epFromStart,
-                    progressVodType = "episode",
-                    progressSeriesId = parentSeriesId?.toString(),
-                    progressSeasonNumber = episode?.seasonNumber ?: 0,
-                    progressEpisodeNumber = episode?.episodeNumber ?: 0,
-                    progressUpNextQueue = epUpNextQueue,
+                    progressMeta = epProgressMeta,
                     // Audit #53/#38: never replay the API key to a session URL
                     // that resolved OFF the server's origin.
                     httpHeaders = if (resolved?.authSafe == false) emptyMap() else headers,
@@ -1795,7 +1801,7 @@ fun AerioTVNavHost(
                     // /file/ shapes, with or without the /api/channels
                     // prefix.
                     videoId = recordingProgressId(playbackUrl, recId),
-                    progressVodType = "recording",
+                    progressMeta = remember { com.aeriotv.android.feature.player.VodProgressMeta("recording") },
                     posterUrl = null,
                     isDvr = isDvr,
                     startAtLiveEdge = isDvr && !fromStart && !autoResume,

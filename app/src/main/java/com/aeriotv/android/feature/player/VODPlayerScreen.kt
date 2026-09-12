@@ -52,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
@@ -159,6 +160,25 @@ private const val AUTO_HIDE_MS = PLAYER_CHROME_HIDE_MS
 private enum class TvVodFocusZone { None, Rewind, PlayPause, Forward, Options, Scrubber }
 
 /**
+ * WatchProgress identity for one VOD / episode / recording playback, collapsed
+ * into a single @Immutable parameter. [vodType] is "movie", "episode" or
+ * "recording"; [seriesId] / [seasonNumber] / [episodeNumber] are set for an
+ * episode only and are what the series-scoped queries
+ * (WatchProgressDao.observeEpisodesForSeries, seriesTarget, Continue Watching)
+ * match on. [upNextQueue] is the JSON queue from
+ * WatchProgressViewModel.encodeQueue, stashed at launch so finishing this
+ * episode advances Continue Watching.
+ */
+@Immutable
+data class VodProgressMeta(
+    val vodType: String,
+    val seriesId: String? = null,
+    val seasonNumber: Int = 0,
+    val episodeNumber: Int = 0,
+    val upNextQueue: String? = null,
+)
+
+/**
  * VOD playback. Task #62: rebuilt on Media3 ExoPlayer.
  *
  * The earlier libmpv version owned a per-screen MPVPlayerView and
@@ -181,22 +201,12 @@ fun VODPlayerScreen(
     onClose: () -> Unit = {},
     loadingMessage: String? = null,
     videoId: String? = null,
-    /** WatchProgress classification for this playback ("movie",
-     *  "episode", or "recording"). Recordings must not land in the
-     *  movie Continue Watching rail, and the type now syncs. */
-    progressVodType: String? = null,
-    /** Episode progress identity (2026-09-11): the series id / season /
-     *  episode every save must carry so the series-scoped queries
-     *  (observeEpisodesForSeries, seriesTarget, Continue Watching) can find
-     *  the row. Non-null only for episode playback. Before this, the episode
-     *  route saved a bare row keyed by the episode uuid with vodType "movie"
-     *  and seriesId null, so nothing series-scoped ever saw it. */
-    progressSeriesId: String? = null,
-    progressSeasonNumber: Int = 0,
-    progressEpisodeNumber: Int = 0,
-    /** JSON up-next queue (WatchProgressViewModel.encodeQueue) stashed on the
-     *  row at launch so finishing this episode advances Continue Watching. */
-    progressUpNextQueue: String? = null,
+    /** WatchProgress identity for this playback: the classification plus, for
+     *  an episode, the series / season / episode the series-scoped queries
+     *  match on. ONE parameter on purpose: the composable sits near ART's
+     *  verifier limit and a 31-argument @Composable was rejected outright
+     *  (VerifyError on the Streamer, 2026-09-11). */
+    progressMeta: VodProgressMeta? = null,
     posterUrl: String? = null,
     /** Hero "Play from Beginning" (tvOS MoviesView:1507-1511): ignore the
      *  saved position and start at 0. The WatchProgress row is left alone,
@@ -774,17 +784,18 @@ fun VODPlayerScreen(
     // up-next queue from the first moment, not only when the detail page
     // happened to annotate it first. Metadata only: the position is never
     // reset, so this cannot wipe a resume point.
-    LaunchedEffect(videoId, progressSeriesId, title) {
-        if (videoId.isNullOrBlank() || progressSeriesId.isNullOrBlank()) return@LaunchedEffect
+    LaunchedEffect(videoId, progressMeta, title) {
+        val seriesId = progressMeta?.seriesId
+        if (videoId.isNullOrBlank() || seriesId.isNullOrBlank()) return@LaunchedEffect
         watchVm.captureEpisodePlay(
             videoId = videoId,
             title = title,
             posterUrl = posterUrl,
-            seriesId = progressSeriesId,
-            seasonNumber = progressSeasonNumber,
-            episodeNumber = progressEpisodeNumber,
+            seriesId = seriesId,
+            seasonNumber = progressMeta.seasonNumber,
+            episodeNumber = progressMeta.episodeNumber,
             streamUrl = null,
-            upNextQueue = progressUpNextQueue,
+            upNextQueue = progressMeta.upNextQueue,
         )
     }
 
@@ -798,7 +809,7 @@ fun VODPlayerScreen(
         // next open instead of resuming into its last minutes. Movies get
         // the same rule from the detail screen's Play / Resume split; a
         // recording has no detail screen, so the player applies it.
-        val finishedRecording = progressVodType == "recording" &&
+        val finishedRecording = progressMeta?.vodType == "recording" &&
             existing != null && existing.isFinished
         savedPositionMs = if (finishedRecording) -1L else existing?.positionMs ?: -1L
     }
@@ -1319,7 +1330,7 @@ fun VODPlayerScreen(
                 // GH #75: recordings have no Resume / Play choice up front,
                 // so say where playback picked up (possibly a position saved
                 // on another device via sync).
-                if (progressVodType == "recording") {
+                if (progressMeta?.vodType == "recording") {
                     val totalSecs = pos / 1000L
                     val label = if (totalSecs >= 3600L) {
                         String.format(
@@ -1461,10 +1472,10 @@ fun VODPlayerScreen(
                     posterUrl = latestPosterUrl,
                     positionMs = pos,
                     durationMs = dur,
-                    vodType = progressVodType,
-                    seriesId = progressSeriesId,
-                    seasonNumber = progressSeriesId?.let { progressSeasonNumber },
-                    episodeNumber = progressSeriesId?.let { progressEpisodeNumber },
+                    vodType = progressMeta?.vodType,
+                    seriesId = progressMeta?.seriesId,
+                    seasonNumber = progressMeta?.seriesId?.let { progressMeta.seasonNumber },
+                    episodeNumber = progressMeta?.seriesId?.let { progressMeta.episodeNumber },
                 )
             }
         }
@@ -1491,10 +1502,10 @@ fun VODPlayerScreen(
                         posterUrl = latestPosterUrl,
                         positionMs = pos,
                         durationMs = dur,
-                        vodType = progressVodType,
-                        seriesId = progressSeriesId,
-                        seasonNumber = progressSeriesId?.let { progressSeasonNumber },
-                        episodeNumber = progressSeriesId?.let { progressEpisodeNumber },
+                        vodType = progressMeta?.vodType,
+                        seriesId = progressMeta?.seriesId,
+                        seasonNumber = progressMeta?.seriesId?.let { progressMeta.seasonNumber },
+                        episodeNumber = progressMeta?.seriesId?.let { progressMeta.episodeNumber },
                     )
                 }
                 com.aeriotv.android.core.sync.DriveSyncWorker
