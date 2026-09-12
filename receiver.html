@@ -147,6 +147,54 @@
     // snapshot so a stall can be read together with whatever preceded it.
     let lastReceiverError = null;
 
+    // ---- measured MSE codec support (replaces the senders' model guess) ----
+    //
+    // 2026-09-12 (gtvlogs/session16, 15:52:40): with the plain AC-3 stream
+    // this page's Chromium logged
+    //   isTypeSupported('video/mp4; codecs="avc1.64002A,ac-3"') -> false
+    // on a Google TV Streamer, and the load died with Shaka 3015 on both
+    // senders. The senders' model allow-list said that device decodes AC-3:
+    // true of the platform's own players, false of the web receiver's MSE,
+    // which is the only decoder that matters here. So the receiver MEASURES
+    // its own MSE support and tells the senders, and the senders decide the
+    // audio ingest from the measurement instead of the device name.
+    const CAPS_TYPES = {
+      'ac-3': 'video/mp4; codecs="ac-3"',
+      'ec-3': 'video/mp4; codecs="ec-3"',
+      'mp4a.40.2': 'video/mp4; codecs="mp4a.40.2"',
+      'avc1.64002A': 'video/mp4; codecs="avc1.64002A"',
+    };
+
+    function mseCapabilities() {
+      const out = {};
+      for (const key in CAPS_TYPES) {
+        let ok = false;
+        try {
+          ok = typeof MediaSource !== 'undefined' &&
+            !!MediaSource.isTypeSupported(CAPS_TYPES[key]);
+        } catch (e) {
+          ok = false;
+        }
+        out[key] = ok;
+      }
+      return out;
+    }
+
+    // Sent on READY (before any load, so the first load can use it) and
+    // repeated with every telemetry snapshot, because a sender that
+    // attached its channel after READY would otherwise never see it.
+    function sendCapabilities(reason) {
+      try {
+        context.sendCustomMessage(DEBUG_NAMESPACE, undefined, {
+          type: 'caps',
+          ev: reason,
+          mse: mseCapabilities(),
+        });
+      } catch (e) {
+        // Diagnostics must never be able to break playback.
+      }
+    }
+
     function roundTo(value, places) {
       if (typeof value !== 'number' || !isFinite(value)) return null;
       const f = Math.pow(10, places);
@@ -231,7 +279,11 @@
       const video = mediaElement();
       const stats = shakaStats();
       const payload = {
+        type: 'state',
         ev: ev,
+        // Repeated here so the senders learn the measurement even if they
+        // attached the debug channel after the READY message went out.
+        mse: mseCapabilities(),
         t: video ? roundTo(video.currentTime, 3) : null,
         buffered: bufferedRanges(),
         ready: video ? video.readyState : null,
@@ -624,6 +676,7 @@
     }
 
     context.addEventListener(cast.framework.system.EventType.READY, () => {
+      sendCapabilities('ready');
       const caps = context.getDeviceCapabilities();
       if (!caps || !caps[cast.framework.system.DeviceCapabilities.TOUCH_INPUT_SUPPORTED]) {
         const st = document.createElement('style');
