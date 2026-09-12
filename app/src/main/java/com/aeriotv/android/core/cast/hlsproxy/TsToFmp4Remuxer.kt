@@ -678,11 +678,49 @@ class TsToFmp4Remuxer(
                     // verbatim: no bit shifting, and the block's existing
                     // id_syn_ele 7 terminator plus its byte alignment
                     // still terminate the shortened block correctly.
+                    // A channel_configuration implies the element types,
+                    // their order AND their instance tags, not just a
+                    // channel count, so the PCE can only be dropped when
+                    // its element list is exactly the one some entry of
+                    // Table 1.19 implies. Deriving the config from the
+                    // channel count alone was measured to destroy the
+                    // audio outright: ffmpeg's "5.1(side)" PCE declares
+                    // CPE(0), SCE(0), SCE(1), CPE(1) and no LFE element,
+                    // and those frames presented as config 6 are rejected
+                    // frame for frame by the Google TV Streamer's
+                    // C2SoftAacDec (decoderErr 0x0005, 4360 times in one
+                    // session) and by ffmpeg's own aac and aac_fixed
+                    // decoders ("channel element 1.0 is not allocated",
+                    // 189 of 189 frames).
+                    val implied = pce.impliedChannelConfig
+                    if (implied == 0) {
+                        // Nothing lossless is left. Reordering the
+                        // elements into Table 1.19 order is not an option:
+                        // they are bit-packed, so re-serializing them
+                        // needs a full AAC syntax parser to find each
+                        // element's bit length, and ffmpeg's layout has no
+                        // LFE element to reorder in the first place.
+                        // Emitting the PCE inside the ASC instead (legal
+                        // per 14496-3 1.6.2.1 when channelConfiguration is
+                        // 0) does not help either: Chromium's
+                        // SkipDecoderGASpecificConfig does
+                        // RCHECK(channel_config_ != 0) before it would
+                        // ever read a PCE (media/formats/mp4/aac.cc, main
+                        // as of 2026-09-12), so a config-0 ASC fails the
+                        // whole append with or without the element. Refuse
+                        // by name so the failure points at the profile
+                        // instead of casting silence.
+                        throw UnsupportedCodecException(
+                            codecName = "AAC with a ${pce.channels}-channel program_config_element " +
+                                "layout that no channel_configuration describes",
+                            isVideo = false,
+                        )
+                    }
                     payloadStart = p + headerLen + pce.lengthBytes
-                    effectiveChanConfig = aacChannelConfigForCount(pce.channels)
+                    effectiveChanConfig = implied
                     if (!aacPceLogged) {
                         aacPceLogged = true
-                        log("AAC PCE stripped: layout ${pce.channels} ch -> config $effectiveChanConfig")
+                        log("AAC PCE stripped: layout ${pce.channels} ch matches config $implied")
                     }
                 }
             }
@@ -1457,18 +1495,6 @@ private val AAC_CHANNEL_COUNTS = intArrayOf(2, 1, 2, 3, 4, 5, 6, 8)
  * count (7 channels is the only gap, since config 7 is 7.1). 0 is then
  * handed to the config sanitizer, which substitutes stereo.
  */
-private fun aacChannelConfigForCount(count: Int): Int =
-    when (count) {
-        1 -> 1
-        2 -> 2
-        3 -> 3
-        4 -> 4
-        5 -> 5
-        6 -> 6
-        8 -> 7
-        else -> 0
-    }
-
 private val ADTS_SAMPLE_RATES = intArrayOf(
     96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050,
     16_000, 12_000, 11_025, 8_000, 7_350,

@@ -758,7 +758,7 @@ class AerioCastSender @Inject constructor(
                     "[Cast] load channel=${base.title} profile=${profileId ?: "none"} " +
                         "audio=${e.codecName} mode=refused",
                 )
-                surfaceCastFailure(describeRefusal(e, receiverName))
+                surfaceCastFailure(describeRefusal(e))
                 null
             } catch (e: TimeoutCancellationException) {
                 surfaceCastFailure(
@@ -796,17 +796,16 @@ class AerioCastSender @Inject constructor(
     /**
      * The specific reason this channel cannot be cast (Logan: "cannot cast
      * this channel" was not detailed enough). Video is never re-encoded
-     * and audio is never transcoded, so both arms name the codec, and the
-     * audio arm names the receiver plus the server-side fix.
+     * and audio is never transcoded, so the video arm names the codec and
+     * the audio arm names the fix the user can make in Dispatcharr.
      */
-    private fun describeRefusal(e: UnsupportedCodecException, receiverName: String?): String {
+    private fun describeRefusal(e: UnsupportedCodecException): String {
         val codec = e.codecName.removeSuffix(" audio").removeSuffix(" video")
         if (e.isVideo) {
             return "This channel's video is $codec, which Google Cast receivers cannot play."
         }
-        val who = receiverName?.takeIf { it.isNotBlank() } ?: "this Cast receiver"
-        return "This channel's audio is $codec and $who cannot decode it. " +
-            "Dispatcharr 0.30 or newer provides an AAC output profile that AerioTV uses automatically."
+        return "This channel's audio is a surround layout the receiver cannot decode. " +
+            "Add a stereo AAC output profile named AerioTV Cast in Dispatcharr (see the README)."
     }
 
     private fun surfaceCastFailure(message: String) {

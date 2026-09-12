@@ -103,6 +103,67 @@ object CastAudioFramer {
          *  i.e. the element the stripped frame will start with is the
          *  stereo pair a channel_configuration of 2 implies. */
         val firstIsCpe: Boolean,
+        /**
+         * The element list the PCE declares, in bitstream order, as
+         * (id_syn_ele, instance tag) pairs: [ELEM_SCE], [ELEM_CPE] or
+         * [ELEM_LFE].
+         */
+        val elements: List<Pair<Int, Int>> = emptyList(),
+    ) {
+        /**
+         * The channel_configuration that describes this layout exactly, or
+         * 0 when no entry of Table 1.19 does.
+         *
+         * A channel_configuration is not just a channel count: it implies
+         * the raw_data_block's element types, their order AND their
+         * instance tags (ISO/IEC 14496-3 Table 1.19). Claiming one for a
+         * layout whose elements differ makes every frame undecodable, and
+         * that is not theoretical: ffmpeg's "5.1(side)" PCE declares
+         * CPE(0), SCE(0), SCE(1), CPE(1) with no LFE element at all, and
+         * presenting those frames as channel_configuration 6 (which
+         * implies SCE(0), CPE(0), CPE(1), LFE(0)) is rejected frame for
+         * frame by the Google TV Streamer's C2SoftAacDec
+         * ("aacDecoder_DecodeFrame decoderErr = 0x0005 / Invalid AAC
+         * stream", 4360 times in one measured session) and by both of
+         * ffmpeg's own decoders ("channel element 1.0 is not allocated",
+         * 189 of 189 frames, aac and aac_fixed alike).
+         *
+         * ffmpeg only reaches for a PCE when the layout is absent from
+         * Table 1.19 ("Using a PCE to encode channel layout"), so in
+         * practice this is 0 for everything ffmpeg emits a PCE for. It is
+         * still worth checking rather than assuming: other encoders write
+         * a PCE that merely restates a standard layout, and those strip
+         * safely.
+         */
+        val impliedChannelConfig: Int
+            get() {
+                for ((config, implied) in TABLE_1_19) {
+                    if (elements == implied) return config
+                }
+                return 0
+            }
+    }
+
+    /** id_syn_ele values for the channel elements a PCE can list. */
+    const val ELEM_SCE = 0
+    const val ELEM_CPE = 1
+    const val ELEM_LFE = 3
+
+    /**
+     * ISO/IEC 14496-3 Table 1.19: the element list each
+     * channel_configuration implies, in raw_data_block order, with the
+     * instance tags the table fixes.
+     */
+    private val TABLE_1_19: List<Pair<Int, List<Pair<Int, Int>>>> = listOf(
+        1 to listOf(ELEM_SCE to 0),
+        2 to listOf(ELEM_CPE to 0),
+        3 to listOf(ELEM_SCE to 0, ELEM_CPE to 0),
+        4 to listOf(ELEM_SCE to 0, ELEM_CPE to 0, ELEM_SCE to 1),
+        5 to listOf(ELEM_SCE to 0, ELEM_CPE to 0, ELEM_CPE to 1),
+        6 to listOf(ELEM_SCE to 0, ELEM_CPE to 0, ELEM_CPE to 1, ELEM_LFE to 0),
+        7 to listOf(
+            ELEM_SCE to 0, ELEM_CPE to 0, ELEM_CPE to 1, ELEM_CPE to 2, ELEM_LFE to 0,
+        ),
     )
 
     /**
@@ -157,6 +218,7 @@ object CastAudioFramer {
         var channels = 0
         var firstIsCpe = false
         var firstSeen = false
+        val elements = ArrayList<Pair<Int, Int>>()
         // front, side and back elements each carry is_cpe + a 4-bit tag;
         // a channel_pair_element is two channels, a single is one.
         for (group in 0 until 3) {
@@ -167,17 +229,20 @@ object CastAudioFramer {
             }
             repeat(count) {
                 val isCpe = read(1)
-                read(4) // element tag
-                if (isCpe < 0) return null
+                val tag = read(4) // element_instance_tag
+                if (isCpe < 0 || tag < 0) return null
                 if (!firstSeen) {
                     firstSeen = true
                     firstIsCpe = isCpe == 1
                 }
+                elements += (if (isCpe == 1) ELEM_CPE else ELEM_SCE) to tag
                 channels += if (isCpe == 1) 2 else 1
             }
         }
         repeat(numLfe) {
-            read(4) // lfe_element_tag: one channel each
+            val tag = read(4) // lfe_element_tag: one channel each
+            if (tag < 0) return null
+            elements += ELEM_LFE to tag
             channels += 1
         }
         repeat(numAssoc) { read(4) } // assoc_data_element_tag: no channels
@@ -197,7 +262,12 @@ object CastAudioFramer {
         // byte boundary could not be dropped with a byte-wise copy.
         if (bit and 7 != 0) return null
         if (channels <= 0) return null
-        return AacPceInfo(channels = channels, lengthBytes = bit shr 3, firstIsCpe = firstIsCpe)
+        return AacPceInfo(
+            channels = channels,
+            lengthBytes = bit shr 3,
+            firstIsCpe = firstIsCpe,
+            elements = elements,
+        )
     }
 
     private fun parseAc3Header(data: ByteArray, off: Int): EsFrameInfo? {

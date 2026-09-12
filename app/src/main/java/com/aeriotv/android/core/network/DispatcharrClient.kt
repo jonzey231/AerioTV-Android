@@ -390,8 +390,15 @@ class DispatcharrClient @Inject constructor() {
     /** The AAC output profile this server offers for casting. */
     data class AacOutputProfile(val id: Int, val name: String)
 
+    /** Name of the profile the user is asked to create for casting (see
+     *  the README): a stereo AAC profile AerioTV prefers over anything
+     *  else the server happens to offer. Matched case-insensitively and
+     *  trimmed, so "aeriotv cast " still wins. */
+    private val PREFERRED_PROFILE_NAME = "AerioTV Cast"
+
     /** Exact name Dispatcharr >= 0.30 seeds in
-     *  core/migrations/0024_outputprofile.py (locked, active). */
+     *  core/migrations/0024_outputprofile.py (locked, active), used when
+     *  the server has no [PREFERRED_PROFILE_NAME] profile. */
     private val AAC_PROFILE_NAME = "Web Player (AAC Audio)"
 
     /**
@@ -419,10 +426,12 @@ class DispatcharrClient @Inject constructor() {
     }.getOrNull()
 
     /**
-     * The server's AAC output profile for the cast path: the ACTIVE
-     * profile named exactly "Web Player (AAC Audio)", else any active
-     * profile whose parameters ask for `-c:a aac`. Null when this server
-     * offers none. The selection rule lives here so the capture points in
+     * The server's AAC output profile for the cast path, in preference
+     * order over the ACTIVE profiles: the one named "AerioTV Cast"
+     * (case-insensitive, trimmed), else the built-in "Web Player (AAC
+     * Audio)", else any profile whose command / parameters ask for both
+     * `-c:a aac` and `-ac 2` (stereo). Null when this server offers
+     * none. The selection rule lives here so the capture points in
      * PlaylistRepository cannot drift from it.
      *
      * Casting appends `?output_profile=<id>` to /proxy/ts/stream/<uuid>
@@ -434,10 +443,13 @@ class DispatcharrClient @Inject constructor() {
      */
     fun pickAacOutputProfile(profiles: List<OutputProfile>): AacOutputProfile? {
         val active = profiles.filter { it.isActive }
-        val chosen = active.firstOrNull { it.name == AAC_PROFILE_NAME }
+        fun named(name: String) = active.firstOrNull { it.name.trim().equals(name, ignoreCase = true) }
+        val chosen = named(PREFERRED_PROFILE_NAME)
+            ?: named(AAC_PROFILE_NAME)
             ?: active.firstOrNull { profile ->
-                val text = (profile.parameters?.toString() ?: "") + " " + (profile.command ?: "")
-                text.contains("-c:a aac")
+                val text = ((profile.parameters?.toString() ?: "") + " " + (profile.command ?: ""))
+                    .lowercase()
+                text.contains("-c:a aac") && text.contains("-ac 2")
             }
         return chosen?.let { AacOutputProfile(it.id, it.name) }
     }

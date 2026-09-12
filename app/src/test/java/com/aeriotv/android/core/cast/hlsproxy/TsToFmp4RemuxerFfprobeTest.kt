@@ -212,8 +212,14 @@ class TsToFmp4RemuxerFfprobeTest {
      * frames underneath the injected PCE are the untouched stereo
      * fixture's frames, so a correct strip has to reproduce them exactly.
      */
-    private fun buildPceTs(): File {
-        val out = File(workDir, "aac-pce.ts")
+    private fun buildPceTs(
+        name: String = "aac-pce",
+        front: List<Pair<Int, Int>> = listOf(1 to 0),
+        side: List<Pair<Int, Int>> = emptyList(),
+        back: List<Pair<Int, Int>> = emptyList(),
+        lfe: List<Int> = emptyList(),
+    ): File {
+        val out = File(workDir, "$name.ts")
         if (out.isFile && out.length() > 0) return out
         val plain = File(workDir, "aac-plain.aac")
         val (demuxCode, demuxLog) = run(
@@ -221,8 +227,8 @@ class TsToFmp4RemuxerFfprobeTest {
             "-map", "0:a", "-c", "copy", "-f", "adts", plain.path,
         )
         assertEquals("ffmpeg demuxed the ADTS audio: $demuxLog", 0, demuxCode)
-        val injected = File(workDir, "aac-pce.aac")
-        injected.writeBytes(injectPce(plain.readBytes()))
+        val injected = File(workDir, "$name.aac")
+        injected.writeBytes(injectPce(plain.readBytes(), front, side, back, lfe))
         val (muxCode, muxLog) = run(
             ffmpeg.path, "-y", "-v", "error",
             "-i", buildAacTs().path, "-i", injected.path,
@@ -236,7 +242,13 @@ class TsToFmp4RemuxerFfprobeTest {
      *  no side/back/LFE/assoc/cc elements, no mixdowns, no comment. That
      *  is 56 bits including the byte_align() and comment_field_bytes, so
      *  it ends byte-aligned exactly as ISO/IEC 14496-3 4.4.1.1 promises. */
-    private fun pceBytes(freqIndex: Int): ByteArray {
+    private fun pceBytes(
+        freqIndex: Int,
+        front: List<Pair<Int, Int>>,
+        side: List<Pair<Int, Int>>,
+        back: List<Pair<Int, Int>>,
+        lfe: List<Int>,
+    ): ByteArray {
         val bits = StringBuilder()
         fun put(value: Int, width: Int) {
             for (i in width - 1 downTo 0) bits.append((value shr i) and 1)
@@ -245,10 +257,12 @@ class TsToFmp4RemuxerFfprobeTest {
         put(0, 4) // element_instance_tag
         put(1, 2) // object_type (AAC-LC)
         put(freqIndex, 4)
-        put(1, 4); put(0, 4); put(0, 4) // num_front/side/back
-        put(0, 2); put(0, 3); put(0, 4) // num_lfe/assoc_data/valid_cc
+        put(front.size, 4); put(side.size, 4); put(back.size, 4) // num_front/side/back
+        put(lfe.size, 2); put(0, 3); put(0, 4) // num_lfe/assoc_data/valid_cc
         put(0, 1); put(0, 1); put(0, 1) // no mono/stereo/matrix mixdown
-        put(1, 1); put(0, 4) // front element: is_cpe = 1, tag 0
+        // Each front/side/back element is is_cpe + a 4-bit instance tag.
+        for ((isCpe, tag) in front + side + back) { put(isCpe, 1); put(tag, 4) }
+        for (tag in lfe) put(tag, 4) // lfe_element_tag
         while (bits.length % 8 != 0) bits.append(0) // byte_align()
         put(0, 8) // comment_field_bytes
         return ByteArray(bits.length / 8) { i ->
@@ -259,7 +273,13 @@ class TsToFmp4RemuxerFfprobeTest {
     /** Rewrite every ADTS frame of [adts] to channel_configuration 0 with
      *  [pceBytes] spliced in ahead of the raw_data_block, growing
      *  aac_frame_length to match. */
-    private fun injectPce(adts: ByteArray): ByteArray {
+    private fun injectPce(
+        adts: ByteArray,
+        front: List<Pair<Int, Int>>,
+        side: List<Pair<Int, Int>>,
+        back: List<Pair<Int, Int>>,
+        lfe: List<Int>,
+    ): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         var p = 0
         while (p + 7 <= adts.size) {
@@ -270,7 +290,7 @@ class TsToFmp4RemuxerFfprobeTest {
                 ((adts[p + 4].toInt() and 0xFF) shl 3) or
                 ((adts[p + 5].toInt() shr 5) and 0x07)
             if (frameLen < headerLen || p + frameLen > adts.size) break
-            val pce = pceBytes(freqIndex)
+            val pce = pceBytes(freqIndex, front, side, back, lfe)
             val newLen = frameLen + pce.size
             val header = adts.copyOfRange(p, p + headerLen)
             // channel_configuration is the low bit of byte 2 plus the top
@@ -296,6 +316,49 @@ class TsToFmp4RemuxerFfprobeTest {
      * Stripping the PCE has to leave decodable AAC behind, and the track
      * has to be declared with the layout the PCE described.
      */
+    /**
+     * The layout ffmpeg actually emits for 5.1 side surround, measured
+     * from `ffmpeg -af "aformat=channel_layouts=5.1(side)" -c:a aac`:
+     * channel_configuration 0 with a PCE declaring front CPE(0) + SCE(0),
+     * side SCE(1), back CPE(1) and NO LFE element. It adds up to six
+     * channels, but it is not what channel_configuration 6 implies
+     * (SCE(0), CPE(0), CPE(1), LFE(0)), so claiming config 6 and
+     * dropping the element makes every frame undecodable. Measured on the
+     * stripped bytes: 189 of 189 frames rejected by ffmpeg's aac AND
+     * aac_fixed decoders ("channel element 1.0 is not allocated"), and
+     * 4360 C2SoftAacDec errors ("decoderErr = 0x0005 / Invalid AAC
+     * stream") in the Google TV Streamer session of 2026-09-12.
+     *
+     * There is no lossless repair: a config-0 ASC is refused by Chromium
+     * before it would read a PCE out of the ASC
+     * (RCHECK(channel_config_ != 0) in SkipDecoderGASpecificConfig), and
+     * reordering bit-packed elements needs a full AAC syntax parser and
+     * an LFE element this layout does not have. So the stream is refused
+     * by name instead of cast as silence.
+     */
+    @Test
+    fun `aac whose pce layout matches no channel configuration is refused`() {
+        assumeTrue("ffmpeg/ffprobe present", ffmpeg.canExecute() && ffprobe.canExecute())
+        val ts = buildPceTs(
+            name = "aac-pce-51side",
+            front = listOf(1 to 0, 0 to 0),
+            side = listOf(0 to 1),
+            back = listOf(1 to 1),
+        )
+        val thrown = try {
+            remux(ts, allowAc3Passthrough = false)
+            null
+        } catch (e: UnsupportedCodecException) {
+            e
+        }
+        assertTrue("the PCE layout was refused, not stripped", thrown != null)
+        assertTrue("refused as audio", thrown!!.isVideo.not())
+        assertTrue(
+            "the message names the layout: ${thrown.message}",
+            thrown.message!!.contains("6-channel program_config_element"),
+        )
+    }
+
     @Test
     fun `aac frames carrying a program config element are stripped and still decode`() {
         assumeTrue("ffmpeg/ffprobe present", ffmpeg.canExecute() && ffprobe.canExecute())
@@ -316,7 +379,7 @@ class TsToFmp4RemuxerFfprobeTest {
         // Announced once for the session, not once per frame.
         val stripLogs = cap.logs.filter { it.startsWith("AAC PCE stripped:") }
         assertEquals("PCE strip logged exactly once: ${cap.logs}", 1, stripLogs.size)
-        assertEquals("AAC PCE stripped: layout 2 ch -> config 2", stripLogs.first())
+        assertEquals("AAC PCE stripped: layout 2 ch matches config 2", stripLogs.first())
         assertTrue(
             "the config sanitizer has nothing left to complain about: ${cap.logs}",
             cap.logs.none { it.startsWith("ADTS audio config sanitized") },

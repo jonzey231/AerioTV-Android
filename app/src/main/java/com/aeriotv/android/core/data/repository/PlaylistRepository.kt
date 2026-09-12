@@ -249,6 +249,40 @@ class PlaylistRepository @Inject constructor(
         }
     }
 
+    /**
+     * Re-resolve the cast AAC output profile against the CURRENT server
+     * list and return the id to persist when it differs from [storedId],
+     * or null when nothing should be written (lookup failed, or the
+     * stored id is still the right answer).
+     *
+     * Re-resolving (rather than "capture once when blank") is what lets a
+     * profile the user creates after setup -- an "AerioTV Cast" profile
+     * added in Dispatcharr -- get picked up on the next EPG load or
+     * launch: a stored id that is no longer in the server list, or a
+     * stored id that a newly created preferred profile now outranks, both
+     * surface as a different pick here.
+     */
+    private suspend fun reresolveCastAacProfile(
+        base: String,
+        apiKey: String,
+        storedId: Int?,
+    ): Int? {
+        val profiles = dispatcharrClient.fetchOutputProfiles(base, apiKey) ?: return null
+        val chosen = dispatcharrClient.pickAacOutputProfile(profiles)
+        val resolved = chosen?.id ?: CAST_AAC_PROFILE_NONE
+        if (resolved == storedId) return null
+        if (chosen == null) {
+            Log.i("PlaylistRepo", "[Cast] no AAC output profile on this server (was id=$storedId)")
+        } else {
+            Log.i(
+                "PlaylistRepo",
+                "[Cast] AAC output profile re-resolved id=${chosen.id} " +
+                    "name=${chosen.name} (was id=$storedId)",
+            )
+        }
+        return resolved
+    }
+
     /** Inputs for creating or updating a playlist row. */
     data class SaveRequest(
         val sourceType: SourceType,
@@ -1740,20 +1774,21 @@ class PlaylistRepository @Inject constructor(
                         Log.i("PlaylistRepo", "[EPG] server version captured $version at EPG load")
                     }
                 }
-                // Cast audio: same "capture once when the persisted value
-                // is missing" shape as the server version above, for the
-                // playlists that were added before the cast AAC profile
-                // column existed. Never refetched once a value (including
-                // the "server has none" sentinel) is stored; the refresh
-                // path keeps it current.
-                if (gated.dispatcharrCastAacProfileId == null) {
-                    val captured = runCatching {
+                // Cast audio: re-resolve against the current server list on
+                // every EPG load, not just when the persisted value is
+                // missing. A profile the user creates after setup (an
+                // "AerioTV Cast" profile added in Dispatcharr) is therefore
+                // picked up on the next EPG load or launch, as is a stored
+                // id the server no longer has. Nothing is written when the
+                // lookup fails or the stored id is still the right pick.
+                run {
+                    val resolved = runCatching {
                         dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                            captureCastAacProfile(base, key)
+                            reresolveCastAacProfile(base, key, gated.dispatcharrCastAacProfileId)
                         }
                     }.getOrNull()
-                    if (captured != null) {
-                        val updated = gated.copy(dispatcharrCastAacProfileId = captured)
+                    if (resolved != null) {
+                        val updated = gated.copy(dispatcharrCastAacProfileId = resolved)
                         runCatching { dao.update(updated) }
                             .onFailure { Log.w("PlaylistRepo", "cast profile capture persist failed", it) }
                         gated = updated
