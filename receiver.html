@@ -127,7 +127,7 @@
     // with media both behind the playhead and ahead of it. The matching
     // proxy-side number is the ready gate (9 s of media before the load is
     // sent) and the two have to move together.
-    const LIVE_START_BEHIND_SECONDS = 4;
+    const LIVE_START_BEHIND_SECONDS = 10;
 
     // EXT-X-TARGETDURATION the proxy publishes is the longest segment in the
     // window (our cuts land on keyframes, measured 3 to 6 s). Used as the
