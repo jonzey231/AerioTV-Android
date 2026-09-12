@@ -12,6 +12,9 @@ import androidx.mediarouter.media.MediaRouter
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.core.cast.hlsproxy.CastHlsProxySession
 import com.aeriotv.android.core.cast.hlsproxy.UnsupportedCodecException
+import com.aeriotv.android.core.data.db.dao.PlaylistDao
+import com.aeriotv.android.core.data.db.entity.castAacOutputProfileId
+import com.aeriotv.android.core.network.DispatcharrClient
 import com.google.android.gms.cast.Cast
 import com.google.android.gms.cast.HlsSegmentFormat
 import com.google.android.gms.cast.MediaInfo
@@ -53,6 +56,10 @@ import javax.inject.Singleton
 @Singleton
 class AerioCastSender @Inject constructor(
     private val hlsProxy: CastHlsProxySession,
+    /** Read straight from the DAO (not the repository) for one field: the
+     *  active playlist's cast AAC output profile id. */
+    private val playlistDao: PlaylistDao,
+    private val dispatcharrClient: DispatcharrClient,
 ) {
 
     /** Sender connection state, surfaced to the player chrome. */
@@ -100,6 +107,33 @@ class AerioCastSender @Inject constructor(
 
     private companion object {
         const val TAG = "AerioCast"
+
+        /**
+         * Cast receiver models known to decode AC-3 / E-AC-3 themselves.
+         * The phone does NO cast audio transcoding (Logan 2026-09-12), so
+         * an AC-3 mux either passes through to one of these or the session
+         * refuses with the message that points at Dispatcharr's AAC
+         * output profile. Default-DENY: a model nobody has verified is
+         * treated as incapable, because a silently-playing TV is a worse
+         * outcome than an honest refusal.
+         */
+        val AC3_CAPABLE_MODELS = listOf(
+            "chromecast ultra",
+            "google tv", // Chromecast with Google TV, Google TV Streamer
+            "android tv", // Cast Connect targets (Shield, Bravia, ONN, ...)
+            "shield",
+            "bravia",
+        )
+
+        /** Checked FIRST: smart displays and the audio-only / pre-Ultra
+         *  dongles decode AAC only, whatever their model string suggests. */
+        val AC3_INCAPABLE_MODELS = listOf(
+            "nest hub",
+            "nest audio",
+            "chromecast audio",
+            "google home",
+            "google nest",
+        )
     }
 
     /** Held so a session that connects AFTER the user starts watching immediately
@@ -432,13 +466,45 @@ class AerioCastSender @Inject constructor(
         _content.value = base
         proxyLoadJob?.cancel()
         proxyLoadJob = senderScope.launch {
-            val playlistUrl = try {
-                hlsProxy.startChannel(rawTsUrl, headers)
+            // Cast audio (Logan 2026-09-12): ask Dispatcharr for its
+            // built-in "Web Player (AAC Audio)" output profile for THIS
+            // request, so the proxy ingests stereo AAC and passes it
+            // through with no decoding on the phone. Local playback is
+            // untouched and keeps the AC-3 feed. Viewers without the
+            // parameter keep the original feed too: the server runs one
+            // transcode per (channel, profile), shared.
+            val profileId = runCatching {
+                playlistDao.firstActive()?.castAacOutputProfileId()
+            }.getOrNull()
+            val profiledUrl = profileId
+                ?.let { dispatcharrClient.withOutputProfile(rawTsUrl, it) }
+                ?: rawTsUrl
+            val ac3Ok = receiverDecodesAc3()
+            val receiverName = lastDeviceName ?: (state.value as? State.Connected)?.deviceName
+            val started = try {
+                hlsProxy.startChannel(
+                    rawTsUrl = profiledUrl,
+                    headers = headers,
+                    // One retry on the plain feed when the profile cannot
+                    // start: a broken server profile must not cost the
+                    // user the channel.
+                    fallbackUrl = rawTsUrl,
+                    allowAc3Passthrough = ac3Ok,
+                    onNotice = { message -> surfaceCastFailure(message) },
+                )
             } catch (e: UnsupportedCodecException) {
-                surfaceCastFailure("Can't cast this channel: ${e.codecName} needs transcoding")
+                Log.w(
+                    TAG,
+                    "[Cast] load channel=${base.title} profile=${profileId ?: "none"} " +
+                        "audio=${e.codecName} mode=refused",
+                )
+                surfaceCastFailure(describeRefusal(e, receiverName))
                 null
             } catch (e: TimeoutCancellationException) {
-                surfaceCastFailure("Can't cast this channel: the stream never started")
+                surfaceCastFailure(
+                    "Dispatcharr did not send any data for this channel within " +
+                        "${CastHlsProxySession.READY_TIMEOUT_MS / 1000} seconds.",
+                )
                 null
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Kenton 2026-08-18 (log 19:55:07): a second channel flip
@@ -454,11 +520,48 @@ class AerioCastSender @Inject constructor(
                 surfaceCastFailure("Can't cast this channel right now")
                 null
             } ?: return@launch
-            val ready = base.copy(webCastUrl = playlistUrl, webCastMime = "application/x-mpegURL")
+            Log.i(
+                TAG,
+                "[Cast] load channel=${base.title} " +
+                    "profile=${if (started.usedFallback) "none (fallback)" else profileId?.toString() ?: "none"} " +
+                    "audio=${started.audioCodec.ifBlank { "unknown" }} mode=passthrough",
+            )
+            val ready = base.copy(webCastUrl = started.playlistUrl, webCastMime = "application/x-mpegURL")
             pending = ready
             _content.value = ready
             currentSession()?.let { loadOnSession(it, ready) }
         }
+    }
+
+    /**
+     * Whether the connected Cast receiver decodes AC-3 / E-AC-3 itself.
+     * The Cast SDK exposes no per-codec capability query, so this is the
+     * device model against the known lists above (default deny). A "yes"
+     * lets the proxy pass AC-3 through untouched; a "no" makes an AC-3
+     * channel refuse with [describeRefusal] instead of playing silently.
+     */
+    private fun receiverDecodesAc3(): Boolean {
+        val model = runCatching {
+            currentSession()?.castDevice?.modelName
+        }.getOrNull()?.lowercase() ?: return false
+        if (AC3_INCAPABLE_MODELS.any { model.contains(it) }) return false
+        return AC3_CAPABLE_MODELS.any { model.contains(it) }
+    }
+
+    /**
+     * The specific reason this channel cannot be cast (Logan: "cannot cast
+     * this channel" was not detailed enough). Video is never re-encoded
+     * and audio is never transcoded, so both arms name the codec, and the
+     * audio arm names the receiver plus the server-side fix.
+     */
+    private fun describeRefusal(e: UnsupportedCodecException, receiverName: String?): String {
+        val codec = e.codecName.removeSuffix(" audio").removeSuffix(" video")
+        if (e.isVideo) {
+            return "This channel's video is $codec, which Google Cast receivers cannot play."
+        }
+        val who = receiverName?.takeIf { it.isNotBlank() } ?: "this Cast receiver"
+        return "This channel's audio is $codec and $who cannot decode it. " +
+            "Dispatcharr 0.30 or newer provides an AAC output profile that AerioTV uses automatically."
     }
 
     private fun surfaceCastFailure(message: String) {
@@ -674,6 +777,11 @@ class AerioCastSender @Inject constructor(
     }
 }
 
+// Cast audio, 2026-09-12: the per-request `?output_profile=<id>` that makes
+// Dispatcharr serve stereo AAC to the cast session is built by
+// DispatcharrClient.withOutputProfile, from the id PlaylistRepository
+// captured on /api/core/outputprofiles/. The phone transcodes nothing.
+//
 // Casting rework P1: the Dispatcharr progressive-fMP4 helper
 // (webReceiverCastUrl + CAST_WEB_OUTPUT_PROFILE_ID) that used to live here is
 // gone. The styled receiver stuttered on that URL every 10-15 s because a

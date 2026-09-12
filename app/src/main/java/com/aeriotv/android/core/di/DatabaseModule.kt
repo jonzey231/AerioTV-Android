@@ -346,6 +346,21 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * v28 -> v29: the cast AAC output profile id (Logan 2026-09-12).
+     * Casting asks Dispatcharr for its built-in "Web Player (AAC Audio)"
+     * profile per request so the phone never transcodes cast audio; the id
+     * is captured from /api/core/outputprofiles/ and persisted per
+     * playlist. NULLABLE INTEGER, so no SQL default is needed (and the
+     * entity declares none either): null means "not looked up yet", which
+     * is exactly the state every existing row should start in.
+     */
+    private val MIGRATION_28_29 = object : Migration(28, 29) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `playlists` ADD COLUMN `dispatcharrCastAacProfileId` INTEGER")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -354,7 +369,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 

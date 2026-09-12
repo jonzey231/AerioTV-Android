@@ -19,10 +19,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Request
+
+/** An ingest connection that answered with an HTTP error (the
+ *  output-profile 503 the sender retries without the parameter). */
+class IngestHttpException(val code: Int) :
+    Exception("cast ingest failed with HTTP $code")
 
 /**
  * Phone-side cast HLS proxy session (GH #33 web-receiver rework): owns
@@ -47,7 +53,7 @@ import okhttp3.Request
 class CastHlsProxySession @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
-    private companion object {
+    internal companion object {
         const val TAG = "CAST-HLS"
 
         /** loadMedia is gated on this many segments so the receiver's
@@ -56,7 +62,8 @@ class CastHlsProxySession @Inject constructor(
 
         /** Bound on the wait for [READY_SEGMENTS]: two 3 s segments plus
          *  provider join latency; past this the channel is declared
-         *  uncastable and the user told. */
+         *  uncastable and the user told (the sender quotes this number in
+         *  the "did not send any data" message, so the two never drift). */
         const val READY_TIMEOUT_MS = 25_000L
 
         /** Consecutive failed (re)connects before the ingest gives up.
@@ -89,31 +96,104 @@ class CastHlsProxySession @Inject constructor(
      *  observed by [startChannel]'s ready wait. */
     private val sessionError = MutableStateFlow<Throwable?>(null)
     @Volatile private var activeUrl: String? = null
+    /** Audio codec the remuxer reported for the current ingest, for the
+     *  sender's cast load log line. */
+    @Volatile private var audioCodec: String = ""
+
+    /**
+     * Outcome of a successful [startChannel]: the playlist URL to hand to
+     * MediaInfo.contentUrl, plus what the sender needs for its load log
+     * line and for telling the user what happened.
+     */
+    data class Started(
+        val playlistUrl: String,
+        /** "AAC", "AC-3", "E-AC-3", "none" or "" when the PMT never
+         *  arrived before the first segments (never observed in the
+         *  field, but the log line must not lie). */
+        val audioCodec: String,
+        /** True when the output-profile URL failed and the plain feed
+         *  carried the session instead. */
+        val usedFallback: Boolean,
+    )
 
     /**
      * Point the proxy at [rawTsUrl] (the SAME URL + headers the local
-     * player would use) and suspend until the playlist has
-     * [READY_SEGMENTS] segments. Returns the playlist URL to hand to
-     * MediaInfo.contentUrl.
+     * player would use, plus `?output_profile=<id>` when the sender
+     * resolved Dispatcharr's AAC profile) and suspend until the playlist
+     * has [READY_SEGMENTS] segments.
+     *
+     * [fallbackUrl] is the same channel WITHOUT the output_profile
+     * parameter. When it is non-null the first connection fails fast on
+     * an HTTP error instead of burning the ready deadline on five
+     * backoff retries, and the session is restarted ONCE on the plain
+     * feed: a broken or mis-seeded server profile must not cost the user
+     * the channel. [onNotice] carries the user-facing explanation of
+     * that fallback.
+     *
+     * [allowAc3Passthrough] is the receiver's AC-3 capability, decided by
+     * the sender from the Cast device: false refuses an AC-3 mux by name
+     * rather than sending a stream the receiver cannot decode (the phone
+     * never transcodes cast audio).
      *
      * Throws [UnsupportedCodecException] for a mux the proxy cannot
-     * serve (non-H.264 video, audio outside AAC passthrough and the
-     * AC-3/E-AC-3/MP2 transcode set, or a device with no decoder for a
-     * transcodable codec), [IllegalStateException] when the phone has no Wi-Fi LAN
-     * address (a Chromecast cannot fetch from a cellular interface), and
+     * serve (non-H.264 video, or audio that is neither AAC nor an AC-3
+     * family stream this receiver decodes), [IllegalStateException] when
+     * the phone has no Wi-Fi LAN address (a Chromecast cannot fetch from
+     * a cellular interface), and
      * kotlinx.coroutines.TimeoutCancellationException when segments never
      * materialize.
      */
     suspend fun startChannel(
         rawTsUrl: String,
         headers: Map<String, String>,
-    ): String = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        fallbackUrl: String? = null,
+        allowAc3Passthrough: Boolean = false,
+        onNotice: ((String) -> Unit)? = null,
+    ): Started = kotlinx.coroutines.withContext(Dispatchers.IO) {
         // The sender calls from its Main scope; the socket bind and the
         // address walk below are not Main-thread work.
-        startChannelBlocking(rawTsUrl, headers)
+        val retryUrl = fallbackUrl?.takeIf { it != rawTsUrl }
+        try {
+            Started(
+                playlistUrl = startChannelBlocking(rawTsUrl, headers, allowAc3Passthrough, retryUrl != null),
+                audioCodec = audioCodec,
+                usedFallback = false,
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Supersession (a later channel flip) or a real timeout; the
+            // timeout arm below is the only one that retries.
+            if (retryUrl == null || e !is TimeoutCancellationException) throw e
+            onNotice?.invoke(
+                "Dispatcharr did not send any data for this channel within " +
+                    "${READY_TIMEOUT_MS / 1000} seconds. Trying the original audio.",
+            )
+            debugLogWarn(context, TAG, "output profile sent no data in time; retrying without it")
+            Started(
+                playlistUrl = startChannelBlocking(retryUrl, headers, allowAc3Passthrough, false),
+                audioCodec = audioCodec,
+                usedFallback = true,
+            )
+        } catch (e: IngestHttpException) {
+            if (retryUrl == null) throw e
+            onNotice?.invoke(
+                "Dispatcharr could not start the AAC output profile for this " +
+                    "channel (HTTP ${e.code}). Trying the original audio.",
+            )
+            debugLogWarn(context, TAG, "output profile failed http=${e.code}; retrying without it")
+            Started(
+                playlistUrl = startChannelBlocking(retryUrl, headers, allowAc3Passthrough, false),
+                audioCodec = audioCodec,
+                usedFallback = true,
+            )
+        }
     }
 
-    private suspend fun startChannelBlocking(rawTsUrl: String, headers: Map<String, String>): String {
+    private suspend fun startChannelBlocking(
+        rawTsUrl: String,
+        headers: Map<String, String>,
+        allowAc3Passthrough: Boolean,
+        failFastOnHttpError: Boolean,
+    ): String {
         // The Chromecast fetches over the LAN; 127.0.0.1 would only ever
         // work for the phone itself.
         val lanIp = wifiLanAddress()
@@ -123,6 +203,7 @@ class CastHlsProxySession @Inject constructor(
         stopIngest()
         activeUrl = rawTsUrl
         sessionError.value = null
+        audioCodec = ""
         // Channel change keeps the ring: the receiver's cached playlist
         // still promises the old channel's last segments, so they stay
         // fetchable until the ring evicts them, and the new generation
@@ -131,14 +212,14 @@ class CastHlsProxySession @Inject constructor(
         debugLog(
             context, TAG,
             "server on $lanIp:$port; ${if (isChannelChange) "channel change" else "session start"} " +
-                "gen=$gen ingest=${sanitize(rawTsUrl)}",
+                "gen=$gen ac3Passthrough=$allowAc3Passthrough ingest=${sanitize(rawTsUrl)}",
         )
         // The proxy must outlive the app's foreground time: casting users
         // pocket the phone. See CastHlsProxyService - the FGS is the only
         // thing keeping this process (and therefore the receiver's video)
         // alive once the activity stops.
         CastHlsProxyService.start(context)
-        startIngest(rawTsUrl, headers, gen)
+        startIngest(rawTsUrl, headers, gen, allowAc3Passthrough, failFastOnHttpError)
         try {
             withTimeout(READY_TIMEOUT_MS) {
                 // First terminal error wins; otherwise wait for segments.
@@ -185,7 +266,13 @@ class CastHlsProxySession @Inject constructor(
         ingestJob = null
     }
 
-    private fun startIngest(url: String, headers: Map<String, String>, gen: Int) {
+    private fun startIngest(
+        url: String,
+        headers: Map<String, String>,
+        gen: Int,
+        allowAc3Passthrough: Boolean,
+        failFastOnHttpError: Boolean,
+    ) {
         var currentGen = gen
         ingestJob = ingestScope.launch {
             var consecutiveFailures = 0
@@ -223,7 +310,10 @@ class CastHlsProxySession @Inject constructor(
                             rollupTicks = 0
                         }
                     }
-                }, log = { msg -> debugLog(context, TAG, msg) })
+                    override fun onAudioCodec(name: String) {
+                        audioCodec = name
+                    }
+                }, log = { msg -> debugLog(context, TAG, msg) }, allowAc3Passthrough = allowAc3Passthrough)
                 try {
                     val req = Request.Builder().url(url).apply {
                         headers.forEach { (k, v) -> header(k, v) }
@@ -233,6 +323,14 @@ class CastHlsProxySession @Inject constructor(
                     call.execute().use { resp ->
                         if (!resp.isSuccessful) {
                             debugLogWarn(context, TAG, "ingest connect failed http=${resp.code}")
+                            // An output-profile URL that errors (503 when
+                            // the server cannot start the profile) must
+                            // surface NOW so the caller can retry on the
+                            // plain feed, not after 15 s of backoff.
+                            if (failFastOnHttpError && !connected) {
+                                sessionError.value = IngestHttpException(resp.code)
+                                return@launch
+                            }
                             return@use
                         }
                         val src = resp.body?.byteStream() ?: return@use
@@ -251,23 +349,21 @@ class CastHlsProxySession @Inject constructor(
                         }
                     }
                 } catch (e: UnsupportedCodecException) {
-                    // Terminal by design: video is never re-encoded and
-                    // the P2 audio transcode covers AC-3/E-AC-3/MP2 only
-                    // (and needs a device decoder). Surfaced to the
-                    // sender's ready wait as the cast failure.
+                    // Terminal by design: nothing in this path is ever
+                    // re-encoded, so audio outside AAC and the AC-3 family
+                    // this receiver decodes cannot be served. Surfaced to
+                    // the sender's ready wait as the cast failure.
                     debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
                     sessionError.value = e
                     return@launch
                 } catch (t: Throwable) {
-                    // Includes mid-stream MediaCodec failures from the
-                    // audio transcode: the reconnect below builds a fresh
-                    // remuxer and transcoder rather than killing the proxy.
+                    // Socket and parse failures alike: the reconnect
+                    // below builds a fresh remuxer rather than killing the
+                    // proxy.
                     if (currentCoroutineContext().isActive) {
                         debugLogWarn(context, TAG, "ingest stream error: $t")
                     }
                 } finally {
-                    // The transcode owns MediaCodec instances; every exit
-                    // from a connection attempt must release them.
                     remuxer.release()
                 }
                 if (!currentCoroutineContext().isActive) break

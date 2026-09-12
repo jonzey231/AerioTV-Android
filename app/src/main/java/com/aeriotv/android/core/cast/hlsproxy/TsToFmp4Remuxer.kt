@@ -1,41 +1,51 @@
 package com.aeriotv.android.core.cast.hlsproxy
 
 import java.io.ByteArrayOutputStream
-import kotlin.math.abs
 
 /**
- * A channel the cast HLS proxy cannot serve. The web/styled Cast
- * receiver is a Chromium page; MSE there can decode H.264 + AAC only,
- * and video is never re-encoded, so non-H.264 video is refused up front
- * with the codec name for the user-facing message. Audio in the
- * AC-3/E-AC-3/MP2 family transcodes on-phone (P2, [CastAudioTranscoder])
- * rather than refusing; this still fires for audio outside that family
- * and for transcodable audio on a device with no MediaCodec decoder.
+ * A channel the cast HLS proxy cannot serve, with enough detail for the
+ * user-facing refusal (see AerioCastSender.describeRefusal).
+ *
+ * The web/styled Cast receiver is a Chromium page: video is never
+ * re-encoded, so non-H.264 video is refused up front by name. Audio is
+ * never transcoded either (Logan 2026-09-12): AAC always passes through,
+ * AC-3 / E-AC-3 passes through only to a receiver that decodes it, and
+ * everything else is refused by name so the message can point at
+ * Dispatcharr's AAC output profile.
  */
-class UnsupportedCodecException(val codecName: String) :
-    Exception("Cast HLS proxy cannot serve $codecName")
+class UnsupportedCodecException(
+    val codecName: String,
+    /** True for a video-stream refusal, false for audio. */
+    val isVideo: Boolean = true,
+) : Exception("Cast HLS proxy cannot serve $codecName")
 
 /**
  * MPEG-TS to fragmented-MP4 (CMAF) remuxer for the phone-local cast HLS
  * proxy (GH #33 web-receiver rework). H.264 video is pure passthrough
- * (Annex B in PES, converted to length-prefixed avc1 samples); audio is
- * ADTS AAC passthrough (headers stripped, config carried in esds) or,
- * since P2, an on-phone AC-3/E-AC-3/MP2 to AAC-LC stereo transcode via
- * [CastAudioTranscoder] (the field lineup is mostly AC-3, which the web
- * receiver cannot decode).
+ * (Annex B in PES, converted to length-prefixed avc1 samples) and audio
+ * is pure passthrough too: ADTS AAC (headers stripped, config carried in
+ * esds) or, when [allowAc3Passthrough] is set because the receiver
+ * decodes it, AC-3 / E-AC-3 syncframes in an ac-3 / ec-3 sample entry
+ * with its dac3 / dec3 config box.
+ *
+ * No transcoding, in either direction: casting a Dispatcharr channel
+ * requests the server's built-in "Web Player (AAC Audio)" output profile
+ * (one server-side transcode shared by every client that asks for it),
+ * so the common AC-3 lineup arrives here as stereo AAC already. The old
+ * on-phone MediaCodec / FFmpeg AC-3 to AAC transcode is gone.
  *
  * Why this exists: the Styled Media Receiver stutters every 10-15 s on a
  * progressive live fMP4 URL because a progressive stream has no manifest
- * clock to pace it. Serving the SAME elementary streams as sliding-window
- * live HLS with fMP4 segments gives Chromium's HLS stack a target
- * duration and a live edge to steer by, which is the pattern VLC / Web
- * Video Cast / IPTV Extreme all ship.
+ * clock. Serving the SAME elementary streams as sliding-window live HLS
+ * with fMP4 segments gives Chromium's HLS stack a target duration and a
+ * live edge to steer by, which is the pattern VLC / Web Video Cast /
+ * IPTV Extreme all ship.
  *
  * Output contract:
  *  - [Listener.onInitSegment] fires once, as soon as SPS/PPS (and the
- *    AAC config when the PMT declares audio) have been seen: ftyp + moov
- *    with one video and (optionally) one audio track, timescale 90000 on
- *    both so PES 90 kHz timestamps ride through untouched.
+ *    audio config when the PMT declares audio) have been seen: ftyp +
+ *    moov with one video and (optionally) one audio track, timescale
+ *    90000 on both so PES 90 kHz timestamps ride through untouched.
  *  - [Listener.onMediaSegment] fires per segment: one moof + mdat pair,
  *    cut ONLY on video keyframe boundaries, targeting
  *    [targetSegmentTicks] (about 3 s). baseMediaDecodeTime is the
@@ -55,18 +65,20 @@ class TsToFmp4Remuxer(
     private val listener: Listener,
     private val targetSegmentTicks: Long = 3 * TICKS_PER_SECOND,
     private val log: (String) -> Unit = {},
-    /** Injectable for the JVM tests (MediaCodec does not exist there);
-     *  production uses the real transcoder. */
-    private val transcoderFactory: (
-        CastAudioTranscoder.SourceCodec,
-        CastAudioTranscoder.Listener,
-    ) -> CastAudioTranscoder = { source, l -> CastAudioTranscoder(source, l, log) },
+    /** Whether AC-3 / E-AC-3 may pass through to this receiver. False
+     *  (the safe default) refuses such a mux by name instead of sending
+     *  a stream the receiver can only play silently. */
+    private val allowAc3Passthrough: Boolean = false,
 ) {
     interface Listener {
         fun onInitSegment(data: ByteArray)
 
         /** [durationTicks] is the segment's video span in 90 kHz ticks. */
         fun onMediaSegment(data: ByteArray, durationTicks: Long)
+
+        /** The mux's audio codec as soon as the PMT is parsed ("AAC",
+         *  "AC-3", "E-AC-3", "none"), for the cast load log line. */
+        fun onAudioCodec(name: String) {}
     }
 
     companion object {
@@ -101,13 +113,12 @@ class TsToFmp4Remuxer(
         private val VIDEO_STREAM_TYPES = setOf(0x01, 0x02, 0x10, 0x1B, 0x24, 0x42, 0xEA)
         private val AUDIO_STREAM_TYPES = setOf(0x03, 0x04, 0x0F, 0x11, 0x81, 0x87, 0x82, 0x8A)
 
-        /** stream_types the P2 audio transcode can take instead of a
-         *  refusal. MPEG-1 audio (0x03) rides the same decoder family. */
-        private val TRANSCODE_SOURCES = mapOf(
-            0x81 to CastAudioTranscoder.SourceCodec.AC3,
-            0x87 to CastAudioTranscoder.SourceCodec.EAC3,
-            0x03 to CastAudioTranscoder.SourceCodec.MP2,
-            0x04 to CastAudioTranscoder.SourceCodec.MP2,
+        /** stream_types that can pass through as AC-3 / E-AC-3 when the
+         *  receiver decodes them. MPEG audio is deliberately absent: no
+         *  Cast receiver decodes it and the phone no longer transcodes. */
+        private val AC3_PASSTHROUGH_SOURCES = mapOf(
+            0x81 to CastAudioFramer.SourceCodec.AC3,
+            0x87 to CastAudioFramer.SourceCodec.EAC3,
         )
     }
 
@@ -138,35 +149,17 @@ class TsToFmp4Remuxer(
     private var aacChannelConfig = 0
     private var initSent = false
 
-    // ---- audio transcode (P2) ----
+    // ---- AC-3 / E-AC-3 passthrough ----
 
-    /** Non-null when the PMT's audio is AC-3/E-AC-3/MP2; null keeps the
-     *  ADTS AAC passthrough path exactly as P1 shipped it. */
-    private var audioSource: CastAudioTranscoder.SourceCodec? = null
-    private var transcoder: CastAudioTranscoder? = null
-    /** Encoder csd-0 (AudioSpecificConfig); gates the init segment the
-     *  same way the ADTS header does on the passthrough path. */
-    private var transcodeAsc: ByteArray? = null
-    private var transcodeSampleRate = 0
-    private var transcodeLogged = false
-    /** Where the source audio clock should continue; a jump past the
-     *  discontinuity threshold flushes the codecs (splice/reconnect). */
-    private var expectedSrcAudioPts = -1L
+    /** Non-null when the PMT's audio is AC-3/E-AC-3 and the receiver
+     *  decodes it; null keeps the ADTS AAC passthrough path. */
+    private var audioSource: CastAudioFramer.SourceCodec? = null
 
-    private val transcoderListener = object : CastAudioTranscoder.Listener {
-        override fun onEncoderConfig(asc: ByteArray, sampleRate: Int) {
-            transcodeAsc = asc
-            transcodeSampleRate = sampleRate
-            audioFrameTicks = 1024L * TICKS_PER_SECOND / sampleRate
-            maybeEmitInit()
-        }
-
-        override fun onAacFrame(data: ByteArray, ptsTicks: Long) {
-            // Same gate as the passthrough path: audio only queues once
-            // the init exists and video has anchored the timeline.
-            if (initSent && timelineBase >= 0) audioQueue.add(AudioSample(data, ptsTicks))
-        }
-    }
+    /** First syncframe's bitstream fields: gates the init segment the way
+     *  the ADTS header does on the AAC path, and supplies the dac3 / dec3
+     *  sample-entry config. */
+    private var ac3Config: CastAudioFramer.EsFrameInfo? = null
+    private var ac3Logged = false
 
     // ---- timeline ----
 
@@ -179,7 +172,7 @@ class TsToFmp4Remuxer(
     // ---- pending segment ----
 
     private class VideoSample(val data: ByteArray, val dts: Long, val pts: Long, val keyframe: Boolean)
-    private class AudioSample(val data: ByteArray, val pts: Long)
+    private class AudioSample(val data: ByteArray, val pts: Long, val durationTicks: Long)
 
     private val videoQueue = ArrayList<VideoSample>()
     private val audioQueue = ArrayList<AudioSample>()
@@ -298,19 +291,32 @@ class TsToFmp4Remuxer(
             throw UnsupportedCodecException(STREAM_TYPE_NAMES[videoType] ?: "video stream_type 0x%02X".format(videoType))
         }
         if (audio >= 0 && audioType != STREAM_TYPE_AAC_ADTS) {
-            // P2: the AC-3 family routes through the on-phone transcode
-            // instead of refusing (the web receiver cannot decode it and
-            // HDMI passthrough is a lottery). Everything else still
-            // refuses by name.
-            audioSource = TRANSCODE_SOURCES[audioType]
-                ?: throw UnsupportedCodecException(
-                    STREAM_TYPE_NAMES[audioType] ?: "audio stream_type 0x%02X".format(audioType),
+            // AC-3 / E-AC-3 passes through UNTOUCHED, but only to a
+            // receiver that decodes it (the sender decides from the Cast
+            // device model). Everything else refuses by name, and the
+            // message points the user at Dispatcharr's AAC output
+            // profile: the phone never transcodes cast audio.
+            val passthrough = AC3_PASSTHROUGH_SOURCES[audioType]
+            if (passthrough == null || !allowAc3Passthrough) {
+                throw UnsupportedCodecException(
+                    codecName = STREAM_TYPE_NAMES[audioType]
+                        ?: "audio stream_type 0x%02X".format(audioType),
+                    isVideo = false,
                 )
+            }
+            audioSource = passthrough
         }
         if (video < 0) throw UnsupportedCodecException("no video stream in PMT")
         videoPid = video
         audioPid = audio // may stay -1: video-only mux is fine
         pmtSeen = true
+        listener.onAudioCodec(
+            when {
+                audio < 0 -> "none"
+                audioSource != null -> audioSource!!.displayName
+                else -> "AAC"
+            },
+        )
     }
 
     // ---- PES layer ----
@@ -453,19 +459,20 @@ class TsToFmp4Remuxer(
 
     private fun onAudioPes(payload: ByteArray, pts33: Long) {
         val source = audioSource
-        if (source == null) onAdtsAudioPes(payload, pts33) else onTranscodeAudioPes(source, payload, pts33)
+        if (source == null) onAdtsAudioPes(payload, pts33) else onAc3AudioPes(source, payload, pts33)
     }
 
     /**
-     * P2 transcode path: frame the elementary stream (AC-3/E-AC-3/MP2
-     * syncframes; [adtsCarry] doubles as the generic audio carry), stamp
-     * each frame's PTS (first frame of the PES rides the PES PTS,
-     * followers step by the codec's frame duration, mirroring the ADTS
-     * path), and hand the access units to [CastAudioTranscoder]. The
-     * transcoder's AAC output flows back through [transcoderListener].
+     * AC-3 / E-AC-3 passthrough: frame the elementary stream (syncframes;
+     * [adtsCarry] doubles as the generic audio carry), stamp each frame's
+     * PTS (first frame of the PES rides the PES PTS, followers step by
+     * the frame's own duration, mirroring the ADTS path), and queue the
+     * syncframe itself as an fMP4 audio sample. Nothing is decoded or
+     * re-encoded; the ac-3 / ec-3 sample entry tells the receiver what it
+     * is holding.
      */
-    private fun onTranscodeAudioPes(
-        source: CastAudioTranscoder.SourceCodec,
+    private fun onAc3AudioPes(
+        source: CastAudioFramer.SourceCodec,
         payload: ByteArray,
         pts33: Long,
     ) {
@@ -474,8 +481,8 @@ class TsToFmp4Remuxer(
         var p = 0
         var framePts = -1L
         while (p < data.size) {
-            val info = CastAudioTranscoder.parseFrameHeader(source, data, p)
-            if (info == null) {
+            val info = CastAudioFramer.parseFrameHeader(source, data, p)
+            if (info == null || info.frameLength <= 0) {
                 if (data.size - p < 8) break // possibly a truncated header: carry it
                 p++ // scan to syncword (junk between frames happens on splices)
                 continue
@@ -484,29 +491,32 @@ class TsToFmp4Remuxer(
             if (next > data.size) break // partial frame: carry
             // Reject a false sync inside frame data: the next frame must
             // start on a syncword when it is already in the buffer.
-            if (next + 1 < data.size && !CastAudioTranscoder.looksLikeSync(source, data, next)) {
+            if (next + 1 < data.size && !CastAudioFramer.looksLikeSync(source, data, next)) {
                 p++
                 continue
             }
-            val t = transcoder ?: transcoderFactory(source, transcoderListener).also { transcoder = it }
-            if (!transcodeLogged) {
-                log("audio transcode active: ${source.displayName} ${info.channels}ch ${info.sampleRate}Hz -> AAC-LC stereo")
-                transcodeLogged = true
+            if (ac3Config == null) {
+                ac3Config = info
+                audioFrameTicks = info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
+                maybeEmitInit()
             }
-            if (framePts < 0) {
-                framePts = audioClock.unwrap(pts33)
-                if (expectedSrcAudioPts >= 0 &&
-                    abs(framePts - expectedSrcAudioPts) > CastAudioTranscoder.DISCONTINUITY_TICKS
-                ) {
-                    // Splice/reconnect: flush both codecs; the PTS mapper
-                    // re-anchors on the next output stamp.
-                    log("audio pts discontinuity (${(framePts - expectedSrcAudioPts) / 90}ms), flushing transcode codecs")
-                    t.flush()
+            if (!ac3Logged) {
+                log(
+                    "audio passthrough: ${source.displayName} ${info.channels}ch " +
+                        "${info.sampleRate}Hz ${info.bitrateKbps}kbps (no transcode)",
+                )
+                ac3Logged = true
+            }
+            if (initSent) {
+                if (framePts < 0) framePts = audioClock.unwrap(pts33)
+                val durationTicks = info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
+                if (timelineBase >= 0) {
+                    audioQueue.add(
+                        AudioSample(data.copyOfRange(p, next), framePts, durationTicks),
+                    )
                 }
+                framePts += durationTicks
             }
-            t.feed(data, p, info.frameLength, framePts, info)
-            framePts += info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
-            expectedSrcAudioPts = framePts
             p = next
         }
         if (p < data.size) adtsCarry = data.copyOfRange(p, data.size)
@@ -545,7 +555,13 @@ class TsToFmp4Remuxer(
                 // every PES keeps drift bounded to one PES worth of frames.
                 if (framePts < 0) framePts = audioClock.unwrap(pts33)
                 if (timelineBase >= 0) {
-                    audioQueue.add(AudioSample(data.copyOfRange(p + headerLen, p + frameLen), framePts))
+                    audioQueue.add(
+                        AudioSample(
+                            data.copyOfRange(p + headerLen, p + frameLen),
+                            framePts,
+                            audioFrameTicks,
+                        ),
+                    )
                 }
                 framePts += audioFrameTicks
             }
@@ -559,12 +575,11 @@ class TsToFmp4Remuxer(
     private fun maybeEmitInit() {
         if (initSent) return
         if (!pmtSeen || sps == null || pps == null) return
-        // Audio config gate: ADTS header on the passthrough path, the
-        // encoder's csd-0 on the transcode path (which means the first
-        // audio has already been through both codecs).
+        // Audio config gate: the first ADTS header on the AAC path, the
+        // first syncframe header on the AC-3 / E-AC-3 path.
         val audioReady = when {
             audioPid < 0 -> true
-            audioSource != null -> transcodeAsc != null
+            audioSource != null -> ac3Config != null
             else -> aacFreqIndex >= 0
         }
         if (!audioReady) return
@@ -572,12 +587,11 @@ class TsToFmp4Remuxer(
         initSent = true
     }
 
-    /** Release the transcode codecs (no-op for passthrough muxes). The
-     *  session calls this once per ingest connection. */
-    fun release() {
-        transcoder?.release()
-        transcoder = null
-    }
+    /** Per-connection teardown hook the session calls once per ingest
+     *  connection. Nothing to release since the audio transcode went
+     *  away (everything here is plain Kotlin state, dropped with the
+     *  instance); kept so the ingest loop's contract is unchanged. */
+    fun release() = Unit
 
     private fun finalizeSegment(cutDts: Long) {
         if (videoQueue.isEmpty()) return
@@ -708,12 +722,15 @@ class TsToFmp4Remuxer(
     }
 
     private fun audioTrun(audio: List<AudioSample>, dataOffset: Int): ByteArray {
-        // Fixed per-frame duration; flags: data-offset | duration | size.
+        // flags: data-offset | sample-duration | sample-size.
         val body = ByteArrayOutputStream(16 + audio.size * 8)
         body.write(u32(audio.size))
         body.write(u32(dataOffset))
         for (a in audio) {
-            body.write(u32(audioFrameTicks.toInt()))
+            // Per-sample duration: AAC is a fixed 1024-sample frame but
+            // E-AC-3 frames carry 1 to 6 blocks, so the sample's own
+            // duration is the only coherent value for tfdt continuity.
+            body.write(u32(a.durationTicks.coerceAtLeast(1L).toInt()))
             body.write(u32(a.data.size))
         }
         return fullBox("trun", 0, 0x000301, body.toByteArray())
@@ -776,25 +793,28 @@ class TsToFmp4Remuxer(
     }
 
     private fun audioTrak(): ByteArray {
-        // Transcode path: the encoder's own csd-0 is the asc, and the
-        // track is what the encoder emits (AAC-LC stereo), not what the
-        // source mux carried.
-        val transAsc = transcodeAsc
-        val sampleRate: Int
-        val channels: Int
-        val asc: ByteArray
-        if (transAsc != null) {
-            asc = transAsc
-            sampleRate = transcodeSampleRate
-            channels = 2
-        } else {
-            sampleRate = ADTS_SAMPLE_RATES.getOrElse(aacFreqIndex) { 48_000 }
-            channels = aacChannelConfig.coerceAtLeast(1)
-            asc = byteArrayOf(
-                ((aacObjectType shl 3) or (aacFreqIndex shr 1)).toByte(),
-                (((aacFreqIndex and 1) shl 7) or (aacChannelConfig shl 3)).toByte(),
-            )
-        }
+        val ac3 = ac3Config
+        val sampleEntry = if (ac3 != null) ac3SampleEntry(ac3) else aacSampleEntry()
+        val volume = 0x0100
+        return trak(
+            trackId = AUDIO_TRACK_ID,
+            width = 0, height = 0,
+            volume = volume,
+            handler = "soun", handlerName = "SoundHandler",
+            mediaHeader = fullBox("smhd", 0, 0, u16(0), u16(0)),
+            sampleEntry = sampleEntry,
+        )
+    }
+
+    /** mp4a + esds for ADTS AAC passthrough (config from the first ADTS
+     *  header; the frames themselves go in raw, headers stripped). */
+    private fun aacSampleEntry(): ByteArray {
+        val sampleRate = ADTS_SAMPLE_RATES.getOrElse(aacFreqIndex) { 48_000 }
+        val channels = aacChannelConfig.coerceAtLeast(1)
+        val asc = byteArrayOf(
+            ((aacObjectType shl 3) or (aacFreqIndex shr 1)).toByte(),
+            (((aacFreqIndex and 1) shl 7) or (aacChannelConfig shl 3)).toByte(),
+        )
         val esds = run {
             // ES_Descriptor(3) > DecoderConfig(4) > DecoderSpecificInfo(5) + SLConfig(6).
             val dsi = byteArrayOf(0x05, asc.size.toByte()) + asc
@@ -818,24 +838,104 @@ class TsToFmp4Remuxer(
             }.toByteArray()
             fullBox("esds", 0, 0, es)
         }
-        val mp4a = run {
-            val body = ByteArrayOutputStream(64)
-            body.write(ByteArray(6)); body.write(u16(1)) // reserved, data_reference_index
-            body.write(ByteArray(8)) // reserved
-            body.write(u16(channels)); body.write(u16(16)) // channels, samplesize
-            body.write(u32(0)) // pre_defined/reserved
-            body.write(u32(sampleRate shl 16)) // 16.16 sample rate
-            body.write(esds)
-            box("mp4a", body.toByteArray())
+        return box("mp4a", audioSampleEntryBody(channels, sampleRate, esds))
+    }
+
+    /**
+     * ac-3 / ec-3 sample entry for AC-3 / E-AC-3 passthrough, carrying the
+     * AC3SpecificBox (dac3) or EC3SpecificBox (dec3) built from the first
+     * syncframe's bitstream fields (ETSI TS 102 366 Annex F). Without this
+     * box Chromium's MSE rejects the init segment outright, which is the
+     * whole reason the old code transcoded instead of passing through.
+     */
+    private fun ac3SampleEntry(info: CastAudioFramer.EsFrameInfo): ByteArray {
+        val isEac3 = audioSource == CastAudioFramer.SourceCodec.EAC3
+        val config = if (isEac3) dec3Box(info) else dac3Box(info)
+        val type = if (isEac3) "ec-3" else "ac-3"
+        return box(type, audioSampleEntryBody(info.channels, info.sampleRate, config))
+    }
+
+    /** The 28-byte AudioSampleEntry preamble every audio sample entry
+     *  shares, followed by the codec configuration box. */
+    private fun audioSampleEntryBody(channels: Int, sampleRate: Int, configBox: ByteArray): ByteArray {
+        val body = ByteArrayOutputStream(64)
+        body.write(ByteArray(6)); body.write(u16(1)) // reserved, data_reference_index
+        body.write(ByteArray(8)) // reserved
+        body.write(u16(channels.coerceIn(1, 8))); body.write(u16(16)) // channels, samplesize
+        body.write(u32(0)) // pre_defined/reserved
+        body.write(u32(sampleRate shl 16)) // 16.16 sample rate
+        body.write(configBox)
+        return body.toByteArray()
+    }
+
+    /** dac3: fscod(2) bsid(5) bsmod(3) acmod(3) lfeon(1) bit_rate_code(5)
+     *  reserved(5) = exactly three bytes. */
+    private fun dac3Box(info: CastAudioFramer.EsFrameInfo): ByteArray {
+        val w = BitWriter()
+        w.write(info.fscod, 2)
+        w.write(info.bsid, 5)
+        w.write(info.bsmod, 3)
+        w.write(info.acmod, 3)
+        w.write(info.lfeon, 1)
+        w.write(ac3BitRateCode(info.bitrateKbps), 5)
+        w.write(0, 5) // reserved
+        return box("dac3", w.bytes())
+    }
+
+    /** dec3 for ONE independent substream with no dependent substreams:
+     *  data_rate(13) num_ind_sub(3) then fscod(2) bsid(5) reserved(1)
+     *  asvc(1) bsmod(3) acmod(3) lfeon(1) reserved(3) num_dep_sub(4)
+     *  reserved(1) = five bytes. A multi-substream Atmos feed is still
+     *  described by its first substream, which is the decodable core. */
+    private fun dec3Box(info: CastAudioFramer.EsFrameInfo): ByteArray {
+        val w = BitWriter()
+        w.write(info.bitrateKbps.coerceIn(0, 8191), 13) // data_rate, kbit/s
+        w.write(0, 3) // num_ind_sub - 1
+        w.write(info.fscod, 2)
+        w.write(info.bsid, 5)
+        w.write(0, 1) // reserved
+        w.write(0, 1) // asvc
+        w.write(info.bsmod, 3)
+        w.write(info.acmod, 3)
+        w.write(info.lfeon, 1)
+        w.write(0, 3) // reserved
+        w.write(0, 4) // num_dep_sub
+        w.write(0, 1) // reserved (no chan_loc without dependent substreams)
+        return box("dec3", w.bytes())
+    }
+
+    /** Nearest A/52 bit_rate_code for [kbps] (table 5.18 order). */
+    private fun ac3BitRateCode(kbps: Int): Int {
+        val index = AC3_BIT_RATE_CODES.indexOfFirst { it >= kbps }
+        return if (index < 0) AC3_BIT_RATE_CODES.size - 1 else index
+    }
+
+    /** MSB-first bit packer for the tiny codec-config boxes above. */
+    private class BitWriter {
+        private val out = ByteArrayOutputStream(8)
+        private var current = 0
+        private var bitsUsed = 0
+
+        fun write(value: Int, bits: Int) {
+            for (i in bits - 1 downTo 0) {
+                current = (current shl 1) or ((value shr i) and 1)
+                bitsUsed++
+                if (bitsUsed == 8) {
+                    out.write(current)
+                    current = 0
+                    bitsUsed = 0
+                }
+            }
         }
-        return trak(
-            trackId = AUDIO_TRACK_ID,
-            width = 0, height = 0,
-            volume = 0x0100,
-            handler = "soun", handlerName = "SoundHandler",
-            mediaHeader = fullBox("smhd", 0, 0, u16(0), u16(0)),
-            sampleEntry = mp4a,
-        )
+
+        fun bytes(): ByteArray {
+            if (bitsUsed > 0) {
+                out.write(current shl (8 - bitsUsed))
+                current = 0
+                bitsUsed = 0
+            }
+            return out.toByteArray()
+        }
     }
 
     private fun trak(
@@ -1027,6 +1127,11 @@ class TsToFmp4Remuxer(
         }
     }
 }
+
+/** A/52 table 5.18 bit rates in kbit/s, indexed by bit_rate_code. */
+private val AC3_BIT_RATE_CODES = intArrayOf(
+    32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640,
+)
 
 private val ADTS_SAMPLE_RATES = intArrayOf(
     96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050,

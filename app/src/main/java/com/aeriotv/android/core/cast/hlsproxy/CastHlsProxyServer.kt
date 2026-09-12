@@ -234,12 +234,36 @@ class CastHlsProxyServer(
      *  Shaka 4.9.2 debug with the symbolized stack). NONE disables the
      *  detection entirely (HlsParser.getClosedCaptions_). */
     internal fun masterPlaylistText(): String {
-        val codecs = synchronized(lock) {
-            inits[generation]?.let { avcCodecString(it) }
-        } ?: "avc1.640028"
+        val init = synchronized(lock) { inits[generation] }
+        val videoCodec = init?.let { avcCodecString(it) } ?: "avc1.640028"
+        // The audio codec must be declared HONESTLY: with AC-3 / E-AC-3
+        // passthrough (no phone transcode since 2026-09-12) a hardcoded
+        // mp4a.40.2 made the receiver pick the AAC decoder for an ac-3
+        // sample entry. Read it back from the init segment's own sample
+        // entry so the two can never disagree.
+        val audioCodec = init?.let { audioCodecString(it) } ?: "mp4a.40.2"
         return "#EXTM3U\n" +
-            "#EXT-X-STREAM-INF:BANDWIDTH=12000000,CODECS=\"$codecs,mp4a.40.2\",CLOSED-CAPTIONS=NONE\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=12000000,CODECS=\"$videoCodec,$audioCodec\",CLOSED-CAPTIONS=NONE\n" +
             "live.m3u8\n"
+    }
+
+    /** RFC 6381 audio codec string from the init segment's audio sample
+     *  entry: ac-3 / ec-3 for the passthrough paths, mp4a.40.2 for AAC-LC
+     *  (the only AAC profile an ADTS IPTV mux carries in practice). */
+    private fun audioCodecString(init: ByteArray): String? = when {
+        containsBoxType(init, "ac-3") -> "ac-3"
+        containsBoxType(init, "ec-3") -> "ec-3"
+        containsBoxType(init, "mp4a") -> "mp4a.40.2"
+        else -> null
+    }
+
+    private fun containsBoxType(data: ByteArray, type: String): Boolean {
+        val t = type.toByteArray(Charsets.US_ASCII)
+        outer@ for (i in 0..data.size - 4) {
+            for (j in 0 until 4) if (data[i + j] != t[j]) continue@outer
+            return true
+        }
+        return false
     }
 
     /** avc1.PPCCLL from the avcC box inside an init segment (profile,

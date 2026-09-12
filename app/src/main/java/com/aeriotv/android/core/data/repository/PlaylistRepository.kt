@@ -8,6 +8,7 @@ import com.aeriotv.android.core.data.db.dao.ChannelSnapshotDao
 import com.aeriotv.android.core.data.db.dao.EpgChunkCoverageDao
 import com.aeriotv.android.core.data.db.dao.EpgProgrammeDao
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
+import com.aeriotv.android.core.data.db.entity.CAST_AAC_PROFILE_NONE
 import com.aeriotv.android.core.data.db.entity.ChannelSnapshotEntity
 import com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
@@ -213,6 +214,24 @@ class PlaylistRepository @Inject constructor(
         return dispatcharrClient.streamUrl(base, channelUuid)
     }
 
+    /**
+     * Look up the server's AAC output profile for casting and log what was
+     * found. Returns the id to persist, [CAST_AAC_PROFILE_NONE] when the
+     * server has no AAC profile, or null when the lookup itself failed (so
+     * the caller keeps whatever is already stored and tries again later).
+     */
+    private suspend fun captureCastAacProfile(base: String, apiKey: String): Int? {
+        val profiles = dispatcharrClient.fetchOutputProfiles(base, apiKey) ?: return null
+        val chosen = dispatcharrClient.pickAacOutputProfile(profiles)
+        return if (chosen == null) {
+            Log.i("PlaylistRepo", "[Cast] no AAC output profile on this server")
+            CAST_AAC_PROFILE_NONE
+        } else {
+            Log.i("PlaylistRepo", "[Cast] AAC output profile id=${chosen.id} name=${chosen.name}")
+            chosen.id
+        }
+    }
+
     /** Inputs for creating or updating a playlist row. */
     data class SaveRequest(
         val sourceType: SourceType,
@@ -349,6 +368,12 @@ class PlaylistRepository @Inject constructor(
             resolvedApiKey?.takeIf { it.isNotBlank() }
                 ?.let { dispatcharrClient.fetchServerVersion(normalisedBase, it) }
         } else null
+        // Cast audio: which output profile casting should ask for, so the
+        // phone never transcodes cast audio (Logan 2026-09-12).
+        val aacProfile = if (isDispatcharr) {
+            resolvedApiKey?.takeIf { it.isNotBlank() }
+                ?.let { captureCastAacProfile(normalisedBase, it) }
+        } else null
 
         val channels = try {
             fetchChannelsFor(
@@ -403,6 +428,7 @@ class PlaylistRepository @Inject constructor(
             dispatcharrVodMoviesEnabled = perms?.vodMoviesEnabled ?: true,
             dispatcharrVodSeriesEnabled = perms?.vodSeriesEnabled ?: true,
             dispatcharrServerVersion = serverVersion ?: "",
+            dispatcharrCastAacProfileId = aacProfile,
             vodEnabled = request.vodEnabled,
             epgRetentionDays = sanitizeGuideDays(request.epgRetentionDays),
         )
@@ -481,6 +507,13 @@ class PlaylistRepository @Inject constructor(
             playlist.apiKey?.takeIf { it.isNotBlank() }
                 ?.let { dispatcharrClient.fetchServerVersion(base, it) }
         } else null
+        // Cast audio: re-read the AAC output profile on every refresh, so a
+        // profile added (or removed) server-side applies without an
+        // Edit-Playlist Save. Null keeps the persisted value.
+        val liveAacProfile = if (liveUserLevel != null) {
+            playlist.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { captureCastAacProfile(base, it) }
+        } else null
         val channels = when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass ->
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
@@ -512,6 +545,8 @@ class PlaylistRepository @Inject constructor(
             dispatcharrVodMoviesEnabled = livePerms?.vodMoviesEnabled ?: playlist.dispatcharrVodMoviesEnabled,
             dispatcharrVodSeriesEnabled = livePerms?.vodSeriesEnabled ?: playlist.dispatcharrVodSeriesEnabled,
             dispatcharrServerVersion = liveVersion ?: playlist.dispatcharrServerVersion,
+            dispatcharrCastAacProfileId =
+                liveAacProfile ?: playlist.dispatcharrCastAacProfileId,
         )
         dao.update(refreshed)
         // Persist the freshly-fetched channels so the next cold launch repaints
@@ -1327,6 +1362,25 @@ class PlaylistRepository @Inject constructor(
                             .onFailure { Log.w("PlaylistRepo", "version capture persist failed", it) }
                         gated = updated
                         Log.i("PlaylistRepo", "[EPG] server version captured $version at EPG load")
+                    }
+                }
+                // Cast audio: same "capture once when the persisted value
+                // is missing" shape as the server version above, for the
+                // playlists that were added before the cast AAC profile
+                // column existed. Never refetched once a value (including
+                // the "server has none" sentinel) is stored; the refresh
+                // path keeps it current.
+                if (gated.dispatcharrCastAacProfileId == null) {
+                    val captured = runCatching {
+                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                            captureCastAacProfile(base, key)
+                        }
+                    }.getOrNull()
+                    if (captured != null) {
+                        val updated = gated.copy(dispatcharrCastAacProfileId = captured)
+                        runCatching { dao.update(updated) }
+                            .onFailure { Log.w("PlaylistRepo", "cast profile capture persist failed", it) }
+                        gated = updated
                     }
                 }
                 if (gated.dispatcharrVersionAtLeast("0.30.0")) {

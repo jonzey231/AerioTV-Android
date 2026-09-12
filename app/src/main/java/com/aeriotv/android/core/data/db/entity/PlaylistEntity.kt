@@ -168,13 +168,46 @@ data class PlaylistEntity(
      */
     @ColumnInfo(defaultValue = "")
     val dispatcharrAuthMode: String = "",
+
+    /**
+     * Cast audio (Logan 2026-09-12): the id of this server's built-in AAC
+     * output profile ("Web Player (AAC Audio)", seeded locked+active by
+     * Dispatcharr >= 0.30), captured from /api/core/outputprofiles/ at add,
+     * on every refresh, and once at EPG load when still unknown.
+     *
+     * Casting appends `?output_profile=<id>` to /proxy/ts/stream/<uuid> so
+     * the cast session receives stereo AAC and the phone passes it through
+     * with NO decoding or transcoding of its own, while local playback
+     * keeps the original AC-3 feed. THREE states, which is why it is
+     * nullable:
+     *   null = never looked up (capture it)
+     *   [CAST_AAC_PROFILE_NONE] (-1) = looked up, this server has none
+     *   > 0 = the profile id to request
+     * Non-Dispatcharr sources leave it null and never use it. Added in
+     * DB v29 (preserving migration; a nullable INTEGER column needs no
+     * SQL default, like [dispatcharrProfileId]).
+     */
+    val dispatcharrCastAacProfileId: Int? = null,
 )
+
+/** Stored sentinel for "this server has no AAC output profile", so the
+ *  lookup is not retried on every EPG load. */
+const val CAST_AAC_PROFILE_NONE: Int = -1
 // Credential columns (apiKey, username, password) are encrypted at rest via
 // CredentialCipher (AndroidKeystore AES-256-GCM), applied transparently by the
 // EncryptingPlaylistDao decorator that every consumer is wired to (audit task
 // #53). Stored values are ciphertext; reads return cleartext, so these columns
 // stay `String?` and call sites are unchanged. A one-time pass in
 // AerioTVApplication re-encrypts rows written by older (plaintext) builds.
+
+/**
+ * The output profile id to request when casting a live channel from this
+ * playlist, or null when there is none to request (never looked up, a
+ * server without an AAC profile, or a non-Dispatcharr source).
+ */
+fun PlaylistEntity.castAacOutputProfileId(): Int? =
+    if (!isDispatcharrDirectConnect()) null
+    else dispatcharrCastAacProfileId?.takeIf { it > 0 }
 
 /**
  * True when this playlist is a Dispatcharr admin account (user_level >= 10),
