@@ -45,6 +45,11 @@ class PlaybackTracer {
     private var playUrlAtMs = 0L
     private var openAtMs = 0L
     @Volatile private var firstByteAtMs = 0L
+    /** When the media connection's HTTP response landed (0 until it does).
+     *  Feeds the loading detail line, which must separate "still connecting"
+     *  from "connected, no bytes yet" (Apple parity: TSHLSRemuxer
+     *  ingestConnectedAt, commit 056feb2). */
+    @Volatile private var connectedAtMs = 0L
     private var readyAtMs = 0L
     private var firstFrameAtMs = 0L
     private var formatLogged = false
@@ -110,6 +115,7 @@ class PlaybackTracer {
         playUrlAtMs = n
         openAtMs = 0L
         firstByteAtMs = 0L
+        connectedAtMs = 0L
         readyAtMs = 0L
         firstFrameAtMs = 0L
         formatLogged = false
@@ -141,6 +147,33 @@ class PlaybackTracer {
         Log.i(TAG, "[TUNE] open +${sincePress(openAtMs)}ms")
     }
 
+    /**
+     * The upstream's HTTP response has landed (the wrapped DataSource's open()
+     * returned). Called from loader threads.
+     */
+    fun onOpened() {
+        if (connectedAtMs == 0L) connectedAtMs = now()
+    }
+
+    /** One poll of the byte source behind a loading spinner. */
+    data class LoadingSnapshot(
+        val connected: Boolean,
+        /** elapsedRealtime stamp of the response, 0 when not connected. */
+        val connectedAtMs: Long,
+        val bytes: Long,
+    )
+
+    /** Thread-safe snapshot for the loading detail line. */
+    fun loadingSnapshot(): LoadingSnapshot {
+        val bytes = synchronized(feedLock) { feedBytesTotal }
+        val at = connectedAtMs
+        return LoadingSnapshot(connected = at != 0L || bytes > 0L, connectedAtMs = at, bytes = bytes)
+    }
+
+    /** Fired once per tune, on a loader thread, when the FIRST byte arrives.
+     *  [LiveStreamFailover] cancels its first-byte deadline against it. */
+    @Volatile var onFirstByte: (() -> Unit)? = null
+
     /** Byte accounting. Called from loader threads (DataSource wrapper) and
      *  from onLoadCompleted for chunk-based sources. */
     fun onBytes(count: Long) {
@@ -148,7 +181,9 @@ class PlaybackTracer {
         val n = now()
         if (firstByteAtMs == 0L) {
             firstByteAtMs = n
+            if (connectedAtMs == 0L) connectedAtMs = n
             Log.i(TAG, "[TUNE] firstByte +${sincePress(n)}ms")
+            onFirstByte?.invoke()
         }
         synchronized(feedLock) {
             advanceFeedBuckets(n)
@@ -457,7 +492,12 @@ class PlaybackTracer {
         private val upstream: DataSource,
         private val tracer: PlaybackTracer,
     ) : DataSource {
-        override fun open(dataSpec: DataSpec): Long = upstream.open(dataSpec)
+        override fun open(dataSpec: DataSpec): Long {
+            val length = upstream.open(dataSpec)
+            // open() returns once the response headers are in: "connected".
+            tracer.onOpened()
+            return length
+        }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
             val n = upstream.read(buffer, offset, length)

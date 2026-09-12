@@ -96,6 +96,17 @@ class AerioExoPlayerHolder @Inject constructor(
     val tracer = PlaybackTracer()
 
     /**
+     * Client-driven no-first-byte stream failover for live tunes (Apple parity
+     * commit dc52f2a). Owned here, never driven from a composable; PlayerScreen
+     * only supplies [LiveStreamFailover.Hooks] for the Dispatcharr calls.
+     */
+    val liveFailover = LiveStreamFailover()
+
+    /** Live loading status published by the failover walk ("Trying another
+     *  stream...", "Reconnecting...", "Channel unavailable. Retrying..."). */
+    val liveStatusText: StateFlow<String?> get() = liveFailover.statusText
+
+    /**
      * Stamp the REAL key event that starts a live channel change so
      * press->firstFrame is measured end to end (D-pad zap, number entry,
      * channel-list / recents pick, the guide's select press).
@@ -210,6 +221,13 @@ class AerioExoPlayerHolder @Inject constructor(
         // Learned live start buffer: the tracer reports the feed shape at every
         // stall, this decides whether the feed was bursty-but-real-time.
         tracer.onStall = { snapshot -> learnStartBuffer(snapshot) }
+        // No-first-byte failover: the tracer already knows when the first byte
+        // lands, so the deadline is cancelled from there rather than by a second
+        // counter.
+        tracer.onFirstByte = { liveFailover.noteFirstByte() }
+        // Every member stream answered and none delivered: hand over to the
+        // standing Task #150 retry / unavailable ladder.
+        liveFailover.onExhausted = { markStreamUnavailable() }
     }
 
     /**
@@ -1508,6 +1526,14 @@ class AerioExoPlayerHolder @Inject constructor(
         p.setMediaSource(source)
         p.prepare()
         p.playWhenReady = true
+        // Arm the 12 s first-byte deadline for live only. A caller-supplied
+        // channelId IS a user-initiated tune (internal re-primes pass null and
+        // keep the walk's tried set).
+        if (kind == "live") {
+            liveFailover.onLiveTune(effectiveChannelId, title, userInitiated = channelId != null)
+        } else {
+            liveFailover.disarm()
+        }
     }
 
     private fun httpDataSourceFactory(isLive: Boolean = false): DataSource.Factory {
@@ -1670,6 +1696,9 @@ class AerioExoPlayerHolder @Inject constructor(
         hasReachedPlaybackRestart = false
         lastPlayUrl = null
         isCatchup = false
+        // Disarm the first-byte deadline with the pipeline but KEEP the tried
+        // set: an internal retry is the same tune on the same channel.
+        liveFailover.disarm()
         p.stop()
         p.clearMediaItems()
     }
@@ -1726,6 +1755,8 @@ class AerioExoPlayerHolder @Inject constructor(
         _playerInstance.value = null
         currentChannelId = null
         currentChannelIdForRebuild = null
+        // Full teardown clears the stream-failover walk.
+        liveFailover.resetWalk()
         watchdogJob?.cancel()
         watchdogJob = null
         lastPlayUrl = null

@@ -1543,6 +1543,14 @@ fun PlayerScreen(
         // escalating 5s->30s delay, and offer a manual Retry button. D-pad
         // up/down still bubbles to the root key handler so channel flips keep
         // working (a flip clears the flag and resets the escalation).
+        // Client-driven no-first-byte stream failover (wires the holder's
+        // LiveStreamFailover hooks) plus the loading detail line under its
+        // status. One line here: this composable is register-pressure sensitive,
+        // so the whole feature lives in LoadingDetailLine.kt.
+        LiveFailoverStatusOverlay(
+            exoHolder, isTvForm, channels,
+            onLoadChannelStreams, onSwitchChannelStream, onLoadCurrentStreamId,
+        )
         if (streamUnavailable && isCatchupMode) {
             CatchupUnavailableCard(
                 exoHolder = exoHolder,

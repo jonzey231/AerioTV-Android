@@ -1003,6 +1003,11 @@ fun VODPlayerScreen(
                 true
             },
     ) {
+        // Loading detail line ("Connecting to server" / "Waiting for stream
+        // data" / "Received X MB") under the spinner text, after 3 s. Kept in
+        // LoadingDetailLine.kt and called with ONE line: this composable is at
+        // the ART verifier's register limit.
+        VodLoadingDetail(loadingMessage, streamUrl, exoPlayer, tracer, isTvForm)
         // Don't mount MPV until the proxy redirect has been resolved into a
         // session URL - otherwise libmpv hits the 301 path that strips our
         // auth headers and fails with "Failed to open".
