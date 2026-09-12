@@ -40,6 +40,8 @@ class PlaybackTracer {
     // ---- current tune timeline (all SystemClock.elapsedRealtime stamps) ----
     @Volatile private var pressAtMs = 0L
     @Volatile private var channelName: String = "?"
+    /** Kind of the current tune (live / catchup / vod / dvr), from [urlKind]. */
+    @Volatile private var tuneKind: String = "live"
     private var playUrlAtMs = 0L
     private var openAtMs = 0L
     @Volatile private var firstByteAtMs = 0L
@@ -70,6 +72,11 @@ class PlaybackTracer {
     private var lastByteAtMs = 0L
     /** (stamp, gapMs) pairs, pruned to the rolling window by [worstGapMs]. */
     private val feedGaps = ArrayDeque<Pair<Long, Long>>()
+    /** Bytes delivered on this tune, and the total as of the first frame, so the
+     *  30 s window can be compared against the tune's own running average
+     *  (the "is this feed still at real time" test the hold-back learner uses). */
+    private var feedBytesTotal = 0L
+    private var feedBytesAtFirstFrame = 0L
     private var lastGapWarnAtMs = 0L
 
     private fun now() = SystemClock.elapsedRealtime()
@@ -99,6 +106,7 @@ class PlaybackTracer {
         // reload, a follow-poller re-prime); start the clock here instead.
         if (pressAtMs == 0L || n - pressAtMs > PRESS_MAX_AGE_MS) pressAtMs = n
         name?.takeIf { it.isNotBlank() }?.let { channelName = it }
+        tuneKind = kind
         playUrlAtMs = n
         openAtMs = 0L
         firstByteAtMs = 0L
@@ -121,6 +129,8 @@ class PlaybackTracer {
             lastByteAtMs = n
             feedGaps.clear()
             lastGapWarnAtMs = 0L
+            feedBytesTotal = 0L
+            feedBytesAtFirstFrame = 0L
         }
         Log.i(TAG, "[TUNE] playUrl ch=$channelName +${sincePress(n)}ms url-kind=$kind")
     }
@@ -143,6 +153,7 @@ class PlaybackTracer {
         synchronized(feedLock) {
             advanceFeedBuckets(n)
             feedBuckets[feedBucketIndex] += count
+            feedBytesTotal += count
             val gap = n - lastByteAtMs
             if (gap >= FEED_GAP_RECORD_MS) {
                 feedGaps.addLast(n to gap)
@@ -206,6 +217,7 @@ class PlaybackTracer {
     fun onFirstFrame() {
         if (summaryLogged || summaryPending) return
         firstFrameAtMs = now()
+        synchronized(feedLock) { feedBytesAtFirstFrame = feedBytesTotal }
         if (readyAtMs == 0L) {
             summaryPending = true
             val tune = playUrlAtMs
@@ -251,6 +263,55 @@ class PlaybackTracer {
             TAG,
             "[STALL] at +${n - firstFrameAtMs}ms pos=${pos}ms buffered=${buffered}ms " +
                 "liveOffset=${liveOffsetMs(player)}ms ch=$channelName",
+        )
+        // Hand the feed shape to the holder's start-buffer learner. It only
+        // ever changes the NEXT tune; this playback is untouched.
+        onStall?.invoke(stallSnapshot())
+    }
+
+    /**
+     * Feed shape at the moment of a [STALL], for the learned live start-buffer
+     * ("hold-back") learner in [AerioExoPlayerHolder]. Reading it here keeps the
+     * tracer observational: it reports, the holder decides.
+     */
+    data class FeedStallSnapshot(
+        val channelName: String,
+        val isLive: Boolean,
+        /** Average kbps over the trailing 30 s feed window. */
+        val windowKbps: Long,
+        /** Average kbps over this tune since the first frame. */
+        val tuneKbps: Long,
+        /** Longest stretch without bytes inside the 30 s window. */
+        val worstGapMs: Long,
+    )
+
+    /** Set by the holder; invoked on the main thread once per [STALL]. */
+    @Volatile var onStall: ((FeedStallSnapshot) -> Unit)? = null
+
+    /** Average kbps over the trailing 30 s feed window. */
+    fun windowKbps(): Long = feedSnapshot(now()).first
+
+    /** Longest stretch without bytes inside the trailing 30 s window. */
+    fun worstGapMs(): Long = feedSnapshot(now()).second
+
+    /** Average kbps over this tune since the first frame (0 before it). */
+    fun tuneKbps(): Long {
+        val frame = firstFrameAtMs
+        if (frame == 0L) return 0L
+        val elapsedMs = (now() - frame).coerceAtLeast(1_000L)
+        val bytes = synchronized(feedLock) { feedBytesTotal - feedBytesAtFirstFrame }
+        if (bytes <= 0L) return 0L
+        return bytes * 8L / elapsedMs
+    }
+
+    private fun stallSnapshot(): FeedStallSnapshot {
+        val (kbps, worst) = feedSnapshot(now())
+        return FeedStallSnapshot(
+            channelName = channelName,
+            isLive = tuneKind == "live",
+            windowKbps = kbps,
+            tuneKbps = tuneKbps(),
+            worstGapMs = worst,
         )
     }
 

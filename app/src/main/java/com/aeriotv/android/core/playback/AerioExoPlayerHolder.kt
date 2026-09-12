@@ -125,6 +125,17 @@ class AerioExoPlayerHolder @Inject constructor(
     /** Buffer floor (ms) the current player was built with; a pref flip forces
      *  a rebuild because the LoadControl is fixed at build time. */
     private var builtWithBufferFloorMs: Int? = null
+    /** Start gate (bufferForPlaybackMs) the current player was built with. Same
+     *  reason as [builtWithBufferFloorMs]: DefaultLoadControl is fixed at build
+     *  time, so a changed learned hold-back needs a player rebuild, which
+     *  [playUrl] does BEFORE priming so it never lands mid-playback. */
+    private var builtWithStartGateMs: Int? = null
+    /** Start gate the next [acquireOrCreate] must build with, stamped by
+     *  [playUrl] from the learned per-channel hold-back. */
+    @Volatile private var desiredStartGateMs: Int = LIVE_START_GATE_DEFAULT_MS
+    /** In-memory mirror of AppPreferences.liveStartBufferMs so [playUrl] can
+     *  read the learned hold-back without blocking the channel-tap path. */
+    @Volatile private var cachedLiveStartBuffers: Map<String, Int> = emptyMap()
     /** iOS #37 kill-switch, cached at build/tune time. When false the stall +
      *  black-screen reload nets no-op; the cold-start no-data net stays armed. */
     @Volatile private var watchdogReloadEnabled: Boolean = true
@@ -192,6 +203,60 @@ class AerioExoPlayerHolder @Inject constructor(
         }
         prefScope.launch {
             appPreferences.autoRecoverFrozenStreams.collect { watchdogReloadEnabled = it }
+        }
+        prefScope.launch {
+            appPreferences.liveStartBufferMs.collect { cachedLiveStartBuffers = it }
+        }
+        // Learned live start buffer: the tracer reports the feed shape at every
+        // stall, this decides whether the feed was bursty-but-real-time.
+        tracer.onStall = { snapshot -> learnStartBuffer(snapshot) }
+    }
+
+    /**
+     * Android analog of the Apple per-channel learned hold-back (Apple commit
+     * 8679aa8). A stall on a feed that is still arriving at real time over the
+     * trailing 30 s means the bytes came in BURSTS and one gap outran the start
+     * cushion (Google TV Streamer, Sky Sports Main Event UHD through a
+     * Dispatcharr progressive TS: 6.9-7.5 s gaps every ~40 s at a steady
+     * 10-15 Mbps average, 3 stalls in 3 min). Raise THIS channel's start gate
+     * so the NEXT tune begins with enough buffered media to ride the gap out.
+     * A feed that is below its own running average is simply starved upstream,
+     * which a deeper start buffer cannot fix, so that case is only logged.
+     *
+     * Never touches the running playback.
+     */
+    private fun learnStartBuffer(snapshot: PlaybackTracer.FeedStallSnapshot) {
+        if (!snapshot.isLive) return
+        val channelId = currentChannelIdForRebuild ?: return
+        if (snapshot.tuneKbps <= 0L) return
+        // At real time = the 30 s window holds at least 90 percent of the
+        // tune's own average since the first frame.
+        if (snapshot.windowKbps * 100L < snapshot.tuneKbps * 90L) {
+            Log.i(
+                TAG,
+                "[HOLDBACK] ch=${snapshot.channelName} stall ignored: feed below real time " +
+                    "(${snapshot.windowKbps}kbps vs ${snapshot.tuneKbps}kbps)",
+            )
+            return
+        }
+        val learned = cachedLiveStartBuffers[channelId] ?: 0
+        val next = (snapshot.worstGapMs + 1_000L)
+            .coerceAtMost(LIVE_START_GATE_MAX_MS.toLong())
+            .toInt()
+            .coerceAtLeast(learned)
+        if (next <= learned) return
+        Log.i(
+            TAG,
+            "[HOLDBACK] ch=${snapshot.channelName} bursty feed " +
+                "(avg ${snapshot.windowKbps}kbps vs tune ${snapshot.tuneKbps}kbps, " +
+                "worst gap ${snapshot.worstGapMs}ms): start buffer $learned -> $next ms " +
+                "for the NEXT tune",
+        )
+        // Update the cache immediately so a tune that beats the DataStore write
+        // still applies the new gate; the write returns the stored map.
+        cachedLiveStartBuffers = cachedLiveStartBuffers + (channelId to next)
+        prefScope.launch {
+            cachedLiveStartBuffers = appPreferences.setLiveStartBufferMs(channelId, next)
         }
     }
 
@@ -774,10 +839,22 @@ class AerioExoPlayerHolder @Inject constructor(
         val audioPassthrough = cachedAudioPassthrough || audioSinkFallback
         // Buffer floor comes from the pref-cache updated by the collector in init{}.
         val bufferFloorMs = cachedBufferFloorMs
+        // Learned live start gate for THIS tune, stamped by playUrl. Clamped so a
+        // corrupt stored value can never push the start gate past the ceiling.
+        val startGateMs = desiredStartGateMs
+            .coerceIn(LIVE_START_GATE_DEFAULT_MS, LIVE_START_GATE_MAX_MS)
         // watchdogReloadEnabled is kept current by the autoRecoverFrozenStreams
         // collector launched in init{}; no blocking read needed here.
         player?.let { existing ->
-            if (builtWithPassthrough == audioPassthrough && builtWithBufferFloorMs == bufferFloorMs) return existing
+            if (builtWithPassthrough == audioPassthrough &&
+                builtWithBufferFloorMs == bufferFloorMs &&
+                builtWithStartGateMs == startGateMs
+            ) {
+                return existing
+            }
+            if (builtWithStartGateMs != startGateMs) {
+                Log.i(TAG, "[HOLDBACK] rebuilding player for start gate $startGateMs ms")
+            }
             Log.i(TAG, "Player build pref changed (passthrough/buffer); rebuilding player")
             destroy()
         }
@@ -835,7 +912,11 @@ class AerioExoPlayerHolder @Inject constructor(
         // offers anything below it - Small, Default and Large all used to
         // collapse onto this same value, which is why a user switching
         // between them measured no difference at all (see BUFFER_OPTIONS).
-        val minBufferMs = maxOf(4_000, bufferFloorMs)
+        // The learned hold-back raises the START gate, so the steady bounds have
+        // to stay above it: a bufferForPlaybackMs at or past minBufferMs leaves
+        // the load control nothing to work with. min = gate + 4s keeps the same
+        // 4 s of real cushion the tuning above describes.
+        val minBufferMs = maxOf(4_000, bufferFloorMs, startGateMs + 4_000)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ minBufferMs,
@@ -844,7 +925,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 // floor reached 8s, leaving the load control nothing to work
                 // with on precisely the setting chosen for poor networks.
                 /* maxBufferMs = */ minBufferMs * 2,
-                /* bufferForPlaybackMs = */ 1_200,
+                /* bufferForPlaybackMs = */ startGateMs,
                 /* bufferForPlaybackAfterRebufferMs = */ 2_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -913,6 +994,7 @@ class AerioExoPlayerHolder @Inject constructor(
         tracer.tracedPlayer = fresh
         builtWithPassthrough = audioPassthrough
         builtWithBufferFloorMs = bufferFloorMs
+        builtWithStartGateMs = startGateMs
         startWatchdog()
         return fresh
     }
@@ -1368,7 +1450,22 @@ class AerioExoPlayerHolder @Inject constructor(
         // the call here left the screen dead until the user picked a
         // DIFFERENT channel (PlayerScreen stamps currentChannelId after this
         // call, so re-selecting the same one was a no-op).
-        val p = player ?: appContext?.let { acquireOrCreate(it) } ?: run {
+        // Learned live start buffer. ONLY live tunes get a raised gate: a VOD,
+        // catch-up or DVR source is a seekable file served as fast as the link
+        // allows, so the bursty-feed problem this solves does not exist there
+        // and a deeper gate would only slow the open.
+        val kind = PlaybackTracer.urlKind(url)
+        val effectiveChannelId = channelId ?: currentChannelIdForRebuild
+        val learnedGateMs =
+            if (kind == "live") effectiveChannelId?.let { cachedLiveStartBuffers[it] } ?: 0 else 0
+        val startGateMs = maxOf(LIVE_START_GATE_DEFAULT_MS, learnedGateMs)
+            .coerceAtMost(LIVE_START_GATE_MAX_MS)
+        Log.i(TAG, "[HOLDBACK] ch=${title ?: "?"} start gate $startGateMs ms (learned $learnedGateMs ms)")
+        desiredStartGateMs = startGateMs
+        // acquireOrCreate rebuilds when the gate changed (DefaultLoadControl is
+        // fixed at build time). Doing it HERE, before the source is primed, is
+        // what keeps a raised gate out of a running playback.
+        val p = appContext?.let { acquireOrCreate(it) } ?: player ?: run {
             Log.w(TAG, "playUrl called before acquireOrCreate and no context cached")
             return
         }
@@ -1392,7 +1489,11 @@ class AerioExoPlayerHolder @Inject constructor(
         lastPlayArtworkUri = artworkUri
         lastPlayDrmType = drmLicenseType
         lastPlayDrmKey = drmLicenseKey
-        if (channelId != null) currentChannelIdForRebuild = channelId
+        // Restamped from effectiveChannelId: a gate rebuild above goes through
+        // destroy(), which clears currentChannelIdForRebuild, so an internal
+        // re-prime (channelId == null) would otherwise lose the id the
+        // terminal-error rebuild hook needs.
+        effectiveChannelId?.let { currentChannelIdForRebuild = it }
         clearPauseStamp("re-prime")
         resetWatchdogStateForNewStream()
         // watchdogReloadEnabled is kept current by the collector in init{}; the
@@ -1402,7 +1503,7 @@ class AerioExoPlayerHolder @Inject constructor(
         // UNLESS a companion remote explicitly asked for Audio Only, which a
         // watchdog/poller re-prime must not undo.
         setVideoTrackEnabled(!remoteAudioOnly)
-        tracer.markTuneStart(title, PlaybackTracer.urlKind(url))
+        tracer.markTuneStart(title, kind)
         val source = buildMediaSource(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey)
         p.setMediaSource(source)
         p.prepare()
@@ -2128,6 +2229,12 @@ class AerioExoPlayerHolder @Inject constructor(
 
     companion object {
         private const val TAG = "AerioExoPlayer"
+        /** Baseline live start gate (bufferForPlaybackMs). See the LoadControl
+         *  comment in [acquireOrCreate] for why 1_200 and not 500 or 2_000. */
+        private const val LIVE_START_GATE_DEFAULT_MS = 1_200
+        /** Ceiling on the learned hold-back: past 10 s the tap-to-motion cost
+         *  outweighs riding out the gap. */
+        private const val LIVE_START_GATE_MAX_MS = 10_000
         private const val TAG_DIAG = "AerioPlayerDiag"
 
         /** How long after a tune a decoder failure still counts as the codec

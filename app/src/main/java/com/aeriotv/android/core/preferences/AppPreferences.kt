@@ -1508,6 +1508,56 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Learned live start buffer per channel id (ms). Android analog of the
+     * Apple per-channel learned hold-back: a channel whose feed is delivered
+     * in bursts (Sky Sports Main Event UHD through Dispatcharr: 6.9-7.5 s gaps
+     * every ~40 s while the 30 s average stays at real time) stalls because the
+     * gap outran the start cushion, so after such a stall we raise THIS
+     * channel's start gate and apply it on the NEXT tune only. Absent key =
+     * today's behavior (the 1_200 ms gate).
+     *
+     * Device-local and deliberately NOT in snapshotSyncablePreferences: it is
+     * learned from this device's network and provider path.
+     */
+    val liveStartBufferMs: Flow<Map<String, Int>> =
+        store.data.map { decodeLiveStartBuffers(it[KEY_LIVE_START_BUFFER_MS]) }
+
+    /** One-shot read for the player holder's in-memory cache. */
+    suspend fun liveStartBuffersOnce(): Map<String, Int> =
+        decodeLiveStartBuffers(store.data.first()[KEY_LIVE_START_BUFFER_MS])
+
+    /**
+     * Persist a learned start buffer for one channel and return the resulting
+     * map so the caller can refresh its cache without waiting for the Flow.
+     * Bounded to [LIVE_START_BUFFER_MAX_ENTRIES]: past the bound the whole map
+     * is cleared and relearned rather than grown unbounded on a huge panel.
+     */
+    suspend fun setLiveStartBufferMs(channelId: String, ms: Int): Map<String, Int> {
+        val id = channelId.trim()
+        if (id.isBlank() || ms <= 0) return liveStartBuffersOnce()
+        var result: Map<String, Int> = emptyMap()
+        store.edit { prefs ->
+            val current = decodeLiveStartBuffers(prefs[KEY_LIVE_START_BUFFER_MS])
+            if (current[id] == ms) {
+                result = current
+                return@edit
+            }
+            val grown = current + (id to ms)
+            val updated =
+                if (grown.size > LIVE_START_BUFFER_MAX_ENTRIES) mapOf(id to ms) else grown
+            prefs[KEY_LIVE_START_BUFFER_MS] = Json.encodeToString(updated)
+            result = updated
+        }
+        return result
+    }
+
+    private fun decodeLiveStartBuffers(raw: String?): Map<String, Int> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching { Json.decodeFromString<Map<String, Int>>(raw) }
+            .getOrDefault(emptyMap())
+    }
+
+    /**
      * iOS DVR Settings "Keep device awake during recording" toggle. Default
      * ON (iOS parity). When on, LocalRecordingService holds a partial
      * WakeLock for the duration of an active local recording so the CPU
@@ -1628,6 +1678,11 @@ class AppPreferences @Inject constructor(
         // window; deliberately NOT in snapshotSyncablePreferences.
         val KEY_DVR_RECORDING_CATEGORIES = stringPreferencesKey("dvr_recording_categories")
         val KEY_DVR_TAB_HINT = stringPreferencesKey("dvr_tab_hint_playlists")
+        // JSON object {channelId: startBufferMs}: learned live start hold-back,
+        // device-local (see liveStartBufferMs).
+        val KEY_LIVE_START_BUFFER_MS = stringPreferencesKey("live_start_buffer_ms")
+        /** Bound on the learned start-buffer map; past it the map is cleared. */
+        const val LIVE_START_BUFFER_MAX_ENTRIES = 200
         val KEY_CATEGORY_MASTER_ENABLE = booleanPreferencesKey(CategoryPaletteState.MASTER_ENABLED_KEY)
         val KEY_CATEGORY_CUSTOM_JSON = stringPreferencesKey(CategoryPaletteState.CUSTOM_KEY)
         val KEY_SYNC_MASTER = booleanPreferencesKey("sync_master_enabled")
