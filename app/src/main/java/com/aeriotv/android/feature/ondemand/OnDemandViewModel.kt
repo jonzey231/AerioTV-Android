@@ -20,6 +20,7 @@ import com.aeriotv.android.core.network.TMDBService
 import com.aeriotv.android.core.network.TmdbArtCache
 import com.aeriotv.android.core.network.TmdbArtEntry
 import com.aeriotv.android.core.network.TmdbCredits
+import com.aeriotv.android.core.network.TmdbEpisodeInfo
 import com.aeriotv.android.core.network.TmdbDetails
 import com.aeriotv.android.core.network.TmdbKnownForItem
 import com.aeriotv.android.core.network.TmdbPersonBio
@@ -1827,6 +1828,30 @@ class OnDemandViewModel @Inject constructor(
         if (key.isBlank()) return null
         return tmdbService.personBio(personId, key)
     }
+
+    /**
+     * One season's TMDB episodes, keyed by episode number, for the episode
+     * cards (still image, title fallback, guest stars and crew). Same opt-in
+     * + key gate and id-then-title resolution order as [resolveTmdbCredits].
+     */
+    suspend fun resolveTmdbSeason(
+        tmdbId: String?,
+        title: String,
+        seasonNumber: Int,
+    ): Map<Int, TmdbEpisodeInfo>? {
+        if (!appPreferences.programPostersTmdbEnabled.first()) return null
+        val key = appPreferences.tmdbApiKey.first()
+        if (key.isBlank()) return null
+        tmdbId?.takeIf { it.isNotBlank() }?.let { id ->
+            tmdbService.seasonEpisodes(id, seasonNumber, key)?.let { return it }
+        }
+        if (title.isBlank()) return null
+        return tmdbService.seasonEpisodesForTitle(title, seasonNumber, key)
+    }
+
+    /** Episode-still URL pass-through (same rationale as [tmdbProfileImageUrl]). */
+    fun tmdbStillImageUrl(path: String?, size: String = "w780"): String? =
+        path?.takeIf { it.isNotBlank() }?.let { tmdbService.imageUrlFor(it, size) }
 
     /** Headshot URL pass-through so screens never need a TMDBService
      *  reference. Pure string building, hence not gated on the pref. */

@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Info
@@ -107,27 +108,36 @@ import kotlinx.coroutines.launch
 fun MovieDetailScreen(
     movieUuid: String,
     onBack: () -> Unit,
-    onPlay: (DispatcharrVODMovie) -> Unit,
+    /** fromStart is passed per launch (never held in view state) and zeroes
+     *  the start position WITHOUT clearing the WatchProgress row (Apple C3). */
+    onPlay: (fromStart: Boolean) -> Unit,
     // Known For tile pushes from the bio dialog: plain navigation pushes so
     // remote BACK returns here. Defaults keep non-nav call sites compiling.
     onOpenMovie: (String) -> Unit = {},
     onOpenSeries: (Int) -> Unit = {},
     viewModel: OnDemandViewModel = hiltViewModel(),
     watchVm: WatchProgressViewModel = hiltViewModel(),
+    watchlistVm: com.aeriotv.android.feature.movies.WatchlistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val movie = viewModel.movieByUuid(movieUuid)
     val context = LocalContext.current
-    val recent by watchVm.observeRecent(50).collectAsStateWithLifecycle(initialValue = emptyList())
-    val progress = recent.firstOrNull { it.videoId == movieUuid }
+    // Keyed lookup, Apple's WatchProgressManager.getResumePosition
+    // (VODModels.swift:280-286): the recent-50 scan read any movie outside the
+    // 50 most recently touched rows as no-resume.
+    val progress by watchVm.observe(movieUuid).collectAsStateWithLifecycle(initialValue = null)
     // Continue Watching / Watchlist row for a title the library walk never
     // loaded: fetch it by name before giving up with "not found".
-    LaunchedEffect(movieUuid, movie == null, progress?.title) {
-        if (movie == null) viewModel.resolveMovie(movieUuid, progress?.title)
+    val progressTitle = progress?.title
+    LaunchedEffect(movieUuid, movie == null, progressTitle) {
+        if (movie == null) viewModel.resolveMovie(movieUuid, progressTitle)
     }
     val resolvingMovie = movie == null && viewModel.isResolving("m:$movieUuid")
-    val hasResume = progress != null && progress.positionMs > 0L &&
-        (progress.durationMs <= 0L || progress.positionMs < progress.durationMs - 5 * 60_000L)
+    // getResumePosition returns nil for a finished row and for position 0.
+    val hasResume = progress?.let {
+        !it.isFinished && it.positionMs > 0L &&
+            (it.durationMs <= 0L || it.positionMs < it.durationMs - 5 * 60_000L)
+    } == true
     val info = movie?.id?.let { state.movieProviderInfo[it] }
 
     LaunchedEffect(movie?.id) {
@@ -239,6 +249,15 @@ fun MovieDetailScreen(
 
     BackHandler(enabled = true) { onBack() }
     val isTv = rememberLiveTvFormFactor().isTv
+    val watchlistEntries by watchlistVm.entries.collectAsStateWithLifecycle(initialValue = emptyList())
+    val watchlistKeys = remember(watchlistEntries) { watchlistEntries.map { it.key }.toSet() }
+    // tvOS puts Version / Trailer / TMDB in the hero action row, so the URLs
+    // are resolved at screen scope (the phone keeps them in the info block).
+    val heroTrailerUrl = (info?.effectiveTrailer ?: movie?.youtubeTrailer?.takeIf { it.isNotBlank() })
+        ?.let { youtubeUrl(it) }
+    val heroTmdbUrl = (info?.tmdbId ?: movie?.tmdbId)?.takeIf { it.isNotBlank() }?.let {
+        "https://www.themoviedb.org/movie/$it"
+    }
 
     // TV: external links surface as a QR dialog (no browser on Android TV).
     var qrLink by remember { mutableStateOf<TvQrLink?>(null) }
@@ -295,24 +314,111 @@ fun MovieDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 item {
-                    HeroSection(
-                        movie = movie,
-                        info = info,
-                        tmdbPosterUrl = tmdbPosterUrl,
-                        tmdbDetails = tmdbDetails,
-                        tmdbBackdropUrl = cachedBackdropUrl,
-                        hasResume = hasResume,
-                        isTv = isTv,
-                        onPlay = { onPlay(movie) },
-                        onPlayFocused = {
-                            if (isTv) {
-                                detailScope.launch {
-                                    runCatching { detailListState.animateScrollToItem(0) }
-                                }
+                    if (isTv) {
+                        val heroPlot = tmdbDetails?.overview?.takeIf { it.isNotBlank() } ?: cachedOverview
+                            ?: info?.effectivePlot?.takeIf { it.isNotBlank() }
+                            ?: movie.plot?.takeIf { it.isNotBlank() }
+                        val genreToken = (info?.effectiveGenre ?: movie.genre ?: tmdbDetails?.genres)
+                            ?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                        val runtimeSecs = info?.durationSecs?.takeIf { it > 0 }
+                            ?: movie.durationSecs?.takeIf { it > 0 }
+                        val playFocus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) {
+                            repeat(10) {
+                                if (runCatching { playFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                                delay(16L)
                             }
-                        },
-                    )
+                        }
+                        TvDetailHero(
+                            artUrl = cachedBackdropUrl ?: info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl,
+                            title = movie.displayName,
+                            // tvOS movie meta: year, runtime, first genre token
+                            // (no MOVIE chip on TV), then the rating.
+                            metaParts = listOfNotNull(
+                                info?.year?.toString() ?: movie.year?.toString() ?: tmdbDetails?.year,
+                                runtimeSecs?.let { formatDuration(it) },
+                                genreToken,
+                            ),
+                            rating = (info?.rating?.takeIf { it.isNotBlank() } ?: movie.rating)
+                                ?.let { runCatching { String.format("%.1f", it.toDouble()) }.getOrDefault(it) }
+                                ?.takeIf { it.isNotBlank() && it != "0.0" }
+                                ?: tmdbDetails?.voteAverage,
+                            plot = heroPlot,
+                        ) {
+                            TvHeroActionButton(
+                                title = if (hasResume) "Resume" else "Play",
+                                icon = Icons.Filled.PlayArrow,
+                                primary = true,
+                                modifier = Modifier
+                                    .focusRequester(playFocus)
+                                    .onFocusChanged {
+                                        if (it.isFocused) {
+                                            detailScope.launch {
+                                                runCatching { detailListState.animateScrollToItem(0) }
+                                            }
+                                        }
+                                    },
+                                onClick = { onPlay(false) },
+                            )
+                            if (hasResume) {
+                                TvHeroActionButton(
+                                    title = "Play from Beginning",
+                                    icon = Icons.Filled.Replay,
+                                    onClick = { onPlay(true) },
+                                )
+                            }
+                            if (versionOptions.size > 1) {
+                                TvHeroActionButton(
+                                    title = "Version: ${selectedVersion?.label ?: "Auto"}",
+                                    icon = Icons.Outlined.Tune,
+                                    onClick = { showVersionPicker = true },
+                                )
+                            }
+                            heroTrailerUrl?.let { url ->
+                                TvHeroActionButton(
+                                    title = "Trailer",
+                                    icon = Icons.Outlined.PlayCircle,
+                                    onClick = {
+                                        if (youtubeResolvable) {
+                                            trailerMenuUrl = url
+                                        } else {
+                                            qrLink = TvQrLink(
+                                                title = "Trailer",
+                                                caption = "Scan with your phone to watch the trailer on YouTube.",
+                                                url = url,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                            heroTmdbUrl?.let { url ->
+                                TvHeroActionButton(
+                                    title = "TMDB",
+                                    icon = Icons.Outlined.Info,
+                                    onClick = {
+                                        qrLink = TvQrLink(
+                                            title = "View on TMDB",
+                                            caption = "Scan with your phone to view this title on TMDB.",
+                                            url = url,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    } else {
+                        HeroSection(
+                            movie = movie,
+                            info = info,
+                            tmdbPosterUrl = tmdbPosterUrl,
+                            tmdbDetails = tmdbDetails,
+                            tmdbBackdropUrl = cachedBackdropUrl,
+                            hasResume = hasResume,
+                            isTv = false,
+                            onPlay = { onPlay(false) },
+                        )
+                    }
                 }
+                if (!isTv) {
                 item {
                     InfoSection(
                         movie = movie,
@@ -360,6 +466,7 @@ fun MovieDetailScreen(
                         },
                     )
                 }
+                }
                 if (castCrewPeople.isNotEmpty()) {
                     item {
                         CastCrewSection(
@@ -370,21 +477,63 @@ fun MovieDetailScreen(
                         )
                     }
                 }
-                if (!isTv && relatedItems.isNotEmpty()) {
-                    item {
-                        RelatedSection(items = relatedItems, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries)
+                if (isTv) {
+                    // tvDetailsBlock (VODDetailView 1124-1185): the facts grid
+                    // sits after Cast and Crew on tvOS, with the provenance
+                    // note inside it.
+                    item(key = "details-block") {
+                        val genre = info?.effectiveGenre?.takeIf { it.isNotBlank() }
+                            ?: movie.genre?.takeIf { it.isNotBlank() } ?: tmdbDetails?.genres
+                        val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
+                        val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
+                        val runtimeSecs = info?.durationSecs?.takeIf { it > 0 }
+                            ?: movie.durationSecs?.takeIf { it > 0 }
+                        val facts = buildList {
+                            genre?.let { add("Genre" to it) }
+                            info?.releaseDate?.takeIf { it.length > 4 }?.let { add("Released" to it) }
+                            runtimeSecs?.let { add("Runtime" to formatDuration(it)) }
+                            director?.let { add("Director" to it) }
+                            if (castCrewPeople.isEmpty()) cast?.let { add("Cast" to it) }
+                            info?.effectiveCountry?.takeIf { it.isNotBlank() }?.let { add("Country" to it) }
+                        }
+                        TvDetailsBlock(facts = facts) {
+                            TmdbSourceNote(
+                                tmdbPosterUsed = tmdbPosterUrl != null,
+                                tmdbDetailsPresent = tmdbDetails != null,
+                                hasProviderArt = hasServerArt,
+                                tmdbConfigured = tmdbConfigured,
+                                lookupDone = tmdbLookupDone,
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
                     }
                 }
-                if (!isTv) {
-                    // iOS puts the long TMDB attribution at the very bottom of
-                    // the page, below the cast strip (VODDetailView 371).
+                if (relatedItems.isNotEmpty()) {
                     item {
-                        TmdbAttribution(
-                            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 24.dp),
-                            long = true,
-                            isTv = false,
-                        )
+                        if (isTv) {
+                            TvRelatedSection(
+                                items = relatedItems,
+                                watchlisted = { it.key in watchlistKeys },
+                                onOpen = { item ->
+                                    item.movieUuid?.let(onOpenMovie) ?: item.seriesId?.let(onOpenSeries)
+                                },
+                                onToggleWatchlist = { watchlistVm.toggle(it) },
+                            )
+                        } else {
+                            RelatedSection(items = relatedItems, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries)
+                        }
                     }
+                }
+                item {
+                    // iOS puts the long TMDB attribution at the very bottom of
+                    // the page on BOTH platforms (VODDetailView 377-380).
+                    TmdbAttribution(
+                        modifier = Modifier
+                            .padding(horizontal = if (isTv) TV_DETAIL_INSET else 16.dp)
+                            .padding(top = 24.dp),
+                        long = true,
+                        isTv = isTv,
+                    )
                 }
             }
             }

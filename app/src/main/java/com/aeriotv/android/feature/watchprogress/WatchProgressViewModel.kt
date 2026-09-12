@@ -43,6 +43,61 @@ class WatchProgressViewModel @Inject constructor(
     fun observe(videoId: String): Flow<WatchProgressEntity?> = dao.observe(videoId)
 
     /**
+     * Every episode progress row of one series, newest first. The detail
+     * screens use this (not [observeRecent]) so a long-tail series still
+     * finds its resume point, matching Apple's keyed lookup.
+     */
+    fun observeSeriesEpisodes(seriesId: String): Flow<List<WatchProgressEntity>> =
+        dao.observeEpisodesForSeries(seriesId)
+
+    /**
+     * Mark an episode watched / unwatched from the detail page's long-press
+     * menu (Apple VODDetailView.swift:913-925): watched writes a finished
+     * row, unwatched deletes the row outright.
+     */
+    fun setEpisodeWatched(
+        videoId: String,
+        title: String,
+        posterUrl: String?,
+        seriesId: String?,
+        seasonNumber: Int,
+        episodeNumber: Int,
+        watched: Boolean,
+    ) {
+        viewModelScope.launch {
+            if (!watched) {
+                dao.delete(videoId)
+                return@launch
+            }
+            val now = System.currentTimeMillis()
+            val existing = dao.getOnce(videoId)
+            val duration = existing?.durationMs?.takeIf { it > 0L } ?: 0L
+            dao.upsert(
+                (existing ?: WatchProgressEntity(
+                    videoId = videoId,
+                    title = title,
+                    posterUrl = posterUrl,
+                    positionMs = 0L,
+                    durationMs = 0L,
+                    updatedAt = now,
+                    playlistId = playlistDao.firstActive()?.id,
+                )).copy(
+                    title = title,
+                    posterUrl = posterUrl ?: existing?.posterUrl,
+                    positionMs = duration,
+                    durationMs = duration,
+                    updatedAt = now,
+                    vodType = "episode",
+                    seriesId = seriesId ?: existing?.seriesId,
+                    seasonNumber = seasonNumber,
+                    episodeNumber = episodeNumber,
+                    isFinished = true,
+                ),
+            )
+        }
+    }
+
+    /**
      * Most-recently-updated rows. Caller filters by videoId-set to match
      * the current Movies / Series cache. iOS calls this "Continue Watching"
      * (project_aeriotv_ios_architecture.md section D); the "5 min from end =

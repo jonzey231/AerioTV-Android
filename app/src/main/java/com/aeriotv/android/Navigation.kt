@@ -922,6 +922,7 @@ fun AerioTVNavHost(
                                         },
                                     drmLicenseType = channel.drmLicenseType,
                                     drmLicenseKey = channel.drmLicenseKey,
+                                    channelId = channel.id,
                                 )
                                 exoHolderNav.currentChannelId = channel.id
                                 exoWindowNav.recordTune(channel.id)
@@ -1234,12 +1235,15 @@ fun AerioTVNavHost(
                 SeriesDetailScreen(
                     seriesId = seriesId,
                     onBack = { navController.popBackStack() },
-                    onEpisodeClick = { episode ->
+                    // fromStart comes from the detail page's "Play from
+                    // Beginning" and rides the existing route arg; the
+                    // Continue Watching row is left intact.
+                    onEpisodeClick = { episode, fromStart ->
                         if (companionTvName != null) {
                             companionRemoteNav.playVod(episode.uuid, isEpisode = true, title = episode.title)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodEpisodePlayer(episode.uuid))
+                            navController.navigate(Routes.vodEpisodePlayer(episode.uuid, fromStart = fromStart))
                         }
                     },
                     // Known For tile in the cast bio dialog: a PLAIN push (no
@@ -1264,12 +1268,12 @@ fun AerioTVNavHost(
                 com.aeriotv.android.feature.ondemand.MovieDetailScreen(
                     movieUuid = movieUuid,
                     onBack = { navController.popBackStack() },
-                    onPlay = {
+                    onPlay = { fromStart ->
                         if (companionTvName != null) {
                             companionRemoteNav.playVod(movieUuid, isEpisode = false)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodPlayer(movieUuid))
+                            navController.navigate(Routes.vodPlayer(movieUuid, fromStart = fromStart))
                         }
                     },
                     // Same plain Known For push as SERIES_DETAIL above.

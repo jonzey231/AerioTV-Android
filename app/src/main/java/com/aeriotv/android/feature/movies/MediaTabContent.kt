@@ -342,6 +342,23 @@ fun MediaTabContent(
     }
 
     val isTv = rememberLiveTvFormFactor().isTv
+    // TV hero "Play" for a SERIES: the library / watchlist hero used to fall
+    // through to Details because a series carries no movieUuid. Resolve the
+    // same target episode the series detail page does (Apple tvSeriesTarget,
+    // VODDetailView.swift:731-751) and play it, labelled "Play S1 E1" /
+    // "Resume S2 E3". Only the hero's own series is prefetched.
+    val heroSeriesId = if (kind == MediaKind.TVShows && isTv) {
+        (heroPages.firstOrNull()?.item ?: library.firstOrNull())?.seriesId
+    } else null
+    LaunchedEffect(heroSeriesId) { heroSeriesId?.let { viewModel.loadEpisodes(it) } }
+    val heroSeriesProgress by remember(heroSeriesId) {
+        heroSeriesId?.let { watchVm.observeSeriesEpisodes(it.toString()) }
+            ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val heroSeriesEpisodes = heroSeriesId?.let { state.episodesBySeries[it] }.orEmpty()
+    val heroSeriesTarget = remember(heroSeriesEpisodes, heroSeriesProgress) {
+        com.aeriotv.android.feature.ondemand.seriesTarget(heroSeriesEpisodes, heroSeriesProgress)
+    }
     if (isTv) {
         com.aeriotv.android.feature.movies.tv.TvMediaTab(
             kind = kind, gridState = gridState, heroPages = heroPages, watchlistPages = watchlistPages,
@@ -368,6 +385,14 @@ fun MediaTabContent(
                 if (kind == MediaKind.Movies) { viewModel.noteMovieTitle(videoId, title); onPlayMovieFromStart(videoId) } else onEpisodeResumeFromStart(videoId)
             },
             onOpen = { item -> item.movieUuid?.let { u -> viewModel.noteMovieTitle(u, item.title); onMovieClick(u) } ?: item.seriesId?.let(onSeriesClick) },
+            seriesPlayLabel = { item ->
+                if (item.seriesId != null && item.seriesId == heroSeriesId) heroSeriesTarget?.label else null
+            },
+            onPlaySeries = { item ->
+                val target = heroSeriesTarget?.takeIf { item.seriesId == heroSeriesId }
+                val sid = item.seriesId
+                if (target != null) onEpisodeResume(target.episode.uuid) else if (sid != null) onSeriesClick(sid)
+            },
             isLoading = isLoading, libraryPending = libraryPending,
             isSearchBusy = state.isSearching || state.isSearchingSeries,
         )

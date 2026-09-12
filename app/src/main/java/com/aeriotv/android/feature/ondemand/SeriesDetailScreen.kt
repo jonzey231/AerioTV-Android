@@ -94,6 +94,8 @@ import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.Replay
+import com.aeriotv.android.core.network.TmdbEpisodeInfo
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -101,31 +103,42 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Series detail screen. Mirrors iOS VODDetailView (Aerio/Features/VOD/VODDetailView.swift)
- * for series: hero with backdrop + bottom-leading poster + title block, no Play
- * button (the user picks an episode instead), Trailer + TMDB chip row, meta
- * rows, then per-season episode list with thumbnail / duration / air-date /
- * rating / plot per row - matching TVEpisodeRowButton on iOS (line 827-979).
+ * Series detail screen. Mirrors iOS VODDetailView
+ * (Aerio/Features/VOD/VODDetailView.swift), which renders both form factors
+ * from one view:
+ *  - TV follows the tvOS layout: the 620 pt (310 dp) hero with no poster, the
+ *    action row (Resume S2 E3 / Play S1 E2, Play from Beginning, Version,
+ *    Trailer, TMDB), horizontal episode cards, episode-scoped Cast and Crew,
+ *    the Details facts block, Available Related Titles, TMDB attribution.
+ *  - Phone follows the iPhone layout: the 280 dp hero with the 80 x 120 poster,
+ *    the info block, Cast and Crew, vertical episode rows, Related, attribution.
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SeriesDetailScreen(
     seriesId: Int,
     onBack: () -> Unit,
-    onEpisodeClick: (DispatcharrVODEpisode) -> Unit,
+    /** fromStart is passed per launch (never held in view state) and zeroes the
+     *  start position WITHOUT clearing the WatchProgress row (Apple C3). */
+    onEpisodeClick: (DispatcharrVODEpisode, Boolean) -> Unit,
     // Known For tile pushes from the bio dialog: plain navigation pushes so
     // remote BACK returns here. Defaults keep non-nav call sites compiling.
     onOpenMovie: (String) -> Unit = {},
     onOpenSeries: (Int) -> Unit = {},
     viewModel: OnDemandViewModel = hiltViewModel(),
     watchVm: WatchProgressViewModel = hiltViewModel(),
+    watchlistVm: com.aeriotv.android.feature.movies.WatchlistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val series = viewModel.seriesById(seriesId)
     LaunchedEffect(seriesId, series == null) { if (series == null) viewModel.resolveSeries(seriesId) }
     val resolvingSeries = series == null && viewModel.isResolving("s:$seriesId")
     val info = state.seriesProviderInfo[seriesId]
-    val recent by watchVm.observeRecent(50).collectAsStateWithLifecycle(initialValue = emptyList())
+    // Keyed per-series episode rows, never the recent-50 scan: a long-tail
+    // series outside the recency window still finds its resume point
+    // (Apple's keyed getResumePosition, VODModels.swift:280-286).
+    val episodeProgress by watchVm.observeSeriesEpisodes(seriesId.toString())
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
     // "Related": TMDB recommendations filtered to the local library. Keyed on
     // the library size too so it re-matches as the launch sweep publishes.
@@ -139,6 +152,8 @@ fun SeriesDetailScreen(
             selfKey = "s:${s.id}",
         )
     }
+    val watchlistEntries by watchlistVm.entries.collectAsStateWithLifecycle(initialValue = emptyList())
+    val watchlistKeys = remember(watchlistEntries) { watchlistEntries.map { it.key }.toSet() }
 
     LaunchedEffect(seriesId) {
         // loadEpisodes now primes provider-info (Dispatcharr series_info) FIRST so the
@@ -225,11 +240,6 @@ fun SeriesDetailScreen(
             )
         }
     }
-    // Cast first, then creators, deduped by id so a creator who also acts
-    // doesn't show twice (the cast entry wins; it carries the character).
-    val castCrewPeople = remember(tmdbCredits) {
-        tmdbCredits?.let { c -> (c.cast + c.directors).distinctBy { it.id } }.orEmpty()
-    }
     var bioPerson by remember { mutableStateOf<TmdbPerson?>(null) }
 
     BackHandler(enabled = true) { onBack() }
@@ -238,16 +248,27 @@ fun SeriesDetailScreen(
     val isLoading = seriesId in state.episodesLoadingFor
     val error = state.episodesErrorFor[seriesId]
 
-    // Season picker state. iOS defaults to the first season; honour the
-    // sorted-keys order so "Specials" (season 0) never accidentally lands as
-    // the default when seasons 1+ exist.
     val seasons = remember(episodes) {
         episodes
             .groupBy { it.seasonNumber ?: 0 }
             .toSortedMap()
     }
+
+    // Target episode + button label (Apple tvSeriesTarget, VODDetailView 731-751).
+    val target = remember(episodes, episodeProgress) { seriesTarget(episodes, episodeProgress) }
+
+    // Apple seats the season that holds the resume target (seatSelectedSeason,
+    // VODDetailView 904-911) rather than defaulting to the first non-special.
     var selectedSeason by remember(seasons.keys) {
         mutableStateOf(seasons.keys.firstOrNull { it != 0 } ?: seasons.keys.firstOrNull() ?: 0)
+    }
+    var seasonSeated by remember(seriesId) { mutableStateOf(false) }
+    LaunchedEffect(target?.episode?.uuid, seasons.keys) {
+        val season = target?.episode?.seasonNumber ?: return@LaunchedEffect
+        if (!seasonSeated && seasons.containsKey(season)) {
+            selectedSeason = season
+            seasonSeated = true
+        }
     }
 
     val episodesInSeason = remember(seasons, selectedSeason) {
@@ -256,26 +277,59 @@ fun SeriesDetailScreen(
             ?: emptyList()
     }
 
-    // Continue Watching pick: the most-recently-touched unfinished episode of
-    // this series. iOS Issue #19 parity: this includes the next episode that
-    // the up-next queue seeds (positionMs 0, not finished) after you finish one,
-    // so the series surfaces "what's next" instead of dropping off.
-    // Per-episode watch progress for the row chrome (phone), keyed by the
-    // episode uuid, the same key the Continue Watching card uses.
-    val progressByEpisode = remember(recent) { recent.associateBy { it.videoId } }
-    val continueWatchingEpisode = remember(recent, episodes) {
-        val episodeIds = episodes.asSequence().map { it.uuid }.toSet()
-        val pick = recent.firstOrNull { row ->
-            row.videoId in episodeIds && !row.isFinished
-        }
-        pick?.let { row -> episodes.firstOrNull { it.uuid == row.videoId }?.to(row) }
+    // Per-episode watch progress for the row / card chrome, keyed by the
+    // episode uuid (the same key the player writes).
+    val progressByEpisode = remember(episodeProgress) { episodeProgress.associateBy { it.videoId } }
+
+    // TMDB season data for the selected season: stills (w780 first, the
+    // provider's still as the fallback), the episode name when the provider's
+    // title is useless, and the guest stars / crew for the episode-scoped
+    // Cast and Crew row (Apple VODDetailView 871-873, 793-798, 2259-2273).
+    var tmdbSeason by remember(seriesId) { mutableStateOf<Map<Int, Map<Int, TmdbEpisodeInfo>>>(emptyMap()) }
+    LaunchedEffect(seriesId, selectedSeason, info, series == null) {
+        val s = series ?: return@LaunchedEffect
+        if (tmdbSeason.containsKey(selectedSeason)) return@LaunchedEffect
+        val fetched = viewModel.resolveTmdbSeason(
+            tmdbId = info?.tmdbId ?: s.tmdbId,
+            title = s.displayName,
+            seasonNumber = selectedSeason,
+        ) ?: return@LaunchedEffect
+        tmdbSeason = tmdbSeason + (selectedSeason to fetched)
     }
+    val seasonStills = tmdbSeason[selectedSeason].orEmpty()
+
+    // The focused episode card latches here and retitles / re-orders the Cast
+    // and Crew row. The latch deliberately survives focus leaving the card so
+    // D-pad Down from a card still lands on the strip (Apple 561-565).
+    var peopleEpisodeNumber by remember(seriesId) { mutableStateOf<Int?>(null) }
+    val castCrewPeople = remember(tmdbCredits, peopleEpisodeNumber, seasonStills) {
+        val base = tmdbCredits?.let { c -> c.cast + c.directors }.orEmpty()
+        val episodeInfo = peopleEpisodeNumber?.let { seasonStills[it] }
+        (base + episodeInfo?.guestStars.orEmpty() + episodeInfo?.crew.orEmpty()).distinctBy { it.id }
+    }
+    val castCrewTitle = peopleEpisodeNumber
+        ?.let { "Cast & Crew · Episode $it" }
+        ?: "Cast & Crew"
+
+    fun episodeTitle(ep: DispatcharrVODEpisode): String {
+        val provider = ep.displayName.trim()
+        if (provider.length > 2) return provider
+        val tmdbName = ep.episodeNumber?.let { seasonStills[it]?.name }
+        return tmdbName ?: "Episode ${ep.episodeNumber ?: ep.id}"
+    }
+
+    fun episodeStill(ep: DispatcharrVODEpisode): String? =
+        ep.episodeNumber
+            ?.let { seasonStills[it]?.stillPath }
+            ?.let { viewModel.tmdbStillImageUrl(it) }
+            ?: ep.stillImageUrl
 
     // Capture episode metadata + an up-next queue (rest of the series, ordered
     // by season then episode, capped at 50) before launching the player, so
     // finishing this episode advances Continue Watching to the next one
-    // (iOS Issue #19). Resume position is preserved by captureEpisodePlay.
-    val playEpisode: (DispatcharrVODEpisode) -> Unit = { ep ->
+    // (iOS Issue #19). This is a METADATA-ONLY annotate: a full save(0) here
+    // wiped the resume point on every launch from the detail page.
+    val playEpisode: (DispatcharrVODEpisode, Boolean) -> Unit = { ep, fromStart ->
         val ordered = episodes.sortedWith(
             compareBy({ it.seasonNumber ?: 0 }, { it.episodeNumber ?: Int.MAX_VALUE }),
         )
@@ -302,11 +356,23 @@ fun SeriesDetailScreen(
             streamUrl = null,
             upNextQueue = WatchProgressViewModel.encodeQueue(queue),
         )
-        onEpisodeClick(ep)
+        onEpisodeClick(ep, fromStart)
+    }
+
+    val toggleWatched: (DispatcharrVODEpisode) -> Unit = { ep ->
+        watchVm.setEpisodeWatched(
+            videoId = ep.uuid,
+            title = ep.displayName,
+            posterUrl = ep.stillImageUrl,
+            seriesId = seriesId.toString(),
+            seasonNumber = ep.seasonNumber ?: 0,
+            episodeNumber = ep.episodeNumber ?: 0,
+            watched = progressByEpisode[ep.uuid]?.isFinished != true,
+        )
     }
 
     val isTv = rememberLiveTvFormFactor().isTv
-    val edgeInset = if (isTv) 48.dp else 16.dp
+    val edgeInset = if (isTv) TV_DETAIL_INSET else 16.dp
 
     // TV: external links surface as a QR dialog (no browser on Android TV).
     var qrLink by remember { mutableStateOf<TvQrLink?>(null) }
@@ -326,18 +392,38 @@ fun SeriesDetailScreen(
     }
     var trailerMenuUrl by remember { mutableStateOf<String?>(null) }
 
-    // Scroll-to-top fix: the hero holds no focusables, so once the list
-    // scrolls it away the D-pad has nowhere to land above the topmost
-    // actionable item and the title / rating / poster become unreachable.
-    // Whichever focusable container is topmost THIS composition calls this
-    // on gaining focus to bring the hero back. Initial entry is safe: the
-    // firstActionFocus request below fires while firstVisibleItemIndex is
-    // still 0, so the guard skips it.
+    val trailerUrl = info?.effectiveTrailer?.let { youtubeUrl(it) }
+    val tmdbUrl = (info?.tmdbId ?: series?.tmdbId)?.takeIf { it.isNotBlank() }?.let {
+        "https://www.themoviedb.org/tv/$it"
+    }
+    val openLink: (String, String) -> Unit = { label, url ->
+        if (isTv) {
+            if (label == "Trailer" && youtubeResolvable) {
+                trailerMenuUrl = url
+            } else {
+                qrLink = TvQrLink(
+                    title = label,
+                    caption = when (label) {
+                        "Trailer" -> "Scan with your phone to watch the trailer on YouTube."
+                        else -> "Scan with your phone to view this title on TMDB."
+                    },
+                    url = url,
+                )
+            }
+        } else {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { context.startActivity(intent) }
+        }
+    }
+
+    // Scroll-to-top fix (single-owner page scroll model, unchanged): whichever
+    // focusable container is topmost THIS composition calls this on gaining
+    // focus to bring the hero back. On TV the hero's own action row is now the
+    // topmost focusable, so it owns the call.
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val maybeScrollHeroIntoView: () -> Unit = {
-        // Offset counts too: the chip row's own bring-into-view can settle at
-        // item 0 with the hero title still clipped above the screen edge.
         if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
             scope.launch {
                 // The focus move that lands here queues its own bring-into-view,
@@ -357,19 +443,17 @@ fun SeriesDetailScreen(
         }
     }
     // Mirrors SeriesInfoSection's own chip-visibility logic; keep in sync.
-    val hasInfoChips = info?.effectiveTrailer?.let { youtubeUrl(it) } != null ||
-        !(info?.tmdbId ?: series?.tmdbId).isNullOrBlank()
+    // On TV the chips moved into the hero action row, so the info block never
+    // holds a focusable there.
+    val hasInfoChips = !isTv && (trailerUrl != null || tmdbUrl != null)
 
-    // On TV land focus on the first actionable control (Resume when the
-    // series has one, otherwise the first episode row) once the episode list
-    // arrives; without this the screen had no focused control at all and the
-    // D-pad appeared dead. Fire once so later data changes don't yank focus.
+    // TV: focus the primary Play button the moment it exists (Apple makes it
+    // prefersDefaultFocus and re-asserts it with a retry loop, 427-445).
     val firstActionFocus = remember(seriesId) { FocusRequester() }
     var initialFocusDone by remember(seriesId) { mutableStateOf(false) }
     if (isTv) {
-        LaunchedEffect(continueWatchingEpisode != null, episodesInSeason.isNotEmpty()) {
+        LaunchedEffect(target != null, episodesInSeason.isNotEmpty()) {
             if (initialFocusDone) return@LaunchedEffect
-            if (continueWatchingEpisode == null && episodesInSeason.isEmpty()) return@LaunchedEffect
             repeat(10) {
                 if (runCatching { firstActionFocus.requestFocus() }.isSuccess) {
                     initialFocusDone = true
@@ -408,101 +492,132 @@ fun SeriesDetailScreen(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 32.dp),
+                contentPadding = PaddingValues(bottom = if (isTv) 60.dp else 32.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 item {
-                    SeriesHeroSection(
-                        series = series,
-                        info = info,
-                        tmdbPosterUrl = tmdbPosterUrl,
-                        tmdbDetails = tmdbDetails,
-                        tmdbBackdropUrl = cachedBackdropUrl,
-                        isTv = isTv,
-                    )
-                }
-                item {
-                    SeriesInfoSection(
-                        series = series,
-                        info = info,
-                        tmdbDetails = tmdbDetails,
-                        cachedOverview = cachedOverview,
-                        isTv = isTv,
-                        castPhotosVisible = castCrewPeople.isNotEmpty(),
-                        // Only offered when there is an actual choice (> 1
-                        // provider copy on a Dispatcharr Direct Connect source).
-                        versionLabel = if (versionOptions.size > 1) {
-                            selectedVersion?.label ?: "Auto"
-                        } else {
-                            null
-                        },
-                        onVersionClick = { showVersionPicker = true },
-                        versionOptions = versionOptions,
-                        selectedVersion = selectedVersion,
-                        onVersionSelect = { option -> viewModel.selectSeriesVersion(seriesId, option) },
-                        tmdbPosterUsed = tmdbPosterUrl != null,
-                        hasProviderArt = hasServerArt,
-                        tmdbConfigured = tmdbConfigured,
-                        tmdbLookupDone = tmdbLookupDone,
-                        // The chip row, when present, is always the topmost
-                        // focusable on this screen.
-                        chipRowModifier = Modifier.onFocusChanged {
-                            if (it.hasFocus) maybeScrollHeroIntoView()
-                        },
-                        onOpenUrl = { label, url ->
-                            if (isTv) {
-                                if (label == "Trailer" && youtubeResolvable) {
-                                    trailerMenuUrl = url
-                                } else {
-                                    qrLink = TvQrLink(
-                                        title = label,
-                                        caption = when (label) {
-                                            "Trailer" -> "Scan with your phone to watch the trailer on YouTube."
-                                            else -> "Scan with your phone to view this title on TMDB."
-                                        },
-                                        url = url,
-                                    )
-                                }
-                            } else {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                runCatching { context.startActivity(intent) }
+                    if (isTv) {
+                        val plot = tmdbDetails?.overview?.takeIf { it.isNotBlank() } ?: cachedOverview
+                            ?: info?.effectivePlot?.takeIf { it.isNotBlank() }
+                            ?: series.plot?.takeIf { it.isNotBlank() }
+                        val genreToken = (info?.effectiveGenre ?: series.genre ?: tmdbDetails?.genres)
+                            ?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                        TvDetailHero(
+                            artUrl = cachedBackdropUrl ?: info?.backdropUrl ?: series.posterUrl ?: tmdbPosterUrl,
+                            title = series.displayName,
+                            // tvOS series meta: year, first genre token (a
+                            // series carries no runtime), then the rating.
+                            metaParts = listOfNotNull(
+                                info?.year?.toString() ?: series.year?.toString() ?: tmdbDetails?.year,
+                                genreToken,
+                            ),
+                            rating = (info?.rating?.takeIf { it.isNotBlank() } ?: series.rating)
+                                ?.let { runCatching { String.format("%.1f", it.toDouble()) }.getOrDefault(it) }
+                                ?.takeIf { it.isNotBlank() && it != "0.0" }
+                                ?: tmdbDetails?.voteAverage,
+                            plot = plot,
+                        ) {
+                            TvHeroActionButton(
+                                title = when {
+                                    isLoading && episodes.isEmpty() -> "Loading…"
+                                    else -> target?.label ?: "Play"
+                                },
+                                icon = Icons.Filled.PlayArrow,
+                                primary = true,
+                                modifier = Modifier
+                                    .focusRequester(firstActionFocus)
+                                    .onFocusChanged { if (it.isFocused) maybeScrollHeroIntoView() },
+                                onClick = { target?.let { playEpisode(it.episode, false) } },
+                            )
+                            if (target?.resuming == true) {
+                                TvHeroActionButton(
+                                    title = "Play from Beginning",
+                                    icon = Icons.Filled.Replay,
+                                    onClick = { playEpisode(target.episode, true) },
+                                )
                             }
-                        },
-                    )
+                            if (versionOptions.size > 1) {
+                                TvHeroActionButton(
+                                    title = "Version: ${selectedVersion?.label ?: "Auto"}",
+                                    icon = Icons.Outlined.Tune,
+                                    onClick = { showVersionPicker = true },
+                                )
+                            }
+                            trailerUrl?.let { url ->
+                                TvHeroActionButton(
+                                    title = "Trailer",
+                                    icon = Icons.Outlined.PlayCircle,
+                                    onClick = { openLink("Trailer", url) },
+                                )
+                            }
+                            tmdbUrl?.let { url ->
+                                TvHeroActionButton(
+                                    title = "TMDB",
+                                    icon = Icons.Outlined.Info,
+                                    onClick = { openLink("View on TMDB", url) },
+                                )
+                            }
+                        }
+                    } else {
+                        SeriesHeroSection(
+                            series = series,
+                            info = info,
+                            tmdbPosterUrl = tmdbPosterUrl,
+                            tmdbDetails = tmdbDetails,
+                            tmdbBackdropUrl = cachedBackdropUrl,
+                            isTv = false,
+                        )
+                    }
+                }
+                if (!isTv) {
+                    item {
+                        SeriesInfoSection(
+                            series = series,
+                            info = info,
+                            tmdbDetails = tmdbDetails,
+                            cachedOverview = cachedOverview,
+                            isTv = false,
+                            castPhotosVisible = castCrewPeople.isNotEmpty(),
+                            // Only offered when there is an actual choice (> 1
+                            // provider copy on a Dispatcharr Direct Connect source).
+                            versionLabel = if (versionOptions.size > 1) {
+                                selectedVersion?.label ?: "Auto"
+                            } else {
+                                null
+                            },
+                            onVersionClick = { showVersionPicker = true },
+                            versionOptions = versionOptions,
+                            selectedVersion = selectedVersion,
+                            onVersionSelect = { option -> viewModel.selectSeriesVersion(seriesId, option) },
+                            tmdbPosterUsed = tmdbPosterUrl != null,
+                            hasProviderArt = hasServerArt,
+                            tmdbConfigured = tmdbConfigured,
+                            tmdbLookupDone = tmdbLookupDone,
+                            // The chip row, when present, is the topmost
+                            // focusable on the phone page.
+                            chipRowModifier = Modifier.onFocusChanged {
+                                if (it.hasFocus) maybeScrollHeroIntoView()
+                            },
+                            onOpenUrl = openLink,
+                        )
+                    }
                 }
 
-                if (castCrewPeople.isNotEmpty()) {
+                // tvOS order puts the seasons section directly under the hero
+                // and Cast and Crew after it; the phone keeps cast above the
+                // episode list (VODDetailView 349-383).
+                if (!isTv && castCrewPeople.isNotEmpty()) {
                     item(key = "cast-crew") {
                         CastCrewSection(
+                            title = castCrewTitle,
                             people = castCrewPeople,
-                            isTv = isTv,
+                            isTv = false,
                             profileUrl = viewModel::tmdbProfileImageUrl,
                             onPersonClick = { bioPerson = it },
                             modifier = Modifier.onFocusChanged {
                                 if (it.hasFocus && !hasInfoChips) maybeScrollHeroIntoView()
                             },
                         )
-                    }
-                }
-
-                continueWatchingEpisode?.let { (episode, progress) ->
-                    item(key = "continue-watching") {
-                        ContinueWatchingCard(
-                            episode = episode,
-                            positionMs = progress.positionMs,
-                            durationMs = progress.durationMs,
-                            onResume = { playEpisode(episode) },
-                            modifier = Modifier
-                                .padding(horizontal = edgeInset)
-                                .onFocusChanged {
-                                    if (it.hasFocus && !hasInfoChips && castCrewPeople.isEmpty()) {
-                                        maybeScrollHeroIntoView()
-                                    }
-                                },
-                            resumeModifier = Modifier.focusRequester(firstActionFocus),
-                        )
-                        Spacer(Modifier.height(12.dp))
                     }
                 }
 
@@ -514,13 +629,19 @@ fun SeriesDetailScreen(
                             onSelect = { selectedSeason = it },
                             edgeInset = edgeInset,
                             isTv = isTv,
-                            modifier = Modifier.onFocusChanged {
-                                if (it.hasFocus && !hasInfoChips && castCrewPeople.isEmpty() &&
-                                    continueWatchingEpisode == null
-                                ) {
-                                    maybeScrollHeroIntoView()
-                                }
-                            },
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                } else if (isTv && episodes.isNotEmpty()) {
+                    // Apple renders a static "Episodes" header for a
+                    // single-season show (VODDetailView 856-860).
+                    item(key = "episodes-header") {
+                        Text(
+                            text = "Episodes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.padding(horizontal = edgeInset),
                         )
                         Spacer(Modifier.height(8.dp))
                     }
@@ -550,32 +671,49 @@ fun SeriesDetailScreen(
                             modifier = Modifier.padding(horizontal = edgeInset, vertical = 24.dp),
                         )
                     }
+                } else if (isTv) {
+                    // tvOS episode CARDS in a horizontal strip, 32 pt spacing
+                    // and 36 pt vertical headroom for the focus scale.
+                    item(key = "episode-strip") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = edgeInset, vertical = 18.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            items(items = episodesInSeason, key = { it.id }) { ep ->
+                                TvEpisodeCard(
+                                    title = episodeTitle(ep),
+                                    meta = listOfNotNull(
+                                        ep.durationSecs?.takeIf { it > 0 }?.let { formatEpisodeDuration(it) },
+                                        ep.airDate?.let { formatAirDate(it) }?.takeIf { it.isNotBlank() },
+                                    ).joinToString(" · ").takeIf { it.isNotBlank() },
+                                    episodeNumber = ep.episodeNumber,
+                                    stillUrl = episodeStill(ep),
+                                    progress = progressByEpisode[ep.uuid],
+                                    onClick = { playEpisode(ep, false) },
+                                    onToggleWatched = { toggleWatched(ep) },
+                                    modifier = Modifier.onFocusChanged {
+                                        if (it.isFocused) peopleEpisodeNumber = ep.episodeNumber
+                                    },
+                                )
+                            }
+                        }
+                    }
                 } else {
                     itemsIndexed(items = episodesInSeason, key = { _, ep -> ep.id }) { index, ep ->
                         EpisodeRow(
                             episode = ep,
+                            title = episodeTitle(ep),
+                            stillUrl = episodeStill(ep),
                             progress = progressByEpisode[ep.uuid],
-                            isTv = isTv,
-                            onClick = { playEpisode(ep) },
+                            isTv = false,
+                            onClick = { playEpisode(ep, false) },
                             modifier = Modifier
-                                .padding(
-                                    horizontal = if (isTv) 44.dp else 12.dp,
-                                    // Phone: the row's own 10dp inset carries
-                                    // the iPhone vertical spacing.
-                                    vertical = if (isTv) 4.dp else 0.dp,
-                                )
-                                .then(
-                                    if (index == 0 && continueWatchingEpisode == null) {
-                                        Modifier.focusRequester(firstActionFocus)
-                                    } else {
-                                        Modifier
-                                    },
-                                )
+                                .padding(horizontal = 12.dp)
                                 .then(
                                     // Topmost only when nothing focusable
                                     // renders above the episode list.
                                     if (index == 0 && !hasInfoChips && castCrewPeople.isEmpty() &&
-                                        continueWatchingEpisode == null && seasons.size <= 1
+                                        seasons.size <= 1
                                     ) {
                                         Modifier.onFocusChanged {
                                             if (it.hasFocus) maybeScrollHeroIntoView()
@@ -587,21 +725,72 @@ fun SeriesDetailScreen(
                         )
                     }
                 }
-                if (!isTv && relatedItems.isNotEmpty()) {
-                    item(key = "related") {
-                        RelatedSection(items = relatedItems, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries)
-                    }
-                }
-                if (!isTv) {
-                    // iOS puts the long TMDB attribution at the very bottom of
-                    // the page, below the episodes (VODDetailView 371).
-                    item(key = "tmdb-attribution") {
-                        TmdbAttribution(
-                            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 24.dp),
-                            long = true,
-                            isTv = false,
+
+                if (isTv && castCrewPeople.isNotEmpty()) {
+                    item(key = "cast-crew-tv") {
+                        CastCrewSection(
+                            title = castCrewTitle,
+                            people = castCrewPeople,
+                            isTv = true,
+                            profileUrl = viewModel::tmdbProfileImageUrl,
+                            onPersonClick = { bioPerson = it },
                         )
                     }
+                }
+
+                if (isTv) {
+                    item(key = "details-block") {
+                        val genre = info?.effectiveGenre?.takeIf { it.isNotBlank() }
+                            ?: series.genre?.takeIf { it.isNotBlank() } ?: tmdbDetails?.genres
+                        val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
+                        val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
+                        val facts = buildList {
+                            genre?.let { add("Genre" to it) }
+                            info?.releaseDate?.takeIf { it.length > 4 }?.let { add("Released" to it) }
+                            if (episodes.isNotEmpty()) {
+                                add("Seasons" to "${seasons.size} seasons, ${episodes.size} episodes")
+                            }
+                            director?.let { add("Director" to it) }
+                            if (castCrewPeople.isEmpty()) cast?.let { add("Cast" to it) }
+                            info?.effectiveCountry?.takeIf { it.isNotBlank() }?.let { add("Country" to it) }
+                        }
+                        TvDetailsBlock(facts = facts) {
+                            TmdbSourceNote(
+                                tmdbPosterUsed = tmdbPosterUrl != null,
+                                tmdbDetailsPresent = tmdbDetails != null,
+                                hasProviderArt = hasServerArt,
+                                tmdbConfigured = tmdbConfigured,
+                                lookupDone = tmdbLookupDone,
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
+                    }
+                }
+
+                if (relatedItems.isNotEmpty()) {
+                    item(key = "related") {
+                        if (isTv) {
+                            TvRelatedSection(
+                                items = relatedItems,
+                                watchlisted = { it.key in watchlistKeys },
+                                onOpen = { item ->
+                                    item.movieUuid?.let(onOpenMovie) ?: item.seriesId?.let(onOpenSeries)
+                                },
+                                onToggleWatchlist = { watchlistVm.toggle(it) },
+                            )
+                        } else {
+                            RelatedSection(items = relatedItems, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries)
+                        }
+                    }
+                }
+                item(key = "tmdb-attribution") {
+                    // iOS puts the long TMDB attribution at the very bottom of
+                    // the page on BOTH platforms (VODDetailView 377-380).
+                    TmdbAttribution(
+                        modifier = Modifier.padding(horizontal = edgeInset).padding(top = 24.dp),
+                        long = true,
+                        isTv = isTv,
+                    )
                 }
             }
             }
@@ -679,9 +868,9 @@ fun SeriesDetailScreen(
                 onDismiss = { bioPerson = null },
                 isTv = isTv,
                 onTileClick = { item ->
-                    when (val target = viewModel.resolveKnownForTarget(item)) {
-                        is OnDemandViewModel.KnownForTarget.Movie -> { onOpenMovie(target.uuid); true }
-                        is OnDemandViewModel.KnownForTarget.Series -> { onOpenSeries(target.id); true }
+                    when (val target2 = viewModel.resolveKnownForTarget(item)) {
+                        is OnDemandViewModel.KnownForTarget.Movie -> { onOpenMovie(target2.uuid); true }
+                        is OnDemandViewModel.KnownForTarget.Series -> { onOpenSeries(target2.id); true }
                         null -> false
                     }
                 },
@@ -974,16 +1163,17 @@ private fun SeriesInfoSection(
  */
 @Composable
 private fun CastCrewSection(
+    title: String,
     people: List<TmdbPerson>,
     isTv: Boolean,
     profileUrl: (String?, String) -> String?,
     onPersonClick: (TmdbPerson) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val edgeInset = if (isTv) 48.dp else 16.dp
+    val edgeInset = if (isTv) TV_DETAIL_INSET else 16.dp
     Column(modifier = modifier.fillMaxWidth().padding(bottom = 16.dp)) {
         Text(
-            text = "Cast & Crew",
+            text = title,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Bold,
@@ -993,8 +1183,9 @@ private fun CastCrewSection(
         LazyRow(
             contentPadding = PaddingValues(
                 horizontal = edgeInset,
-                // Phone: 12dp matches the iPhone cast strip (VODDetailView 2245).
-                vertical = if (isTv) 0.dp else 12.dp,
+                // tvOS reserves 36 pt = 18 dp of headroom so the focus scale
+                // never clips; phone 12 dp matches the iPhone cast strip.
+                vertical = if (isTv) 18.dp else 12.dp,
             ),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1020,7 +1211,7 @@ private fun PersonCard(
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
-            .width(if (isTv) 110.dp else 90.dp)
+            .width(if (isTv) 100.dp else 90.dp)
             .onFocusChanged { focused = it.isFocused }
             .tvFocusScale(focused)
             .clip(RoundedCornerShape(10.dp))
@@ -1158,7 +1349,8 @@ private fun SeasonPicker(
                 // TV chrome canon (ui/tv/TvChrome.kt): same capsule + ring rules
                 // as the library group pills (tvOS MoviesPillStyle).
                 com.aeriotv.android.ui.tv.TvPill(
-                    label = if (season == 0) "Specials" else "Season $season",
+                    // Apple always renders "Season {n}" (VODDetailView 849).
+                    label = "Season $season",
                     selected = isSelected,
                     onClick = { onSelect(season) },
                 )
@@ -1194,6 +1386,9 @@ private fun SeasonPicker(
 @Composable
 private fun EpisodeRow(
     episode: DispatcharrVODEpisode,
+    /** Provider title when usable, else the TMDB name, else "Episode {n}". */
+    title: String,
+    stillUrl: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     // Phone: watch-progress chrome (iOS TVEpisodeRowButton 2467-2508).
@@ -1232,7 +1427,7 @@ private fun EpisodeRow(
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
             contentAlignment = Alignment.Center,
         ) {
-            val still = episode.stillImageUrl
+            val still = stillUrl
             if (!still.isNullOrBlank()) {
                 AsyncImage(
                     model = still,
@@ -1253,7 +1448,7 @@ private fun EpisodeRow(
         Column(modifier = Modifier.weight(1f)) {
             val titleLine = buildString {
                 episode.episodeNumber?.let { append("E$it · ") }
-                append(episode.displayName.ifBlank { "Episode ${episode.id}" })
+                append(title)
             }
             Text(
                 text = titleLine,
@@ -1313,98 +1508,6 @@ private fun EpisodeRow(
                 tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                 modifier = Modifier.size(22.dp),
             )
-        }
-    }
-}
-
-@Composable
-private fun ContinueWatchingCard(
-    episode: DispatcharrVODEpisode,
-    positionMs: Long,
-    durationMs: Long,
-    onResume: () -> Unit,
-    modifier: Modifier = Modifier,
-    resumeModifier: Modifier = Modifier,
-) {
-    val progress = if (durationMs > 0L) {
-        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
-    val remainingMin = if (durationMs > positionMs) {
-        ((durationMs - positionMs) / 60_000L).toInt().coerceAtLeast(1)
-    } else 0
-    val seasonEpisodeTag = listOfNotNull(
-        episode.seasonNumber?.let { "S$it" },
-        episode.episodeNumber?.let { "E$it" },
-    ).joinToString("·")
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-    ) {
-        Text(
-            text = "Continue Watching",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = buildString {
-                if (seasonEpisodeTag.isNotBlank()) append(seasonEpisodeTag).append("  ·  ")
-                append(episode.displayName.ifBlank { "Episode ${episode.id}" })
-            },
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(8.dp))
-        LinearProgressIndicator(
-            progress = { progress },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(3.dp),
-            color = MaterialTheme.colorScheme.primary,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            drawStopIndicator = {},
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            var resumeFocused by remember { mutableStateOf(false) }
-            Button(
-                onClick = onResume,
-                modifier = resumeModifier
-                    .onFocusChanged { resumeFocused = it.isFocused }
-                    .tvFocusScale(resumeFocused)
-                    .border(
-                        width = 2.dp,
-                        color = if (resumeFocused) Color.White else Color.Transparent,
-                        shape = RoundedCornerShape(50),
-                    ),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("Resume")
-            }
-            if (remainingMin > 0) {
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    text = "$remainingMin min left",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
     }
 }

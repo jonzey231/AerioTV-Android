@@ -125,6 +125,20 @@ data class TmdbPersonBio(
 )
 
 /**
+ * One TMDB episode of a season (`/tv/{id}/season/{n}`). Used by the series
+ * detail screen for the still image, a title when the provider's is useless,
+ * and the episode-scoped Cast and Crew splice (guest stars then crew).
+ * Mirrors the fields Apple reads in VODDetailView.
+ */
+data class TmdbEpisodeInfo(
+    val episodeNumber: Int,
+    val name: String?,
+    val stillPath: String?,
+    val guestStars: List<TmdbPerson> = emptyList(),
+    val crew: List<TmdbPerson> = emptyList(),
+)
+
+/**
  * Minimal TMDB v3 client, the Android port of iOS `TMDBService`
  * (Aerio Networking/VODService.swift). Used ONLY to (a) validate the user's
  * own free API key, (b) look up a poster image when the playlist provides
@@ -182,6 +196,9 @@ class TMDBService @Inject constructor() {
     /** "person:<id>" -> parsed bio. Successes only. */
     private val personBioCache = ConcurrentHashMap<String, TmdbPersonBio>()
 
+    /** "season:<id>:<n>" -> episode number -> episode info. Successes only. */
+    private val seasonCache = ConcurrentHashMap<String, Map<Int, TmdbEpisodeInfo>>()
+
     /** Drop every cached lookup, including misses recorded under an old key.
      *  Called when the user saves a new key so prior 401-era state can't
      *  outlive the credential that produced it. */
@@ -190,6 +207,7 @@ class TMDBService @Inject constructor() {
         detailsCache.clear()
         creditsCache.clear()
         personBioCache.clear()
+        seasonCache.clear()
     }
 
     /** v4 read-access token = a JWT: starts with "eyJ" and has exactly 2 dots. */
@@ -420,6 +438,59 @@ class TMDBService @Inject constructor() {
         val id = resolveIdForTitle(title, isMovie, key) ?: return null
         return creditsForId(id, isMovie, key)
     }
+
+    /**
+     * One season's episodes by exact TMDB id (`/tv/{id}/season/{n}`), keyed
+     * by episode number. Feeds the TV episode cards: the still image, the
+     * episode name when the provider's title is useless, and the guest stars
+     * / crew the episode-scoped Cast and Crew row splices in. Cached per
+     * id + season; successes only, so a transport failure stays retryable.
+     */
+    suspend fun seasonEpisodes(tmdbId: String, seasonNumber: Int, rawKey: String): Map<Int, TmdbEpisodeInfo>? {
+        val key = rawKey.trim()
+        val id = tmdbId.trim()
+        if (key.isEmpty() || id.isEmpty() || seasonNumber < 0) return null
+        val cacheKey = "season:$id:$seasonNumber"
+        seasonCache[cacheKey]?.let { return it }
+        val body = getJsonOrNull("/tv/$id/season/$seasonNumber", "", key) ?: return null
+        val parsed = parseSeason(body)
+        if (parsed != null) seasonCache[cacheKey] = parsed
+        return parsed
+    }
+
+    /** [seasonEpisodes] when only the title is known (same shared id resolution). */
+    suspend fun seasonEpisodesForTitle(title: String, seasonNumber: Int, rawKey: String): Map<Int, TmdbEpisodeInfo>? {
+        val key = rawKey.trim()
+        if (key.isEmpty()) return null
+        val id = resolveIdForTitle(title, false, key) ?: return null
+        return seasonEpisodes(id, seasonNumber, key)
+    }
+
+    private fun parseSeason(body: String): Map<Int, TmdbEpisodeInfo>? = runCatching {
+        val episodes = json.parseToJsonElement(body).jsonObject["episodes"]?.jsonArray.orEmpty()
+        episodes.mapNotNull { element ->
+            val o = element.jsonObject
+            val number = o["episode_number"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                ?: return@mapNotNull null
+            number to TmdbEpisodeInfo(
+                episodeNumber = number,
+                name = o["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                stillPath = o["still_path"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                guestStars = o["guest_stars"]?.jsonArray?.mapNotNull { entry ->
+                    parsePerson(
+                        entry,
+                        entry.jsonObject["character"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                    )
+                }.orEmpty(),
+                crew = o["crew"]?.jsonArray?.mapNotNull { entry ->
+                    parsePerson(
+                        entry,
+                        entry.jsonObject["job"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                    )
+                }.orEmpty(),
+            )
+        }.toMap()
+    }.getOrNull()
 
     /**
      * `/person/{id}` profile for the bio sheet: biography text, birth and

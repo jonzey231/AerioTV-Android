@@ -81,6 +81,12 @@ internal fun TvMediaTab(
     /** "Play from Beginning": start at 0 and KEEP the Continue Watching row. */
     onPlayFromStart: (videoId: String, title: String) -> Unit,
     onOpen: (MediaItem) -> Unit,
+    /** Hero label for a SERIES whose target episode is known ("Play S1 E1" /
+     *  "Resume S2 E3"); null while the episode list is still loading. */
+    seriesPlayLabel: (MediaItem) -> String? = { null },
+    /** Play a series hero: resolves the target episode instead of opening
+     *  Details (Apple tvSeriesTarget, VODDetailView.swift:731-751). */
+    onPlaySeries: (MediaItem) -> Unit = {},
     isLoading: Boolean,
     libraryPending: Boolean,
     isSearchBusy: Boolean,
@@ -98,8 +104,11 @@ internal fun TvMediaTab(
     fun heroFor(page: MediaHeroPage, watchlist: Boolean): TvHeroPage {
         val item = page.item
         val videoId = page.key.removePrefix("cw:")
+        // A watchlisted SERIES has no movieUuid: play its target episode
+        // rather than falling through to Details.
         val play: () -> Unit = if (watchlist) ({
-            item?.movieUuid?.let { onPlay(it, page.title) } ?: item?.let(open)
+            item?.movieUuid?.let { onPlay(it, page.title) }
+                ?: item?.let { if (it.seriesId != null) onPlaySeries(it) else open(it) }
         }) else ({ onPlay(videoId, page.title) })
         val details: () -> Unit = { item?.let(open) }
         val meta = buildList {
@@ -112,8 +121,14 @@ internal fun TvMediaTab(
             }
             page.genre?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it) }
         }
+        val seriesLabel = item?.takeIf { it.movieUuid == null && it.seriesId != null }?.let(seriesPlayLabel)
         val buttons = buildList {
-            add(TvHeroButton(if (page.hasProgress) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, onClick = play))
+            val primaryLabel = when {
+                watchlist && seriesLabel != null -> seriesLabel
+                page.hasProgress -> "Resume"
+                else -> "Play"
+            }
+            add(TvHeroButton(primaryLabel, Icons.Filled.PlayArrow, primary = true, onClick = play))
             // tvOS plays at 0 and LEAVES WatchProgress intact
             // (MoviesView.swift:1507-1511): the row must survive.
             if (page.hasProgress) {
@@ -135,12 +150,23 @@ internal fun TvMediaTab(
 
     fun libraryFallbackHero(): List<TvHeroPage> {
         val first = library.firstOrNull() ?: return emptyList()
+        // A series hero plays its target episode; "Loading…" until the
+        // episode list lands, exactly like the tvOS series action row.
+        val isSeries = first.movieUuid == null && first.seriesId != null
+        val seriesLabel = if (isSeries) seriesPlayLabel(first) else null
         return listOf(
             TvHeroPage(
                 key = "lib:" + first.key, title = first.title, artUrl = first.posterUrl,
                 meta = listOfNotNull(first.year?.toString()), rating = formatRating(first.rating).ifEmpty { null },
                 buttons = listOf(
-                    TvHeroButton("Play", Icons.Filled.PlayArrow, primary = true) { first.movieUuid?.let { onPlay(it, first.title) } ?: open(first) },
+                    TvHeroButton(
+                        if (isSeries) seriesLabel ?: "Loading…" else "Play",
+                        Icons.Filled.PlayArrow,
+                        primary = true,
+                    ) {
+                        first.movieUuid?.let { onPlay(it, first.title) }
+                            ?: if (isSeries) onPlaySeries(first) else open(first)
+                    },
                     TvHeroButton("Details", Icons.Outlined.Info) { open(first) },
                 ),
                 longPressActions = listOf(
