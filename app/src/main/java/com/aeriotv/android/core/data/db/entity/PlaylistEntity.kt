@@ -276,3 +276,26 @@ fun PlaylistEntity.dispatcharrAccountProfileIdList(): List<Int> =
         .split(',')
         .mapNotNull { it.trim().toIntOrNull() }
 
+/**
+ * Guide Days (Logan 2026-09-11). The playlist's [PlaylistEntity.epgRetentionDays]
+ * governs the guide window in BOTH directions. Valid stored values are 1..14
+ * days, plus the sentinel [GUIDE_DAYS_ALL] (0) = "All Available": fetch one-day
+ * chunks back and ahead until the server runs dry (two consecutive empty chunks
+ * end a direction), bounded by [GUIDE_DAYS_ALL_MAX_BACK] /
+ * [GUIDE_DAYS_ALL_MAX_AHEAD] so a huge server cannot run forever. The legacy
+ * 30-day option is gone from the UI and reads back as All Available.
+ */
+const val GUIDE_DAYS_ALL: Int = 0
+
+/** Hard floor for All Available history, in days. */
+const val GUIDE_DAYS_ALL_MAX_BACK: Int = 30
+
+/** Hard ceiling for All Available forward fetch, in days. */
+const val GUIDE_DAYS_ALL_MAX_AHEAD: Int = 60
+
+/** Clamp a selected/stored Guide Days value: 1..14, or [GUIDE_DAYS_ALL]. */
+fun sanitizeGuideDays(value: Int): Int =
+    if (value <= 0 || value >= 30) GUIDE_DAYS_ALL else value.coerceIn(1, 14)
+
+/** Resolved Guide Days, or null when the playlist is set to All Available. */
+fun resolveGuideDays(value: Int): Int? = sanitizeGuideDays(value).takeIf { it > 0 }

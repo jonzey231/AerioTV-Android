@@ -767,17 +767,13 @@ class AppPreferences @Inject constructor(
     }
 
     /**
-     * iOS `epgWindowHours` parity. How many hours wide the EPG Guide's
-     * horizontal time strip spans. One of 6/12/24/36/48/72; the sentinel
-     * value 0 means "All available" (Guide spans from now to the latest
-     * loaded programme end). Default 24 — keeps the scroll manageable on a
-     * phone while covering the rest of the day. The Guide always shows 1h of
-     * history before "now" regardless of this value.
+     * RETIRED (Logan 2026-09-11). The guide window is governed by the
+     * playlist's Guide Days setting (PlaylistEntity.epgRetentionDays) in both
+     * directions; the Settings > Network "Guide Window" picker is gone and
+     * nothing writes this key any more. Kept readable only so a future
+     * migration can inspect what a user had chosen.
      */
     val epgWindowHours: Flow<Int> = store.data.map { it[KEY_EPG_WINDOW_HOURS] ?: 24 }
-    suspend fun setEpgWindowHours(value: Int) {
-        store.edit { it[KEY_EPG_WINDOW_HOURS] = value }
-    }
 
     /**
      * Generation stamp for the on-disk EPG cache. Bump

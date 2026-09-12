@@ -391,11 +391,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setStreamBufferSize(value) }
     }
 
-    val epgWindowHours: StateFlow<Int> = prefs.epgWindowHours
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 24)
-    fun setEpgWindowHours(value: Int) {
-        viewModelScope.launch { prefs.setEpgWindowHours(value) }
-    }
+    // Logan 2026-09-11: the Guide Window preference is retired. The guide
+    // window comes from the playlist's Guide Days setting
+    // (PlaylistEntity.epgRetentionDays) in both directions, so there is no
+    // epgWindowHours state or setter here any more. AppPreferences still
+    // exposes the key read-only for migration.
 
     // Audit task #48: master toggle for the periodic PlaylistRefreshWorker.
     // The Application collects this Flow and registers/cancels the unique

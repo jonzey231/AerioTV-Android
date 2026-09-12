@@ -13,6 +13,10 @@ import com.aeriotv.android.core.debug.LogSanitizer
 import com.aeriotv.android.core.data.bridgeChannelIds
 import com.aeriotv.android.core.data.buildChannelEpgKeyBridge
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_AHEAD
+import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_BACK
+import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
+import com.aeriotv.android.core.data.db.entity.resolveGuideDays
 import com.aeriotv.android.core.data.repository.ChannelProfileOption
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.debug.MemoryPressureBus
@@ -366,7 +370,8 @@ class PlaylistViewModel @Inject constructor(
                     // composes. Keeping windowStart stable from the start
                     // avoids the whole widen-mid-session scroll-compensation
                     // dance (the history ROWS still merge in lazily).
-                    epgHistoryHours = saved.epgRetentionDays.coerceIn(1, 30) * 24,
+                    epgHistoryHours = (resolveGuideDays(saved.epgRetentionDays)
+                        ?: GUIDE_DAYS_ALL_MAX_BACK) * 24,
                     sourceType = sourceType,
                     name = saved.name.orEmpty(),
                     url = saved.urlString,
@@ -477,10 +482,10 @@ class PlaylistViewModel @Inject constructor(
     fun onDvrDestinationChange(server: Boolean) {
         _state.update { it.copy(dvrDestinationServer = server) }
     }
-    /** Bound to the "Guide History" picker in ConfigureSourceScreen (task
+    /** Bound to the "Guide Days" picker in ConfigureSourceScreen (task
      *  #135). Threaded into SaveRequest.epgRetentionDays on submit. */
     fun onEpgRetentionDaysChange(value: Int) {
-        _state.update { it.copy(epgRetentionDays = value.coerceIn(1, 30)) }
+        _state.update { it.copy(epgRetentionDays = sanitizeGuideDays(value)) }
     }
     fun onSearchQueryChange(value: String) {
         _state.update { it.copy(searchQuery = value) }
@@ -690,8 +695,11 @@ class PlaylistViewModel @Inject constructor(
         guideForwardThroughMs = throughMs
         guideForwardJob?.cancel()
         guideForwardJob = viewModelScope.launch {
-            val windowHours = runCatching { appPreferences.epgWindowHours.first() }.getOrDefault(24)
-                .let { if (it <= 0) 7 * 24 else it.coerceAtLeast(24) }
+            // Logan 2026-09-11: the playlist's Guide Days setting governs the
+            // default forward edge (both directions), not the old Settings >
+            // Network "Guide Window" preference.
+            val windowHours = ((resolveGuideDays(playlist.epgRetentionDays)
+                ?: GUIDE_DAYS_ALL_MAX_AHEAD) * 24).coerceAtLeast(24)
             val defaultEnd = System.currentTimeMillis() + windowHours * 3_600_000L
             val from = maxOf(defaultEnd, guideForwardFetchedThroughMs)
             if (throughMs > from) {
@@ -706,10 +714,12 @@ class PlaylistViewModel @Inject constructor(
     private suspend fun rebuildGuideCatalog(playlist: PlaylistEntity, reason: String, quick: Boolean = false) {
         val channels = _state.value.channels
         if (channels.isEmpty()) return
-        val retentionDays = playlist.epgRetentionDays.coerceIn(1, 30)
-        val windowHours = runCatching { appPreferences.epgWindowHours.first() }
-            .getOrDefault(24)
-            .let { if (it <= 0) 7 * 24 else it.coerceAtLeast(24) }
+        // Guide Days drives history AND forward (Logan 2026-09-11). All
+        // Available reads the full hard-bounded span out of Room; what the
+        // catalog actually spans is then whatever got fetched.
+        val guideDays = resolveGuideDays(playlist.epgRetentionDays)
+        val retentionDays = guideDays ?: GUIDE_DAYS_ALL_MAX_BACK
+        val windowHours = ((guideDays ?: GUIDE_DAYS_ALL_MAX_AHEAD) * 24).coerceAtLeast(24)
         val now = System.currentTimeMillis()
         // Quick pass: only what the guide paints at launch (a couple of hours
         // back, the evening ahead); the full retention window follows.
@@ -775,29 +785,25 @@ class PlaylistViewModel @Inject constructor(
         // the rail even when `tvgID` is blank. See ChannelEpgKey.kt.
         val channelsForBridge = _state.value.channels
         // iOS GuideStore.loadFromCache predicate (P1 #5): only load
-        // programmes whose airing overlaps the user's selected guide
-        // window (now-1h .. now+epgWindowHours). On a 7-day, 58K-row
-        // cache that drops ~85% of rows before they hit the bridge /
-        // dedup / group pipeline, cutting cold-launch CPU + GC by a
-        // similar fraction. epgWindowHours = 0 means "All available";
-        // fall back to the unwindowed read so the guide still renders
-        // the full 7 days for users who picked that option.
-        val windowHours = runCatching { appPreferences.epgWindowHours.first() }
-            .getOrDefault(24)
+        // programmes whose airing overlaps the guide window (now-1h ..
+        // now + the playlist's Guide Days). On a 7-day, 58K-row cache a
+        // narrow first read drops most rows before they hit the bridge /
+        // dedup / group pipeline, cutting cold-launch CPU + GC by a similar
+        // fraction. Logan 2026-09-11: the span comes from the playlist's
+        // Guide Days setting, not the retired Settings > Network preference.
+        val windowHours = ((resolveGuideDays(playlist.epgRetentionDays) ?: 1) * 24)
+            .coerceAtLeast(24)
         val now = System.currentTimeMillis()
-        val cachedRaw = if (windowHours <= 0) {
-            runCatching { repository.loadCachedEpg(playlist.id) }
-                .getOrDefault(emptyList())
-        } else {
+        val cachedRaw = run {
             val fromMillis = now - 60L * 60L * 1000L
             val toMillis = now + windowHours.toLong() * 60L * 60L * 1000L
             runCatching {
                 repository.loadCachedEpg(playlist.id, fromMillis, toMillis)
             }.getOrDefault(emptyList())
         }
-        // Off-main, same reason as the network path below: with epgWindowHours
-        // set to "All available" this is the entire cache, which catch-up depth
-        // grew to six figures.
+        // Off-main, same reason as the network path below: on a 30-day Guide
+        // Days setting this is effectively the entire cache, which catch-up
+        // depth grew to six figures.
         val channelsNowCached = _state.value.channels
         val cached = withContext(Dispatchers.Default) {
             bridgeChannelIds(cachedRaw, channelsForBridge)
@@ -1398,7 +1404,7 @@ class PlaylistViewModel @Inject constructor(
                 password = password?.ifBlank { null },
                 dispatcharrProfileId = dispatcharrProfileId,
                 vodEnabled = vodEnabled,
-                epgRetentionDays = epgRetentionDays.coerceIn(1, 30),
+                epgRetentionDays = sanitizeGuideDays(epgRetentionDays),
             )
             // GH #83: Edit Playlist reads state.playlist, so reflect the
             // edited fields there NOW (the repository writes the DB row early

@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.onboarding
 
+import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -898,17 +899,22 @@ private fun GuideHistoryRow(
 ) {
     Column(modifier = Modifier.padding(vertical = 4.dp)) {
         Text(
-            text = "Guide History",
+            text = "Guide Days",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Medium,
         )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(1, 3, 7, 14, 30).forEach { days ->
-                val selected = days == selectedDays
+            // 0 = All Available (Logan 2026-09-11); legacy 30 reads as All.
+            listOf(1, 3, 7, 14, 0).forEach { days ->
+                val selected = days == sanitizeGuideDays(selectedDays)
                 Text(
-                    text = if (days == 1) "1 Day" else "$days Days",
+                    text = when (days) {
+                        0 -> "All Available"
+                        1 -> "1 Day"
+                        else -> "$days Days"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (selected) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onBackground,
@@ -925,7 +931,7 @@ private fun GuideHistoryRow(
             }
         }
         Text(
-            text = "How many days of already-aired guide data to keep. Past shows on channels with catch-up can be replayed from the guide.",
+            text = "How many days of guide data to load, back and ahead. Dispatcharr only; other sources show what their guide carries.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),

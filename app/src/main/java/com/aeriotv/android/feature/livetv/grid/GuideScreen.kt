@@ -90,6 +90,7 @@ import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.ProgramInfoTarget
 import com.aeriotv.android.core.data.canReplay
 import com.aeriotv.android.core.data.db.entity.dispatcharrVersionAtLeast
+import com.aeriotv.android.core.data.db.entity.resolveGuideDays
 import com.aeriotv.android.core.data.db.entity.reminderKey
 import com.aeriotv.android.core.data.toInfoTarget
 import com.aeriotv.android.core.guide.GuideCatalog
@@ -177,7 +178,6 @@ fun GuideScreen(
     val context = LocalContext.current
     val canRecordToServer = LocalCanRecordToServer.current
 
-    val windowHours by settingsVm.epgWindowHours.collectAsStateWithLifecycle()
     val guideScale by settingsVm.guideScale.collectAsStateWithLifecycle()
     val displayScaleLiveTv by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle()
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle()
@@ -284,9 +284,11 @@ fun GuideScreen(
     }
     val displayChannels = if (favoritesOnly) favoriteChannels else groupedChannels
 
-    // Grid window: history back to the retention edge, forward to the EPG window.
-    val historyHours = state.epgHistoryHours.coerceAtLeast(1)
-    // Loaded EPG span in whole days either side of now, for the Jump To sheet.
+    // Grid window: the playlist's Guide Days setting (epgRetentionDays) in
+    // BOTH directions (Logan 2026-09-11); the retired Settings > Network
+    // "Guide Window" preference no longer shapes the timeline.
+    // Loaded EPG span in whole days either side of now, for the Jump To sheet
+    // and (on All Available) for the timeline extent itself.
     val (epgDaysBack, epgDaysAhead) = remember(state.epgByChannel) {
         var minStart = Long.MAX_VALUE; var maxEnd = Long.MIN_VALUE
         for (list in state.epgByChannel.values) {
@@ -300,14 +302,25 @@ fun GuideScreen(
         back to ahead
     }
     // A Dispatcharr 0.30+ server keeps many days and ensureGuideForward
-    // fetches the jumped day on demand, so Jump To offers two weeks there
-    // (Logan 2026-09-10); other sources are limited to what is loaded.
-    val epgDaysAheadOffered = state.playlist?.let { pl ->
+    // fetches the jumped day on demand, so Jump To offers exactly the
+    // playlist's Guide Days there, back and ahead (Logan 2026-09-11); the
+    // 14-day ceiling below is a Jump To sheet constraint, not a fetch limit.
+    // Other sources are limited to the guide their XMLTV actually carries.
+    val guideDaysOffered = state.playlist?.let { pl ->
         val dispatcharr = pl.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrApiKey.name ||
             pl.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrUserPass.name
-        if (dispatcharr && pl.dispatcharrVersionAtLeast("0.30.0")) 14 else null
-    } ?: epgDaysAhead
-    val forwardHours = if (windowHours <= 0) 48 else windowHours.coerceAtLeast(3)
+        if (dispatcharr && pl.dispatcharrVersionAtLeast("0.30.0"))
+            resolveGuideDays(pl.epgRetentionDays)
+        else null
+    }
+    val epgDaysAheadOffered = guideDaysOffered ?: epgDaysAhead
+    val epgDaysBackOffered = guideDaysOffered ?: epgDaysBack
+    // Extent: a fixed Guide Days setting drives both directions from the
+    // setting; All Available (and non-Dispatcharr sources) follow the guide
+    // that is actually loaded.
+    val historyHours = (guideDaysOffered?.times(24)
+        ?: minOf(state.epgHistoryHours, epgDaysBack * 24)).coerceAtLeast(1)
+    val forwardHours = (guideDaysOffered?.times(24) ?: (epgDaysAhead * 24)).coerceAtLeast(3)
     // Quantized to 15 min so re-entering the tab within that window reuses
     // the memoized rows instead of rebuilding them for a new "now".
     val windowStartMs = remember(historyHours) {
@@ -712,7 +725,7 @@ fun GuideScreen(
     val fullScreenSlot = com.aeriotv.android.feature.main.LocalTvFullScreenOverlay.current
     val jumpOverlay: @Composable () -> Unit = {
         com.aeriotv.android.feature.livetv.GuideJumpTvOverlay(
-            daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
+            daysBack = epgDaysBackOffered.coerceIn(0, 14),
             daysAhead = epgDaysAheadOffered.coerceIn(1, 14),
             onJump = startJump,
             onBackToNow = snapToNow,
@@ -869,7 +882,7 @@ fun GuideScreen(
         com.aeriotv.android.feature.livetv.GuideJumpSheet(
             // Days follow the EPG that is actually loaded (Logan 2026-09-10),
             // back no further than the grid's own history window.
-            daysBack = minOf(epgDaysBack, (historyHours + 23) / 24).coerceIn(0, 14),
+            daysBack = epgDaysBackOffered.coerceIn(0, 14),
             daysAhead = epgDaysAheadOffered.coerceIn(1, 14),
             onJump = startJump,
             onBackToNow = snapToNow,

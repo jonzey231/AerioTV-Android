@@ -70,7 +70,6 @@ fun NetworkSettingsScreen(
     val timeoutSecs by viewModel.networkTimeoutSecs.collectAsStateWithLifecycle(initialValue = 15.0)
     val maxRetries by viewModel.maxRetries.collectAsStateWithLifecycle(initialValue = 3)
     val bufferSize by viewModel.streamBufferSize.collectAsStateWithLifecycle(initialValue = "default")
-    val epgWindowHours by viewModel.epgWindowHours.collectAsStateWithLifecycle(initialValue = 24)
     val backgroundRefreshEnabled by viewModel.backgroundRefreshEnabled
         .collectAsStateWithLifecycle(initialValue = true)
     val backgroundRefreshIntervalMins by viewModel.backgroundRefreshIntervalMins
@@ -103,10 +102,6 @@ fun NetworkSettingsScreen(
             BufferSizeSection(
                 current = bufferSize,
                 onSelect = viewModel::setStreamBufferSize,
-            )
-            EpgWindowSection(
-                currentHours = epgWindowHours,
-                onSelect = viewModel::setEpgWindowHours,
             )
             BackgroundRefreshSection(
                 enabled = backgroundRefreshEnabled,
@@ -243,30 +238,6 @@ private fun SettingsCard(
     }
 }
 
-/**
- * EPG Window picker. iOS `epgWindowHours` parity (Network settings radio
- * list 6/12/24/36/48/72h + "All available"). The sentinel 0 = All. Drives
- * GuideScreen's horizontal time-strip span.
- */
-@Composable
-private fun EpgWindowSection(
-    currentHours: Int,
-    onSelect: (Int) -> Unit,
-) {
-    SettingsSection(
-        header = "EPG Window",
-        footer = "How far ahead the TV Guide timeline extends. How far back it scrolls is set per playlist by Guide History. Wider windows need more horizontal scrolling; \"All available\" spans your full loaded guide data.",
-    ) {
-        EPG_WINDOW_OPTIONS.forEach { opt ->
-            SettingsSelectionRow(
-                label = opt.label,
-                selected = opt.hours == currentHours,
-                onClick = { onSelect(opt.hours) },
-            )
-        }
-    }
-}
-
 /** tvOS Request Timeout options (s_10): 5/10/15/30/60 seconds. */
 private val TIMEOUT_OPTIONS: List<Int> = listOf(5, 10, 15, 30, 60)
 
@@ -322,18 +293,6 @@ private val BG_REFRESH_INTERVAL_OPTIONS: List<BgRefreshIntervalOption> = listOf(
     BgRefreshIntervalOption(720, "Every 12 hours"),
     BgRefreshIntervalOption(1440, "Every 24 hours"),
     BgRefreshIntervalOption(2880, "Every 48 hours"),
-)
-
-private data class EpgWindowOption(val hours: Int, val label: String)
-
-private val EPG_WINDOW_OPTIONS: List<EpgWindowOption> = listOf(
-    EpgWindowOption(6, "6 hours"),
-    EpgWindowOption(12, "12 hours"),
-    EpgWindowOption(24, "24 hours"),
-    EpgWindowOption(36, "36 hours"),
-    EpgWindowOption(48, "48 hours"),
-    EpgWindowOption(72, "72 hours"),
-    EpgWindowOption(0, "All available"),
 )
 
 data class BufferOption(val id: String, val label: String, val detail: String, val cachingMs: Int)

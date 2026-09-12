@@ -12,6 +12,10 @@ import com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.db.entity.dispatcharrVersionAtLeast
 import com.aeriotv.android.core.data.db.entity.dispatcharrAccountProfileIdList
+import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
+import com.aeriotv.android.core.data.db.entity.resolveGuideDays
+import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_BACK
+import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_AHEAD
 import android.content.Context
 import android.util.Log
 import com.aeriotv.android.core.network.DispatcharrAuthBroker
@@ -324,7 +328,7 @@ class PlaylistRepository @Inject constructor(
                     password = request.password?.takeIf { it.isNotBlank() },
                     dispatcharrProfileId = request.dispatcharrProfileId,
                     vodEnabled = request.vodEnabled,
-                    epgRetentionDays = request.epgRetentionDays.coerceIn(1, 30),
+                    epgRetentionDays = sanitizeGuideDays(request.epgRetentionDays),
                 ),
             )
         }
@@ -396,7 +400,7 @@ class PlaylistRepository @Inject constructor(
             dispatcharrVodSeriesEnabled = perms?.vodSeriesEnabled ?: true,
             dispatcharrServerVersion = serverVersion ?: "",
             vodEnabled = request.vodEnabled,
-            epgRetentionDays = request.epgRetentionDays.coerceIn(1, 30),
+            epgRetentionDays = sanitizeGuideDays(request.epgRetentionDays),
         )
         // New / re-loaded playlist becomes the active one. Mirrors iOS commit
         // f72b942 — wrap "deactivate others + upsert" in a transactional DAO
@@ -667,7 +671,7 @@ class PlaylistRepository @Inject constructor(
     /**
      * Dispatcharr 0.30 window extension (iOS 076d041 parity): the base grid
      * paints the default -1h..+24h fast; this fills history back to the
-     * playlist's Guide History (6 h on very large playlists) and forward to
+     * playlist's Guide Days (6 h of history on very large playlists) and forward to
      * the Guide Window, one day per request via `start`/`end`, merging each
      * chunk into the cache (non-authoritative, like an upstream layer).
      */
@@ -708,18 +712,84 @@ class PlaylistRepository @Inject constructor(
         return total
     }
 
+    /**
+     * One grid chunk: fetch + merge. Returns the programme count, or null when
+     * the request failed (the caller stops that direction).
+     */
+    private suspend fun fetchGridChunk(
+        playlist: PlaylistEntity,
+        base: String,
+        start: Long,
+        end: Long,
+    ): Int? {
+        val programmes = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+            }
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            Log.w("PlaylistRepo", "grid window chunk failed; stopping: $it")
+            return null
+        }
+        if (programmes.isEmpty()) return 0
+        runCatching { saveEpgToCache(playlist.id, programmes, authoritative = false) }
+            .onFailure { Log.w("PlaylistRepo", "grid window merge failed", it) }
+        return programmes.size
+    }
+
     private fun extendGridWindowInBackground(playlist: PlaylistEntity, base: String) {
         layeringJobs.compute(playlist.id) { _, existing ->
             if (existing?.isActive == true) return@compute existing
             layeringScope.launch {
                 val now = System.currentTimeMillis()
                 val dayMs = 86_400_000L
-                val historyMs = if (playlist.channelCount > 5_000) 6L * 3_600_000L
-                    else playlist.epgRetentionDays.coerceIn(1, 30) * dayMs
-                val windowHours = runCatching { appPreferences.epgWindowHours.first() }.getOrDefault(24)
-                val forwardEnd = now + windowHours.coerceAtLeast(1) * 3_600_000L
+                // Logan 2026-09-11: the playlist's Guide Days setting
+                // (epgRetentionDays) governs the grid in BOTH directions. The
+                // Settings > Network "Guide Window" preference no longer has
+                // any say here. Huge panels still clamp HISTORY to 6h only.
+                val guideDays = resolveGuideDays(playlist.epgRetentionDays)
+                val hugePanel = playlist.channelCount > 5_000
                 val baseStart = now - 3_600_000L
                 val baseEnd = now + dayMs
+                if (guideDays == null) {
+                    // All Available: walk one-day chunks outward until the
+                    // server runs dry (two consecutive empty chunks), bounded
+                    // at 30 days back / 60 days ahead.
+                    var total = 0
+                    val historyMs = if (hugePanel) 6L * 3_600_000L
+                        else GUIDE_DAYS_ALL_MAX_BACK * dayMs
+                    val historyFloor = now - historyMs
+                    var backDays = 0
+                    var cursor = baseStart
+                    var empties = 0
+                    while (cursor > historyFloor && empties < 2) {
+                        val chunkStart = maxOf(historyFloor, cursor - dayMs)
+                        if (chunkStart >= cursor) break
+                        val n = fetchGridChunk(playlist, base, chunkStart, cursor) ?: break
+                        if (n == 0) empties++ else { empties = 0; total += n }
+                        cursor = chunkStart
+                        backDays = ((now - cursor + dayMs - 1) / dayMs).toInt()
+                        delay(250)
+                    }
+                    val forwardCeiling = now + GUIDE_DAYS_ALL_MAX_AHEAD * dayMs
+                    var aheadDays = 1
+                    cursor = baseEnd
+                    empties = 0
+                    while (cursor < forwardCeiling && empties < 2) {
+                        val chunkEnd = minOf(forwardCeiling, cursor + dayMs)
+                        if (chunkEnd <= cursor) break
+                        val n = fetchGridChunk(playlist, base, cursor, chunkEnd) ?: break
+                        if (n == 0) empties++ else { empties = 0; total += n }
+                        cursor = chunkEnd
+                        aheadDays = ((cursor - now + dayMs - 1) / dayMs).toInt()
+                        delay(250)
+                    }
+                    Log.i("PlaylistRepo", "grid window: all available, back ${backDays}d ahead ${aheadDays}d")
+                    Log.i("PlaylistRepo", "grid window: merged $total programmes (all available)")
+                    return@launch
+                }
+                val historyMs = if (hugePanel) 6L * 3_600_000L else guideDays * dayMs
+                val forwardEnd = now + guideDays * dayMs
                 val chunks = mutableListOf<Pair<Long, Long>>()
                 var hEnd = baseStart
                 val historyStart = now - historyMs
@@ -735,22 +805,16 @@ class PlaylistRepository @Inject constructor(
                     fStart = fEnd
                 }
                 if (chunks.isEmpty()) return@launch
-                Log.i("PlaylistRepo", "grid window: ${chunks.size} chunk(s), history ${historyMs / 3_600_000}h, forward +${windowHours}h")
+                Log.i(
+                    "PlaylistRepo",
+                    "grid window: ${chunks.size} chunk(s), history ${historyMs / 3_600_000}h, " +
+                        "forward +${guideDays * 24}h (playlist days $guideDays)",
+                )
                 var total = 0
                 for ((start, end) in chunks) {
-                    val programmes = runCatching {
-                        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                            dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
-                        }
-                    }.getOrElse {
-                        if (it is CancellationException) throw it
-                        Log.w("PlaylistRepo", "grid window chunk failed; stopping: $it")
-                        return@launch
-                    }
-                    if (programmes.isEmpty()) continue
-                    runCatching { saveEpgToCache(playlist.id, programmes, authoritative = false) }
-                        .onFailure { Log.w("PlaylistRepo", "grid window merge failed", it) }
-                    total += programmes.size
+                    val n = fetchGridChunk(playlist, base, start, end) ?: return@launch
+                    if (n == 0) continue
+                    total += n
                     delay(250)
                 }
                 Log.i("PlaylistRepo", "grid window: merged $total programmes over ${chunks.size} chunk(s)")
@@ -1039,7 +1103,7 @@ class PlaylistRepository @Inject constructor(
                 // Catch-up depth (task #210): Dispatcharr's grid only retains a
                 // couple of days of history, so Direct Connect users could not
                 // browse catch-up content older than that even when the playlist's
-                // Guide History setting allows more. The server knows where its
+                // Guide Days setting allows more. The server knows where its
                 // guide comes from, though: /api/epg/sources/ lists the XMLTV
                 // feeds assigned to channels, and those upstream feeds usually
                 // carry a much deeper past window. Fetch each active xmltv source
@@ -1167,8 +1231,9 @@ class PlaylistRepository @Inject constructor(
      * EPGGuideView.swift `loadFromCache` predicate). Returns only programmes
      * whose airing overlaps [[fromMillis]..[toMillis]], so cold-launch paint
      * loads ~5-15% of the cache (a 24h window over a 7-day grid) instead of
-     * every row. The user's epgWindowHours preference dictates [toMillis] in
-     * the calling ViewModel; [fromMillis] is typically now-1h so the
+     * every row. The playlist's Guide Days setting (epgRetentionDays)
+     * dictates [toMillis] in the calling ViewModel; [fromMillis] is
+     * typically now minus that same span, or now-1h on the quick pass, so the
      * "currently airing" programme is always inside the result regardless of
      * how long it's been running.
      */
@@ -1252,7 +1317,9 @@ class PlaylistRepository @Inject constructor(
         val lastSweep = lastRetentionSweepAtMs[playlistId] ?: 0L
         if (now - lastSweep >= RETENTION_SWEEP_COOLDOWN_MS) {
             lastRetentionSweepAtMs[playlistId] = now
-            val retentionDays = (dao.byId(playlistId)?.epgRetentionDays ?: 7).coerceAtLeast(1)
+            // All Available prunes at the hard 30-day bound.
+            val retentionDays = resolveGuideDays(dao.byId(playlistId)?.epgRetentionDays ?: 7)
+                ?: GUIDE_DAYS_ALL_MAX_BACK
             epgProgrammeDao.deleteEndedBeforeForPlaylist(
                 playlistId,
                 now - retentionDays * 24L * 60L * 60L * 1000L,

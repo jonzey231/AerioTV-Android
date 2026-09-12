@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -446,17 +447,22 @@ fun EditPlaylistScreen(
             // guide browsable into the past.
             item {
                 Section(
-                    header = "Guide History",
-                    footer = "How many days of already-aired guide data to keep for this playlist. " +
-                        "Past shows on channels with catch-up can be replayed from the guide. " +
-                        "Longer history means a larger guide cache.",
+                    header = "Guide Days",
+                    footer = "How many days of guide data to load, back and ahead. " +
+                        "Dispatcharr only; other sources show what their guide carries.",
                 ) {
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                        listOf(1, 3, 7, 14, 30).forEach { days ->
+                        // 0 = All Available (Logan 2026-09-11); a stored 30
+                        // from the old option reads back as All Available.
+                        listOf(1, 3, 7, 14, 0).forEach { days ->
                             ProfileRow(
-                                label = if (days == 1) "1 Day" else "$days Days",
+                                label = when (days) {
+                                    0 -> "All Available"
+                                    1 -> "1 Day"
+                                    else -> "$days Days"
+                                },
                                 detail = if (days == 7) "Default" else null,
-                                selected = epgRetentionDays == days,
+                                selected = sanitizeGuideDays(epgRetentionDays) == days,
                                 onClick = { epgRetentionDays = days },
                             )
                         }
