@@ -2321,6 +2321,11 @@ data class VODCustomProps(
     @SerialName("movie_image") val movieImage: JsonElement? = null,
     val cover: JsonElement? = null,
     val image: JsonElement? = null,
+    /** Series provider-info nests the air / release date here, in any of
+     *  three spellings depending on the upstream panel. */
+    @SerialName("release_date") val releaseDateSnake: JsonElement? = null,
+    @SerialName("releaseDate") val releaseDateCamel: JsonElement? = null,
+    @SerialName("first_air_date") val firstAirDate: JsonElement? = null,
 ) {
     operator fun get(name: String): JsonElement? = when (name) {
         "plot" -> plot
@@ -2336,6 +2341,9 @@ data class VODCustomProps(
         "movie_image" -> movieImage
         "cover" -> cover
         "image" -> image
+        "release_date" -> releaseDateSnake
+        "releaseDate" -> releaseDateCamel
+        "first_air_date" -> firstAirDate
         else -> null
     }
 
@@ -2468,6 +2476,15 @@ data class DispatcharrVODProviderInfo(
     val effectiveGenre: String?
         get() = genre?.takeIf { it.isNotBlank() }
             ?: customProperties?.stringField("genre")
+
+    /** Release date for a movie, first-air date for a series. The movie
+     *  endpoint hoists `release_date`; the series endpoint nests it (and
+     *  spells it three different ways depending on the upstream panel). */
+    val effectiveReleaseDate: String?
+        get() = releaseDate?.takeIf { it.isNotBlank() }
+            ?: customProperties?.stringField("release_date")
+            ?: customProperties?.stringField("releaseDate")
+            ?: customProperties?.stringField("first_air_date")
 
     val effectiveTrailer: String?
         get() = youtubeTrailer.flexString()

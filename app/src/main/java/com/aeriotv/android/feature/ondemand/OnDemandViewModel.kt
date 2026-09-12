@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.aeriotv.android.feature.movies.cleanArtTitle
 import com.aeriotv.android.feature.movies.displayTitle
 import com.aeriotv.android.feature.movies.tmdbArtKey
 import com.aeriotv.android.feature.movies.toMediaItem
@@ -1641,34 +1642,40 @@ class OnDemandViewModel @Inject constructor(
         return withContext(Dispatchers.Default) {
             val seen = mutableSetOf(selfKey)
             val out = mutableListOf<com.aeriotv.android.feature.movies.MediaItem>()
+            // Apple's LibraryMatcher (VODModels.swift:1219-1239) over Apple's
+            // exact pool: the browse list plus the search results, NOT the
+            // lazily resolved-detail cache, which was adding titles tvOS never
+            // sees and made the Android strip longer than the tvOS one
+            // (Logan 2026-09-11). Every entry is indexed by BOTH its tmdb id
+            // and its cleaned title, and a recommendation matches on the id
+            // first and the title second, with no per-rec media-type filter:
+            // the pool is already type-scoped.
             if (isMovie) {
-                val library = snapshot.movies + snapshot.searchResults + snapshot.resolvedMovies.values
+                val library = snapshot.movies + snapshot.searchResults
                 val byTmdb = HashMap<String, DispatcharrVODMovie>()
                 val byTitle = HashMap<String, DispatcharrVODMovie>()
                 for (m in library) {
-                    val t = m.tmdbId
-                    if (!t.isNullOrBlank()) byTmdb.putIfAbsent(t, m)
-                    else byTitle.putIfAbsent(normalizeVodTitle(m.displayName), m)
+                    m.tmdbId?.takeIf { it.isNotBlank() }?.let { byTmdb.putIfAbsent(it, m) }
+                    cleanArtTitle(m.displayName).takeIf { it.isNotEmpty() }
+                        ?.let { byTitle.putIfAbsent(it, m) }
                 }
                 for (rec in recs) {
-                    if (!rec.isMovie) continue
-                    val hit = byTmdb[rec.id] ?: byTitle[normalizeVodTitle(rec.title)] ?: continue
+                    val hit = byTmdb[rec.id] ?: byTitle[cleanArtTitle(rec.title)] ?: continue
                     val item = hit.toMediaItem()
                     if (seen.add(item.key)) out += item
                     if (out.size >= 12) break
                 }
             } else {
-                val library = snapshot.series + snapshot.seriesSearchResults + snapshot.resolvedSeries.values
+                val library = snapshot.series + snapshot.seriesSearchResults
                 val byTmdb = HashMap<String, DispatcharrVODSeries>()
                 val byTitle = HashMap<String, DispatcharrVODSeries>()
                 for (s in library) {
-                    val t = s.tmdbId
-                    if (!t.isNullOrBlank()) byTmdb.putIfAbsent(t, s)
-                    else byTitle.putIfAbsent(normalizeVodTitle(s.displayName), s)
+                    s.tmdbId?.takeIf { it.isNotBlank() }?.let { byTmdb.putIfAbsent(it, s) }
+                    cleanArtTitle(s.displayName).takeIf { it.isNotEmpty() }
+                        ?.let { byTitle.putIfAbsent(it, s) }
                 }
                 for (rec in recs) {
-                    if (rec.isMovie) continue
-                    val hit = byTmdb[rec.id] ?: byTitle[normalizeVodTitle(rec.title)] ?: continue
+                    val hit = byTmdb[rec.id] ?: byTitle[cleanArtTitle(rec.title)] ?: continue
                     val item = hit.toMediaItem()
                     if (seen.add(item.key)) out += item
                     if (out.size >= 12) break

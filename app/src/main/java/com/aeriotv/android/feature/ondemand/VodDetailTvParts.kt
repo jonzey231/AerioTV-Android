@@ -52,7 +52,9 @@ import com.aeriotv.android.core.tv.TvActionMenuDialog
 import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.movies.MediaItem
+import com.aeriotv.android.feature.movies.displayTitle
 import com.aeriotv.android.feature.movies.formatRating
+import com.aeriotv.android.feature.movies.tv.TvPage
 import com.aeriotv.android.feature.movies.tv.TvPosterCard
 import com.aeriotv.android.ui.tv.tvFocusScale
 
@@ -62,8 +64,21 @@ import com.aeriotv.android.ui.tv.tvFocusScale
  * the 960x540 dp TV canvas). Nothing here is reached on a phone.
  */
 
-/** tvOS edge inset: 56 pt -> 28 dp (VODDetailView.swift:377). */
-internal val TV_DETAIL_INSET = 28.dp
+/**
+ * Page horizontal margin for the TV detail page. tvOS lays the column out
+ * inside the 90 pt tvOS safe area and adds 56 pt of its own
+ * (VODDetailView.swift:377), so the content edge sits ~146 pt = 73 dp in.
+ * Android expresses the same thing as this app's canon overscan
+ * (TvPage.overscan = 80 pt -> 40 dp) plus the tvOS 56 pt -> 28 dp inset, so
+ * the detail page and the media page share one left edge.
+ */
+internal val TV_DETAIL_INSET = TvPage.overscan + 28.dp
+
+/**
+ * The hero CARD's margin: the same overscan plus tvOS's own 16 pt -> 8 dp
+ * hero padding (VODDetailView.swift:657), matching TvMediaPage's hero.
+ */
+internal val TV_DETAIL_HERO_INSET = TvPage.overscan + TvPage.heroInset
 
 /**
  * `MoviesHeroButton` (MoviesView.swift:3393-3459): capsule, 60 pt = 30 dp
@@ -237,7 +252,7 @@ internal fun TvEpisodeCard(
         Text(
             text = title,
             fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
+            lineHeight = 12.sp,
             color = MaterialTheme.colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -246,6 +261,7 @@ internal fun TvEpisodeCard(
             Text(
                 text = meta,
                 fontSize = 9.sp,
+                lineHeight = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -280,7 +296,8 @@ internal fun TvDetailsBlock(
         Text(
             text = "Details",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            // tvOS .headlineSmall is SEMIbold, not bold (Typography.swift).
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground,
         )
         Spacer(Modifier.height(9.dp))
@@ -295,8 +312,11 @@ internal fun TvDetailsBlock(
                             color = MaterialTheme.colorScheme.tertiary,
                         )
                         Text(
+                            // tvOS .bodyMedium: 24 pt -> 12 sp, regular, with
+                            // the font's own leading.
                             text = value,
-                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            lineHeight = 15.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -325,7 +345,7 @@ internal fun TvRelatedSection(
         Text(
             text = "Available Related Titles",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.padding(horizontal = TV_DETAIL_INSET),
         )
@@ -374,7 +394,7 @@ internal fun TvDetailHero(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp)
+            .padding(horizontal = TV_DETAIL_HERO_INSET)
             .padding(top = 20.dp)
             .height(310.dp)
             .clip(RoundedCornerShape(12.dp)),
@@ -415,6 +435,7 @@ internal fun TvDetailHero(
             Text(
                 text = title.ifBlank { "Untitled" },
                 fontSize = 26.sp,
+                lineHeight = 30.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 2,
@@ -430,17 +451,31 @@ internal fun TvDetailHero(
                             Text(
                                 text = "·",
                                 fontSize = 11.sp,
+                                lineHeight = 13.sp,
                                 color = MaterialTheme.colorScheme.tertiary,
                             )
                         }
                         Text(
+                            // tvOS: system(size: 22, weight: .medium)
+                            // (VODDetailView.swift:716).
                             text = part,
                             fontSize = 11.sp,
+                            lineHeight = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     if (!rating.isNullOrBlank()) {
+                        // tvOS puts a middle dot before the star too
+                        // (VODDetailView.swift:707).
+                        if (metaParts.isNotEmpty()) {
+                            Text(
+                                text = "·",
+                                fontSize = 11.sp,
+                                lineHeight = 13.sp,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
                         Icon(
                             imageVector = Icons.Filled.Star,
                             contentDescription = null,
@@ -450,6 +485,7 @@ internal fun TvDetailHero(
                         Text(
                             text = rating,
                             fontSize = 11.sp,
+                            lineHeight = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -460,6 +496,10 @@ internal fun TvDetailHero(
                 Text(
                     text = plot,
                     fontSize = 11.sp,
+                    // tvOS .bodySmall keeps the font's own leading; a bare
+                    // fontSize leaves Compose on bodyLarge's 24 sp line
+                    // height, which read as double-spaced on the Streamer.
+                    lineHeight = 14.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
                     maxLines = 4,
                     overflow = TextOverflow.Ellipsis,
@@ -470,3 +510,54 @@ internal fun TvDetailHero(
         }
     }
 }
+
+/**
+ * tvOS `VODEpisode.cleanedTitle(showName:)` (VODModels.swift:1137): provider
+ * episode titles are usually the show's own name plus markers
+ * ("A Knight of the Seven Kingdoms (2026) S01E01"), which is why the Android
+ * cards were all showing the SHOW title. The show name, year groups, season /
+ * episode markers and leftover separators are stripped; an empty result tells
+ * the caller to fall back to TMDB's episode name.
+ */
+internal fun cleanedEpisodeTitle(raw: String, showName: String): String {
+    var t = raw.trim()
+    val show = displayTitle(showName, null).trim()
+    if (show.isNotEmpty() && t.lowercase().startsWith(show.lowercase())) {
+        t = t.substring(show.length)
+    }
+    episodeTitleNoise.forEach { t = it.replace(t, " ") }
+    t = episodeTitleLeadingJunk.replace(t, "")
+    t = episodeTitleTrailingJunk.replace(t, "")
+    t = episodeTitleGaps.replace(t, " ").trim()
+    while (true) {
+        val m = episodeTitleTrailingYear.find(t) ?: break
+        val head = t.substring(0, m.range.first).trim()
+        if (head.isEmpty()) break
+        t = head
+    }
+    return t.trim()
+}
+
+private val episodeTitleNoise = listOf(
+    Regex("""\((?:19|20)\d{2}\)"""),
+    Regex("""\bS\d{1,2}\s*E\d{1,3}\b""", RegexOption.IGNORE_CASE),
+    Regex("""\b\d{1,2}x\d{1,3}\b""", RegexOption.IGNORE_CASE),
+    Regex("""\bepisode\s*\d{1,3}\b""", RegexOption.IGNORE_CASE),
+    Regex("""\bseason\s*\d{1,2}\b""", RegexOption.IGNORE_CASE),
+)
+private val episodeTitleLeadingJunk = Regex("""^[\s\-:·|)(\[\]]+""")
+private val episodeTitleTrailingJunk = Regex("""[\s\-:·|(\[]+$""")
+private val episodeTitleGaps = Regex("""\s{2,}""")
+private val episodeTitleTrailingYear = Regex("""\s*\((?:19|20)\d{2}\)\s*$""")
+
+/**
+ * Genre list for the Details block: providers emit "Animation / Comedy",
+ * "Animation|Comedy" or "Animation,Comedy"; tvOS shows one comma-separated
+ * line, so every separator is normalized to ", ".
+ */
+internal fun joinGenres(raw: String): String =
+    raw.split(',', '/', '|')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .joinToString(", ")

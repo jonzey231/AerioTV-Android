@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -331,7 +332,9 @@ fun MovieDetailScreen(
                         }
                         TvDetailHero(
                             artUrl = cachedBackdropUrl ?: info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl,
-                            title = movie.displayName,
+                            // tvOS displayName drops every trailing
+                            // "(YYYY)" group (VODModels.swift:1284).
+                            title = displayTitle(movie.displayName, null),
                             // tvOS movie meta: year, runtime, first genre token
                             // (no MOVIE chip on TV), then the rating.
                             metaParts = listOfNotNull(
@@ -488,9 +491,14 @@ fun MovieDetailScreen(
                         val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
                         val runtimeSecs = info?.durationSecs?.takeIf { it > 0 }
                             ?: movie.durationSecs?.takeIf { it > 0 }
+                        // tvOS tvFacts order (VODDetailView.swift:1124-1147)
+                        // laid into a 2-column row-major grid: left column
+                        // Genre then Runtime, right column Released then
+                        // Director.
                         val facts = buildList {
-                            genre?.let { add("Genre" to it) }
-                            info?.releaseDate?.takeIf { it.length > 4 }?.let { add("Released" to it) }
+                            genre?.let { add("Genre" to joinGenres(it)) }
+                            info?.effectiveReleaseDate?.takeIf { it.length > 4 }
+                                ?.let { add("Released" to it) }
                             runtimeSecs?.let { add("Runtime" to formatDuration(it)) }
                             director?.let { add("Director" to it) }
                             if (castCrewPeople.isEmpty()) cast?.let { add("Cast" to it) }
@@ -715,7 +723,7 @@ private fun HeroSection(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .padding(
-                    horizontal = if (isTv) 48.dp else 16.dp,
+                    horizontal = if (isTv) TV_DETAIL_INSET else 16.dp,
                     vertical = 16.dp,
                 ),
             verticalAlignment = Alignment.Bottom,
@@ -931,7 +939,7 @@ private fun InfoSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = if (isTv) 48.dp else 16.dp, vertical = 16.dp),
+            .padding(horizontal = if (isTv) TV_DETAIL_INSET else 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (!plot.isNullOrBlank()) {
@@ -1028,13 +1036,14 @@ private fun CastCrewSection(
     onPersonClick: (TmdbPerson) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val edgeInset = if (isTv) 48.dp else 16.dp
+    val edgeInset = if (isTv) TV_DETAIL_INSET else 16.dp
     Column(modifier = modifier.fillMaxWidth().padding(bottom = 16.dp)) {
         Text(
             text = "Cast & Crew",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Bold,
+            // tvOS .headlineSmall is SEMIbold (Typography.swift).
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = edgeInset),
         )
         Spacer(Modifier.height(10.dp))
@@ -1110,12 +1119,16 @@ private fun PersonCard(
         }
         Spacer(Modifier.height(6.dp))
         // Name and role centered under the photo (Logan 2026-09-10, all platforms).
+        // tvOS: name .labelMedium (20 pt -> 10 sp, medium), role .labelSmall
+        // (18 pt -> 9 sp), one line each on TV so a two-word name does not
+        // wrap inside the 100 dp card.
         Text(
             text = person.name,
-            style = MaterialTheme.typography.labelLarge,
+            fontSize = if (isTv) 10.sp else 12.sp,
+            lineHeight = if (isTv) 12.sp else 14.sp,
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -1123,9 +1136,10 @@ private fun PersonCard(
         person.role?.takeIf { it.isNotBlank() }?.let { role ->
             Text(
                 text = role,
-                style = MaterialTheme.typography.labelMedium,
+                fontSize = if (isTv) 9.sp else 11.sp,
+                lineHeight = if (isTv) 11.sp else 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = if (isTv) 1 else 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),

@@ -71,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -311,11 +312,16 @@ fun SeriesDetailScreen(
         ?.let { "Cast & Crew · Episode $it" }
         ?: "Cast & Crew"
 
+    // Card title: TMDB's episode name first, else the provider's own title
+    // with the SHOW name and the S01E01 markers stripped (the raw provider
+    // title is usually just the show's name, which is what every Android card
+    // was showing), else "Episode N". tvOS: VODDetailView.swift:793-798.
     fun episodeTitle(ep: DispatcharrVODEpisode): String {
-        val provider = ep.displayName.trim()
-        if (provider.length > 2) return provider
-        val tmdbName = ep.episodeNumber?.let { seasonStills[it]?.name }
-        return tmdbName ?: "Episode ${ep.episodeNumber ?: ep.id}"
+        val tmdbName = ep.episodeNumber?.let { seasonStills[it]?.name }?.takeIf { it.isNotBlank() }
+        if (tmdbName != null) return tmdbName
+        val own = cleanedEpisodeTitle(ep.displayName, series?.displayName ?: "")
+        if (own.length > 2) return own
+        return "Episode ${ep.episodeNumber ?: ep.id}"
     }
 
     fun episodeStill(ep: DispatcharrVODEpisode): String? =
@@ -504,7 +510,10 @@ fun SeriesDetailScreen(
                             ?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
                         TvDetailHero(
                             artUrl = cachedBackdropUrl ?: info?.backdropUrl ?: series.posterUrl ?: tmdbPosterUrl,
-                            title = series.displayName,
+                            // tvOS shows VODDisplayItem.displayName, which
+                            // drops every trailing "(YYYY)" group
+                            // (VODModels.swift:1284).
+                            title = displayTitle(series.displayName, null),
                             // tvOS series meta: year, first genre token (a
                             // series carries no runtime), then the rating.
                             metaParts = listOfNotNull(
@@ -639,7 +648,7 @@ fun SeriesDetailScreen(
                         Text(
                             text = "Episodes",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.padding(horizontal = edgeInset),
                         )
@@ -744,11 +753,22 @@ fun SeriesDetailScreen(
                             ?: series.genre?.takeIf { it.isNotBlank() } ?: tmdbDetails?.genres
                         val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
                         val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
+                        // tvOS tvFacts order (VODDetailView.swift:1124-1147)
+                        // laid into a 2-column row-major grid: left column
+                        // Genre then Seasons, right column Released then
+                        // Director.
                         val facts = buildList {
-                            genre?.let { add("Genre" to it) }
-                            info?.releaseDate?.takeIf { it.length > 4 }?.let { add("Released" to it) }
+                            genre?.let { add("Genre" to joinGenres(it)) }
+                            info?.effectiveReleaseDate?.takeIf { it.length > 4 }
+                                ?.let { add("Released" to it) }
                             if (episodes.isNotEmpty()) {
-                                add("Seasons" to "${seasons.size} seasons, ${episodes.size} episodes")
+                                val sN = seasons.size
+                                val eN = episodes.size
+                                add(
+                                    "Seasons" to
+                                        "$sN season${if (sN == 1) "" else "s"}, " +
+                                        "$eN episode${if (eN == 1) "" else "s"}",
+                                )
                             }
                             director?.let { add("Director" to it) }
                             if (castCrewPeople.isEmpty()) cast?.let { add("Cast" to it) }
@@ -950,7 +970,7 @@ private fun SeriesHeroSection(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .padding(
-                    horizontal = if (isTv) 48.dp else 16.dp,
+                    horizontal = if (isTv) TV_DETAIL_INSET else 16.dp,
                     vertical = 16.dp,
                 ),
             verticalAlignment = Alignment.Bottom,
@@ -1077,7 +1097,7 @@ private fun SeriesInfoSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = if (isTv) 48.dp else 16.dp, vertical = 16.dp),
+            .padding(horizontal = if (isTv) TV_DETAIL_INSET else 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (!plot.isNullOrBlank()) {
@@ -1176,7 +1196,7 @@ private fun CastCrewSection(
             text = title,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = edgeInset),
         )
         Spacer(Modifier.height(10.dp))
@@ -1250,12 +1270,16 @@ private fun PersonCard(
         }
         Spacer(Modifier.height(6.dp))
         // Name and role centered under the photo (Logan 2026-09-10, all platforms).
+        // tvOS: name .labelMedium (20 pt -> 10 sp, medium), role .labelSmall
+        // (18 pt -> 9 sp). labelLarge semibold at 14 sp wrapped
+        // "Yoshitaka Yamaya" across two lines on the 100 dp card.
         Text(
             text = person.name,
-            style = MaterialTheme.typography.labelLarge,
+            fontSize = if (isTv) 10.sp else 12.sp,
+            lineHeight = if (isTv) 12.sp else 14.sp,
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -1263,9 +1287,10 @@ private fun PersonCard(
         person.role?.takeIf { it.isNotBlank() }?.let { role ->
             Text(
                 text = role,
-                style = MaterialTheme.typography.labelMedium,
+                fontSize = if (isTv) 9.sp else 11.sp,
+                lineHeight = if (isTv) 11.sp else 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = if (isTv) 1 else 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
