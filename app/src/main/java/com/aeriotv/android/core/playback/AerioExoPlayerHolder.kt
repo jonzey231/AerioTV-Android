@@ -146,7 +146,8 @@ class AerioExoPlayerHolder @Inject constructor(
     @Volatile private var desiredStartGateMs: Int = LIVE_START_GATE_DEFAULT_MS
     /** In-memory mirror of AppPreferences.liveStartBufferMs so [playUrl] can
      *  read the learned hold-back without blocking the channel-tap path. */
-    @Volatile private var cachedLiveStartBuffers: Map<String, Int> = emptyMap()
+    @Volatile private var cachedLiveStartBuffers:
+        Map<String, com.aeriotv.android.core.preferences.LearnedStartBuffer> = emptyMap()
     /** iOS #37 kill-switch, cached at build/tune time. When false the stall +
      *  black-screen reload nets no-op; the cold-start no-data net stays armed. */
     @Volatile private var watchdogReloadEnabled: Boolean = true
@@ -262,24 +263,30 @@ class AerioExoPlayerHolder @Inject constructor(
             )
             return
         }
-        val learned = cachedLiveStartBuffers[channelId] ?: 0
+        val learned = cachedLiveStartBuffers[channelId]?.ms ?: 0
         val next = (snapshot.worstGapMs + 1_000L)
             .coerceAtMost(LIVE_START_GATE_MAX_MS.toLong())
             .toInt()
             .coerceAtLeast(learned)
-        if (next <= learned) return
+        // A stall that does not raise the value still RE-CONFIRMS it, which
+        // re-arms its 30 minute life (Logan 2026-09-12); only the timestamp
+        // moves in that case.
+        val learnedAtMs = System.currentTimeMillis()
         val ratioText = if (ratio == null) "n/a" else "%.2f".format(ratio)
         Log.i(
             TAG,
             "[HOLDBACK] ch=${snapshot.channelName} bursty feed " +
                 "(media ratio $ratioText, worst gap ${snapshot.worstGapMs} ms): " +
-                "start buffer $learned -> $next ms for the NEXT tune",
+                "start buffer $learned -> $next ms for the NEXT tune " +
+                "(learned at $learnedAtMs)",
         )
         // Update the cache immediately so a tune that beats the DataStore write
         // still applies the new gate; the write returns the stored map.
-        cachedLiveStartBuffers = cachedLiveStartBuffers + (channelId to next)
+        cachedLiveStartBuffers = cachedLiveStartBuffers +
+            (channelId to com.aeriotv.android.core.preferences.LearnedStartBuffer(next, learnedAtMs))
         prefScope.launch {
-            cachedLiveStartBuffers = appPreferences.setLiveStartBufferMs(channelId, next)
+            cachedLiveStartBuffers =
+                appPreferences.setLiveStartBufferMs(channelId, next, learnedAtMs)
         }
     }
 
@@ -1485,8 +1492,22 @@ class AerioExoPlayerHolder @Inject constructor(
         // and a deeper gate would only slow the open.
         val kind = PlaybackTracer.urlKind(url)
         val effectiveChannelId = channelId ?: currentChannelIdForRebuild
-        val learnedGateMs =
-            if (kind == "live") effectiveChannelId?.let { cachedLiveStartBuffers[it] } ?: 0 else 0
+        // A learned hold-back expires after 30 minutes so one bad session cannot
+        // pin a channel's start buffer forever (Logan 2026-09-12). A missing
+        // timestamp (prefs written before the stamp existed) reads as expired.
+        val learnedEntry =
+            if (kind == "live") effectiveChannelId?.let { cachedLiveStartBuffers[it] } else null
+        val learnedAgeMs =
+            learnedEntry?.let { System.currentTimeMillis() - it.learnedAtMs } ?: 0L
+        val learnedExpired = learnedEntry != null && learnedAgeMs > HOLDBACK_LEARNED_TTL_MS
+        if (learnedExpired && learnedEntry != null) {
+            Log.i(
+                TAG,
+                "[HOLDBACK] learned ${learnedEntry.ms}ms expired " +
+                    "(age ${learnedAgeMs / 60_000L}m), using base $LIVE_START_GATE_DEFAULT_MS ms",
+            )
+        }
+        val learnedGateMs = if (learnedExpired) 0 else learnedEntry?.ms ?: 0
         val startGateMs = maxOf(LIVE_START_GATE_DEFAULT_MS, learnedGateMs)
             .coerceAtMost(LIVE_START_GATE_MAX_MS)
         Log.i(TAG, "[HOLDBACK] ch=${title ?: "?"} start gate $startGateMs ms (learned $learnedGateMs ms)")
@@ -2284,6 +2305,10 @@ class AerioExoPlayerHolder @Inject constructor(
          *  time, so a stall means the bytes arrived in bursts and the start
          *  cushion was too shallow. */
         private const val HOLDBACK_MEDIA_RATIO_MIN = 0.9
+        /** How long a learned hold-back stays valid. Past this a tune discards it
+         *  and uses the base gate, so one bad session does not pin a channel
+         *  (Logan 2026-09-12). A fresh learn re-arms it. */
+        private const val HOLDBACK_LEARNED_TTL_MS = 30L * 60L * 1_000L
         private const val TAG_DIAG = "AerioPlayerDiag"
 
         /** How long after a tune a decoder failure still counts as the codec

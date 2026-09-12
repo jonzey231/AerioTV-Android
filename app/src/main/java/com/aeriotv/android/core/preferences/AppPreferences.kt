@@ -27,6 +27,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 
+/**
+ * One channel's learned live start hold-back plus the wall-clock time it was
+ * last learned (raised or re-confirmed by a stall). The timestamp is what lets
+ * a tune expire a stale value instead of being pinned by one bad session
+ * (Logan 2026-09-12).
+ */
+data class LearnedStartBuffer(val ms: Int, val learnedAtMs: Long)
+
 private val Context.appDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "aerio_prefs",
     produceMigrations = { _ ->
@@ -1496,15 +1504,19 @@ class AppPreferences @Inject constructor(
      * channel's start gate and apply it on the NEXT tune only. Absent key =
      * today's behavior (the 1_200 ms gate).
      *
+     * Each value carries the wall-clock time it was last learned: a tune
+     * discards a value older than 30 minutes and falls back to the base gate
+     * (Logan 2026-09-12), so one bad session cannot pin a channel forever.
+     *
      * Device-local and deliberately NOT in snapshotSyncablePreferences: it is
      * learned from this device's network and provider path.
      */
-    val liveStartBufferMs: Flow<Map<String, Int>> =
-        store.data.map { decodeLiveStartBuffers(it[KEY_LIVE_START_BUFFER_MS]) }
+    val liveStartBufferMs: Flow<Map<String, LearnedStartBuffer>> =
+        store.data.map { decodeLearnedStartBuffers(it) }
 
     /** One-shot read for the player holder's in-memory cache. */
-    suspend fun liveStartBuffersOnce(): Map<String, Int> =
-        decodeLiveStartBuffers(store.data.first()[KEY_LIVE_START_BUFFER_MS])
+    suspend fun liveStartBuffersOnce(): Map<String, LearnedStartBuffer> =
+        decodeLearnedStartBuffers(store.data.first())
 
     /**
      * Persist a learned start buffer for one channel and return the resulting
@@ -1512,21 +1524,27 @@ class AppPreferences @Inject constructor(
      * Bounded to [LIVE_START_BUFFER_MAX_ENTRIES]: past the bound the whole map
      * is cleared and relearned rather than grown unbounded on a huge panel.
      */
-    suspend fun setLiveStartBufferMs(channelId: String, ms: Int): Map<String, Int> {
+    suspend fun setLiveStartBufferMs(
+        channelId: String,
+        ms: Int,
+        learnedAtMs: Long = System.currentTimeMillis(),
+    ): Map<String, LearnedStartBuffer> {
         val id = channelId.trim()
         if (id.isBlank() || ms <= 0) return liveStartBuffersOnce()
-        var result: Map<String, Int> = emptyMap()
+        var result: Map<String, LearnedStartBuffer> = emptyMap()
         store.edit { prefs ->
             val current = decodeLiveStartBuffers(prefs[KEY_LIVE_START_BUFFER_MS])
-            if (current[id] == ms) {
-                result = current
-                return@edit
-            }
+            val currentAt = decodeLiveStartBufferTimes(prefs[KEY_LIVE_START_BUFFER_AT_MS])
+            // An unchanged value still rewrites the timestamp: a stall that
+            // re-confirms the learned hold-back re-arms its 30 minute life.
             val grown = current + (id to ms)
-            val updated =
-                if (grown.size > LIVE_START_BUFFER_MAX_ENTRIES) mapOf(id to ms) else grown
+            val grownAt = currentAt + (id to learnedAtMs)
+            val overBound = grown.size > LIVE_START_BUFFER_MAX_ENTRIES
+            val updated = if (overBound) mapOf(id to ms) else grown
+            val updatedAt = if (overBound) mapOf(id to learnedAtMs) else grownAt
             prefs[KEY_LIVE_START_BUFFER_MS] = Json.encodeToString(updated)
-            result = updated
+            prefs[KEY_LIVE_START_BUFFER_AT_MS] = Json.encodeToString(updatedAt)
+            result = zipLearnedStartBuffers(updated, updatedAt)
         }
         return result
     }
@@ -1536,6 +1554,26 @@ class AppPreferences @Inject constructor(
         return runCatching { Json.decodeFromString<Map<String, Int>>(raw) }
             .getOrDefault(emptyMap())
     }
+
+    private fun decodeLiveStartBufferTimes(raw: String?): Map<String, Long> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching { Json.decodeFromString<Map<String, Long>>(raw) }
+            .getOrDefault(emptyMap())
+    }
+
+    /** Pairs each learned value with its learn time. A value written before the
+     *  timestamp key existed gets 0L, which every caller treats as expired. */
+    private fun zipLearnedStartBuffers(
+        values: Map<String, Int>,
+        times: Map<String, Long>,
+    ): Map<String, LearnedStartBuffer> =
+        values.mapValues { (id, ms) -> LearnedStartBuffer(ms, times[id] ?: 0L) }
+
+    private fun decodeLearnedStartBuffers(prefs: Preferences): Map<String, LearnedStartBuffer> =
+        zipLearnedStartBuffers(
+            decodeLiveStartBuffers(prefs[KEY_LIVE_START_BUFFER_MS]),
+            decodeLiveStartBufferTimes(prefs[KEY_LIVE_START_BUFFER_AT_MS]),
+        )
 
     /**
      * iOS DVR Settings "Keep device awake during recording" toggle. Default
@@ -1660,6 +1698,9 @@ class AppPreferences @Inject constructor(
         // JSON object {channelId: startBufferMs}: learned live start hold-back,
         // device-local (see liveStartBufferMs).
         val KEY_LIVE_START_BUFFER_MS = stringPreferencesKey("live_start_buffer_ms")
+        // JSON object {channelId: epochMillis}: when that channel's hold-back was
+        // last learned or re-confirmed. Missing entry = expired (old prefs).
+        val KEY_LIVE_START_BUFFER_AT_MS = stringPreferencesKey("live_start_buffer_at_ms")
         /** Bound on the learned start-buffer map; past it the map is cleared. */
         const val LIVE_START_BUFFER_MAX_ENTRIES = 200
         val KEY_CATEGORY_MASTER_ENABLE = booleanPreferencesKey(CategoryPaletteState.MASTER_ENABLED_KEY)
