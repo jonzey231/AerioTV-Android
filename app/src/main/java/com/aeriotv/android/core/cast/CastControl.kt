@@ -26,6 +26,17 @@ object CastControl {
     /** Custom Cast message namespace (also declared as receiver additionalSenderNamespaces). */
     const val NAMESPACE = "urn:x-cast:com.aeriotv.control"
 
+    /** Diagnostic-only namespace (2026-09-12). The receiver WEB APP broadcasts a
+     *  JSON snapshot of its player state on it: the current time, the buffered
+     *  ranges, readyState, the Shaka/CAF player state, the playback rate, the
+     *  seek range, buffering time, the bandwidth estimate, the last state
+     *  history entry and the last error. ONE WAY, receiver to sender, and purely
+     *  diagnostic: nothing reads it but the sender's log, because zero CONSOLE
+     *  lines from the receiver page reach logcat, which is why the 15:10 Google
+     *  TV Streamer freeze (one video frame, then position -58 ms and BUFFERING
+     *  for 45 s) could not be told apart from a buffered-range problem. */
+    const val DEBUG_NAMESPACE = "urn:x-cast:com.aeriotv.receiver.debug"
+
     // Command discriminator + values.
     const val KEY_CMD = "cmd"
     const val CMD_GET_STATE = "getState"

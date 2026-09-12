@@ -81,8 +81,41 @@ class TsToFmp4Remuxer(
          *  so the session can log what the FIRST segment of a generation
          *  contained: a segment with zero audio samples, or a video-only
          *  one where the PMT promised audio, is the shape a receiver
-         *  rejects silently. Default no-op so tests need not care. */
-        fun onSegmentComposition(videoSamples: Int, audioSamples: Int) {}
+         *  rejects silently. Default no-op so tests need not care.
+         *
+         *  The four Doubles are the segment's own TIMELINE, in seconds
+         *  relative to [timelineBase] (exactly what lands in the tfdt
+         *  boxes, divided by [TICKS_PER_SECOND]). Added 2026-09-12 after
+         *  the Google TV Streamer session at 15:10: with Shaka's
+         *  sequenceMode=false the playlist timeline (accumulated EXTINF
+         *  from 0) and the media timeline (the segments' own tfdt) were
+         *  only related by luck, Shaka seeked to 2.439 s before any media
+         *  was appended, then relocated to 0.016 s (MediaGapJumped=1) and
+         *  auto-paused at -58 ms. Nothing in the logs let us do that
+         *  arithmetic, so the proxy now prints it per segment.
+         *
+         *  [firstVideoPtsSeconds] is the video track's earliest
+         *  PRESENTATION time, and max(firstVideoPtsSeconds,
+         *  firstAudioPtsSeconds) is where a two-track SourceBuffer's
+         *  buffered range actually begins, because Chromium reports the
+         *  INTERSECTION of the tracks, not their union. That maximum is
+         *  the number a playhead has to be at or after for the receiver
+         *  to have data, which is the comparison the 15:10 session needed
+         *  and could not make.
+         *
+         *  [firstAudioPtsSeconds] is -1.0 when the segment has no audio.
+         *  [segmentStartSeconds] is this segment's accumulated media start
+         *  within the generation (0.0 for the generation's first segment),
+         *  i.e. the playlist-side position, so the two timelines can be
+         *  compared directly. */
+        fun onSegmentComposition(
+            videoSamples: Int,
+            audioSamples: Int,
+            firstVideoDtsSeconds: Double,
+            firstVideoPtsSeconds: Double,
+            firstAudioPtsSeconds: Double,
+            segmentStartSeconds: Double,
+        ) {}
 
         /** The mux's audio codec as soon as the PMT is parsed ("AAC",
          *  "AC-3", "E-AC-3", "none"), for the cast load log line. */
@@ -205,6 +238,15 @@ class TsToFmp4Remuxer(
      *  presentation time. Gating on the presentation time removes the
      *  whole sequence. */
     private var timelineBasePts = -1L
+
+    /** Media duration already EMITTED by this remuxer, in 90 kHz ticks,
+     *  i.e. the accumulated media start of the next segment. This remuxer
+     *  instance lives for exactly one ingest connection (one playlist
+     *  generation), so it starts at 0 and is the playlist-side position of
+     *  each segment: the number [Listener.onSegmentComposition] reports as
+     *  segmentStartSeconds, to be compared against the segment's own tfdt
+     *  timeline. */
+    private var emittedTicks = 0L
 
     // ---- pending segment ----
 
@@ -706,7 +748,22 @@ class TsToFmp4Remuxer(
         }
         val segment = buildMediaSegment(videoQueue, durations, segAudio)
         val durationTicks = cutDts - segStart
-        listener.onSegmentComposition(videoQueue.size, segAudio.size)
+        // Timeline census for the proxy log (2026-09-12): the tfdt values
+        // this segment will carry, plus where the PLAYLIST says it starts.
+        // Reported before onMediaSegment so the session can log one line
+        // per segment; emittedTicks is read before it is advanced, so the
+        // generation's first segment reports 0.0.
+        val ticks = TICKS_PER_SECOND.toDouble()
+        listener.onSegmentComposition(
+            videoSamples = videoQueue.size,
+            audioSamples = segAudio.size,
+            firstVideoDtsSeconds = (videoQueue.first().dts - timelineBase) / ticks,
+            firstVideoPtsSeconds = (videoQueue.first().pts - timelineBase) / ticks,
+            firstAudioPtsSeconds = segAudio.firstOrNull()
+                ?.let { (it.pts - timelineBase) / ticks } ?: -1.0,
+            segmentStartSeconds = emittedTicks / ticks,
+        )
+        emittedTicks += durationTicks
         videoQueue.clear()
         audioQueue.clear()
         audioQueue.addAll(keepAudio)

@@ -179,6 +179,72 @@ class AerioCastSender @Inject constructor(
     }
 
     /**
+     * Receiver DEBUG channel (2026-09-12). The receiver web app broadcasts a
+     * JSON player-state snapshot on [CastControl.DEBUG_NAMESPACE]; this logs it
+     * as ONE line per message. It exists because the receiver page's own CONSOLE
+     * output never reaches logcat, so the 15:10 Google TV Streamer freeze (one
+     * frame at 1920x1080, then position -58 ms / BUFFERING / rate 0.0 for 45 s)
+     * left us unable to see the buffered ranges or the seek range and therefore
+     * unable to tell a seek-outside-the-buffer from a starved buffer.
+     *
+     * A field the receiver did not send prints "?"; the callback never throws,
+     * and logs nothing but this one line.
+     */
+    private val receiverDebugChannel = Cast.MessageReceivedCallback { _, ns, message ->
+        if (ns != CastControl.DEBUG_NAMESPACE) return@MessageReceivedCallback
+        runCatching {
+            val j = JSONObject(message)
+            fun str(key: String): String = if (j.has(key) && !j.isNull(key)) j.optString(key) else "?"
+            fun num(key: String, decimals: Int): String =
+                if (j.has(key) && !j.isNull(key)) {
+                    String.format(java.util.Locale.US, "%.${decimals}f", j.optDouble(key))
+                } else {
+                    "?"
+                }
+            // buffered: array of [start, end] pairs -> [a-b][c-d]; an empty
+            // array is the interesting case (nothing buffered at all), so it
+            // prints "none" rather than an empty string.
+            val buffered = if (j.has("buffered") && !j.isNull("buffered")) {
+                val arr = j.optJSONArray("buffered")
+                if (arr == null || arr.length() == 0) {
+                    "none"
+                } else {
+                    (0 until arr.length()).joinToString("") { i ->
+                        val r = arr.optJSONArray(i)
+                        val a = r?.optDouble(0) ?: Double.NaN
+                        val b = r?.optDouble(1) ?: Double.NaN
+                        String.format(java.util.Locale.US, "[%.3f-%.3f]", a, b)
+                    }
+                }
+            } else {
+                "?"
+            }
+            val seek = if (j.has("seek")) {
+                val r = j.optJSONArray("seek")
+                if (r == null) {
+                    "none"
+                } else {
+                    String.format(java.util.Locale.US, "[%.3f-%.3f]", r.optDouble(0), r.optDouble(1))
+                }
+            } else {
+                "?"
+            }
+            val bw = if (j.has("bw") && !j.isNull("bw")) j.optLong("bw").toString() else "?"
+            val err = if (j.has("err") && !j.isNull("err")) {
+                j.optString("err").ifBlank { "none" }
+            } else {
+                "none"
+            }
+            Log.i(
+                TAG,
+                "[Cast] receiver: ev=${str("ev")} t=${num("t", 3)} buffered=$buffered " +
+                    "ready=${str("ready")} state=${str("state")} rate=${str("rate")} " +
+                    "seek=$seek bufTime=${num("bufTime", 2)} bw=$bw hist=${str("hist")} err=$err",
+            )
+        }
+    }
+
+    /**
      * Logged player state of the receiver, so the card reflects what the TV's
      * player actually reports instead of a local guess. IDLE means the
      * receiver has no active playback: the transport button must re-issue the
@@ -761,6 +827,17 @@ class AerioCastSender @Inject constructor(
         session.castDevice?.friendlyName?.let { lastDeviceName = it }
         _state.value = State.Connected(session.castDevice?.friendlyName)
         attachControl(session)
+        // Name the load decision. In the 15:10 window the Nothing Phone showed
+        // a cast card and never loaded anything at all (no proxy start, no
+        // media LOAD reached the receiver) and the sender log said nothing
+        // about why: this branch is the decision, and it printed nothing. The
+        // iPhone logs an equivalent line. Logging only; the behaviour below is
+        // unchanged.
+        Log.i(
+            TAG,
+            "[Cast] session started: pendingChannel=${pending?.mediaId ?: "none"} " +
+                "willLoad=${pending != null}",
+        )
         pending?.let { loadOnSession(session, it) }
         // Session RESUMED after an app force-close / reinstall: `pending` is null
         // (this @Singleton sender was recreated with the process), so nothing set
@@ -806,6 +883,11 @@ class AerioCastSender @Inject constructor(
         detachControl()
         controlSession = session
         runCatching { session.setMessageReceivedCallbacks(CastControl.NAMESPACE, controlChannel) }
+        // Second, diagnostic-only channel: the receiver's player-state
+        // snapshots (see [receiverDebugChannel]). Registered and removed
+        // exactly like the control channel, and a receiver that does not
+        // broadcast on it simply never delivers a message.
+        runCatching { session.setMessageReceivedCallbacks(CastControl.DEBUG_NAMESPACE, receiverDebugChannel) }
         runCatching { session.remoteMediaClient?.registerCallback(remoteClientCallback) }
         val state = runCatching { session.remoteMediaClient?.mediaStatus?.playerState }.getOrNull()
         _isPlaying.value = state == MediaStatus.PLAYER_STATE_PLAYING ||
@@ -819,6 +901,7 @@ class AerioCastSender @Inject constructor(
     private fun detachControl() {
         val s = controlSession ?: return
         runCatching { s.removeMessageReceivedCallbacks(CastControl.NAMESPACE) }
+        runCatching { s.removeMessageReceivedCallbacks(CastControl.DEBUG_NAMESPACE) }
         runCatching { s.remoteMediaClient?.unregisterCallback(remoteClientCallback) }
         controlSession = null
         _remoteState.value = CastControl.RemoteState()

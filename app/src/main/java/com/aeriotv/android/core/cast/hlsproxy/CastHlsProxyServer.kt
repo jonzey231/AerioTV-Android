@@ -82,6 +82,16 @@ class CastHlsProxyServer(
         private const val MIME_PLAYLIST = "application/vnd.apple.mpegurl"
         private const val MIME_MP4 = "video/mp4"
         private const val MIME_SEGMENT = "video/iso.segment"
+
+        /** EXT-X-PROGRAM-DATE-TIME format: ISO-8601 with milliseconds and a
+         *  numeric UTC offset, which is what ISO_OFFSET_DATE_TIME produces
+         *  for a sub-second instant and what RFC 8216 section 4.3.2.6 asks
+         *  for. Spelled out so a whole second still prints ".000". */
+        private val PROGRAM_DATE_TIME_FORMAT: java.time.format.DateTimeFormatter =
+            java.time.format.DateTimeFormatter.ofPattern(
+                "yyyy-MM-dd'T'HH:mm:ss.SSSxxx",
+                java.util.Locale.US,
+            )
     }
 
     private class SegmentEntry(
@@ -90,6 +100,12 @@ class CastHlsProxyServer(
         val data: ByteArray,
         val durationTicks: Long,
         val discontinuity: Boolean,
+        /** This segment's accumulated media start WITHIN ITS GENERATION, in
+         *  90 kHz ticks (0 for a generation's first segment). Carried per
+         *  entry, not recomputed from the window, because the window slides:
+         *  the EXT-X-PROGRAM-DATE-TIME of the first listed segment has to
+         *  advance by exactly the durations that rolled off. */
+        val mediaStartTicks: Long,
     )
 
     /** Guards the store; also the monitor held segment fetches wait on
@@ -107,6 +123,15 @@ class CastHlsProxyServer(
     /** EXT-X-DISCONTINUITY-SEQUENCE: count of flagged segments that have
      *  fully rolled out of the ring. */
     private var discontinuitySequence = 0
+    /** Media duration published in the CURRENT generation, in 90 kHz ticks;
+     *  the accumulated media start stamped on the next segment. */
+    private var generationMediaTicks = 0L
+    /** Wall clock (epoch ms) captured when each generation published its
+     *  FIRST segment: the absolute anchor for that generation's media
+     *  timeline, from which every EXT-X-PROGRAM-DATE-TIME in the window is
+     *  derived. Keyed by generation because a window can straddle a splice,
+     *  and each generation restarts its media clock at 0. */
+    private val generationAnchorMs = HashMap<Int, Long>()
 
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
@@ -164,6 +189,8 @@ class CastHlsProxyServer(
         synchronized(lock) {
             ring.clear()
             inits.clear()
+            generationAnchorMs.clear()
+            generationMediaTicks = 0
             _segmentsInGeneration.value = 0
             _mediaTicksInGeneration.value = 0
             storeOpen = false
@@ -194,6 +221,10 @@ class CastHlsProxyServer(
         pendingDiscontinuity = ring.isNotEmpty()
         _segmentsInGeneration.value = 0
         _mediaTicksInGeneration.value = 0
+        // Fresh remuxer, fresh media clock: the new generation's first
+        // segment starts at media time 0 and gets its own wall-clock anchor
+        // when it is published.
+        generationMediaTicks = 0
         if (oldGen > 0) {
             log(
                 "splice oldGen=$oldGen newGen=$generation " +
@@ -210,13 +241,24 @@ class CastHlsProxyServer(
     fun addSegment(gen: Int, data: ByteArray, durationTicks: Long) {
         synchronized(lock) {
             if (gen != generation) return // stale ingest racing a channel change
+            // Anchor the generation's media timeline to the wall clock on
+            // its first segment. With Shaka's sequenceMode=false the segment
+            // timestamps come from the media and the segment POSITIONS come
+            // from the playlist, and nothing reconciles the two without an
+            // absolute clock (Google TV Streamer 2026-09-12 15:10: Shaka
+            // chose its start position from the EXTINF window before any
+            // media was appended, then had to gap-jump to the media's own
+            // 16.333 ms start and auto-paused).
+            generationAnchorMs.getOrPut(gen) { System.currentTimeMillis() }
             val entry = SegmentEntry(
                 seq = nextSeq++,
                 generation = gen,
                 data = data,
                 durationTicks = durationTicks,
                 discontinuity = pendingDiscontinuity,
+                mediaStartTicks = generationMediaTicks,
             )
+            generationMediaTicks += durationTicks
             pendingDiscontinuity = false
             ring.addLast(entry)
             while (ring.size > RING_SIZE) {
@@ -227,6 +269,8 @@ class CastHlsProxyServer(
                     evicted.generation != generation
                 ) {
                     inits.remove(evicted.generation)
+                    // Its anchor can never be needed again either.
+                    generationAnchorMs.remove(evicted.generation)
                 }
             }
             _segmentsInGeneration.value += 1
@@ -338,11 +382,25 @@ class CastHlsProxyServer(
             sb.append("#EXT-X-DISCONTINUITY-SEQUENCE:").append(discontinuitySequence).append('\n')
         }
         var lastGen = -1
-        for (seg in window) {
+        for ((index, seg) in window.withIndex()) {
             // The tag stays attached to its segment for as long as the
             // segment is in the window; DISCONTINUITY-SEQUENCE above only
             // accounts for flagged segments that have rolled out.
             if (seg.discontinuity) sb.append("#EXT-X-DISCONTINUITY\n")
+            // EXT-X-PROGRAM-DATE-TIME on the first segment of the window,
+            // and again immediately after any DISCONTINUITY inside it (that
+            // segment restarts its generation's media clock at 0, so it
+            // needs its OWN generation's anchor). This is the absolute clock
+            // that lets Shaka align its presentation timeline to the
+            // segments' own timestamps instead of assuming the window starts
+            // at media time 0: without it, with sequenceMode=false, it
+            // picked a start position from the accumulated EXTINF durations
+            // and then had to gap-jump onto the media timeline (receiver log
+            // 2026-09-12 15:10:04.187, MediaGapJumped=1, then a permanent
+            // auto-pause at position -58 ms).
+            if (index == 0 || seg.discontinuity) {
+                programDateTime(seg)?.let { sb.append("#EXT-X-PROGRAM-DATE-TIME:").append(it).append('\n') }
+            }
             if (seg.generation != lastGen) {
                 sb.append("#EXT-X-MAP:URI=\"init").append(seg.generation).append(".mp4\"\n")
                 lastGen = seg.generation
@@ -354,6 +412,24 @@ class CastHlsProxyServer(
         // LIVE playlist: no EXT-X-ENDLIST, ever; the advancing
         // MEDIA-SEQUENCE is the manifest clock the progressive URL lacked.
         sb.toString()
+    }
+
+    /** ISO-8601 (with milliseconds and UTC offset) for [seg]'s start: its
+     *  generation's wall-clock anchor plus its own accumulated media start.
+     *  Null only when the anchor is somehow missing, in which case the tag
+     *  is simply omitted rather than guessed. Caller holds [lock]. */
+    private fun programDateTime(seg: SegmentEntry): String? {
+        val anchor = generationAnchorMs[seg.generation] ?: return null
+        val ms = anchor + seg.mediaStartTicks * 1000L / TsToFmp4Remuxer.TICKS_PER_SECOND
+        val time = java.time.OffsetDateTime.ofInstant(
+            java.time.Instant.ofEpochMilli(ms),
+            java.time.ZoneId.systemDefault(),
+        )
+        // ISO_OFFSET_DATE_TIME prints only the fields that are present, so
+        // a whole-second instant would lose the ".000" HLS parsers expect.
+        // An explicit pattern always emits exactly three fraction digits and
+        // the same +HH:MM offset ISO_OFFSET_DATE_TIME uses.
+        return PROGRAM_DATE_TIME_FORMAT.format(time)
     }
 
     // ---- HTTP ----

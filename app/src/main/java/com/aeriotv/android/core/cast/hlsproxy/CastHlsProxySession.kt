@@ -324,20 +324,67 @@ class CastHlsProxySession @Inject constructor(
                      *  for the first-segment detail line below. */
                     private var videoSamples = 0
                     private var audioSamples = 0
+                    /** Timeline census of the same segment, logged per
+                     *  segment (2026-09-12): see the per-segment line in
+                     *  onMediaSegment below. */
+                    private var segmentStartSeconds = 0.0
+                    private var firstVideoDtsSeconds = 0.0
+                    private var firstVideoPtsSeconds = 0.0
+                    private var firstAudioPtsSeconds = -1.0
+                    /** Sequence the server will assign this segment. The
+                     *  server claims numbers at publish time and does not
+                     *  report them back, so this mirrors it: one counter
+                     *  per generation, and this listener is built fresh per
+                     *  ingest connection, i.e. per generation. */
+                    private var localSeq = 0
 
                     override fun onInitSegment(data: ByteArray) {
                         server.setInitSegment(currentGen, data)
                         debugLog(context, TAG, "init segment ready gen=$currentGen (${data.size} B)")
                     }
 
-                    override fun onSegmentComposition(videoSamples: Int, audioSamples: Int) {
+                    override fun onSegmentComposition(
+                        videoSamples: Int,
+                        audioSamples: Int,
+                        firstVideoDtsSeconds: Double,
+                        firstVideoPtsSeconds: Double,
+                        firstAudioPtsSeconds: Double,
+                        segmentStartSeconds: Double,
+                    ) {
                         this.videoSamples = videoSamples
                         this.audioSamples = audioSamples
+                        this.firstVideoDtsSeconds = firstVideoDtsSeconds
+                        this.firstVideoPtsSeconds = firstVideoPtsSeconds
+                        this.firstAudioPtsSeconds = firstAudioPtsSeconds
+                        this.segmentStartSeconds = segmentStartSeconds
                     }
 
                     override fun onMediaSegment(data: ByteArray, durationTicks: Long) {
                         server.addSegment(currentGen, data, durationTicks)
                         segmentsLogged++
+                        // EVERY segment's timeline, so the playhead-versus-
+                        // buffer arithmetic can be done from the sender log
+                        // alone. The 15:10 Google TV Streamer session had to
+                        // be guessed at because nothing printed where each
+                        // segment sat on the PLAYLIST timeline (t=) versus
+                        // its own MEDIA timeline (vdts/vpts/apts), and
+                        // buffStart is the one that matters: Chromium reports
+                        // a two-track SourceBuffer's buffered range as the
+                        // INTERSECTION of the tracks, so the range starts at
+                        // max(vpts, apts), not at t=.
+                        val segSeconds = durationTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+                        val buffStart = maxOf(firstVideoPtsSeconds, firstAudioPtsSeconds)
+                        debugLog(
+                            context, TAG,
+                            "seg=$localSeq t=${"%.2f".format(segmentStartSeconds)}s " +
+                                "dur=${"%.2f".format(segSeconds)}s " +
+                                "vdts=${"%.3f".format(firstVideoDtsSeconds)} " +
+                                "vpts=${"%.3f".format(firstVideoPtsSeconds)} " +
+                                "apts=${"%.3f".format(firstAudioPtsSeconds)} " +
+                                "buffStart=${"%.3f".format(buffStart)} " +
+                                "video=$videoSamples audio=$audioSamples ${data.size} B",
+                        )
+                        localSeq++
                         if (segmentsLogged == 1) {
                             // The FIRST segment of a generation is the one
                             // the receiver starts on, so its shape is what
