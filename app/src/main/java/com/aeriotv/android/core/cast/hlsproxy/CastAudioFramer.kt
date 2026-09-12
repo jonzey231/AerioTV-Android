@@ -81,6 +81,125 @@ object CastAudioFramer {
                 data[off + 1].toInt() and 0xE0 == 0xE0
     }
 
+    /**
+     * A program_config_element found at the start of a raw_data_block.
+     *
+     * [lengthBytes] is the element's size measured from the block start,
+     * which is always a whole number of bytes: the PCE byte-aligns
+     * relative to the block start before comment_field_bytes, and the
+     * comment itself is a whole number of bytes after it (ISO/IEC
+     * 14496-3 4.4.1.1). That is what lets the PCE be removed with a
+     * byte-wise copy instead of shifting the whole remaining payload
+     * left bit by bit; [CastAudioFramer.parseAacPce] refuses to report a
+     * PCE that does not end aligned, so the byte-wise caller can never
+     * corrupt a frame.
+     */
+    class AacPceInfo(
+        /** Channels the declared layout adds up to: CPE 2, SCE 1, LFE 1. */
+        val channels: Int,
+        /** PCE size in bytes, measured from the raw_data_block start. */
+        val lengthBytes: Int,
+        /** True when the first front element is a channel_pair_element,
+         *  i.e. the element the stripped frame will start with is the
+         *  stereo pair a channel_configuration of 2 implies. */
+        val firstIsCpe: Boolean,
+    )
+
+    /**
+     * Parse the program_config_element at [offset] in [data], or return
+     * null when the block does not start with one.
+     *
+     * Dispatcharr's "Web Player (AAC Audio)" output profile (ffmpeg
+     * `-c:a aac -ac 2`) emits ADTS frames whose channel_configuration is
+     * 0 with the real layout carried in a PCE at the start of the
+     * raw_data_block ("Using a PCE to encode channel layout"). An
+     * AudioSpecificConfig cannot carry config 0 (Chromium's
+     * SkipGASpecificConfig does RCHECK(channel_config_ != 0)), and the
+     * Google TV Streamer's C2SoftAacDec rejects every frame that still
+     * contains the PCE ("error 0x0005, substituting silence", 5388 times
+     * in one session). Parsing the element here gives the remuxer both
+     * halves of the lossless fix: the real channel count for the ASC,
+     * and the exact byte length to drop off the front of each frame.
+     *
+     * Field order is ISO/IEC 14496-3 4.4.1.1.
+     */
+    fun parseAacPce(data: ByteArray, offset: Int, end: Int): AacPceInfo? {
+        if (offset >= end) return null
+        var bit = 0 // bit position RELATIVE to the raw_data_block start
+        val limit = (end - offset) * 8
+        fun read(n: Int): Int {
+            if (bit + n > limit) return -1
+            var v = 0
+            repeat(n) {
+                val p = offset + (bit shr 3)
+                v = (v shl 1) or ((data[p].toInt() shr (7 - (bit and 7))) and 1)
+                bit++
+            }
+            return v
+        }
+        // id_syn_ele: PCE is 0x5. Anything else is a normal element and
+        // the frame passes through untouched.
+        if (read(3) != 5) return null
+        read(4) // element_instance_tag
+        read(2) // object_type
+        read(4) // sampling_frequency_index
+        val numFront = read(4)
+        val numSide = read(4)
+        val numBack = read(4)
+        val numLfe = read(2)
+        val numAssoc = read(3)
+        val numCc = read(4)
+        if (numCc < 0) return null
+        // Each mixdown flag is followed by its index only when present.
+        if (read(1) == 1) read(4) // mono_mixdown_element_number
+        if (read(1) == 1) read(4) // stereo_mixdown_element_number
+        if (read(1) == 1) read(3) // matrix_mixdown_idx + pseudo_surround_enable
+        var channels = 0
+        var firstIsCpe = false
+        var firstSeen = false
+        // front, side and back elements each carry is_cpe + a 4-bit tag;
+        // a channel_pair_element is two channels, a single is one.
+        for (group in 0 until 3) {
+            val count = when (group) {
+                0 -> numFront
+                1 -> numSide
+                else -> numBack
+            }
+            repeat(count) {
+                val isCpe = read(1)
+                read(4) // element tag
+                if (isCpe < 0) return null
+                if (!firstSeen) {
+                    firstSeen = true
+                    firstIsCpe = isCpe == 1
+                }
+                channels += if (isCpe == 1) 2 else 1
+            }
+        }
+        repeat(numLfe) {
+            read(4) // lfe_element_tag: one channel each
+            channels += 1
+        }
+        repeat(numAssoc) { read(4) } // assoc_data_element_tag: no channels
+        repeat(numCc) {
+            read(1) // cc_element_is_ind_sw
+            read(4) // valid_cc_element_tag
+        }
+        if (bit > limit) return null
+        // byte_align() is relative to the raw_data_block start, which is
+        // exactly where [bit] is counted from.
+        if (bit and 7 != 0) read(8 - (bit and 7))
+        val commentBytes = read(8)
+        if (commentBytes < 0) return null
+        if (bit + commentBytes * 8 > limit) return null
+        bit += commentBytes * 8
+        // Spec-guaranteed, asserted anyway: a PCE that did not end on a
+        // byte boundary could not be dropped with a byte-wise copy.
+        if (bit and 7 != 0) return null
+        if (channels <= 0) return null
+        return AacPceInfo(channels = channels, lengthBytes = bit shr 3, firstIsCpe = firstIsCpe)
+    }
+
     private fun parseAc3Header(data: ByteArray, off: Int): EsFrameInfo? {
         if (off + 7 > data.size || !looksLikeSync(SourceCodec.AC3, data, off)) return null
         val fscod = (data[off + 4].toInt() shr 6) and 0x03

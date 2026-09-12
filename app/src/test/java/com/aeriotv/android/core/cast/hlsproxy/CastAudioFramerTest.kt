@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.cast.hlsproxy
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -87,5 +88,92 @@ class CastAudioFramerTest {
         assertTrue(!CastAudioFramer.looksLikeSync(CastAudioFramer.SourceCodec.MP2, ac3, 0))
         assertTrue(CastAudioFramer.looksLikeSync(CastAudioFramer.SourceCodec.MP2, mpeg, 0))
         assertTrue(!CastAudioFramer.looksLikeSync(CastAudioFramer.SourceCodec.AC3, mpeg, 0))
+    }
+
+    // ---- AAC program_config_element ----
+
+    /** The PCE a `-c:a aac -ac 2` encoder emits: one front
+     *  channel_pair_element, nothing else, empty comment. */
+    private fun stereoPce(freqIndex: Int = 3): ByteArray {
+        val bits = StringBuilder()
+        fun put(value: Int, width: Int) {
+            for (i in width - 1 downTo 0) bits.append((value shr i) and 1)
+        }
+        put(5, 3) // id_syn_ele = PCE
+        put(0, 4) // element_instance_tag
+        put(1, 2) // object_type
+        put(freqIndex, 4)
+        put(1, 4); put(0, 4); put(0, 4) // num_front/side/back
+        put(0, 2); put(0, 3); put(0, 4) // num_lfe/assoc_data/valid_cc
+        put(0, 1); put(0, 1); put(0, 1) // no mixdowns
+        put(1, 1); put(0, 4) // front element is a CPE
+        while (bits.length % 8 != 0) bits.append(0) // byte_align()
+        put(0, 8) // comment_field_bytes
+        return ByteArray(bits.length / 8) { bits.substring(it * 8, it * 8 + 8).toInt(2).toByte() }
+    }
+
+    @Test
+    fun `a stereo program config element reports two channels and a byte length`() {
+        val pce = stereoPce()
+        val block = pce + byteArrayOf(0x21, 0x00, 0x00, 0x00)
+        val info = CastAudioFramer.parseAacPce(block, 0, block.size)
+        assertNotNull(info)
+        assertEquals(2, info!!.channels)
+        assertEquals(pce.size, info.lengthBytes)
+        assertTrue(info.firstIsCpe)
+    }
+
+    /**
+     * The property the whole lossless strip rests on: the element's size
+     * is a whole number of bytes from the raw_data_block start, so the
+     * elements behind it are byte-aligned and copy over verbatim (ISO/IEC
+     * 14496-3 4.4.1.1 byte_align() before comment_field_bytes).
+     */
+    @Test
+    fun `a program config element always ends on a byte boundary`() {
+        // Vary the element counts so the pre-alignment bit length changes,
+        // and a non-empty comment so the trailing bytes are exercised too.
+        for (comment in 0..3) {
+            for (front in 1..3) {
+                val bits = StringBuilder()
+                fun put(value: Int, width: Int) {
+                    for (i in width - 1 downTo 0) bits.append((value shr i) and 1)
+                }
+                put(5, 3); put(0, 4); put(1, 2); put(3, 4)
+                put(front, 4); put(0, 4); put(0, 4)
+                put(1, 2); put(0, 3); put(0, 4) // one LFE
+                put(0, 1); put(0, 1); put(0, 1)
+                repeat(front) { put(1, 1); put(0, 4) } // every front element a CPE
+                put(0, 4) // lfe_element_tag
+                while (bits.length % 8 != 0) bits.append(0)
+                put(comment, 8)
+                repeat(comment) { put(0x41, 8) }
+                val pce = ByteArray(bits.length / 8) {
+                    bits.substring(it * 8, it * 8 + 8).toInt(2).toByte()
+                }
+                val block = pce + byteArrayOf(0x21, 0x00, 0x00, 0x00)
+                val info = CastAudioFramer.parseAacPce(block, 0, block.size)
+                assertNotNull("front=$front comment=$comment parsed", info)
+                assertEquals("front=$front comment=$comment length", pce.size, info!!.lengthBytes)
+                assertEquals("front=$front comment=$comment channels", front * 2 + 1, info.channels)
+            }
+        }
+    }
+
+    @Test
+    fun `a block that does not start with a PCE is reported as absent`() {
+        // id_syn_ele 0 is SCE, 1 is CPE, 7 is TERM: none of them a PCE.
+        for (synEle in intArrayOf(0, 1, 2, 3, 4, 6, 7)) {
+            val block = byteArrayOf((synEle shl 5).toByte(), 0x11, 0x22, 0x33)
+            assertNull("syn_ele $synEle", CastAudioFramer.parseAacPce(block, 0, block.size))
+        }
+    }
+
+    @Test
+    fun `a truncated program config element is refused rather than guessed`() {
+        val pce = stereoPce()
+        for (cut in 1 until pce.size) {
+            assertNull("cut at $cut", CastAudioFramer.parseAacPce(pce, 0, cut))
+        }
     }
 }

@@ -192,6 +192,10 @@ class TsToFmp4Remuxer(
     /** Latched once so a sanitized ADTS config is explained a single time
      *  instead of per frame for the life of the connection. */
     private var adtsConfigSanitized = false
+
+    /** Latched once so the PCE strip is announced a single time instead
+     *  of for every frame of the connection. */
+    private var aacPceLogged = false
     private var initSent = false
 
     // ---- AC-3 / E-AC-3 passthrough ----
@@ -650,6 +654,43 @@ class TsToFmp4Remuxer(
                 p++
                 continue
             }
+            // channel_configuration 0 means the layout lives in a
+            // program_config_element at the start of the raw_data_block,
+            // which is exactly what Dispatcharr's AAC output profile
+            // emits (ffmpeg `-c:a aac -ac 2`, "Using a PCE to encode
+            // channel layout"). Two things then break downstream: an
+            // AudioSpecificConfig cannot express config 0 at all, and the
+            // Google TV Streamer's C2SoftAacDec refuses every frame that
+            // still carries the PCE (measured: 5388 lines of "error
+            // 0x0005, substituting silence" in one session). Both are
+            // fixed losslessly here, per frame: derive the real channel
+            // count from the element for the ASC, and drop the element
+            // off the front of the block. No transcode, no re-encode.
+            var payloadStart = p + headerLen
+            var effectiveChanConfig = chanConfig
+            if (chanConfig == 0) {
+                val pce = CastAudioFramer.parseAacPce(data, p + headerLen, p + frameLen)
+                if (pce != null) {
+                    // The PCE ends byte-aligned relative to the block
+                    // start (parseAacPce refuses to report one that does
+                    // not), so the elements after it begin on a byte
+                    // boundary and the rest of the block copies over
+                    // verbatim: no bit shifting, and the block's existing
+                    // id_syn_ele 7 terminator plus its byte alignment
+                    // still terminate the shortened block correctly.
+                    payloadStart = p + headerLen + pce.lengthBytes
+                    effectiveChanConfig = aacChannelConfigForCount(pce.channels)
+                    if (!aacPceLogged) {
+                        aacPceLogged = true
+                        log("AAC PCE stripped: layout ${pce.channels} ch -> config $effectiveChanConfig")
+                    }
+                }
+            }
+            if (payloadStart >= p + frameLen) {
+                // A frame that is nothing but a PCE carries no audio.
+                p += frameLen
+                continue
+            }
             if (aacFreqIndex < 0) {
                 // The esds ASC is built from these three fields, and
                 // Chromium's MP4StreamParser VALIDATES it (AAC::Parse,
@@ -661,7 +702,7 @@ class TsToFmp4Remuxer(
                 val safe = sanitizeAacConfig(
                     objectType = profile + 1, // ADTS profile is audioObjectType - 1
                     freqIndex = freqIndex,
-                    chanConfig = chanConfig,
+                    chanConfig = effectiveChanConfig,
                 )
                 aacObjectType = safe.objectType
                 aacFreqIndex = safe.freqIndex
@@ -691,7 +732,7 @@ class TsToFmp4Remuxer(
                 if (timelineBasePts >= 0 && framePts >= timelineBasePts) {
                     audioQueue.add(
                         AudioSample(
-                            data.copyOfRange(p + headerLen, p + frameLen),
+                            data.copyOfRange(payloadStart, p + frameLen),
                             framePts,
                             audioFrameTicks,
                         ),
@@ -1409,6 +1450,24 @@ private val AC3_BIT_RATE_CODES = intArrayOf(
  * 0 holds 2 because a sanitized config never stays 0.
  */
 private val AAC_CHANNEL_COUNTS = intArrayOf(2, 1, 2, 3, 4, 5, 6, 8)
+
+/**
+ * The inverse of [AAC_CHANNEL_COUNTS]: the channel_configuration that
+ * declares [count] channels, or 0 when Table 1.19 has no entry for that
+ * count (7 channels is the only gap, since config 7 is 7.1). 0 is then
+ * handed to the config sanitizer, which substitutes stereo.
+ */
+private fun aacChannelConfigForCount(count: Int): Int =
+    when (count) {
+        1 -> 1
+        2 -> 2
+        3 -> 3
+        4 -> 4
+        5 -> 5
+        6 -> 6
+        8 -> 7
+        else -> 0
+    }
 
 private val ADTS_SAMPLE_RATES = intArrayOf(
     96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050,

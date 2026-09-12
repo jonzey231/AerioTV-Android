@@ -108,32 +108,43 @@ class AerioCastSender @Inject constructor(
 
     private companion object {
         const val TAG = "AerioCast"
+    }
 
-        /**
-         * Cast receiver models known to decode AC-3 / E-AC-3 themselves.
-         * The phone does NO cast audio transcoding (Logan 2026-09-12), so
-         * an AC-3 mux either passes through to one of these or the session
-         * refuses with the message that points at Dispatcharr's AAC
-         * output profile. Default-DENY: a model nobody has verified is
-         * treated as incapable, because a silently-playing TV is a worse
-         * outcome than an honest refusal.
-         */
-        val AC3_CAPABLE_MODELS = listOf(
-            "chromecast ultra",
-            "google tv", // Chromecast with Google TV, Google TV Streamer
-            "android tv", // Cast Connect targets (Shield, Bravia, ONN, ...)
-            "shield",
-            "bravia",
-        )
+    /**
+     * MEASURED receiver MSE codec support for this session, reported by the
+     * receiver web app on [CastControl.DEBUG_NAMESPACE] (see receiver.html).
+     * Null until the first caps message arrives; cleared when the session ends.
+     *
+     * This replaced a model allow-list that said a Google TV Streamer decodes
+     * AC-3. Its platform players do; the web receiver's MSE does NOT, and the
+     * receiver's own Chromium proved it (gtvlogs/session16, 2026-09-12
+     * 15:52:40): isTypeSupported("video/mp4; codecs=\"avc1.64002A,ac-3\"")
+     * returned false and the plain AC-3 load died with Shaka error 3015 on
+     * both senders. The decision below now uses the measurement only.
+     */
+    private var receiverCaps: Map<String, Boolean>? = null
 
-        /** Checked FIRST: smart displays and the audio-only / pre-Ultra
-         *  dongles decode AAC only, whatever their model string suggests. */
-        val AC3_INCAPABLE_MODELS = listOf(
-            "nest hub",
-            "nest audio",
-            "chromecast audio",
-            "google home",
-            "google nest",
+    /** Logged once per distinct measurement so the telemetry stream that
+     *  repeats the caps does not repeat the line. */
+    private var loggedCaps: Map<String, Boolean>? = null
+
+    /** Reads the `mse` object from a receiver debug message (the dedicated
+     *  `type:"caps"` message on READY, and the copy that rides every
+     *  telemetry snapshot) and stores it for this session. */
+    private fun noteReceiverCaps(json: JSONObject) {
+        val mse = json.optJSONObject("mse") ?: return
+        val parsed = buildMap {
+            for (key in mse.keys()) put(key, mse.optBoolean(key, false))
+        }
+        if (parsed.isEmpty()) return
+        receiverCaps = parsed
+        if (loggedCaps == parsed) return
+        loggedCaps = parsed
+        fun cap(key: String) = if (parsed[key] == true) "yes" else "no"
+        Log.i(
+            TAG,
+            "[Cast] receiver caps: ac-3=${cap("ac-3")} ec-3=${cap("ec-3")} " +
+                "aac=${cap("mp4a.40.2")} h264=${cap("avc1.64002A")}",
         )
     }
 
@@ -194,6 +205,10 @@ class AerioCastSender @Inject constructor(
         if (ns != CastControl.DEBUG_NAMESPACE) return@MessageReceivedCallback
         runCatching {
             val j = JSONObject(message)
+            noteReceiverCaps(j)
+            // The dedicated caps message carries no player state; it is fully
+            // handled above and must not print a row of "?" fields.
+            if (j.optString("type") == "caps") return@runCatching
             fun str(key: String): String = if (j.has(key) && !j.isNull(key)) j.optString(key) else "?"
             fun num(key: String, decimals: Int): String =
                 if (j.has(key) && !j.isNull(key)) {
@@ -691,10 +706,21 @@ class AerioCastSender @Inject constructor(
             // emits channel_configuration 0 (layout in a PCE) whenever the
             // AC-3 source layout is outside Table 1.19, and the receiver's
             // AAC decoder then substitutes silence for every frame. So the
-            // profile is now requested ONLY when the receiver cannot
-            // decode AC-3; a capable receiver ingests the PLAIN stream and
-            // the remuxer passes AC-3 / E-AC-3 through untouched.
-            val ac3Ok = receiverDecodesAc3()
+            // profile is requested ONLY when the receiver can decode AC-3
+            // in MSE; that receiver ingests the PLAIN stream and the
+            // remuxer passes AC-3 / E-AC-3 through untouched.
+            //
+            // 2026-09-12 session16: "can decode" is now the receiver's own
+            // MediaSource.isTypeSupported measurement ([receiverCaps]), not
+            // a model allow-list. The list called the Streamer AC-3 capable
+            // and the plain stream died with Shaka 3015. With no caps yet
+            // (first load can race READY) the profile is the safe default:
+            // every receiver we measure supports AAC.
+            val caps = receiverCaps
+            if (caps == null) {
+                Log.i(TAG, "[Cast] caps not received, defaulting to profile")
+            }
+            val ac3Ok = caps != null && (caps["ac-3"] == true || caps["ec-3"] == true)
             val receiverName = lastDeviceName ?: (state.value as? State.Connected)?.deviceName
             val profileId = if (ac3Ok) {
                 null
@@ -711,7 +737,8 @@ class AerioCastSender @Inject constructor(
             }.getOrNull()?.takeIf { it.isNotBlank() } ?: receiverName ?: "unknown"
             Log.i(
                 TAG,
-                "[Cast] audio plan: receiver=$receiverModel ac3=${if (ac3Ok) "yes" else "no"} " +
+                "[Cast] audio plan: receiver=$receiverModel " +
+                    "ac3=${if (ac3Ok) "yes" else "no"} (${if (caps == null) "no caps" else "measured"}) " +
                     "-> ingest=${profileId?.let { "profile $it" } ?: "plain"}",
             )
             val started = try {
@@ -764,21 +791,6 @@ class AerioCastSender @Inject constructor(
             _content.value = ready
             currentSession()?.let { loadOnSession(it, ready) }
         }
-    }
-
-    /**
-     * Whether the connected Cast receiver decodes AC-3 / E-AC-3 itself.
-     * The Cast SDK exposes no per-codec capability query, so this is the
-     * device model against the known lists above (default deny). A "yes"
-     * lets the proxy pass AC-3 through untouched; a "no" makes an AC-3
-     * channel refuse with [describeRefusal] instead of playing silently.
-     */
-    private fun receiverDecodesAc3(): Boolean {
-        val model = runCatching {
-            currentSession()?.castDevice?.modelName
-        }.getOrNull()?.lowercase() ?: return false
-        if (AC3_INCAPABLE_MODELS.any { model.contains(it) }) return false
-        return AC3_CAPABLE_MODELS.any { model.contains(it) }
     }
 
     /**
@@ -926,6 +938,8 @@ class AerioCastSender @Inject constructor(
         runCatching { s.removeMessageReceivedCallbacks(CastControl.DEBUG_NAMESPACE) }
         runCatching { s.remoteMediaClient?.unregisterCallback(remoteClientCallback) }
         controlSession = null
+        receiverCaps = null
+        loggedCaps = null
         _remoteState.value = CastControl.RemoteState()
         _position.value = CastControl.PositionSnapshot()
     }

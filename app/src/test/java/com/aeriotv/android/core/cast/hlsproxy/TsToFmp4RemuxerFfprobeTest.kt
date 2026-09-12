@@ -41,6 +41,7 @@ class TsToFmp4RemuxerFfprobeTest {
         val segments = ArrayList<ByteArray>()
         val durations = ArrayList<Long>()
         var audioCodec: String? = null
+        val logs = ArrayList<String>()
         override fun onInitSegment(data: ByteArray) { init = data }
         override fun onMediaSegment(data: ByteArray, durationTicks: Long) {
             segments.add(data); durations.add(durationTicks)
@@ -95,7 +96,7 @@ class TsToFmp4RemuxerFfprobeTest {
         val cap = Capture()
         val remuxer = TsToFmp4Remuxer(
             listener = cap,
-            log = {},
+            log = { cap.logs.add(it) },
             allowAc3Passthrough = allowAc3Passthrough,
         )
         val bytes = ts.readBytes()
@@ -196,6 +197,246 @@ class TsToFmp4RemuxerFfprobeTest {
      * to start an audio append at. Asserted on the bytes rather than via
      * ffprobe because ffmpeg is forgiving about it and Chromium is not.
      */
+    /**
+     * The Dispatcharr PCE fixture, built by REWRITING the AAC fixture's
+     * ADTS stream rather than by asking ffmpeg for it: ffmpeg's own AAC
+     * encoder refuses every two-channel layout outside plain stereo
+     * (FL+LFE and friends fail with EINVAL), so it cannot be made to emit
+     * the exact shape Dispatcharr's `-c:a aac -ac 2` produces on this
+     * machine. What it produces there is channel_configuration 0 plus a
+     * program_config_element declaring one front channel_pair_element at
+     * the start of EVERY raw_data_block, and that is synthesized here
+     * byte for byte.
+     *
+     * Building it this way buys the strongest possible assertion: the
+     * frames underneath the injected PCE are the untouched stereo
+     * fixture's frames, so a correct strip has to reproduce them exactly.
+     */
+    private fun buildPceTs(): File {
+        val out = File(workDir, "aac-pce.ts")
+        if (out.isFile && out.length() > 0) return out
+        val plain = File(workDir, "aac-plain.aac")
+        val (demuxCode, demuxLog) = run(
+            ffmpeg.path, "-y", "-v", "error", "-i", buildAacTs().path,
+            "-map", "0:a", "-c", "copy", "-f", "adts", plain.path,
+        )
+        assertEquals("ffmpeg demuxed the ADTS audio: $demuxLog", 0, demuxCode)
+        val injected = File(workDir, "aac-pce.aac")
+        injected.writeBytes(injectPce(plain.readBytes()))
+        val (muxCode, muxLog) = run(
+            ffmpeg.path, "-y", "-v", "error",
+            "-i", buildAacTs().path, "-i", injected.path,
+            "-map", "0:v", "-map", "1:a", "-c", "copy", "-f", "mpegts", out.path,
+        )
+        assertEquals("ffmpeg muxed the PCE fixture: $muxLog", 0, muxCode)
+        return out
+    }
+
+    /** A 7-byte program_config_element: one front channel_pair_element,
+     *  no side/back/LFE/assoc/cc elements, no mixdowns, no comment. That
+     *  is 56 bits including the byte_align() and comment_field_bytes, so
+     *  it ends byte-aligned exactly as ISO/IEC 14496-3 4.4.1.1 promises. */
+    private fun pceBytes(freqIndex: Int): ByteArray {
+        val bits = StringBuilder()
+        fun put(value: Int, width: Int) {
+            for (i in width - 1 downTo 0) bits.append((value shr i) and 1)
+        }
+        put(5, 3) // id_syn_ele = PCE
+        put(0, 4) // element_instance_tag
+        put(1, 2) // object_type (AAC-LC)
+        put(freqIndex, 4)
+        put(1, 4); put(0, 4); put(0, 4) // num_front/side/back
+        put(0, 2); put(0, 3); put(0, 4) // num_lfe/assoc_data/valid_cc
+        put(0, 1); put(0, 1); put(0, 1) // no mono/stereo/matrix mixdown
+        put(1, 1); put(0, 4) // front element: is_cpe = 1, tag 0
+        while (bits.length % 8 != 0) bits.append(0) // byte_align()
+        put(0, 8) // comment_field_bytes
+        return ByteArray(bits.length / 8) { i ->
+            bits.substring(i * 8, i * 8 + 8).toInt(2).toByte()
+        }
+    }
+
+    /** Rewrite every ADTS frame of [adts] to channel_configuration 0 with
+     *  [pceBytes] spliced in ahead of the raw_data_block, growing
+     *  aac_frame_length to match. */
+    private fun injectPce(adts: ByteArray): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        var p = 0
+        while (p + 7 <= adts.size) {
+            val protectionAbsent = adts[p + 1].toInt() and 0x01 != 0
+            val headerLen = if (protectionAbsent) 7 else 9
+            val freqIndex = (adts[p + 2].toInt() shr 2) and 0x0F
+            val frameLen = ((adts[p + 3].toInt() and 0x03) shl 11) or
+                ((adts[p + 4].toInt() and 0xFF) shl 3) or
+                ((adts[p + 5].toInt() shr 5) and 0x07)
+            if (frameLen < headerLen || p + frameLen > adts.size) break
+            val pce = pceBytes(freqIndex)
+            val newLen = frameLen + pce.size
+            val header = adts.copyOfRange(p, p + headerLen)
+            // channel_configuration is the low bit of byte 2 plus the top
+            // two bits of byte 3; zero all three.
+            header[2] = (header[2].toInt() and 0xFE).toByte()
+            header[3] = (header[3].toInt() and 0x3F).toByte()
+            header[3] = ((header[3].toInt() and 0xFC) or ((newLen shr 11) and 0x03)).toByte()
+            header[4] = ((newLen shr 3) and 0xFF).toByte()
+            header[5] = ((header[5].toInt() and 0x1F) or ((newLen and 0x07) shl 5)).toByte()
+            out.write(header)
+            out.write(pce)
+            out.write(adts, p + headerLen, frameLen - headerLen)
+            p += frameLen
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * The Google TV Streamer failure of 2026-09-12: Dispatcharr's AAC
+     * output profile hands us channel_configuration 0 frames whose raw
+     * data blocks start with a program_config_element, and C2SoftAacDec
+     * rejected all 5388 of them ("error 0x0005, substituting silence").
+     * Stripping the PCE has to leave decodable AAC behind, and the track
+     * has to be declared with the layout the PCE described.
+     */
+    @Test
+    fun `aac frames carrying a program config element are stripped and still decode`() {
+        assumeTrue("ffmpeg/ffprobe present", ffmpeg.canExecute() && ffprobe.canExecute())
+        val cap = remux(buildPceTs(), allowAc3Passthrough = false)
+        assertTrue("init segment emitted", cap.init != null)
+        assertTrue("segments produced, got ${cap.segments.size}", cap.segments.size >= 2)
+
+        val file = writePlayable("aac-pce.mp4", cap, segmentCount = 2)
+        val streams = probeStreams(file)
+        assertTrue("aac audio stream\n$streams", streams.contains("codec_name=\"aac\""))
+        assertTrue("48 kHz audio\n$streams", streams.contains("sample_rate=\"48000\""))
+        assertTrue("stereo declared from the PCE layout\n$streams", streams.contains("channels=2"))
+
+        val (pts, err) = probeAudioPackets(file)
+        assertTrue("audio packets present", pts.size >= 40)
+        assertTrue("no decode errors from ffprobe: $err", err.isBlank())
+
+        // Announced once for the session, not once per frame.
+        val stripLogs = cap.logs.filter { it.startsWith("AAC PCE stripped:") }
+        assertEquals("PCE strip logged exactly once: ${cap.logs}", 1, stripLogs.size)
+        assertEquals("AAC PCE stripped: layout 2 ch -> config 2", stripLogs.first())
+        assertTrue(
+            "the config sanitizer has nothing left to complain about: ${cap.logs}",
+            cap.logs.none { it.startsWith("ADTS audio config sanitized") },
+        )
+
+        // The decoder's verdict, not ours: a full decode of the whole
+        // file. ffmpeg prints nothing on a clean decode, so any AAC error
+        // (the "substituting silence" class of failure the Streamer hit)
+        // shows up here as output.
+        val (decodeCode, decodeLog) = run(ffmpeg.path, "-v", "error", "-i", file.path, "-f", "null", "-")
+        assertEquals("ffmpeg decoded the stripped stream: $decodeLog", 0, decodeCode)
+        assertTrue("no decoder output at all: $decodeLog", decodeLog.isBlank())
+
+        // The AudioSpecificConfig in the esds: AAC-LC, 48 kHz, channel
+        // configuration 2. 0x05 is the DecoderSpecificInfo tag, followed
+        // by its 2-byte length and the ASC itself.
+        val init = cap.init!!
+        var ascFound = false
+        for (i in 0 until init.size - 3) {
+            if (init[i].toInt() == 0x05 && init[i + 1].toInt() == 0x02 &&
+                init[i + 2].toInt() == 0x11 && init[i + 3].toInt() == 0x90.toByte().toInt()
+            ) {
+                ascFound = true
+            }
+        }
+        assertTrue("the esds ASC says AAC-LC 48 kHz channel configuration 2", ascFound)
+    }
+
+    /**
+     * Losslessness, asserted on the bytes: the PCE fixture's frames are
+     * the plain fixture's frames with a PCE spliced in front, so the
+     * samples the remuxer queues for the two must be IDENTICAL. This is
+     * what proves the strip is a byte-wise copy and not a re-encode or a
+     * mis-shifted payload.
+     */
+    @Test
+    fun `stripping the program config element reproduces the original frames exactly`() {
+        assumeTrue("ffmpeg/ffprobe present", ffmpeg.canExecute() && ffprobe.canExecute())
+        val plain = remux(buildAacTs(), allowAc3Passthrough = false)
+        val pce = remux(buildPceTs(), allowAc3Passthrough = false)
+        // Concatenated across segments, not compared per segment: the
+        // injected PCE makes every source frame 7 bytes longer, which
+        // repacks the PES and shifts where a segment boundary falls by up
+        // to one frame. The SAMPLES either side of that cut are still the
+        // same frames in the same order.
+        val plainSamples = plain.segments.flatMap { audioSampleBytes(it) }
+        val pceSamples = pce.segments.flatMap { audioSampleBytes(it) }
+        assertTrue("samples extracted, got ${plainSamples.size}", plainSamples.size >= 200)
+        // The runs are aligned by CONTENT, not by index: every source
+        // frame grew by the 7-byte PCE, which repacks the PES and shifts
+        // both the first frame that clears the video presentation gate
+        // and where the last partial segment ends. What must hold is that
+        // from the first shared frame onward the two sample streams are
+        // the same frames in the same order, byte for byte.
+        val plainHex = plainSamples.map { it.toHex() }
+        val pceHex = pceSamples.map { it.toHex() }
+        val offset = pceHex.indexOf(plainHex[0])
+        assertTrue("the plain run's first frame appears in the PCE run", offset >= 0)
+        val common = minOf(plainHex.size, pceHex.size - offset)
+        assertTrue("a long shared run to compare, got $common", common >= 200)
+        for (i in 0 until common) {
+            assertEquals(
+                "audio sample $i is byte-identical after the PCE strip",
+                plainHex[i],
+                pceHex[i + offset],
+            )
+        }
+        // And the init segments agree, so the declared track is the same
+        // one the untouched stereo stream produces.
+        assertEquals("identical init segment", plain.init!!.toHex(), pce.init!!.toHex())
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
+    /** The audio track's samples, cut out of a segment's mdat using the
+     *  second traf's trun sample sizes and data_offset. */
+    private fun audioSampleBytes(seg: ByteArray): List<ByteArray> {
+        var moofStart = -1
+        var i = 0
+        while (i + 8 <= seg.size) {
+            val size = be32(seg, i)
+            if (size <= 0) break
+            if (String(seg, i + 4, 4, Charsets.US_ASCII) == "moof") { moofStart = i; break }
+            i += size
+        }
+        if (moofStart < 0) return emptyList()
+        val moofSize = be32(seg, moofStart)
+        val trafs = ArrayList<Pair<Int, Int>>()
+        var j = moofStart + 8
+        while (j + 8 <= moofStart + moofSize) {
+            val s = be32(seg, j)
+            if (s <= 0) break
+            if (String(seg, j + 4, 4, Charsets.US_ASCII) == "traf") trafs.add(Pair(j, s))
+            j += s
+        }
+        if (trafs.size < 2) return emptyList()
+        val (off, sz) = trafs[1]
+        var k = off + 8
+        while (k + 8 <= off + sz) {
+            val s = be32(seg, k)
+            if (s <= 0) break
+            if (String(seg, k + 4, 4, Charsets.US_ASCII) == "trun") {
+                val count = be32(seg, k + 12)
+                // data_offset is relative to the moof start.
+                var cursor = moofStart + be32(seg, k + 16)
+                val out = ArrayList<ByteArray>(count)
+                var q = k + 20
+                repeat(count) {
+                    val len = be32(seg, q + 4)
+                    out.add(seg.copyOfRange(cursor, cursor + len))
+                    cursor += len
+                    q += 8
+                }
+                return out
+            }
+            k += s
+        }
+        return emptyList()
+    }
+
     @Test
     fun `audio trex default sample flags mark sync samples`() {
         assumeTrue("ffmpeg/ffprobe present", ffmpeg.canExecute() && ffprobe.canExecute())
