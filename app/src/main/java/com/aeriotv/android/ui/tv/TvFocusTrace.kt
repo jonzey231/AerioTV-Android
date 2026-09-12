@@ -56,6 +56,14 @@ object TvFocusTrace {
         Log.i(TAG, "[ANCHOR] $anchor from $source")
     }
 
+    /** The single scroll owner threw an anchor away: the geometry it needed was
+     *  never measured (Logan 2026-09-11: a freshly inserted Watchlist shelf
+     *  anchored with no measured height and the page silently did not move).
+     *  One line per dropped anchor so the next such case is readable. */
+    fun anchorDropped(anchor: Any, reason: String) {
+        Log.i(TAG, "[ANCHOR] $anchor DROPPED ($reason)")
+    }
+
     /** A D-pad / Back decision at a page-level handler. */
     fun key(key: String, consumed: Boolean, by: String) {
         Log.i(TAG, "[KEY] $key consumed=$consumed by=$by")

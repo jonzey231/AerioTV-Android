@@ -244,6 +244,9 @@ internal fun TvMediaTab(
     TvMediaPage(
         gridState = gridState,
         heroPages = tvHero,
+        // Only the real Continue Watching carousel gets the section title; the
+        // library fallback hero (nothing in progress) is not continue watching.
+        heroSectionTitle = if (heroPages.isNotEmpty()) "Continue Watching" else null,
         shelves = listOf(watchlistShelf),
         headerTitle = if (isSearching) "Results" else kind.libraryTitle,
         headerCount = gridItems.size,

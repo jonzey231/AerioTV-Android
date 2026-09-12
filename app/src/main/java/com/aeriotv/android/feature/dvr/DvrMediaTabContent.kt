@@ -734,7 +734,10 @@ private fun TvDvrPage(
         return com.aeriotv.android.feature.movies.tv.TvHeroPage(
             key = rec.id, title = rec.title.ifBlank { "Recording" }, artUrl = rec.backdropUrl ?: rec.posterUrl, logoUrl = channelLogo(rec),
             subtitle = rec.subTitle, meta = meta, plot = rec.description.takeIf { it.isNotBlank() },
-            eyebrow = when { recording -> "Recording now"; progress > 0f -> "Continue watching"; else -> null },
+            // The "Continue watching" label moved OFF the banner card and into the
+            // section header over the hero (Logan 2026-09-11); "Recording now"
+            // stays, it is the live-capture dot, not a section name.
+            eyebrow = if (recording) "Recording now" else null,
             eyebrowColor = if (recording) red else Color.Unspecified, eyebrowDot = recording,
             buttons = buttons, longPressActions = menuActions(rec),
         )
@@ -777,20 +780,31 @@ private fun TvDvrPage(
     // in-progress capture, any in-progress capture, the newest partly-watched
     // finished recording and finally the newest finished recording
     // (DVRView.swift:227-245). A settled library still shows a hero.
-    val heroPages = remember(continueWatching, recordingNow, recentRecordings, now) {
-        if (continueWatching.size > 1) continueWatching.map(::hero)
+    val heroRecs = remember(continueWatching, recordingNow, recentRecordings, now) {
+        if (continueWatching.size > 1) continueWatching
         else {
             val newestFinished = recentRecordings.sortedByDescending { it.startMillis }
             val heroPick = recordingNow.firstOrNull { it.inProgressUrl != null }
                 ?: recordingNow.firstOrNull()
                 ?: newestFinished.firstOrNull { val p = progressOf(it); p > 0f && p < 0.97f }
                 ?: newestFinished.firstOrNull()
-            listOfNotNull(heroPick).map(::hero)
+            listOfNotNull(heroPick)
+        }
+    }
+    val heroPages = remember(heroRecs, now) { heroRecs.map(::hero) }
+    // The section title over the banner, the same rule the phone deck uses
+    // (line 423): every hero page capturing now reads "Recording Now".
+    val heroSectionTitle = remember(heroRecs, now) {
+        when {
+            heroRecs.isEmpty() -> null
+            heroRecs.all { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording } -> "Recording Now"
+            else -> "Continue Watching"
         }
     }
     com.aeriotv.android.feature.movies.tv.TvMediaPage(
         gridState = gridState,
         heroPages = heroPages,
+        heroSectionTitle = heroSectionTitle,
         shelves = listOf(
             // tvOS: every card, shelf or grid, calls actions.play(rec), i.e.
             // RESUME (DVRView.swift:1198, 1300-1307).

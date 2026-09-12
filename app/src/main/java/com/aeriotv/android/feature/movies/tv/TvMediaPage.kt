@@ -323,6 +323,12 @@ fun <T> TvMediaPage(
     /** Stable per-tab id ("Movies", "TVShows", "dvr"): the key this page
      *  records its focused source under in [TvReturnMemory]. */
     pageId: String = "",
+    /** Section title over the hero banner ("Continue Watching"), drawn in the
+     *  shelf-title style at the hero copy column's leading inset and NOT
+     *  focusable (Logan 2026-09-11). It lives inside the hero's own grid row,
+     *  so the row's measured height carries it and every rest top below the
+     *  hero shifts down by itself: no scroll target needs a new constant. */
+    heroSectionTitle: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -451,6 +457,14 @@ fun <T> TvMediaPage(
     // late, search opening). The table is rebuilt whenever a measured height,
     // the structure or the at-rest viewport changes.
     val leadingHeightByKey = remember { HashMap<Any, Int>() }
+    /** Bumped whenever a leading row reports a NEW height from its own layout
+     *  pass. The geometry collector below watches it, so the table is rebuilt
+     *  for a row that is composed but never visible. Written in the layout
+     *  phase and read only from a snapshotFlow, never from a composition. */
+    val measureEpoch = remember { mutableIntStateOf(0) }
+    val recordLeadingHeight: (Any, Int) -> Unit = remember {
+        { key, h -> if (h > 0 && leadingHeightByKey.put(key, h) != h) measureEpoch.value++ }
+    }
     val geometry = remember { mutableStateOf<TvPageGeometry?>(null) }
     val chromeScroll = com.aeriotv.android.feature.main.LocalTvChromeScroll.current
     /** Pixels the page has scrolled, from the first visible row whose rest top is known. */
@@ -491,7 +505,11 @@ fun <T> TvMediaPage(
         var cellHeight = 0
         var viewportAtTop = 0
         var dirty = true
-        snapshotFlow { gridState.layoutInfo }.collect { info ->
+        var seenEpoch = -1
+        // The epoch is part of the flow so an off-screen row reporting its
+        // height rebuilds the table even when the grid itself never relaid out.
+        snapshotFlow { measureEpoch.value to gridState.layoutInfo }.collect { (epoch, info) ->
+            if (epoch != seenEpoch) { seenEpoch = epoch; dirty = true }
             info.visibleItemsInfo.forEach { item ->
                 if (item.size.height <= 0) return@forEach
                 if (item.index < leadingCount) {
@@ -700,7 +718,13 @@ fun <T> TvMediaPage(
                     current = now
                     ready = true
                 }
-                if (!ready) return@launch
+                if (!ready) {
+                    // Never silent: "[ANCHOR] Shelf(ordinal=0) from shelf-card"
+                    // with nothing after it is exactly what a dropped anchor
+                    // looked like in Logan's 2026-09-11 trace.
+                    TvFocusTrace.anchorDropped(target, "geometry")
+                    return@launch
+                }
                 if (goal == current) return@launch
                 if (target is TvPageAnchor.Hero) {
                     // Bring the bar back before the page moves: one relayout,
@@ -1077,7 +1101,7 @@ fun <T> TvMediaPage(
             verticalArrangement = Arrangement.spacedBy(gridRowSpacing),
             horizontalArrangement = Arrangement.spacedBy(TvPage.columnSpacing),
         ) {
-            fullSpan("catcher") {
+            fullSpan("catcher", onMeasured = recordLeadingHeight) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1101,7 +1125,22 @@ fun <T> TvMediaPage(
                 // the first shelf's posters off the bottom at rest (Logan
                 // 2026-09-10). The hero row gives back the row spacing plus
                 // 10 dp so the shelf sits fully in view.
-                fullSpan("hero", trimBottom = gridRowSpacing + 10.dp) {
+                fullSpan("hero", trimBottom = gridRowSpacing + 10.dp, onMeasured = recordLeadingHeight) {
+                  Column {
+                    // "Continue Watching" over the banner, in the shelf-title
+                    // style (12 sp SemiBold onBackground) at the same leading
+                    // inset as the hero's copy column: overscan 40 + content
+                    // inset 30 = 70 dp = overscan 40 + heroInset 8 + the card's
+                    // own 22 dp copy padding. 4 dp under it is the shelf's own
+                    // title-to-row gap, so the hero sits exactly one shelf
+                    // title lower (Logan 2026-09-11).
+                    heroSectionTitle?.takeIf { it.isNotBlank() }?.let { t ->
+                        Text(
+                            t, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground, maxLines = 1,
+                            modifier = Modifier.padding(start = TvPage.overscan + TvPage.contentInset, bottom = 4.dp),
+                        )
+                    }
                     TvHeroCarousel(
                         pages = heroPages,
                         primaryRequester = heroPrimary,
@@ -1117,10 +1156,11 @@ fun <T> TvMediaPage(
                         },
                         modifier = Modifier.padding(start = TvPage.overscan, end = TvPage.overscan, bottom = TvPage.sectionSpacing),
                     )
+                  }
                 }
             }
             visibleShelves.forEachIndexed { si, shelf ->
-                fullSpan("shelf:" + shelf.title) {
+                fullSpan("shelf:" + shelf.title, onMeasured = recordLeadingHeight) {
                     TvShelfRow(
                         shelf = shelf,
                         firstCardRequester = if (si == 0) firstShelfCard else null,
@@ -1143,7 +1183,7 @@ fun <T> TvMediaPage(
                     )
                 }
             }
-            fullSpan("header") {
+            fullSpan("header", onMeasured = recordLeadingHeight) {
                 Column(
                     modifier = Modifier
                         .padding(start = TvPage.overscan + TvPage.contentInset, end = TvPage.overscan + TvPage.heroInset)
@@ -1238,13 +1278,13 @@ fun <T> TvMediaPage(
             }
             if (isSearching) {
                 searchExtras.forEachIndexed { i, extra ->
-                    fullSpan("extra:$i") {
+                    fullSpan("extra:$i", onMeasured = recordLeadingHeight) {
                         Box(modifier = Modifier.padding(start = TvPage.overscan + TvPage.contentInset, top = 6.dp)) { extra() }
                     }
                 }
             }
             if (pillRow) {
-                fullSpan("pills") {
+                fullSpan("pills", onMeasured = recordLeadingHeight) {
                     // Its own HORIZONTAL spec: inheriting the page's vertical
                     // one made an off-screen pill unreachable (report C 4.3).
                     val pillSpec = with(androidx.compose.ui.platform.LocalDensity.current) {
@@ -1286,7 +1326,7 @@ fun <T> TvMediaPage(
                 }
             }
             if (gridItems.isEmpty()) {
-                fullSpan("empty") {
+                fullSpan("empty", onMeasured = recordLeadingHeight) {
                     Box(modifier = Modifier.fillMaxWidth().padding(top = 40.dp), contentAlignment = Alignment.Center) { emptyContent() }
                 }
             }
@@ -1442,6 +1482,12 @@ private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(
     key: Any,
     /** Height the row gives back so the next row sits closer (the grid's row spacing still applies). */
     trimBottom: Dp = 0.dp,
+    /** The row's final height, reported from the LAYOUT pass, so a row that is
+     *  composed but OFF SCREEN (the lazy grid's cache window reaches 1 viewport
+     *  ahead and 2 behind) still feeds the geometry table. layoutInfo only ever
+     *  reports VISIBLE rows, which is why a shelf inserted above the scroll
+     *  position had no height and broke the rest-top chain (Logan 2026-09-11). */
+    onMeasured: (Any, Int) -> Unit = { _, _ -> },
     content: @Composable () -> Unit,
 ) {
     item(key = key, span = { GridItemSpan(maxLineSpan) }) {
@@ -1458,6 +1504,7 @@ private fun androidx.compose.foundation.lazy.grid.LazyGridScope.fullSpan(
                     ),
                 )
                 val height = (placeable.height - trimBottom.roundToPx()).coerceAtLeast(0)
+                onMeasured(key, height)
                 layout(constraints.maxWidth, height) { placeable.place(-extraStart, 0) }
             },
         ) { content() }
@@ -1679,10 +1726,25 @@ private fun TvHeroCard(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
+                // tvOS MoviesHeroButton rows NEVER wrap, scroll or shrink: each
+                // label carries .fixedSize(horizontal: true) and the HStack
+                // simply overflows the copy column's .frame(maxWidth: 720)
+                // (MoviesView.swift:3292-3310, :3393-3420). Compose instead
+                // measures a Row into the width left over, so "Details" was
+                // squeezed down to nothing and the More circle, which keeps its
+                // size with requiredSize(30.dp), was drawn as a sliver under
+                // Details' trailing edge (Logan 2026-09-11). unbounded = true
+                // is the fixedSize port: every button keeps its intrinsic
+                // width, nothing overlaps, and the row bleeds past the 360 dp
+                // copy column into the hero card's own width (820 dp with one
+                // hero page, 485 with three) where nothing clips it.
                 // requiredHeight: an overflowing copy column once squeezed
                 // this row (pills at 23 dp, the options circle an oval);
                 // the row can never be squeezed again.
-                modifier = Modifier.padding(top = 2.dp).requiredHeight(30.dp),
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .wrapContentWidth(Alignment.Start, unbounded = true)
+                    .requiredHeight(30.dp),
             ) {
                 // The hero menu is the right-most options circle, not a
                 // long press on Resume (Logan 2026-09-10, all platforms).
@@ -1814,7 +1876,16 @@ private fun <T> TvShelfRow(
                         .width(shelf.cardWidth)
                         .then(if (cardRequester != null) Modifier.focusRequester(cardRequester) else Modifier)
                         .then(if (i == 0 && firstCardRequester != null) Modifier.focusRequester(firstCardRequester) else Modifier)
-                        .then(if (onCardFocused != null) Modifier.onFocusChanged { if (it.hasFocus) onCardFocused(i) } else Modifier),
+                        // Shelf cards were the one focusable with no [FOCUS]
+                        // line, so a trace showed the anchor and nothing else
+                        // and we could not tell whether focus had even moved
+                        // (Logan 2026-09-11).
+                        .onFocusChanged {
+                            if (it.hasFocus) {
+                                com.aeriotv.android.ui.tv.TvFocusTrace.focus("shelf:$shelfIndex:$i " + shelf.title)
+                                onCardFocused?.invoke(i)
+                            }
+                        },
                 )
             }
         }
