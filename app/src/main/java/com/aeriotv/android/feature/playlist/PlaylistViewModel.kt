@@ -835,8 +835,16 @@ class PlaylistViewModel @Inject constructor(
                 "loadEpgIfConfigured: cached EPG keys do not match current channel " +
                     "identity; treating cache as stale and refetching",
             )
+            // Cache-identity rule: rows keyed to a channel identity that no
+            // longer exists are orphans no channel will ever look up, so they
+            // are dropped outright rather than painted, AND the grid coverage
+            // map goes with them -- a surviving coverage row would tell the
+            // incremental grid walk those chunks are already cached and the
+            // guide would never refill.
+            runCatching { repository.purgeEpgCache(playlist.id) }
+                .onFailure { Log.w(TAG, "identity purge failed", it) }
         }
-        if (hasCache) {
+        if (hasCache && !identityStale) {
             Log.i(TAG, "loadEpgIfConfigured: painted ${cached.size} cached programmes")
             rebuildGuideCatalog(playlist, "cache-quick", quick = true)
             _state.update { it.copy(isEpgLoading = false) }
@@ -883,6 +891,15 @@ class PlaylistViewModel @Inject constructor(
         // 3. Stale / forced / first-ever launch -> network. Only show the
         // spinner when there is nothing cached to display yet.
         Log.i(TAG, "loadEpgIfConfigured: fetching EPG for ${playlist.sourceType} (force=$forceRefresh, hadCache=$hasCache)")
+        // A forced reload (Refresh on Edit Playlist, Refresh EPG Data, Refresh
+        // Everything) means "get fresh guide data": forget which one-day grid
+        // chunks are covered so the incremental walk fetches all of them again.
+        // The programmes themselves stay put here so the catch-up archive
+        // survives a plain Refresh; refreshEpg purges those separately.
+        if (forceRefresh) {
+            runCatching { repository.purgeEpgCoverage(playlist.id) }
+                .onFailure { Log.w(TAG, "purgeEpgCoverage failed", it) }
+        }
         if (!hasCache) _state.update { it.copy(isEpgLoading = true) }
         // iOS GuideStore audit P3 #13: pass the candidate-key set so the
         // XMLTV parser can drop any programme whose `channel="..."`

@@ -5,6 +5,7 @@ import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.data.SourceType
 import androidx.room.withTransaction
 import com.aeriotv.android.core.data.db.dao.ChannelSnapshotDao
+import com.aeriotv.android.core.data.db.dao.EpgChunkCoverageDao
 import com.aeriotv.android.core.data.db.dao.EpgProgrammeDao
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.data.db.entity.ChannelSnapshotEntity
@@ -12,6 +13,8 @@ import com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.db.entity.dispatcharrVersionAtLeast
 import com.aeriotv.android.core.data.db.entity.dispatcharrAccountProfileIdList
+import com.aeriotv.android.core.data.db.entity.EPG_CHUNK_TTL_MS
+import com.aeriotv.android.core.data.db.entity.EpgChunkCoverage
 import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
 import com.aeriotv.android.core.data.db.entity.resolveGuideDays
 import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_BACK
@@ -126,6 +129,7 @@ class PlaylistRepository @Inject constructor(
     private val dispatcharrTokenStore: DispatcharrTokenStore,
     private val appPreferences: AppPreferences,
     private val epgProgrammeDao: EpgProgrammeDao,
+    private val epgChunkCoverageDao: EpgChunkCoverageDao,
     private val channelSnapshotDao: ChannelSnapshotDao,
     // GH #31: injected so the channel-snapshot persist can delete-then-insert in
     // CHUNKS inside one transaction (see saveChannelsToCache) instead of binding
@@ -737,7 +741,89 @@ class PlaylistRepository @Inject constructor(
         return programmes.size
     }
 
-    private fun extendGridWindowInBackground(playlist: PlaylistEntity, base: String) {
+    /**
+     * UTC day-grid floor. Coverage chunk keys MUST be stable across launches:
+     * anchoring chunks at "now - 1h" (what this pass used to do) mints a new
+     * start millisecond on every launch, so no cached row would ever be
+     * reusable and the incremental walk would degenerate back into the full
+     * 30-chunk refetch it exists to eliminate.
+     */
+    private fun dayFloorMs(ms: Long): Long = Math.floorDiv(ms, 86_400_000L) * 86_400_000L
+
+    /**
+     * Fetch one aligned day chunk, merge it, and record its coverage row.
+     * Returns the programme count (0 is a legitimate answer, and the coverage
+     * row still lands so the chunk is not refetched), or null when the request
+     * failed, which stops the caller's walk exactly as before.
+     */
+    private suspend fun fetchAndRecordChunk(
+        playlist: PlaylistEntity,
+        base: String,
+        start: Long,
+        end: Long,
+    ): Int? {
+        val n = fetchGridChunk(playlist, base, start, end) ?: return null
+        runCatching {
+            epgChunkCoverageDao.upsert(
+                EpgChunkCoverage(
+                    playlistId = playlist.id,
+                    chunkStartMs = start,
+                    chunkEndMs = end,
+                    fetchedAtMs = System.currentTimeMillis(),
+                    programCount = n,
+                ),
+            )
+        }.onFailure { Log.w("PlaylistRepo", "grid window coverage upsert failed", it) }
+        return n
+    }
+
+    /**
+     * Post-walk pruning: drop what is no longer valid instead of letting the
+     * cache grow without bound.
+     *
+     * Programmes are pruned at the RETENTION bound (the playlist's Guide Days,
+     * or the hard 30-day floor for All Available), NOT at the fetch-history
+     * bound: a huge panel clamps how far back it FETCHES to 6 h, and pruning
+     * there would delete exactly the catch-up archive task #135 accumulated.
+     *
+     * Coverage rows are pruned to the walk's own aligned range, so shrinking
+     * Guide Days forgets the chunks outside the new range and growing it leaves
+     * every kept row alone, which is what makes only the NEW chunks fetch.
+     */
+    private suspend fun pruneEpgToGuideRange(
+        playlistId: String,
+        retentionHistoryStart: Long,
+        coverageFromMs: Long,
+        coverageToMs: Long,
+    ) {
+        runCatching {
+            epgProgrammeDao.deleteEndedBeforeForPlaylist(playlistId, retentionHistoryStart)
+        }.onFailure { Log.w("PlaylistRepo", "grid window programme prune failed", it) }
+        runCatching {
+            epgChunkCoverageDao.pruneOutside(playlistId, coverageFromMs, coverageToMs)
+        }.onFailure { Log.w("PlaylistRepo", "grid window coverage prune failed", it) }
+    }
+
+    /**
+     * INCREMENTAL Dispatcharr grid window pass (Logan 2026-09-11). The previous
+     * revision refetched EVERY one-day chunk of the Guide Days range on every
+     * single launch ("grid window: 30 chunk(s)" in the Streamer log each time),
+     * 30 HTTP round trips plus 30 merges for data already sitting in Room.
+     *
+     * Now: the live -1h..+24h window is still fetched unconditionally on the
+     * critical path by [loadEpgInternal] (its coverage is recorded here), and
+     * this background walk only loads the chunks that are MISSING or STALE,
+     * then prunes what is no longer valid. Chunks live on the fixed UTC day
+     * grid so a row written last launch is reusable this launch.
+     *
+     * [liveProgrammeCount] is the base grid's size, recorded on the live
+     * window's coverage rows so they read as non-empty bookkeeping.
+     */
+    private fun extendGridWindowInBackground(
+        playlist: PlaylistEntity,
+        base: String,
+        liveProgrammeCount: Int,
+    ) {
         layeringJobs.compute(playlist.id) { _, existing ->
             if (existing?.isActive == true) return@compute existing
             layeringScope.launch {
@@ -751,73 +837,138 @@ class PlaylistRepository @Inject constructor(
                 val hugePanel = playlist.channelCount > 5_000
                 val baseStart = now - 3_600_000L
                 val baseEnd = now + dayMs
+                // Record the aligned day chunks the live window FULLY covers.
+                // Days it merely clips stay uncovered so the walk still fills
+                // them; claiming a partially-fetched day would leave holes that
+                // no later launch would ever repair.
+                val liveRows = mutableListOf<EpgChunkCoverage>()
+                var liveDay = dayFloorMs(baseStart)
+                while (liveDay + dayMs <= baseEnd) {
+                    if (liveDay >= baseStart) {
+                        liveRows += EpgChunkCoverage(
+                            playlistId = playlist.id,
+                            chunkStartMs = liveDay,
+                            chunkEndMs = liveDay + dayMs,
+                            fetchedAtMs = now,
+                            programCount = liveProgrammeCount,
+                        )
+                    }
+                    liveDay += dayMs
+                }
+                if (liveRows.isNotEmpty()) {
+                    runCatching { epgChunkCoverageDao.upsertAll(liveRows) }
+                        .onFailure { Log.w("PlaylistRepo", "live window coverage upsert failed", it) }
+                }
+                // Read AFTER the live upsert so the live days are already in
+                // the map and the walk treats them as cached.
+                val coverage = runCatching { epgChunkCoverageDao.forPlaylist(playlist.id) }
+                    .getOrDefault(emptyList())
+                    .associateBy { it.chunkStartMs }
+                fun isCovered(chunkStart: Long): Boolean {
+                    val row = coverage[chunkStart] ?: return false
+                    return now - row.fetchedAtMs < EPG_CHUNK_TTL_MS
+                }
                 if (guideDays == null) {
                     // All Available: walk one-day chunks outward until the
                     // server runs dry (two consecutive empty chunks), bounded
-                    // at 30 days back / 60 days ahead.
+                    // at 30 days back / 60 days ahead. A chunk that is already
+                    // COVERED counts as covered, never as an empty: letting a
+                    // cached empty day feed the terminator would stop the walk
+                    // two days out on every launch after the first.
                     var total = 0
+                    var fetched = 0
+                    var cached = 0
                     val historyMs = if (hugePanel) 6L * 3_600_000L
                         else GUIDE_DAYS_ALL_MAX_BACK * dayMs
-                    val historyFloor = now - historyMs
-                    var backDays = 0
-                    var cursor = baseStart
+                    val historyFloor = dayFloorMs(now - historyMs)
+                    var stopped = false
+                    var cursor = dayFloorMs(baseStart) + dayMs
                     var empties = 0
                     while (cursor > historyFloor && empties < 2) {
-                        val chunkStart = maxOf(historyFloor, cursor - dayMs)
-                        if (chunkStart >= cursor) break
-                        val n = fetchGridChunk(playlist, base, chunkStart, cursor) ?: break
-                        if (n == 0) empties++ else { empties = 0; total += n }
+                        val chunkStart = cursor - dayMs
+                        if (isCovered(chunkStart)) {
+                            cached++
+                        } else {
+                            val n = fetchAndRecordChunk(playlist, base, chunkStart, cursor)
+                            if (n == null) { stopped = true; break }
+                            fetched++
+                            if (n == 0) empties++ else { empties = 0; total += n }
+                            delay(250)
+                        }
                         cursor = chunkStart
-                        backDays = ((now - cursor + dayMs - 1) / dayMs).toInt()
-                        delay(250)
                     }
-                    val forwardCeiling = now + GUIDE_DAYS_ALL_MAX_AHEAD * dayMs
-                    var aheadDays = 1
-                    cursor = baseEnd
+                    val backFloor = cursor
+                    val forwardCeiling = dayFloorMs(now + GUIDE_DAYS_ALL_MAX_AHEAD * dayMs)
+                    cursor = dayFloorMs(baseEnd)
                     empties = 0
-                    while (cursor < forwardCeiling && empties < 2) {
-                        val chunkEnd = minOf(forwardCeiling, cursor + dayMs)
-                        if (chunkEnd <= cursor) break
-                        val n = fetchGridChunk(playlist, base, cursor, chunkEnd) ?: break
-                        if (n == 0) empties++ else { empties = 0; total += n }
+                    while (cursor < forwardCeiling && empties < 2 && !stopped) {
+                        val chunkEnd = cursor + dayMs
+                        if (isCovered(cursor)) {
+                            cached++
+                        } else {
+                            val n = fetchAndRecordChunk(playlist, base, cursor, chunkEnd)
+                            if (n == null) { stopped = true; break }
+                            fetched++
+                            if (n == 0) empties++ else { empties = 0; total += n }
+                            delay(250)
+                        }
                         cursor = chunkEnd
-                        aheadDays = ((cursor - now + dayMs - 1) / dayMs).toInt()
-                        delay(250)
                     }
-                    Log.i("PlaylistRepo", "grid window: all available, back ${backDays}d ahead ${aheadDays}d")
+                    val walked = fetched + cached
+                    Log.i(
+                        "PlaylistRepo",
+                        "grid window: $fetched of $walked chunk(s) fetched ($cached cached), " +
+                            "history ${(now - backFloor) / 3_600_000}h, " +
+                            "forward +${(cursor - now) / 3_600_000}h",
+                    )
                     Log.i("PlaylistRepo", "grid window: merged $total programmes (all available)")
+                    if (!stopped) {
+                        pruneEpgToGuideRange(
+                            playlistId = playlist.id,
+                            retentionHistoryStart = now - GUIDE_DAYS_ALL_MAX_BACK * dayMs,
+                            coverageFromMs = backFloor,
+                            coverageToMs = cursor,
+                        )
+                    }
                     return@launch
                 }
                 val historyMs = if (hugePanel) 6L * 3_600_000L else guideDays * dayMs
                 val forwardEnd = now + guideDays * dayMs
                 val chunks = mutableListOf<Pair<Long, Long>>()
-                var hEnd = baseStart
-                val historyStart = now - historyMs
-                while (hEnd > historyStart) {
-                    val hStart = maxOf(historyStart, hEnd - dayMs)
-                    chunks += hStart to hEnd
-                    hEnd = hStart
+                var cursor = dayFloorMs(now - historyMs)
+                val coverageFrom = cursor
+                while (cursor < forwardEnd) {
+                    chunks += cursor to (cursor + dayMs)
+                    cursor += dayMs
                 }
-                var fStart = baseEnd
-                while (fStart < forwardEnd) {
-                    val fEnd = minOf(forwardEnd, fStart + dayMs)
-                    chunks += fStart to fEnd
-                    fStart = fEnd
-                }
+                val coverageTo = cursor
                 if (chunks.isEmpty()) return@launch
-                Log.i(
-                    "PlaylistRepo",
-                    "grid window: ${chunks.size} chunk(s), history ${historyMs / 3_600_000}h, " +
-                        "forward +${guideDays * 24}h (playlist days $guideDays)",
-                )
                 var total = 0
+                var fetched = 0
+                var cached = 0
+                var stopped = false
                 for ((start, end) in chunks) {
-                    val n = fetchGridChunk(playlist, base, start, end) ?: return@launch
-                    if (n == 0) continue
+                    if (isCovered(start)) { cached++; continue }
+                    val n = fetchAndRecordChunk(playlist, base, start, end)
+                    if (n == null) { stopped = true; break }
+                    fetched++
                     total += n
                     delay(250)
                 }
+                Log.i(
+                    "PlaylistRepo",
+                    "grid window: $fetched of ${chunks.size} chunk(s) fetched ($cached cached), " +
+                        "history ${historyMs / 3_600_000}h, forward +${guideDays * 24}h",
+                )
                 Log.i("PlaylistRepo", "grid window: merged $total programmes over ${chunks.size} chunk(s)")
+                if (!stopped) {
+                    pruneEpgToGuideRange(
+                        playlistId = playlist.id,
+                        retentionHistoryStart = now - guideDays * dayMs,
+                        coverageFromMs = coverageFrom,
+                        coverageToMs = coverageTo,
+                    )
+                }
             }
         }
     }
@@ -1181,7 +1332,7 @@ class PlaylistRepository @Inject constructor(
                 if (gated.dispatcharrVersionAtLeast("0.30.0")) {
                     // Dispatcharr 0.30: the grid serves history and days ahead
                     // itself; no third-party XMLTV layering needed.
-                    extendGridWindowInBackground(gated, base)
+                    extendGridWindowInBackground(gated, base, grid.size)
                 } else {
                     layerUpstreamInBackground(playlist.id, base, customXmltv, knownChannelKeys)
                 }
@@ -1280,8 +1431,29 @@ class PlaylistRepository @Inject constructor(
      * possibly-corrupt cached rows. Idempotent; safe to call when no rows
      * exist.
      */
+    /**
+     * Drop ONLY the grid coverage map, keeping the cached programmes.
+     *
+     * This is what a forced full reload needs (the "Refresh" button on Edit
+     * Playlist, or any forceRefresh EPG load): every one-day chunk must be
+     * fetched again, because the user is asking for fresh guide data, but the
+     * accumulated catch-up history must NOT be thrown away to get it. The
+     * merge is idempotent, so refetched chunks replace their rows in place.
+     */
+    suspend fun purgeEpgCoverage(playlistId: String) {
+        epgChunkCoverageDao.deleteForPlaylist(playlistId)
+    }
+
     suspend fun purgeEpgCache(playlistId: String) {
         epgProgrammeDao.deleteForPlaylist(playlistId)
+        // The grid coverage map dies WITH the rows it vouches for (the
+        // cache-identity rule): a surviving coverage row would tell the next
+        // incremental walk a chunk is already cached while the programmes it
+        // stood for are gone, and the guide would stay permanently holed.
+        // Covers the user's "Refresh" from Edit Playlist, Refresh EPG Data,
+        // Refresh Everything, and the identity-change purge in the ViewModel.
+        runCatching { epgChunkCoverageDao.deleteForPlaylist(playlistId) }
+            .onFailure { Log.w("PlaylistRepo", "purgeEpgCache: coverage purge failed", it) }
     }
 
     suspend fun saveEpgToCache(

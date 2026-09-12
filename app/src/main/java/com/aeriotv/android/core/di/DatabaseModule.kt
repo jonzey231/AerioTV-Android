@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.aeriotv.android.core.data.db.AerioDatabase
 import com.aeriotv.android.core.data.db.dao.ChannelSnapshotDao
 import com.aeriotv.android.core.data.db.dao.EncryptingPlaylistDao
+import com.aeriotv.android.core.data.db.dao.EpgChunkCoverageDao
 import com.aeriotv.android.core.data.db.dao.EpgProgrammeDao
 import com.aeriotv.android.core.data.db.dao.FavoriteChannelDao
 import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
@@ -321,6 +322,30 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * v27 -> v28: add the `epg_chunk_coverage` map so the Dispatcharr grid
+     * window pass becomes INCREMENTAL (one row per one-day chunk already
+     * fetched). Purely derived data with nothing to backfill: an empty
+     * coverage map simply makes the first post-upgrade launch behave exactly
+     * like today (fetch every chunk once), and every launch after that skips
+     * the chunks it already has. A CREATE TABLE, never the destructive
+     * fallback; the definition must match what Room generates for
+     * EpgChunkCoverage, composite primary key included.
+     */
+    private val MIGRATION_27_28 = object : Migration(27, 28) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `epg_chunk_coverage` (" +
+                    "`playlistId` TEXT NOT NULL, " +
+                    "`chunkStartMs` INTEGER NOT NULL, " +
+                    "`chunkEndMs` INTEGER NOT NULL, " +
+                    "`fetchedAtMs` INTEGER NOT NULL, " +
+                    "`programCount` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`playlistId`, `chunkStartMs`))",
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AerioDatabase =
@@ -329,7 +354,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 
@@ -358,6 +383,9 @@ object DatabaseModule {
 
     @Provides
     fun provideEpgProgrammeDao(db: AerioDatabase): EpgProgrammeDao = db.epgProgrammeDao()
+
+    @Provides
+    fun provideEpgChunkCoverageDao(db: AerioDatabase): EpgChunkCoverageDao = db.epgChunkCoverageDao()
 
     @Provides
     fun provideChannelSnapshotDao(db: AerioDatabase): ChannelSnapshotDao = db.channelSnapshotDao()
