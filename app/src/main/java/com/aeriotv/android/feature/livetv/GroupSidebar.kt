@@ -211,7 +211,7 @@ internal fun GroupSidebarPanel(
                         focusedRowIndex != 0 ||
                         key != androidx.compose.ui.input.key.Key.DirectionUp ||
                         !down -> false
-                    else -> runCatching { manageFocus.requestFocus() }.isSuccess
+                    else -> runCatching { manageFocus.requestFocus() }.getOrDefault(false)
                 }
             },
     ) {

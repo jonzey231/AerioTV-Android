@@ -7,6 +7,7 @@ import com.aeriotv.android.DeepLinkTarget
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.guide.guideChannelId
 import com.aeriotv.android.core.data.ChannelCollection
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.debug.LogSanitizer
@@ -187,6 +188,12 @@ class PlaylistViewModel @Inject constructor(
          * making quick app revisits zero-network.
          */
         private const val EPG_CACHE_TTL_MS = 30L * 60L * 1000L
+
+        /** Launch quick paint: the cached rows read before the first guide
+         *  frame (the pre-9be8071 quick pass window). The full window follows
+         *  in the background. */
+        private const val QUICK_PAINT_BACK_MS = 2L * 60L * 60L * 1000L
+        private const val QUICK_PAINT_AHEAD_MS = 8L * 60L * 60L * 1000L
 
         /** Generation of the on-disk EPG cache this build trusts. BUMP THIS
          *  whenever a shipped defect could have written a corrupt cache: the
@@ -386,15 +393,31 @@ class PlaylistViewModel @Inject constructor(
      * diagnostics; even modest EPG shedding here keeps us out of the
      * low-memory killer queue when other apps want to come up.
      */
+    /** Set when a trim shed the in-memory guide; [refreshEpgIfStale] (the
+     *  return-to-foreground hook) rebuilds it from the Room cache. */
+    @Volatile private var guideShedByTrim = false
+
     private fun observeMemoryPressure() {
         viewModelScope.launch {
             memoryPressureBus.level.collect { level ->
                 if (MemoryPressureBus.isCritical(level)) {
                     val cleared = _state.value.epgByChannel.isNotEmpty()
-                    if (cleared) {
-                        Log.i(TAG, "onTrimMemory=$level: shedding in-memory EPG map")
-                        epgWriteMutex.withLock { _state.update { it.copy(epgByChannel = emptyMap()) } }
+                    if (!cleared) return@collect
+                    // Foreground: never blank the guide the user is looking at.
+                    // RUNNING_CRITICAL reports SYSTEM-wide pressure (seen on a
+                    // 3 GB Shield with ~650 MB available while this app sat at
+                    // ~410 MB PSS); shedding there blanked the visible guide
+                    // until the next launch and the rebuild cost ~23 s of
+                    // allocation on that device, which is worse than keeping it.
+                    // Shed only once backgrounded (COMPLETE), where it is
+                    // invisible and rebuilt on return.
+                    if (com.aeriotv.android.core.data.repository.EpgSweepGate.appInForeground) {
+                        Log.i(TAG, "onTrimMemory=$level: in foreground, keeping in-memory EPG map")
+                        return@collect
                     }
+                    Log.i(TAG, "onTrimMemory=$level: shedding in-memory EPG map")
+                    epgWriteMutex.withLock { _state.update { it.copy(epgByChannel = emptyMap()) } }
+                    guideShedByTrim = true
                 }
             }
         }
@@ -978,15 +1001,19 @@ class PlaylistViewModel @Inject constructor(
         // fraction. Logan 2026-09-11: the span comes from the playlist's
         // Guide Days setting, not the retired Settings > Network preference.
         //
-        // ONE windowed read for the whole launch: [guideWindow] is the exact
-        // span the catalog will be built over, so the rows read here are
-        // handed straight to [rebuildGuideCatalog] below instead of being
-        // queried again. Before this, launch did a now-1h..+24h read here and
-        // then two more reads for the quick and full catalog rebuilds.
+        // Launch paints a QUICK window first (what the guide shows on its
+        // first frame), then [rebuildGuideCatalog] widens to the full
+        // [guideWindow] in the background. The single now-1d..now+1d read that
+        // replaced the old quick pass (9be8071) is ~5x the rows: on a Shield
+        // with 1401 channels it returned 133297 programmes in 18.7 s, and the
+        // guide was blank for all of it.
         val (cacheFromMs, cacheToMs) = guideWindow(playlist)
+        val launchNowMs = System.currentTimeMillis()
+        val quickFromMs = maxOf(cacheFromMs, launchNowMs - QUICK_PAINT_BACK_MS)
+        val quickToMs = minOf(cacheToMs, launchNowMs + QUICK_PAINT_AHEAD_MS)
         val readStartedAt = android.os.SystemClock.elapsedRealtime()
         val cachedRaw = runCatching {
-            repository.loadCachedEpg(playlist.id, cacheFromMs, cacheToMs)
+            repository.loadCachedEpg(playlist.id, quickFromMs, quickToMs)
         }.getOrDefault(emptyList())
         val readMs = android.os.SystemClock.elapsedRealtime() - readStartedAt
         // Off-main, same reason as the network path below: on a 30-day Guide
@@ -1019,12 +1046,31 @@ class PlaylistViewModel @Inject constructor(
         val identityHash = com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsForBridge)
         val storedHash = appPreferences.epgIdentityHash(playlist.id).first()
         val identityStale = hasCache && channelsForBridge.isNotEmpty() && storedHash != identityHash
+        // Rows painted from a stale-identity cache before the purge below.
+        var identityPainted = 0
         if (identityStale) {
             Log.w(
                 TAG,
                 "loadEpgIfConfigured: cached EPG keys do not match current channel " +
-                    "identity; treating cache as stale and refetching",
+                    "identity (stored=${storedHash.take(8)} current=${identityHash.take(8)} " +
+                    "channels=${channelsForBridge.size}); treating cache as stale and refetching",
             )
+            // Paint what is still unambiguous BEFORE the purge. The identity
+            // hash also covers each channel's guide key (Dispatcharr's EPGData
+            // tvg_id, which re-keys whenever the epgdata/sources lookups fail
+            // or the server re-matches EPG), but rows the fetch path wrote
+            // under a CANONICAL id (disp:<uuid>, m3u:<url hash>) are keyed to
+            // the channel itself and cannot land on the wrong one. Without
+            // this the guide sat blank, with no spinner (hasCache is true),
+            // for the whole purge plus refetch: 33 s + 5 s on a Shield with
+            // 1401 channels.
+            val canonicalIds = channelsForBridge.mapTo(HashSet()) { it.guideChannelId().value }
+            val unambiguous = cachedRaw.filter { it.channelId in canonicalIds }
+            if (unambiguous.isNotEmpty()) {
+                rebuildGuideCatalog(playlist, "cache-identity", preloadedRows = unambiguous)
+                identityPainted = unambiguous.size
+                Log.i(TAG, "loadEpgIfConfigured: painted $identityPainted canonically keyed programmes before the identity purge")
+            }
             // Cache-identity rule: rows keyed to a channel identity that no
             // longer exists are orphans no channel will ever look up, so they
             // are dropped outright rather than painted, AND the grid coverage
@@ -1040,12 +1086,14 @@ class PlaylistViewModel @Inject constructor(
                 "loadEpgIfConfigured: painted ${cached.size} cached programmes " +
                     "(read ${readMs}ms, bridge ${bridgeMs}ms)",
             )
-            // Single build over the rows just read; no second Room query, and
-            // no separate quick pass, because the window IS the quick window.
-            rebuildGuideCatalog(playlist, "cache", preloadedRows = cached)
+            // Quick paint over the rows just read, then widen to the full
+            // window off the critical path. Unchanged channels keep their list
+            // instances across the two builds (GuideCatalog previous=).
+            rebuildGuideCatalog(playlist, "cache-quick", preloadedRows = cached)
             _state.update { it.copy(isEpgLoading = false) }
             AppLaunchTrace.noteGuidePrograms(cached.size)
             publishCachedEpgSpan(playlist)
+            viewModelScope.launch { rebuildGuideCatalog(playlist, "cache") }
         }
         // Release the other sections' cached restores whether or not there WAS
         // a cache to paint: a fresh install has no guide rows, and On Demand
@@ -1109,7 +1157,7 @@ class PlaylistViewModel @Inject constructor(
             runCatching { repository.purgeEpgCoverage(playlist.id) }
                 .onFailure { Log.w(TAG, "purgeEpgCoverage failed", it) }
         }
-        if (!hasCache) _state.update { it.copy(isEpgLoading = true) }
+        if (!hasCache || (identityStale && identityPainted == 0)) _state.update { it.copy(isEpgLoading = true) }
         // iOS GuideStore audit P3 #13: pass the candidate-key set so the
         // XMLTV parser can drop any programme whose `channel="..."`
         // attribute will never match a M3UChannel before allocating an
@@ -1560,6 +1608,26 @@ class PlaylistViewModel @Inject constructor(
      */
     fun refreshEpgIfStale(maxAgeMillis: Long = 30L * 60L * 1000L) {
         viewModelScope.launch {
+            // A background trim shed the in-memory guide: repaint it from the
+            // cache before anything else (the staleness gate below may skip).
+            if (guideShedByTrim) {
+                guideShedByTrim = false
+                _state.value.playlist?.let { playlist ->
+                    // Same two-step paint as launch: the quick window first
+                    // (~4 s on a Shield), then the full window (~18 s).
+                    val (fromMs, toMs) = guideWindow(playlist)
+                    val nowMs = System.currentTimeMillis()
+                    val quick = runCatching {
+                        repository.loadCachedEpg(
+                            playlist.id,
+                            maxOf(fromMs, nowMs - QUICK_PAINT_BACK_MS),
+                            minOf(toMs, nowMs + QUICK_PAINT_AHEAD_MS),
+                        )
+                    }.getOrDefault(emptyList())
+                    if (quick.isNotEmpty()) rebuildGuideCatalog(playlist, "after-trim-quick", preloadedRows = quick)
+                    rebuildGuideCatalog(playlist, "after-trim")
+                }
+            }
             val s = _state.value
             if (s.isLoading || s.isEpgLoading) return@launch
             val active = repository.activePlaylist() ?: return@launch

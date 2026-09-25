@@ -3137,13 +3137,22 @@ class PlaylistRepository @Inject constructor(
             // channel's own tvg_id, so map epg_data_id -> EPGData.tvg_id and use
             // THAT as the channel's tvgID below. Without this, only channels
             // whose raw tvg_id happens to equal the EPGData tvg_id get a guide.
+            // A failure here silently re-keys channels to the legacy guide key
+            // (see [dispatcharrGuideKey]), which changes the EPG identity hash
+            // and purges the cached guide on the next load, so log it.
             val epgDataById: Map<Int, DispatcharrEpgData>? = runCatching {
                 dispatcharrClient.listEpgData(base, key).associateBy { it.id }
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Log.w("PlaylistRepo", "Dispatcharr epgdata lookup failed; guide keys fall back to legacy: $it")
             }.getOrNull()
             // GH #53: which SOURCE an EPGData row came from decides whether its
             // tvg_id is a real broadcast identity at all. See [dispatcharrGuideKey].
             val epgSourceTypeById: Map<Int, String?>? = runCatching {
                 dispatcharrClient.listEpgSources(base, key).associate { it.id to it.sourceType }
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Log.w("PlaylistRepo", "Dispatcharr EPG sources lookup failed; guide keys fall back to legacy: $it")
             }.getOrNull()
             val serverChannels = dispatcharrClient.listChannels(base, key)
             val afterAccount =

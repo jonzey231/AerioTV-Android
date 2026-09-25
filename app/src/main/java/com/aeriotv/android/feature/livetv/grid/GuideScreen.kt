@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -594,7 +595,7 @@ fun GuideScreen(
             // bar claiming focus a frame later) settle before assuming a trap.
             delay(350L)
             if (guideHasFocus || topNavHasFocus.value) return@LaunchedEffect
-            val ok = runCatching { gridFocus.requestFocus() }.isSuccess
+            val ok = runCatching { gridFocus.requestFocus() }.getOrDefault(false)
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=stranded result=$ok ${traceGates()}")
         }
     }
@@ -608,7 +609,7 @@ fun GuideScreen(
         val id = miniChannelId ?: return@LaunchedEffect
         if (!isTv || rows.isEmpty) return@LaunchedEffect
         val found = grid.focusChannel(id)
-        val requested = if (found) runCatching { gridFocus.requestFocus() }.isSuccess else false
+        val requested = if (found) runCatching { gridFocus.requestFocus() }.getOrDefault(false) else false
         if (isTv) {
             androidx.compose.runtime.withFrameNanos { }
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=mini-channel channel=$id found=$found requested=$requested gridHasFocus=$gridHasFocus cell=${guideTraceCell(grid)} ${traceGates()}")
@@ -665,7 +666,7 @@ fun GuideScreen(
             sidebarOriginalGroup = state.selectedGroup
             groupSidebarOpen = true
             true
-        } else runCatching { pillsFocus.requestFocus() }.isSuccess
+        } else runCatching { pillsFocus.requestFocus() }.getOrDefault(false)
     }
     val hostAction: (com.aeriotv.android.core.remote.GuideRemoteAction) -> Boolean = { action ->
         when (action) {
@@ -892,8 +893,8 @@ fun GuideScreen(
             items = pillItems,
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
-            firstPillFocus = pillsFocus,
-            onDown = { runCatching { gridFocus.requestFocus() }.isSuccess },
+            rowFocus = pillsFocus,
+            onDown = { runCatching { gridFocus.requestFocus() }.getOrDefault(false) },
             leadInset = railWidth,
         )
         // Channel Preview OFF + corner mini Active: the mini has no banner art
@@ -989,7 +990,7 @@ fun GuideScreen(
                             runCatching { bannerFocus.requestFocus() }.getOrDefault(false)
                         favoritesOnly -> guideFocusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
                         sidebarGroupMode -> false
-                        else -> runCatching { pillsFocus.requestFocus() }.isSuccess
+                        else -> runCatching { pillsFocus.requestFocus() }.getOrDefault(false)
                     }
                 },
                 compact = previewMode,
@@ -1056,7 +1057,7 @@ fun GuideScreen(
                 if (!drawerWasOpen) return@LaunchedEffect
                 drawerWasOpen = false
                 repeat(3) { androidx.compose.runtime.withFrameNanos { } }
-                val requested = runCatching { gridFocus.requestFocus() }.isSuccess
+                val requested = runCatching { gridFocus.requestFocus() }.getOrDefault(false)
                 androidx.compose.runtime.withFrameNanos { }
                 com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=sidebar-close requested=$requested result=${if (gridHasFocus) "success" else "failure"} ${traceGates()}")
             }
@@ -1099,7 +1100,7 @@ fun GuideScreen(
             if (!jumpWasOpen) return@LaunchedEffect
             jumpWasOpen = false
             repeat(3) { androidx.compose.runtime.withFrameNanos { } }
-            val requested = runCatching { gridFocus.requestFocus() }.isSuccess
+            val requested = runCatching { gridFocus.requestFocus() }.getOrDefault(false)
             androidx.compose.runtime.withFrameNanos { }
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=jump-close requested=$requested result=${if (gridHasFocus) "success" else "failure"} ${traceGates()}")
         }
@@ -1278,7 +1279,8 @@ private fun GroupPills(
     items: List<Pair<String, String>>,
     selected: String,
     onSelect: (String) -> Unit,
-    firstPillFocus: FocusRequester,
+    /** Focus entry for the whole row: lands on the selected pill. */
+    rowFocus: FocusRequester,
     onDown: () -> Boolean,
     /** Logan 2026-09-03: pills mode had no way to show/hide groups (the
      *  sidebar has its Manage button, the pill row had none). Trailing pill. */
@@ -1289,10 +1291,46 @@ private fun GroupPills(
 ) {
     val listState = rememberLazyListState()
     val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
+    // The row's focus entry used to be a requester on the FIRST pill only.
+    // LazyRow disposes pills scrolled out of view, so once the user walked
+    // right and picked a later group the first pill was gone, the requester
+    // was unattached, and Up from the guide clock went nowhere (the user was
+    // stuck on the clock). The requester now sits on the row itself (a focus
+    // group) and entry is routed to the SELECTED pill, the tvOS behaviour.
+    val selectedIndex = items.indexOfFirst { it.first == selected }
+    val selectedPillFocus = remember { FocusRequester() }
+    var rowHasFocus by remember { mutableStateOf(false) }
+    // A selection made from OUTSIDE the row (sidebar, remote shortcut) glides
+    // the new pill into view. The row is never scrolled when focus merely
+    // leaves it: where the user left it is where it stays.
+    LaunchedEffect(selectedIndex) {
+        if (rowHasFocus || selectedIndex < 0) return@LaunchedEffect
+        if (listState.layoutInfo.visibleItemsInfo.none { it.index == selectedIndex }) {
+            val viewport = listState.layoutInfo.viewportEndOffset
+            listState.animateScrollToItem(selectedIndex, scrollOffset = -(viewport / 3))
+        }
+    }
     LazyRow(
         state = listState,
         contentPadding = PaddingValues(start = leadInset, end = 12.dp, top = 6.dp, bottom = 6.dp),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).focusProperties { if (topNav != null) up = topNav },
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .focusRequester(rowFocus)
+            .onFocusChanged { rowHasFocus = it.hasFocus }
+            // focusProperties must precede focusGroup() to apply to the group.
+            .focusProperties {
+                if (topNav != null) up = topNav
+                onEnter = {
+                    // Selected pill when it is in view; otherwise the default
+                    // search picks the first visible pill, so entry always
+                    // lands inside the row as the user left it.
+                    if (listState.layoutInfo.visibleItemsInfo.any { it.index == selectedIndex }) {
+                        selectedPillFocus.requestFocus()
+                    }
+                }
+            }
+            .focusGroup(),
     ) {
         items(items, key = { it.first }) { (group, label) ->
             // TV chrome canon (ui/tv/TvChrome.kt): capsule, accent fill when
@@ -1307,7 +1345,7 @@ private fun GroupPills(
                 interactionSource = interaction,
                 modifier = Modifier
                     .padding(end = 8.dp)
-                    .then(if (group == items.firstOrNull()?.first) Modifier.focusRequester(firstPillFocus) else Modifier)
+                    .then(if (group == selected) Modifier.focusRequester(selectedPillFocus) else Modifier)
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
                     },

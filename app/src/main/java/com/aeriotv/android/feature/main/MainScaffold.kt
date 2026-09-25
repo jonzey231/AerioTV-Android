@@ -828,7 +828,7 @@ fun MainScaffold(
         val requestCurrentTabPill: () -> Boolean = remember {
             {
                 val r = pillRequestersRef.value[selectedTab]
-                r != null && runCatching { r.requestFocus() }.isSuccess
+                r != null && runCatching { r.requestFocus() }.getOrDefault(false)
             }
         }
         // Chrome-collapse channel: long content surfaces (the On Demand grids)
@@ -2024,7 +2024,7 @@ private fun TvTopTabBar(
                         onExit = {
                             if (requestedFocusDirection == androidx.compose.ui.focus.FocusDirection.Down) {
                                 val target = tabEntryFocus?.value
-                                if (target != null && runCatching { target.requestFocus() }.isSuccess) {
+                                if (target != null && runCatching { target.requestFocus() }.getOrDefault(false)) {
                                     // The default geometric move would run
                                     // after this and land elsewhere.
                                     cancelFocusChange()
