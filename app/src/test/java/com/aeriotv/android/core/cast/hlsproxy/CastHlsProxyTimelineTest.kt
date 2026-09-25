@@ -86,14 +86,14 @@ class CastHlsProxyTimelineTest {
     }
 
     @Test
-    fun `a full window spans five segments and still carries no program date time`() {
+    fun `a full window spans sixteen segments and still carries no program date time`() {
         val server = CastHlsProxyServer(log = {})
         val gen = server.beginGeneration()
         server.setInitSegments(gen, byteArrayOf(1), byteArrayOf(11))
-        repeat(9) { i -> server.addSegment(gen, byteArrayOf(i.toByte()), byteArrayOf(i.toByte()), ticks) }
+        repeat(20) { i -> server.addSegment(gen, byteArrayOf(i.toByte()), byteArrayOf(i.toByte()), ticks) }
         val playlist = server.videoPlaylistText()
         assertTrue("window head advanced", playlist.contains("#EXT-X-MEDIA-SEQUENCE:4"))
-        assertEquals("five 3 s segments span 15 s", 15.0, windowSpanSeconds(playlist), 0.001)
+        assertEquals("sixteen 3 s segments span 48 s", 48.0, windowSpanSeconds(playlist), 0.001)
         assertEquals("still no PROGRAM-DATE-TIME", emptyList<String>(), programDateTimes(playlist))
     }
 
@@ -220,5 +220,20 @@ class CastHlsProxyTimelineTest {
         }
         // The first segment of the generation starts the playlist timeline.
         assertEquals(0.0, cap.census.first().start, tick)
+    }
+
+    @Test
+    fun `the playlist states a hold-back inside the window`() {
+        val server = CastHlsProxyServer(log = {})
+        val gen = server.beginGeneration()
+        server.setInitSegments(gen, byteArrayOf(1), byteArrayOf(11))
+        repeat(CastHlsProxySession.READY_MIN_SEGMENTS) { i ->
+            server.addSegment(gen, byteArrayOf(i.toByte()), byteArrayOf(i.toByte()), ticks)
+        }
+        // 3 x 3 s target = 9 s, floor 8 s; four 3 s segments leave 9 s of room.
+        assertEquals(9.0, server.holdBackSeconds, 0.001)
+        val playlist = server.videoPlaylistText()
+        assertTrue(playlist, playlist.contains("#EXT-X-SERVER-CONTROL:HOLD-BACK=9.000"))
+        assertTrue(playlist, playlist.contains("#EXT-X-START:TIME-OFFSET=-9.000,PRECISE=NO"))
     }
 }

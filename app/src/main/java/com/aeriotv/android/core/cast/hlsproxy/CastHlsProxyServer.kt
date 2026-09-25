@@ -42,7 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * CORS on MSE fetches.
  *
  * Segment store: an in-memory ring of the last [RING_SIZE] segments
- * (about 3 s each; even a 10 Mbps feed stays under ~32 MB). Generations
+ * (about 3 s each; 16 advertised plus a short tail). Generations
  * exist because a reconnect or channel change restarts the remuxer: the
  * new ingest gets a fresh init segment and its first segment is flagged
  * as a playlist discontinuity, so the receiver resets its timeline
@@ -59,13 +59,31 @@ class CastHlsProxyServer(
     private val log: (String) -> Unit,
 ) {
     companion object {
-        /** Segments advertised in the playlist. */
-        private const val WINDOW_SIZE = 5
+        /** Segments advertised in the playlist: the whole ring (iOS
+         *  incident 2026-09-25, bursty ingest). A receiver is the only
+         *  client of this server, so the window is always the receiver's
+         *  window; the stated [holdBackSeconds] needs room inside it. */
+        internal const val WINDOW_SIZE = 16
 
-        /** Segments retained in memory; the extra tail past the window
-         *  lets a receiver that is a poll behind still fetch what the
-         *  previous playlist advertised. */
-        private const val RING_SIZE = 8
+        /** Segments retained in memory: the 16-segment window (~40-48 s, at
+         *  least the [HOLD_BACK_CEILING_S] hold-back plus room to re-fetch
+         *  through a stall) and a 3-segment tail so a receiver that is a
+         *  poll behind can still fetch what the previous playlist
+         *  advertised. A 16 Mbps feed is ~6 MB per ~3 s cut, ~115 MB
+         *  worst case. */
+        internal const val RING_SIZE = WINDOW_SIZE + 3
+
+        /** Hold-back floor and ceiling in seconds (iOS 20413d8 formula). */
+        internal const val HOLD_BACK_FLOOR_S = 8.0
+        internal const val HOLD_BACK_CEILING_S = 20.0
+
+        /** A publish that lands more than this past its own media duration
+         *  after the previous one is a starved cut (iOS "starved closure"). */
+        private const val STARVED_SLACK_S = 0.6
+
+        /** Nominal segment target (the remuxer cuts on the first keyframe
+         *  after ~3 s). */
+        private const val TARGET_SEGMENT_S = 3.0
 
         /** Bound on holding a segment GET that names a sequence the ingest
          *  has not published yet (the receiver racing the live edge);
@@ -137,6 +155,26 @@ class CastHlsProxyServer(
      *  fully rolled out of the ring. */
     private var discontinuitySequence = 0
 
+    // ---- receiver runway (iOS incident 2026-09-25) ----
+    //
+    // The iOS receiver played a bursty Dispatcharr feed (11-13 two-second
+    // silences a minute at 8 Mbps) with too little runway and rebuffered.
+    // This server was already unpaced (a segment is listed the moment it is
+    // cut); it now keeps a 16-segment ring and window and states a hold-back
+    // grown for a bursty ingest and a high bitrate. Guarded by [lock].
+
+    /** Wall time (ms) of the previous publish in the current generation. */
+    private var lastPublishWallMs = 0L
+    /** Starved cuts (wall ms, gap s) in the last 60 s. */
+    private val recentStarvations = ArrayDeque<Pair<Long, Double>>()
+    /** Stated hold-back, seconds; monotonic until [stop] (never shrinks
+     *  within a session, channel changes included). 0 = not computed yet. */
+    @Volatile var holdBackSeconds: Double = 0.0
+        private set
+    /** Starved cuts since [start], monotonic, for the link line. */
+    @Volatile var starvedCutsTotal: Int = 0
+        private set
+
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
@@ -198,6 +236,10 @@ class CastHlsProxyServer(
             _segmentsInGeneration.value = 0
             _mediaTicksInGeneration.value = 0
             storeOpen = false
+            recentStarvations.clear()
+            lastPublishWallMs = 0L
+            holdBackSeconds = 0.0
+            starvedCutsTotal = 0
             lock.notifyAll()
         }
         firstPlaylistServed.set(false)
@@ -239,6 +281,8 @@ class CastHlsProxyServer(
         pendingDiscontinuity = ring.isNotEmpty()
         _segmentsInGeneration.value = 0
         _mediaTicksInGeneration.value = 0
+        // A reconnect's first cut is not a starved cut of the old feed.
+        lastPublishWallMs = 0L
         if (oldGen > 0) {
             log(
                 "splice oldGen=$oldGen newGen=$generation " +
@@ -288,10 +332,83 @@ class CastHlsProxyServer(
             }
             _segmentsInGeneration.value += 1
             _mediaTicksInGeneration.value += durationTicks
+            val nowMs = System.currentTimeMillis()
+            val durS = durationTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+            if (lastPublishWallMs > 0L) {
+                val gap = (nowMs - lastPublishWallMs) / 1000.0
+                if (gap > durS + STARVED_SLACK_S) {
+                    recentStarvations.addLast(nowMs to gap)
+                    starvedCutsTotal++
+                }
+            }
+            lastPublishWallMs = nowMs
+            refreshHoldBackLocked(nowMs)
             // Wake any held fetch for the sequence just published.
             lock.notifyAll()
         }
     }
+
+    /**
+     * Chooses the stated hold-back (iOS 20413d8, same formula): max(3 x
+     * target, 8 s); +4 s when the last 60 s had more than 6 starved cuts, +8 s
+     * above 12; at least the worst recent gap plus one target; +4 s above
+     * 10 Mbps; capped at 20 s. Only ever grows within a session. Logs when
+     * it grows. Caller holds [lock].
+     */
+    private fun refreshHoldBackLocked(nowMs: Long) {
+        while (recentStarvations.isNotEmpty() && nowMs - recentStarvations.first().first > 60_000L) {
+            recentStarvations.removeFirst()
+        }
+        val stalls = recentStarvations.size
+        val worst = recentStarvations.maxOfOrNull { it.second } ?: 0.0
+        val target = maxOf(TARGET_SEGMENT_S, targetSecondsLocked(ring.takeLast(WINDOW_SIZE)).toDouble())
+        val kbps = ringKbpsLocked()
+        var hb = maxOf(3 * target, HOLD_BACK_FLOOR_S)
+        val why = StringBuilder(
+            String.format(
+                java.util.Locale.US, "3 x target %.0f s = %.0f s, floor %.0f s",
+                target, 3 * target, HOLD_BACK_FLOOR_S,
+            ),
+        )
+        if (stalls > 6) {
+            val add = if (stalls > 12) 8.0 else 4.0
+            hb += add
+            why.append(String.format(java.util.Locale.US, "; bursty ingest %d stalls in 60 s +%.0f s", stalls, add))
+        }
+        if (worst > 0 && worst + target > hb) {
+            hb = worst + target
+            why.append(String.format(java.util.Locale.US, "; worst gap %.1f s + target", worst))
+        }
+        if (kbps > 10_000) {
+            hb += 4
+            why.append("; $kbps kbps > 10 Mbps +4 s")
+        }
+        hb = minOf(HOLD_BACK_CEILING_S, hb)
+        if (hb <= holdBackSeconds + 0.4) return
+        holdBackSeconds = hb
+        log(
+            String.format(
+                java.util.Locale.US,
+                "hold-back %.1f s (%s; ceiling %.0f s); playlist unpaced, RAM ring %d segs",
+                hb, why, HOLD_BACK_CEILING_S, RING_SIZE,
+            ),
+        )
+    }
+
+    /** Bitrate of the ring (video + audio), kbps. Caller holds [lock]. */
+    private fun ringKbpsLocked(): Int {
+        val bytes = ring.sumOf { it.videoData.size.toLong() + (it.audioData?.size ?: 0) }
+        val secs = ring.sumOf { it.durationTicks } / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+        return if (secs > 0) (bytes * 8 / secs / 1000).toInt() else 0
+    }
+
+    private fun targetSecondsLocked(window: List<SegmentEntry>): Int =
+        window.maxOfOrNull {
+            ceil(
+                maxOf(it.durationTicks, it.audioDurationTicks) /
+                    TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble(),
+            ).toInt()
+        }?.coerceAtLeast(1) ?: 4
 
     /** Init segment for [gen], or null when no longer retained. */
     internal fun videoInitSegment(gen: Int): ByteArray? = synchronized(lock) { videoInits[gen] }
@@ -432,16 +549,23 @@ class CastHlsProxyServer(
         // Deliberately the max over BOTH renditions' spans, so the two
         // demuxed playlists advertise the SAME target duration even though
         // their EXTINF values differ by up to an audio frame.
-        val targetSeconds = window.maxOfOrNull {
-            ceil(
-                maxOf(it.durationTicks, it.audioDurationTicks) /
-                    TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble(),
-            ).toInt()
-        }?.coerceAtLeast(1) ?: 4
+        val targetSeconds = targetSecondsLocked(window)
         sb.append("#EXT-X-TARGETDURATION:").append(targetSeconds).append('\n')
         sb.append("#EXT-X-MEDIA-SEQUENCE:").append(window.firstOrNull()?.seq ?: nextSeq).append('\n')
         if (discontinuitySequence > 0) {
             sb.append("#EXT-X-DISCONTINUITY-SEQUENCE:").append(discontinuitySequence).append('\n')
+        }
+        // Stated hold-back (iOS incident 2026-09-25): never deeper than the
+        // window minus one target, so the join point stays inside what is
+        // advertised. Shaka takes HOLD-BACK as the presentation delay and
+        // EXT-X-START as the start offset unless the receiver page configures
+        // its own; both are harmless to a player that ignores them.
+        if (holdBackSeconds > 0 && window.isNotEmpty()) {
+            val room = window.sumOf { it.durationTicks } / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble() -
+                targetSeconds
+            val hb = minOf(holdBackSeconds, maxOf(3.0 * targetSeconds, room))
+            sb.append(String.format(java.util.Locale.US, "#EXT-X-SERVER-CONTROL:HOLD-BACK=%.3f\n", hb))
+            sb.append(String.format(java.util.Locale.US, "#EXT-X-START:TIME-OFFSET=-%.3f,PRECISE=NO\n", hb))
         }
         var lastGen = -1
         for (seg in window) {

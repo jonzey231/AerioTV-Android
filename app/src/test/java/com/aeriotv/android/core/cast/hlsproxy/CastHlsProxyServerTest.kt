@@ -73,24 +73,24 @@ class CastHlsProxyServerTest {
     fun `playlist across splice lists old entries then discontinuity then new map`() {
         val gen1 = server.beginGeneration()
         server.setInitSegments(gen1, byteArrayOf(1), byteArrayOf(11))
-        publish(gen1, 6) // seq 0..5; window will hold 3,4,5
+        publish(gen1, 17) // seq 0..16; the 16-segment window will hold 3..18
         val gen2 = server.beginGeneration()
         server.setInitSegments(gen2, byteArrayOf(2), byteArrayOf(22))
-        publish(gen2, 2) // seq 6,7
+        publish(gen2, 2) // seq 17,18
         val playlist = server.videoPlaylistText()
         val lines = playlist.lines()
         assertTrue(playlist.contains("#EXT-X-MEDIA-SEQUENCE:3"))
         val oldMap = lines.indexOf("#EXT-X-MAP:URI=\"vinit$gen1.mp4\"")
-        val lastOldSeg = lines.indexOf("vseg5.m4s")
+        val lastOldSeg = lines.indexOf("vseg16.m4s")
         val disc = lines.indexOf("#EXT-X-DISCONTINUITY")
         val newMap = lines.indexOf("#EXT-X-MAP:URI=\"vinit$gen2.mp4\"")
-        val firstNewSeg = lines.indexOf("vseg6.m4s")
+        val firstNewSeg = lines.indexOf("vseg17.m4s")
         assertTrue("old-generation MAP present", oldMap >= 0)
         assertTrue("old-generation segments still listed", lastOldSeg > oldMap)
         assertTrue("DISCONTINUITY after the old entries", disc > lastOldSeg)
         assertTrue("new MAP after the DISCONTINUITY", newMap > disc)
         assertTrue("new-generation segments after the new MAP", firstNewSeg > newMap)
-        assertTrue("new-generation live edge listed", playlist.contains("vseg7.m4s"))
+        assertTrue("new-generation live edge listed", playlist.contains("vseg18.m4s"))
     }
 
     @Test
@@ -116,9 +116,9 @@ class CastHlsProxyServerTest {
         }
         assertNotNull("old-gen init must survive while listed", server.videoInitSegment(gen1))
         assertNotNull(server.videoInitSegment(gen2))
-        // Ring capacity is 8: publish enough new-gen segments to evict
+        // Ring capacity is 19 (16-segment window + 3 tail): publish enough new-gen segments to evict
         // every old-gen entry, then the old init goes too.
-        publish(gen2, 8) // seq 7..14; ring now 7..14, all gen2
+        publish(gen2, 19) // seq 7..25; ring now 7..25, all gen2
         assertNull("evicted old segment 404s", server.awaitSegment(0, 0))
         assertNull("unreferenced old init dropped", server.videoInitSegment(gen1))
         assertNotNull(server.videoInitSegment(gen2))
@@ -174,7 +174,7 @@ class CastHlsProxyServerTest {
         // must 404 at once rather than pinning a connection thread.
         assertNull("four past the edge is a bad URL", server.awaitSegment(7, 5_000))
         assertTrue("no hold for far-future sequences", System.currentTimeMillis() - start < 1_000)
-        publish(gen1, 8) // evict seq 0..2
+        publish(gen1, 19) // evict seq 0..2
         assertNull("behind the ring is gone", server.awaitSegment(0, 5_000))
         assertTrue(System.currentTimeMillis() - start < 2_000)
     }
