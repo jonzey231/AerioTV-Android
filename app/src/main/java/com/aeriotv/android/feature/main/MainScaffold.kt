@@ -1309,8 +1309,8 @@ fun MainScaffold(
                         castSender = castSender,
                         companionRemote = companionRemote,
                         channels = state.channels,
-                        nowProgrammeTitle = { ch ->
-                            state.epgByChannel[ch.guideMatchKey]?.nowPlaying()?.title
+                        nowProgramme = { ch ->
+                            state.epgByChannel[ch.guideMatchKey]?.nowPlaying()
                         },
                         onCastChannel = onChannelClick,
                         loadChannelStreams = { channelIntPk ->

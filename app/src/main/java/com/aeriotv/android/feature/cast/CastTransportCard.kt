@@ -54,8 +54,10 @@ fun CastTransportCard(
     castSender: AerioCastSender,
     companionRemote: CompanionRemoteController,
     channels: List<M3UChannel>,
-    /** Current program title for a channel, for the card's second line. */
-    nowProgrammeTitle: (M3UChannel) -> String?,
+    /** Current guide programme for a channel, resolved the same way the
+     *  channel list rows do; drives the card's program line and the sheet's
+     *  time range and progress. */
+    nowProgramme: (M3UChannel) -> com.aeriotv.android.core.data.EPGProgramme?,
     /** Cast this channel to the active session (the scaffold's channel tap). */
     onCastChannel: (M3UChannel) -> Unit,
     /** Dispatcharr Switch Stream plumbing (admin-only channels). */
@@ -134,10 +136,31 @@ fun CastTransportCard(
             // as mediaId (the receiver's bridged session drops our id).
             ?: channels.firstOrNull { it.name == id }
     }
+    // Re-resolved each minute so the programme rolls over on the hour.
+    var guideTick by remember { mutableStateOf(0) }
+    LaunchedEffect(currentChannel?.id) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000L)
+            guideTick++
+        }
+    }
+    val castProgramme = remember(currentChannel, guideTick) {
+        if (isCompanion) null else currentChannel?.let(nowProgramme)
+    }
     val programmeTitle = if (isCompanion) {
         companionDetails?.programmeTitle
     } else {
-        currentChannel?.let(nowProgrammeTitle)
+        castProgramme?.title
+    }
+    val programmeStartMs = if (isCompanion) companionDetails?.programmeStartMs ?: 0L
+        else castProgramme?.startMillis ?: 0L
+    val programmeEndMs = if (isCompanion) companionDetails?.programmeEndMs ?: 0L
+        else castProgramme?.endMillis ?: 0L
+    val logoUrl = if (isCompanion) {
+        companionDetails?.logoUrl
+    } else {
+        castContent?.artUri?.takeIf { it.isNotBlank() }
+            ?: currentChannel?.tvgLogo?.takeIf { it.isNotBlank() }
     }
     val title = when {
         isCompanion -> companionDetails?.channelName
@@ -262,6 +285,9 @@ fun CastTransportCard(
             channelTitle = title,
             switchingTo = switchingTo,
             programmeTitle = programmeTitle,
+            logoUrl = logoUrl,
+            programmeStartMs = programmeStartMs,
+            programmeEndMs = programmeEndMs,
             remoteState = remoteState,
             isPlaying = remoteIsPlaying,
             position = position,

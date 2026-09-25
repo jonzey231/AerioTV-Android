@@ -131,6 +131,12 @@ fun CastRemoteSheet(
      *  and hide the card while the TV keeps playing. Null for Google Cast, where
      *  there is nothing to leave behind once the session ends. */
     onDisconnect: (() -> Unit)? = null,
+    /** Channel logo for the header; the transport glyph stands in when null. */
+    logoUrl: String? = null,
+    /** Current programme's start / end (epoch ms) for the time range and
+     *  progress bar; 0 hides both. */
+    programmeStartMs: Long = 0L,
+    programmeEndMs: Long = 0L,
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -150,12 +156,26 @@ fun CastRemoteSheet(
                 .padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(
-                imageVector = transportIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp),
-            )
+            // Header (iOS parity 2026-09-25): channel logo, channel, "Casting to
+            // <device>", programme with a LIVE badge, then its time range and
+            // progress, resolved from the guide exactly like the list rows.
+            if (!logoUrl.isNullOrBlank()) {
+                coil3.compose.AsyncImage(
+                    model = logoUrl,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier
+                        .size(width = 96.dp, height = 56.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                )
+            } else {
+                Icon(
+                    imageVector = transportIcon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
             Spacer(Modifier.height(10.dp))
             Text(
                 text = switchingTo?.let { "Switching to $it" }
@@ -166,22 +186,60 @@ fun CastRemoteSheet(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            programmeTitle?.takeIf { it.isNotBlank() }?.let {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(2.dp))
             Text(
                 text = "$statusVerb ${deviceName ?: "your TV"}",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.textAccent,
             )
+            programmeTitle?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    LiveBadge()
+                }
+            }
+            if (programmeEndMs > programmeStartMs && programmeStartMs > 0L) {
+                // Re-read the clock each minute so the bar advances while open.
+                var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+                androidx.compose.runtime.LaunchedEffect(programmeStartMs, programmeEndMs) {
+                    while (true) {
+                        nowMs = System.currentTimeMillis()
+                        kotlinx.coroutines.delay(30_000L)
+                    }
+                }
+                val total = (programmeEndMs - programmeStartMs).coerceAtLeast(1L)
+                val progress = ((nowMs - programmeStartMs).toFloat() / total).coerceIn(0f, 1f)
+                val clock = com.aeriotv.android.core.ui.ClockFormat.short()
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = clock.format(java.util.Date(programmeStartMs)) + " \u2013 " +
+                        clock.format(java.util.Date(programmeEndMs)),
+                    style = MaterialTheme.typography.labelMedium.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    drawStopIndicator = {},
+                )
+            }
             Spacer(Modifier.height(14.dp))
 
             // Skip Intervals setting, read live so a change re-renders.
@@ -305,7 +363,18 @@ fun CastRemoteSheet(
                     onRefreshState()
                     optionsOpen = true
                 })
-                RemoteButton(Icons.Filled.Close, stopLabel, onStopCasting)
+            }
+            Spacer(Modifier.height(16.dp))
+            // Red full-width stop, as on iOS ("Stop casting" / "Stop").
+            androidx.compose.material3.Button(
+                onClick = onStopCasting,
+                modifier = Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFD32F2F),
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(stopLabel, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.height(18.dp))
         }
@@ -552,6 +621,21 @@ private fun RemoteButton(
             )
         }
     }
+}
+
+/** Small red LIVE badge beside the programme title. */
+@Composable
+private fun LiveBadge() {
+    Text(
+        text = "LIVE",
+        color = Color.White,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color(0xFFD32F2F))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 /** Red "LIVE" pill shown while the cast is rewound; tap returns to the live edge. */
