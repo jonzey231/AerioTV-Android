@@ -823,6 +823,41 @@ class AerioCastSender @Inject constructor(
         runCatching { CastContext.getSharedInstance()?.sessionManager?.endCurrentSession(true) }
     }
 
+    /**
+     * Stop what is playing on the receiver but KEEP the Cast session (iOS parity,
+     * 2026-09-25): the playing card's X and the sheet's Stop casting return the
+     * card to its idle "Select a Channel" state instead of disconnecting. Nothing
+     * resumes locally. The proxy (ingest, socket, foreground service) is torn down
+     * with the media, since nothing is being served any more; the next channel
+     * tap starts a fresh proxy session exactly like the first cast did.
+     */
+    fun stopPlayback() {
+        Log.i(TAG, "[Cast] stop: playback ended, session kept (idle card), no local resume")
+        // Receiver content recovery must not resurrect the media we just stopped
+        // from a status update that still carries its MediaInfo.
+        recoverySuppressed = true
+        pending = null
+        _content.value = null
+        _switchingTo.value = null
+        flipEpoch++
+        proxyLoadJob?.cancel()
+        proxyLoadJob = null
+        deferredTune = null
+        lastLoadedMediaId = null
+        idleReloadAttempts = 0
+        staleReceiverJob?.cancel()
+        runCatching { currentSession()?.remoteMediaClient?.stop() }
+        senderScope.launch(Dispatchers.IO) { runCatching { hlsProxy.stop() } }
+    }
+
+    /** Stale-receiver watchdog armed by each proxy load. */
+    private var staleReceiverJob: kotlinx.coroutines.Job? = null
+
+    /** Set by [stopPlayback] so a trailing status update carrying the stopped
+     *  media's MediaInfo is not recovered as live content; cleared by the next
+     *  load or a new session. */
+    private var recoverySuppressed = false
+
     // --- Cast remote controls (GH #33), all no-ops when not connected. ---
 
     /**
@@ -1227,6 +1262,7 @@ class AerioCastSender @Inject constructor(
      *  once content is known. */
     private fun recoverContentFromSession(session: CastSession) {
         if (_content.value != null || pending != null) return
+        if (recoverySuppressed) return
         val info = runCatching { session.remoteMediaClient?.mediaInfo }.getOrNull() ?: return
         val custom = info.customData
         val mediaId = custom?.optString(AerioCastReceiverController.KEY_MEDIA_ID)?.takeIf { it.isNotBlank() }
@@ -1304,6 +1340,8 @@ class AerioCastSender @Inject constructor(
      *  SUSPEND deliberately does NOT stop the proxy (refreshFromContext): the
      *  receiver keeps fetching segments across the blip and resumes cleanly. */
     private fun endCleanup() {
+        recoverySuppressed = false
+        staleReceiverJob?.cancel()
         _content.value = null
         _switchingTo.value = null
         flipEpoch++
@@ -1404,6 +1442,7 @@ class AerioCastSender @Inject constructor(
             idleReloadAttempts = 0
         }
         lastLoadAtMs = System.currentTimeMillis()
+        recoverySuppressed = false
         _receiverIdle.value = true // until the receiver says otherwise
         Log.i(
             TAG,

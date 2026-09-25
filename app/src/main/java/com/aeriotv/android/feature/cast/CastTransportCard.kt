@@ -42,8 +42,11 @@ private const val TAG = "CastCard"
  *  - Connecting from the picker stays on the current page; the card simply
  *    appears. With nothing playing yet it reads "Select a Channel", and the
  *    next channel tap casts (the tap handler owns that, see Navigation).
- *  - The X stops playback on the other screen AND hides the card, for Cast and
- *    the companion remote alike. Playback is NOT handed back to the phone.
+ *  - Google Cast: the X (and Stop casting) on a PLAYING card stops the media
+ *    and returns the card to its idle "Select a Channel" state with the session
+ *    still connected; the X on the IDLE card ends the session and hides it.
+ *    Companion remote: the X stops the TV and hides the card. Playback is
+ *    never handed back to the phone.
  *  - Companion only: "Disconnect" in the remote sheet drops the link and hides
  *    the card while the TV keeps playing.
  *  - Only ONE card is possible: the picker keeps the two transports mutually
@@ -188,8 +191,12 @@ fun CastTransportCard(
             Log.i(TAG, "[Remote] X: stop + close")
             companionRemote.stopRemotePlayback()
             companionRemote.disconnect()
+        } else if (hasContent || switchingTo != null) {
+            // Playing card (or its sheet's Stop casting): stop the media, keep
+            // the session, and fall back to the idle card (iOS parity).
+            castSender.stopPlayback()
         } else {
-            Log.i(TAG, "[Cast] stop: session ended, no local resume")
+            Log.i(TAG, "[Cast] X on idle card: session ended, no local resume")
             castSender.stopCasting()
         }
         sheetOpen = false
