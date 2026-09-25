@@ -272,6 +272,11 @@ class CastHlsProxySession @Inject constructor(
         return proxyBaseUrl
     }
 
+    /** (playlist fetches, segment fetches) since the proxy started, for the
+     *  sender's stale-receiver watchdog. */
+    fun fetchCounters(): Pair<Int, Int> =
+        server.playlistFetches.get() to server.segmentFetches.get()
+
     /** Base URL of the running proxy ("http://ip:port"), set by
      *  [startChannelBlocking] once the socket is bound and the ready gate
      *  has passed. */

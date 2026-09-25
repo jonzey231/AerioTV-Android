@@ -205,9 +205,16 @@ class CastHlsProxyServer(
         videoPlaylistTextLogged.set(false)
         audioPlaylistTextLogged.set(false)
         requestsServed.set(0)
+        playlistFetches.set(0)
+        segmentFetches.set(0)
     }
 
     val isRunning: Boolean get() = running.get()
+
+    /** Playlist (.m3u8) and media segment requests since [start]: the
+     *  sender's stale-receiver watchdog compares them across a load. */
+    val playlistFetches = java.util.concurrent.atomic.AtomicInteger(0)
+    val segmentFetches = java.util.concurrent.atomic.AtomicInteger(0)
 
     /** Requests served since [start], for the keepalive log lines. */
     val requestCount: Int get() = requestsServed.get()
@@ -578,6 +585,8 @@ class CastHlsProxyServer(
                     mime = "text/plain"
                 }
             }
+            if (path.endsWith(".m3u8")) playlistFetches.incrementAndGet()
+            if (path.endsWith(".m4s")) segmentFetches.incrementAndGet()
             val status = if (body == null) 404 else 200
             logRequest(method, path, status, body?.size ?: 0, waitMs)
             if (body == null) {

@@ -130,6 +130,10 @@ class AerioCastSender @Inject constructor(
 
         /** Poll interval while waiting for that answer. */
         const val CAPS_POLL_MS = 100L
+
+        /** Grace after a proxy load before a receiver that fetched the playlist
+         *  but no segment is declared stale and re-loaded once. */
+        const val STALE_RECEIVER_MS = 10_000L
     }
 
     /**
@@ -852,6 +856,61 @@ class AerioCastSender @Inject constructor(
 
     /** Stale-receiver watchdog armed by each proxy load. */
     private var staleReceiverJob: kotlinx.coroutines.Job? = null
+    /** mediaId whose load the watchdog already re-issued: once per channel. */
+    private var staleReloadDoneFor: String? = null
+
+    /**
+     * Stale receiver page (iOS incident 2026-09-25): a session attached to a
+     * receiver page that was already running fetched the playlist ONCE and then
+     * never asked for a segment, so the TV sat on a black screen while the
+     * proxy served nothing. After each proxy load, if the receiver has fetched
+     * a playlist but requested no segment within [STALE_RECEIVER_MS], the load
+     * is re-issued once for that channel and the decision is logged.
+     */
+    private fun armStaleReceiverWatchdog(content: Content, countersAtLoad: Pair<Int, Int>) {
+        staleReceiverJob?.cancel()
+        if (content.webCastUrl == null) return
+        val (playlistsAtLoad, segmentsAtLoad) = countersAtLoad
+        staleReceiverJob = senderScope.launch {
+            kotlinx.coroutines.delay(STALE_RECEIVER_MS)
+            if (_content.value?.mediaId != content.mediaId) return@launch
+            val (playlists, segments) = hlsProxy.fetchCounters()
+            val newPlaylists = playlists - playlistsAtLoad
+            val newSegments = segments - segmentsAtLoad
+            if (newSegments > 0) {
+                Log.i(
+                    TAG,
+                    "[Cast] receiver healthy ${STALE_RECEIVER_MS / 1000}s after load: " +
+                        "playlists=$newPlaylists segments=$newSegments",
+                )
+                return@launch
+            }
+            if (newPlaylists == 0) {
+                Log.w(
+                    TAG,
+                    "[Cast] receiver fetched NOTHING ${STALE_RECEIVER_MS / 1000}s after load " +
+                        "(no playlist, no segment); leaving it to the idle reload",
+                )
+                return@launch
+            }
+            if (staleReloadDoneFor == content.mediaId) {
+                Log.w(
+                    TAG,
+                    "[Cast] stale receiver again: playlists=$newPlaylists segments=0 " +
+                        "after the re-issued load; not retrying",
+                )
+                return@launch
+            }
+            val session = currentSession() ?: return@launch
+            staleReloadDoneFor = content.mediaId
+            Log.w(
+                TAG,
+                "[Cast] stale receiver: fetched the playlist ($newPlaylists) but no segment " +
+                    "${STALE_RECEIVER_MS / 1000}s after load; re-issuing the load once",
+            )
+            loadOnSession(session, content)
+        }
+    }
 
     /** Set by [stopPlayback] so a trailing status update carrying the stopped
      *  media's MediaInfo is not recovered as live content; cleared by the next
@@ -1440,6 +1499,7 @@ class AerioCastSender @Inject constructor(
         if (lastLoadedMediaId != content.mediaId) {
             lastLoadedMediaId = content.mediaId
             idleReloadAttempts = 0
+            staleReloadDoneFor = null
         }
         lastLoadAtMs = System.currentTimeMillis()
         recoverySuppressed = false
@@ -1450,11 +1510,13 @@ class AerioCastSender @Inject constructor(
                 "contentUrl=${if (content.webCastUrl != null) "proxy" else "none"} " +
                 "mime=${content.webCastMime}",
         )
+        val countersAtLoad = hlsProxy.fetchCounters()
         runCatching {
             client.load(request).setResultCallback { result ->
                 val status = result.status
                 if (status.isSuccess) {
                     Log.i(TAG, "[Cast] load accepted by the receiver")
+                    armStaleReceiverWatchdog(content, countersAtLoad)
                 } else {
                     Log.w(
                         TAG,
