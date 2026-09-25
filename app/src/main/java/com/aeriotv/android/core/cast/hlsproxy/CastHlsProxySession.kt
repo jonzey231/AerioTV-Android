@@ -121,6 +121,13 @@ class CastHlsProxySession @Inject constructor(
 
     private val server = CastHlsProxyServer(log = { msg -> debugLog(context, TAG, msg) })
 
+    init {
+        CastHlsProxyService.stats = {
+            "requests=${server.requestCount} lastSeq=${server.lastSequence} " +
+                "genSegments=${server.segmentsInGeneration.value}"
+        }
+    }
+
     private var ingestJob: Job? = null
     @Volatile private var ingestCall: okhttp3.Call? = null
     /** Terminal ingest failure (unsupported codec, connect exhaustion),

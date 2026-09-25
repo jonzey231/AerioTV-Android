@@ -209,6 +209,12 @@ class CastHlsProxyServer(
 
     val isRunning: Boolean get() = running.get()
 
+    /** Requests served since [start], for the keepalive log lines. */
+    val requestCount: Int get() = requestsServed.get()
+
+    /** Newest committed sequence number, or -1 with an empty ring. */
+    val lastSequence: Int get() = synchronized(lock) { nextSeq - 1 }
+
     // ---- store (called from the ingest thread) ----
 
     /** Start a new ingest generation (channel change or same-channel
