@@ -116,7 +116,87 @@ class CastHlsProxySession @Inject constructor(
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .followRedirects(true)
+            // Ingest network policy (iOS incident 2026-09-25, Apple 2ceaaed):
+            // logging only. The client is not bound to a Network, so the
+            // socket rides the default network, cellular included.
+            .eventListener(object : okhttp3.EventListener() {
+                override fun connectionAcquired(call: okhttp3.Call, connection: okhttp3.Connection) {
+                    logIngestSocket(connection.socket())
+                }
+            })
             .build()
+    }
+
+    // ---- ingest network policy (iOS incident 2026-09-25, Apple 2ceaaed) ----
+
+    private val connectivity: ConnectivityManager? by lazy {
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    }
+    /** Transport the ingest socket rode at its last connect ("wifi", ...). */
+    @Volatile private var ingestTransport: String = "?"
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Which Network the ingest socket's local address belongs to. */
+    private fun logIngestSocket(socket: java.net.Socket) {
+        val cm = connectivity ?: return
+        val local = socket.localAddress
+        @Suppress("DEPRECATION")
+        val network = runCatching {
+            cm.allNetworks.firstOrNull { n ->
+                cm.getLinkProperties(n)?.linkAddresses?.any { it.address == local } == true
+            }
+        }.getOrNull()
+        val caps = network?.let { runCatching { cm.getNetworkCapabilities(it) }.getOrNull() }
+        val iface = runCatching { java.net.NetworkInterface.getByInetAddress(local)?.name }.getOrNull() ?: "?"
+        ingestTransport = NetworkPathLog.transports(caps)
+        debugLog(
+            context, TAG,
+            "ingest network policy: client unbound (default network, cellular allowed); " +
+                "socket on ${NetworkPathLog.describe(caps)} iface=$iface; ${NetworkPathLog.current(context)}",
+        )
+        if (NetworkPathLog.isCellular(caps)) {
+            debugLogWarn(
+                context, TAG,
+                "ingest is on CELLULAR while the receiver is served over Wi-Fi " +
+                    "(phone fell off Wi-Fi or the default network moved)",
+            )
+        }
+    }
+
+    /** Default-network changes while a session is active. */
+    private fun startNetworkWatch() {
+        val cm = connectivity ?: return
+        if (networkCallback != null) return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            private var last: String? = null
+            override fun onCapabilitiesChanged(network: android.net.Network, caps: NetworkCapabilities) {
+                val now = NetworkPathLog.describe(caps)
+                if (now == last) return
+                val first = last == null
+                last = now
+                if (first) return // the connect line already states it
+                debugLog(context, TAG, "default network changed: $now (ingest socket on $ingestTransport)")
+                if (NetworkPathLog.isCellular(caps) && !NetworkPathLog.isLan(caps)) {
+                    debugLogWarn(
+                        context, TAG,
+                        "default network moved to CELLULAR during a cast; the next ingest " +
+                            "(re)connect rides it while the receiver is on Wi-Fi",
+                    )
+                }
+            }
+
+            override fun onLost(network: android.net.Network) {
+                last = null
+                debugLog(context, TAG, "default network lost (ingest socket on $ingestTransport)")
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { networkCallback = cb }
+    }
+
+    private fun stopNetworkWatch() {
+        val cb = networkCallback ?: return
+        networkCallback = null
+        runCatching { connectivity?.unregisterNetworkCallback(cb) }
     }
 
     private val server = CastHlsProxyServer(log = { msg -> debugLog(context, TAG, msg) })
@@ -297,6 +377,7 @@ class CastHlsProxySession @Inject constructor(
         // alive once the activity stops.
         CastHlsProxyService.start(context)
         startLinkLog()
+        startNetworkWatch()
         startIngest(rawTsUrl, headers, gen, allowAc3Passthrough, failFastOnHttpError)
         val readyWaitBegan = System.currentTimeMillis()
         try {
@@ -358,6 +439,7 @@ class CastHlsProxySession @Inject constructor(
         activeUrl = null
         stopIngest()
         stopLinkLog()
+        stopNetworkWatch()
         server.stop()
         CastHlsProxyService.stop(context)
         if (hadSession) debugLog(context, TAG, "proxy stopped")
