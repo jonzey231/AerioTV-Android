@@ -134,6 +134,14 @@ class AerioCastSender @Inject constructor(
         /** Grace after a proxy load before a receiver that fetched the playlist
          *  but no segment is declared stale and re-loaded once. */
         const val STALE_RECEIVER_MS = 10_000L
+
+        /** A receiver that stays IDLE this long with no segment fetched after
+         *  having played ends the playback (iOS incident 2026-09-25): anything
+         *  shorter is a rebuffer and the session is held. */
+        const val RECEIVER_IDLE_END_MS = 60_000L
+
+        /** Cadence of the "still buffering" line while a stall is held. */
+        const val STALL_LOG_EVERY_MS = 15_000L
     }
 
     /**
@@ -549,6 +557,8 @@ class AerioCastSender @Inject constructor(
             // "Switching to <channel>" ends the moment the receiver is actually
             // playing the new channel, not when the load was merely accepted.
             if (playerState == MediaStatus.PLAYER_STATE_PLAYING) _switchingTo.value = null
+            // A rebuffer is a stall, not the end (iOS incident 2026-09-25).
+            trackReceiverStall(playerState, idleReason)
             // A live HLS receiver advertises what it can seek within; without a
             // range the skip buttons stay visible but disabled.
             _canSkip.value = runCatching { status?.liveSeekableRange != null }.getOrDefault(false)
@@ -577,6 +587,126 @@ class AerioCastSender @Inject constructor(
                 "[Cast] media error code=${error.detailedErrorCode} " +
                     "reason=${error.reason} type=${error.type}",
             )
+        }
+    }
+
+    // ---- receiver stall hold (iOS incident 2026-09-25) ----
+    //
+    // On iOS a bursty Dispatcharr ingest (11-13 two-second silences a minute at
+    // 8 Mbps) made the receiver rebuffer and the app read the rebuffer as the
+    // receiver ending the session. Here a BUFFERING (or a transient IDLE) after
+    // the receiver has played is HELD: content, the proxy, the ingest and the
+    // foreground service stay up and the card reads "Buffering...". Only a
+    // receiver-side session end (onSessionEnded), a user stop (stopPlayback /
+    // stopCasting) or an IDLE lasting [RECEIVER_IDLE_END_MS] with no segment
+    // fetched ends it.
+
+    private val _receiverBuffering = MutableStateFlow(false)
+    /** True while a receiver stall is being held; the card and sheet show
+     *  "Buffering..." for it. */
+    val receiverBuffering: StateFlow<Boolean> = _receiverBuffering.asStateFlow()
+
+    /** The receiver reached PLAYING / PAUSED since the current channel was
+     *  loaded; a BUFFERING before that is the start-up, not a stall. */
+    private var playedSinceLoad = false
+    private var stallStartedAtMs = 0L
+    private var stallJob: Job? = null
+
+    /** Last receiver player state name, for the proxy's link line. */
+    @Volatile private var receiverStateName: String = "none"
+
+    private fun trackReceiverStall(playerState: Int, idleReason: Int) {
+        receiverStateName = playerStateName(playerState) +
+            if (playerState == MediaStatus.PLAYER_STATE_IDLE) "/${idleReasonName(idleReason).substringBefore(' ')}" else ""
+        val content = _content.value
+        if (content?.webCastUrl == null || _switchingTo.value != null) {
+            clearStall(resumed = false)
+            return
+        }
+        when (playerState) {
+            MediaStatus.PLAYER_STATE_PLAYING, MediaStatus.PLAYER_STATE_PAUSED -> {
+                playedSinceLoad = true
+                clearStall(resumed = true)
+            }
+            MediaStatus.PLAYER_STATE_BUFFERING, MediaStatus.PLAYER_STATE_LOADING,
+            MediaStatus.PLAYER_STATE_IDLE,
+            -> {
+                if (!playedSinceLoad || stallStartedAtMs != 0L) return
+                // A CANCELED idle is a media STOP from a sender, not a stall.
+                if (playerState == MediaStatus.PLAYER_STATE_IDLE &&
+                    idleReason == MediaStatus.IDLE_REASON_CANCELED
+                ) {
+                    return
+                }
+                stallStartedAtMs = System.currentTimeMillis()
+                _receiverBuffering.value = true
+                Log.i(TAG, "[Cast] receiver buffering (reason $receiverStateName); holding the session")
+                startStallWatch(content.mediaId)
+            }
+        }
+    }
+
+    /** Ends a held stall. [resumed] logs the recovery. */
+    private fun clearStall(resumed: Boolean) {
+        stallJob?.cancel()
+        stallJob = null
+        if (stallStartedAtMs != 0L && resumed) {
+            val secs = (System.currentTimeMillis() - stallStartedAtMs) / 1000.0
+            Log.i(TAG, "[Cast] receiver resumed after ${"%.1f".format(java.util.Locale.US, secs)} s")
+        }
+        stallStartedAtMs = 0L
+        _receiverBuffering.value = false
+    }
+
+    /** 1 s watch over a held stall: a "still buffering" line every
+     *  [STALL_LOG_EVERY_MS], and the one exit that is not the receiver's or the
+     *  user's: IDLE for [RECEIVER_IDLE_END_MS] with no segment fetched. */
+    private fun startStallWatch(mediaId: String) {
+        stallJob?.cancel()
+        stallJob = senderScope.launch {
+            var lastSegments = hlsProxy.fetchCounters().second
+            var lastProgressMs = System.currentTimeMillis()
+            var idleSinceMs = 0L
+            var lastLogMs = System.currentTimeMillis()
+            while (true) {
+                kotlinx.coroutines.delay(1_000L)
+                if (_content.value?.mediaId != mediaId || stallStartedAtMs == 0L) return@launch
+                val now = System.currentTimeMillis()
+                val segments = hlsProxy.fetchCounters().second
+                if (segments != lastSegments) {
+                    lastSegments = segments
+                    lastProgressMs = now
+                }
+                val ps = runCatching { currentSession()?.remoteMediaClient?.mediaStatus?.playerState }
+                    .getOrNull()
+                if (ps == MediaStatus.PLAYER_STATE_IDLE || ps == null) {
+                    if (idleSinceMs == 0L) idleSinceMs = now
+                } else {
+                    idleSinceMs = 0L
+                }
+                val held = (now - stallStartedAtMs) / 1000
+                if (now - lastLogMs >= STALL_LOG_EVERY_MS) {
+                    lastLogMs = now
+                    Log.i(
+                        TAG,
+                        "[Cast] receiver still buffering after $held s (state $receiverStateName, " +
+                            "last segment fetch ${(now - lastProgressMs) / 1000} s ago); holding the session",
+                    )
+                }
+                if (idleSinceMs != 0L &&
+                    now - idleSinceMs >= RECEIVER_IDLE_END_MS &&
+                    now - lastProgressMs >= RECEIVER_IDLE_END_MS
+                ) {
+                    Log.w(
+                        TAG,
+                        "[Cast] receiver idle ${(now - idleSinceMs) / 1000} s with no segment fetched " +
+                            "and no recovery; ending playback",
+                    )
+                    stallJob = null
+                    stopPlayback()
+                    return@launch
+                }
+            }
         }
     }
 
@@ -850,6 +980,8 @@ class AerioCastSender @Inject constructor(
         lastLoadedMediaId = null
         idleReloadAttempts = 0
         staleReceiverJob?.cancel()
+        clearStall(resumed = false)
+        playedSinceLoad = false
         runCatching { currentSession()?.remoteMediaClient?.stop() }
         senderScope.launch(Dispatchers.IO) { runCatching { hlsProxy.stop() } }
     }
@@ -1401,6 +1533,9 @@ class AerioCastSender @Inject constructor(
     private fun endCleanup() {
         recoverySuppressed = false
         staleReceiverJob?.cancel()
+        clearStall(resumed = false)
+        playedSinceLoad = false
+        receiverStateName = "none"
         _content.value = null
         _switchingTo.value = null
         flipEpoch++
@@ -1500,6 +1635,9 @@ class AerioCastSender @Inject constructor(
             lastLoadedMediaId = content.mediaId
             idleReloadAttempts = 0
             staleReloadDoneFor = null
+            // New channel: its start-up BUFFERING is not a stall.
+            clearStall(resumed = false)
+            playedSinceLoad = false
         }
         lastLoadAtMs = System.currentTimeMillis()
         recoverySuppressed = false

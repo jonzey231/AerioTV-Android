@@ -76,6 +76,9 @@ fun CastTransportCard(
     // the new proxy session is warming up, so the card says so rather than
     // keeping the old channel's name on screen (Logan 2026-09-13).
     val castSwitchingTo by castSender.switchingTo.collectAsStateWithLifecycle()
+    // A held receiver stall (iOS incident 2026-09-25): the session is kept
+    // through a rebuffer and the card says so.
+    val castBuffering by castSender.receiverBuffering.collectAsStateWithLifecycle()
     val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
     val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
     val companionNowPlaying by companionRemote.nowPlaying.collectAsStateWithLifecycle()
@@ -234,6 +237,7 @@ fun CastTransportCard(
             subtitle = when {
                 switchingTo != null -> "Casting to ${deviceName ?: "your TV"}"
                 !hasContent -> "Select a Channel"
+                !isCompanion && castBuffering -> "Buffering\u2026"
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
                 else -> null
             },
@@ -291,6 +295,7 @@ fun CastTransportCard(
             deviceName = deviceName,
             channelTitle = title,
             switchingTo = switchingTo,
+            buffering = !isCompanion && castBuffering,
             programmeTitle = programmeTitle,
             logoUrl = logoUrl,
             programmeStartMs = programmeStartMs,

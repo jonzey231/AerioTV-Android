@@ -115,6 +115,9 @@ fun CastRemoteSheet(
      *  has been unloaded and the new proxy session is warming up, so the header
      *  reads "Switching to <channel>" until the receiver reports PLAYING. */
     switchingTo: String? = null,
+    /** True while the sender holds a receiver stall (iOS incident
+     *  2026-09-25): the status line reads "Buffering..." instead. */
+    buffering: Boolean = false,
     /** Label for the stop action: "Stop casting" for Cast, "Disconnect" for the
      *  companion transport. */
     stopLabel: String = "Stop casting",
@@ -188,7 +191,11 @@ fun CastRemoteSheet(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                text = "$statusVerb ${deviceName ?: "your TV"}",
+                text = if (buffering && switchingTo == null) {
+                    "Buffering\u2026 on ${deviceName ?: "your TV"}"
+                } else {
+                    "$statusVerb ${deviceName ?: "your TV"}"
+                },
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.textAccent,
             )
