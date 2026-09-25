@@ -86,6 +86,8 @@ fun CastTransportCard(
     val deviceName = if (isCompanion) companionTv?.name else castDevice
 
     var sheetOpen by remember { mutableStateOf(false) }
+    /** The Cast device picker, opened from the idle sheet's Change Cast Device. */
+    var pickerOpen by remember { mutableStateOf(false) }
     var switchStreams by remember { mutableStateOf<List<StreamOption>?>(null) }
     var switchCurrentId by remember { mutableStateOf<Int?>(null) }
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
@@ -220,7 +222,30 @@ fun CastTransportCard(
         )
     }
 
-    if (sheetOpen) {
+    // Connected, nothing playing (and no flip warming up): the minimal idle
+    // sheet, not the remote with every control dimmed (iOS parity 2026-09-25).
+    val idleCast = !isCompanion && !hasContent && switchingTo == null
+    if (sheetOpen && idleCast) {
+        CastIdleSheet(
+            deviceName = deviceName,
+            onChangeDevice = {
+                Log.i(TAG, "[Cast] idle sheet: change device")
+                sheetOpen = false
+                pickerOpen = true
+            },
+            onDismiss = { sheetOpen = false },
+        )
+    }
+    if (pickerOpen) {
+        CastRouteChooserDialog(
+            sender = castSender,
+            companionRemote = companionRemote,
+            companionDiscovery = null,
+            onDismiss = { pickerOpen = false },
+        )
+    }
+
+    if (sheetOpen && !idleCast) {
         val remoteState by (if (isCompanion) companionRemote.remoteState else castSender.remoteState)
             .collectAsStateWithLifecycle()
         val remoteIsPlaying by (if (isCompanion) companionRemote.isPlaying else castSender.isPlaying)

@@ -453,6 +453,61 @@ fun CastRemoteSheet(
     }
 }
 
+/**
+ * The sheet for a connected Cast session with nothing playing yet (iOS parity,
+ * 2026-09-25). The idle card reads "Casting to <device>" / "Select a Channel";
+ * tapping it opens this minimal sheet instead of the full remote with dimmed
+ * controls and a "Nothing playing" title: there is nothing to pause, skip or
+ * flip yet, so the only useful action is picking another device. Ending the
+ * session is the card's X.
+ */
+@Composable
+fun CastIdleSheet(
+    deviceName: String?,
+    onChangeDevice: () -> Unit,
+    onDismiss: () -> Unit,
+    transportIcon: ImageVector = Icons.Filled.Cast,
+) {
+    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                imageVector = transportIcon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp),
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = deviceName ?: "your TV",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Connected. Select a channel to start.",
+                style = MaterialTheme.typography.bodyMedium.subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(18.dp))
+            androidx.compose.material3.OutlinedButton(
+                onClick = onChangeDevice,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Change Cast Device")
+            }
+            Spacer(Modifier.height(18.dp))
+        }
+    }
+}
+
 private fun CastControl.Track.toAudioTrack(): AudioTrack =
     AudioTrack(id = id.toIntOrNull() ?: id.hashCode(), title = label, lang = "", codec = "", channels = "")
 
