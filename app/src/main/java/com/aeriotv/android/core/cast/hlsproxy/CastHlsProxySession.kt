@@ -128,6 +128,74 @@ class CastHlsProxySession @Inject constructor(
         }
     }
 
+    // ---- link line (iOS incident 2026-09-25, Apple 85ef563) ----
+
+    /** Ingest bytes read since the process started, for the link line. */
+    private val linkIngestBytes = java.util.concurrent.atomic.AtomicLong(0)
+    private var linkJob: Job? = null
+
+    /**
+     * Receiver readout for the link line, installed by the sender: returns
+     * (playhead behind the live edge in seconds or null, player state). Called
+     * on the main thread (RemoteMediaClient is main-thread only).
+     */
+    @Volatile var receiverProbe: (() -> Pair<Double?, String>)? = null
+
+    /** One link line every 10 s while the proxy serves: ingest kbps (avg and
+     *  the worst 1 s), 2 s silence stalls, the runway past the receiver's
+     *  newest video fetch, what was served to whom, the receiver's playhead
+     *  and state, and the stated hold-back. Idempotent. */
+    private fun startLinkLog() {
+        if (linkJob?.isActive == true) return
+        linkJob = ingestScope.launch {
+            var lastIngest = linkIngestBytes.get()
+            var lastServed = server.servedBytesTotal.get()
+            val samples = ArrayList<Double>(10)
+            var silentSeconds = 0
+            var stalls = 0
+            while (currentCoroutineContext().isActive) {
+                delay(1_000L)
+                val ingest = linkIngestBytes.get()
+                val delta = ingest - lastIngest
+                lastIngest = ingest
+                samples.add(maxOf(0L, delta) * 8 / 1000.0)
+                if (delta == 0L) {
+                    silentSeconds++
+                    if (silentSeconds == 2) stalls++
+                } else {
+                    silentSeconds = 0
+                }
+                if (samples.size < 10) continue
+                val served = server.servedBytesTotal.get()
+                val servedKbps = maxOf(0L, served - lastServed) * 8 / 1000.0 / 10
+                lastServed = served
+                val (segs, secs) = server.runwayAfter(server.highestVideoSeq)
+                val probe = runCatching {
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { receiverProbe?.invoke() }
+                }.getOrNull()
+                val behind = probe?.first?.let { "%.1f s".format(java.util.Locale.US, it) } ?: "?"
+                debugLog(
+                    context, TAG,
+                    String.format(
+                        java.util.Locale.US,
+                        "link: ingest %.0f kbps avg/%.0f kbps min over 10 s, stalls %d, " +
+                            "reservoir %d segs/%.1f s, served %.0f kbps to %s, " +
+                            "receiver playhead-behind-edge %s, receiver state %s (hold-back %.1f s)",
+                        samples.average(), samples.min(), stalls, segs, secs, servedKbps,
+                        server.lastPeer ?: "none", behind, probe?.second ?: "?", server.holdBackSeconds,
+                    ),
+                )
+                samples.clear()
+                stalls = 0
+            }
+        }
+    }
+
+    private fun stopLinkLog() {
+        linkJob?.cancel()
+        linkJob = null
+    }
+
     private var ingestJob: Job? = null
     @Volatile private var ingestCall: okhttp3.Call? = null
     /** Terminal ingest failure (unsupported codec, connect exhaustion),
@@ -228,6 +296,7 @@ class CastHlsProxySession @Inject constructor(
         // thing keeping this process (and therefore the receiver's video)
         // alive once the activity stops.
         CastHlsProxyService.start(context)
+        startLinkLog()
         startIngest(rawTsUrl, headers, gen, allowAc3Passthrough, failFastOnHttpError)
         val readyWaitBegan = System.currentTimeMillis()
         try {
@@ -288,6 +357,7 @@ class CastHlsProxySession @Inject constructor(
         val hadSession = activeUrl != null || server.isRunning
         activeUrl = null
         stopIngest()
+        stopLinkLog()
         server.stop()
         CastHlsProxyService.stop(context)
         if (hadSession) debugLog(context, TAG, "proxy stopped")
@@ -493,7 +563,10 @@ class CastHlsProxySession @Inject constructor(
                                 endedCleanly = true
                                 break
                             }
-                            if (n > 0) remuxer.feed(buf, 0, n)
+                            if (n > 0) {
+                                linkIngestBytes.addAndGet(n.toLong())
+                                remuxer.feed(buf, 0, n)
+                            }
                         }
                     }
                 } catch (e: UnsupportedCodecException) {

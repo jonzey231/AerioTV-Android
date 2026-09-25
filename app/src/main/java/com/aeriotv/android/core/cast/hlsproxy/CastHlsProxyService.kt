@@ -122,7 +122,10 @@ class CastHlsProxyService : Service() {
                 "wifiLock=${if (wifiLock?.isHeld == true) "held" else "NOT held"} " +
                 "batteryOptimization=${when (batteryExempt) { true -> "exempt"; false -> "optimized"; null -> "?" }} " +
                 "deviceIdle=${idle ?: "?"}; " +
-                "still running: ingest, remuxer, HTTP server on the LAN (${stats?.invoke() ?: "no stats"})",
+                "still running: ingest, remuxer, HTTP server on the LAN (${stats?.invoke() ?: "no stats"}); " +
+                // Network transport and Battery Saver (iOS incident 2026-09-25,
+                // Apple 85ef563): what the phone's link was doing at the moment.
+                NetworkPathLog.current(this),
         )
     }
 

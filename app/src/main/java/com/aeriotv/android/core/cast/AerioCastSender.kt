@@ -615,6 +615,25 @@ class AerioCastSender @Inject constructor(
     /** Last receiver player state name, for the proxy's link line. */
     @Volatile private var receiverStateName: String = "none"
 
+    init {
+        // The proxy's 10 s link line reads the receiver through this (main
+        // thread): playhead behind the receiver's seekable live edge from its
+        // media status, and the player state ("+held" during a held stall).
+        hlsProxy.receiverProbe = {
+            val client = currentSession()?.remoteMediaClient
+            val behind = runCatching {
+                val end = client?.approximateLiveSeekableRangeEnd ?: -1L
+                val pos = client?.approximateStreamPosition ?: -1L
+                if (client?.mediaStatus?.liveSeekableRange != null && end >= 0 && pos >= 0) {
+                    (end - pos) / 1000.0
+                } else {
+                    null
+                }
+            }.getOrNull()
+            behind to (receiverStateName + if (stallStartedAtMs != 0L) "+held" else "")
+        }
+    }
+
     private fun trackReceiverStall(playerState: Int, idleReason: Int) {
         receiverStateName = playerStateName(playerState) +
             if (playerState == MediaStatus.PLAYER_STATE_IDLE) "/${idleReasonName(idleReason).substringBefore(' ')}" else ""

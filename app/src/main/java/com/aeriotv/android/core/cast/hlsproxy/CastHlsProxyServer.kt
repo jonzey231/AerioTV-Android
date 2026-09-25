@@ -175,6 +175,24 @@ class CastHlsProxyServer(
     @Volatile var starvedCutsTotal: Int = 0
         private set
 
+    // ---- link counters (iOS incident 2026-09-25, Apple 85ef563) ----
+
+    /** Response body bytes sent since [start]. */
+    val servedBytesTotal = java.util.concurrent.atomic.AtomicLong(0)
+    /** Address of the last client served. */
+    @Volatile var lastPeer: String? = null
+        private set
+    /** Newest video sequence the receiver fetched successfully (-1 = none). */
+    @Volatile var highestVideoSeq: Int = -1
+        private set
+
+    /** Published segments after [seq] (the receiver's newest video fetch)
+     *  and their media seconds: the runway the receiver has not pulled yet. */
+    fun runwayAfter(seq: Int): Pair<Int, Double> = synchronized(lock) {
+        val ahead = ring.filter { it.seq > seq }
+        ahead.size to ahead.sumOf { it.durationTicks } / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+    }
+
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
@@ -247,6 +265,9 @@ class CastHlsProxyServer(
         videoPlaylistTextLogged.set(false)
         audioPlaylistTextLogged.set(false)
         requestsServed.set(0)
+        servedBytesTotal.set(0)
+        lastPeer = null
+        highestVideoSeq = -1
         playlistFetches.set(0)
         segmentFetches.set(0)
     }
@@ -695,6 +716,7 @@ class CastHlsProxyServer(
                     val began = System.currentTimeMillis()
                     body = seq?.let { s -> awaitSegment(s, Rendition.VIDEO) }
                     waitMs = System.currentTimeMillis() - began
+                    if (seq != null && body != null && seq > highestVideoSeq) highestVideoSeq = seq
                     mime = MIME_SEGMENT
                 }
                 path.startsWith("/aseg") && path.endsWith(".m4s") -> {
@@ -713,6 +735,8 @@ class CastHlsProxyServer(
             if (path.endsWith(".m4s")) segmentFetches.incrementAndGet()
             val status = if (body == null) 404 else 200
             logRequest(method, path, status, body?.size ?: 0, waitMs)
+            if (method != "HEAD") servedBytesTotal.addAndGet((body?.size ?: 0).toLong())
+            lastPeer = sock.inetAddress?.hostAddress
             if (body == null) {
                 respond(out, 404, "Not Found", "text/plain", "not found".toByteArray())
             } else {
