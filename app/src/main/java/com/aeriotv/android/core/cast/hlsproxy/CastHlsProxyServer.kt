@@ -492,10 +492,37 @@ class CastHlsProxyServer(
      * desktop Shaka 4.9.2 debug with the symbolized stack). NONE disables
      * the detection entirely (HlsParser.getClosedCaptions_).
      */
+    /** Whether the receiver answered yes to isTypeSupported for
+     *  avc1.64002A (level 4.2). False also covers caps never received. */
+    @Volatile private var receiverH264Level42 = false
+    @Volatile private var levelCapLogged = false
+
+    /** Set per channel start from the sender's measured receiver caps. */
+    fun setReceiverH264Level42(supported: Boolean) {
+        receiverH264Level42 = supported
+        levelCapLogged = false
+    }
+
+    /** A Chromecast Ultra decodes 1080p60 but its MSE answers no to the
+     *  level 4.2 string (Shaka 4032 on avc1.64002A, 2026-09-26). When the
+     *  receiver did not say yes to 4.2, declare level 4.0 (0x28) for any
+     *  higher level, keeping the profile and constraint bytes. */
+    private fun capAvcLevel(codec: String): String {
+        if (receiverH264Level42 || codec.length != 11 || !codec.startsWith("avc1.")) return codec
+        val level = codec.substring(9).toIntOrNull(16) ?: return codec
+        if (level <= 0x28) return codec
+        val capped = codec.substring(0, 9) + "28"
+        if (!levelCapLogged) {
+            levelCapLogged = true
+            log("[CAST-HLS] master declares $capped (stream is $codec; receiver answered no to level 4.2)")
+        }
+        return capped
+    }
+
     internal fun demuxedMasterPlaylistText(): String {
         val videoInit = synchronized(lock) { videoInits[generation] }
         val audioInit = synchronized(lock) { audioInits[generation] }
-        val videoCodec = videoInit?.let { avcCodecString(it) } ?: "avc1.640028"
+        val videoCodec = videoInit?.let { avcCodecString(it) }?.let { capAvcLevel(it) } ?: "avc1.640028"
         val audioCodec = audioInit?.let { audioCodecString(it) }
         val sb = StringBuilder(320)
         sb.append("#EXTM3U\n")
