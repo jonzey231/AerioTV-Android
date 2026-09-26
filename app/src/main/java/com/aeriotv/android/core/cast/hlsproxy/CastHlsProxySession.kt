@@ -334,12 +334,10 @@ class CastHlsProxySession @Inject constructor(
         rawTsUrl: String,
         headers: Map<String, String>,
         allowAc3Passthrough: Boolean = false,
-        h264Level42Supported: Boolean = false,
         @Suppress("UNUSED_PARAMETER") onNotice: ((String) -> Unit)? = null,
     ): Started = kotlinx.coroutines.withContext(Dispatchers.IO) {
         // The sender calls from its Main scope; the socket bind and the
         // address walk below are not Main-thread work.
-        server.setReceiverH264Level42(h264Level42Supported)
         Started(
             demuxedPlaylistUrl = startChannelBlocking(rawTsUrl, headers, allowAc3Passthrough, false) +
                 "/demuxed.m3u8",

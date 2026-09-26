@@ -1253,7 +1253,6 @@ class AerioCastSender @Inject constructor(
                     rawTsUrl = rawTsUrl,
                     headers = headers,
                     allowAc3Passthrough = ac3Ok,
-                    h264Level42Supported = caps?.get("avc1.64002A") == true,
                     onNotice = { message -> surfaceCastFailure(message) },
                 )
             } catch (e: com.aeriotv.android.core.cast.hlsproxy.IngestConnectionLimitException) {
