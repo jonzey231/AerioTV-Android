@@ -424,6 +424,38 @@
     // sent) and the two have to move together.
     const LIVE_START_BEHIND_SECONDS = 10;
 
+    // The hold-back the phone proxy states in the playlist
+    // (#EXT-X-SERVER-CONTROL:HOLD-BACK=H, #EXT-X-START:TIME-OFFSET=-H, H from
+    // 8 to 20 s sized by the proxy from target duration, ingest burstiness
+    // and bitrate). Parsed from every playlist the manifestHandler sees; null
+    // until one states it, and LIVE_START_BEHIND_SECONDS is the fallback.
+    // Shaka's HLS parser prefers manifest.defaultPresentationDelay over the
+    // playlist's HOLD-BACK whenever the config value is non-zero, so the
+    // config below sets it to 0 and the handler injects a HOLD-BACK of
+    // LIVE_START_BEHIND_SECONDS into any playlist that states none: Shaka
+    // then always takes the delay from the playlist, and the old fixed
+    // delay is what a silent proxy still gets.
+    let playlistHoldBack = null;
+    const HOLD_BACK_MIN_SECONDS = 1;
+    const HOLD_BACK_MAX_SECONDS = 60;
+
+    function parseHoldBack(text) {
+      let hb = null;
+      const sc = /#EXT-X-SERVER-CONTROL:(?:[^\r\n]*,)?HOLD-BACK=([0-9.]+)/.exec(text);
+      if (sc) hb = parseFloat(sc[1]);
+      if (!(hb > 0)) {
+        const st = /#EXT-X-START:(?:[^\r\n]*,)?TIME-OFFSET=(-?[0-9.]+)/.exec(text);
+        if (st && parseFloat(st[1]) < 0) hb = -parseFloat(st[1]);
+      }
+      if (!(hb >= HOLD_BACK_MIN_SECONDS && hb <= HOLD_BACK_MAX_SECONDS)) return null;
+      return hb;
+    }
+
+    // The delay this page aims at: the playlist's, else the fixed fallback.
+    function appliedHoldBack() {
+      return playlistHoldBack !== null ? playlistHoldBack : LIVE_START_BEHIND_SECONDS;
+    }
+
     // EXT-X-TARGETDURATION the proxy publishes is the longest segment in the
     // window (our cuts land on keyframes, measured 3 to 6 s). Used as the
     // guard band around the live seek range end: a playhead within one
@@ -482,10 +514,20 @@
     // availability minus the delay, sitting on the buffered end. Pinning the
     // duration to a constant (hls_parser.js:1383, "The app can override that
     // with a longer duration, to allow seeking") breaks the loop: the seek
-    // range becomes [availEnd - 20, availEnd - 4], 16 s wide. Deliberately
-    // under the proxy's published window (5 segments, 15 to 25 s) plus its
-    // ring, so we never claim availability for media the proxy has dropped.
-    const AVAILABILITY_WINDOW_SECONDS = 20;
+    // range becomes [availEnd - window, availEnd - delay].
+    //
+    // The value was 20 until 2026-09-26. With a 10 s presentation delay that
+    // left a seek range only 10 s wide with the playhead parked at its
+    // start. Shaka 4.15 runs a 250 ms playhead timer: when currentTime falls
+    // below seekRange.start it re-seeks to seekRange.start + rebufferingGoal
+    // (+ safeSeekOffset). Measured on the Chromecast Ultra over DevTools: any
+    // ingest stall longer than 10 s put the playhead behind the range start,
+    // Shaka jumped it forward into media the element had not decoded
+    // (readyState 1), that stalled again, and the loop repeated 5 to 10 s
+    // jumps every few seconds. 90 s keeps the fixed override (so the ratchet
+    // above cannot return) while leaving 80 s or more of slack behind the
+    // playhead. The proxies now list at least 60 s of segments.
+    const AVAILABILITY_WINDOW_SECONDS = 90;
 
     // ---- receiver telemetry (urn:x-cast:com.aeriotv.receiver.debug) ----
     //
@@ -911,6 +953,12 @@
       }
     }
 
+    function seekRangeWidth() {
+      const range = seekRange();
+      if (!range || range[0] === null || range[1] === null) return null;
+      return roundTo(range[1] - range[0], 1);
+    }
+
     function sendReceiverSnapshot(ev) {
       const video = mediaElement();
       const stats = shakaStats();
@@ -935,6 +983,13 @@
         seekPending: seekPending,
         rate: video ? roundTo(video.playbackRate, 2) : null,
         seek: seekRange(),
+        // Seek range width (end - start), 1 decimal: the effective live
+        // window Shaka is enforcing. See AVAILABILITY_WINDOW_SECONDS.
+        sr: seekRangeWidth(),
+        // The live delay in force: the playlist's HOLD-BACK, or the fixed
+        // fallback when the playlist stated none (holdBackSrc says which).
+        holdBack: appliedHoldBack(),
+        holdBackSrc: playlistHoldBack !== null ? 'playlist' : 'default',
         bufTime: stats.bufTime === undefined ? null : stats.bufTime,
         bw: stats.bw === undefined ? null : stats.bw,
         hist: stats.hist === undefined ? null : stats.hist,
@@ -1062,8 +1117,9 @@
       // Three seconds of a motionless playhead is NOT on its own a reason to
       // move it. On 2026-09-12 at 16:30 it was the reason the receiver threw
       // the picture away: Shaka's live seek range had collapsed to one
-      // segment minus the presentation delay (seek=[51.368-52.373], see
-      // AVAILABILITY_WINDOW_SECONDS), the playhead sat a few milliseconds
+      // segment minus the presentation delay (seek=[51.368-52.373], the
+      // ratchet described at AVAILABILITY_WINDOW_SECONDS; the fixed 90 s
+      // override now prevents it), the playhead sat a few milliseconds
       // below its start in permanent BUFFERING, and this watchdog then
       // seeked BACKWARD out of the buffer entirely (err=nudge 45.411 ->
       // 39.185), which is the handful of frames Logan saw. Three rules now
@@ -1190,19 +1246,29 @@
         return skipSeek(ev, 'ahead' + roundTo(bufEnd - video.currentTime, 3) +
           '<' + RESYNC_MIN_AHEAD_SECONDS);
       }
-      const lo = bufStart + RESYNC_START_FLOOR_SECONDS;
+      // Never aim below Shaka's own seekRange.start. Shaka's 250 ms playhead
+      // timer re-seeks anything under that start to start + rebufferingGoal,
+      // so a target there would start a tug of war between this watchdog and
+      // Shaka. The floor is the later of the buffered start and the seek
+      // range start (from playerManager.getLiveSeekableRange()).
+      let lo = bufStart + RESYNC_START_FLOOR_SECONDS;
+      if (range && range[0] !== null) {
+        lo = Math.max(lo, range[0] + RESYNC_START_FLOOR_SECONDS);
+      }
       const hi = bufEnd - RESYNC_END_MARGIN_SECONDS;
       if (hi <= lo) {
         // Too little media to aim inside; wait for the next append.
         return skipSeek(ev, 'narrow' + roundTo(bufEnd - bufStart, 3));
       }
 
-      // Aim LIVE_START_BEHIND_SECONDS behind the live edge, but never past
+      // Aim appliedHoldBack() (the playlist's HOLD-BACK, never less than
+      // what it states; LIVE_START_BEHIND_SECONDS when it states none)
+      // behind the live edge, but never past
       // the media we have, and never at the very front of it. Both bounds are
       // hard: the target must sit STRICTLY inside [bufStart + 0.1,
       // bufEnd - 1.5], which is what the Ultra's runaway seeks violated.
       let target = range && range[1] !== null ?
-        range[1] - LIVE_START_BEHIND_SECONDS : hi;
+        range[1] - appliedHoldBack() : hi;
       const wanted = target;
       target = Math.min(target, hi);
       target = Math.max(target, lo);
@@ -1359,7 +1425,11 @@
       playbackConfig.shakaConfig = {
         manifest: {
           hls: { sequenceMode: false },
-          defaultPresentationDelay: LIVE_START_BEHIND_SECONDS,
+          // 0 = take the delay from the playlist's HOLD-BACK (see
+          // playlistHoldBack; the manifestHandler guarantees one is present).
+          defaultPresentationDelay: 0,
+          // Fixed 90 s window: stops the HLS window ratchet and leaves the
+          // playhead far from seekRange.start (AVAILABILITY_WINDOW_SECONDS).
           availabilityWindowOverride: AVAILABILITY_WINDOW_SECONDS,
         },
         streaming: {
@@ -1382,6 +1452,28 @@
           if (!manifestSeenAt) manifestSeenAt = Date.now();
         } catch (e) {
           // Diagnostics must never be able to break playback.
+        }
+        try {
+          if (typeof manifest === 'string' && manifest.indexOf('#EXTM3U') !== -1 &&
+              manifest.indexOf('#EXTINF') !== -1) {
+            // A media playlist (a multivariant one has no #EXTINF).
+            const hb = parseHoldBack(manifest);
+            if (hb !== null) {
+              playlistHoldBack = hb;
+              if (!/[:,]HOLD-BACK=/.test(manifest)) {
+                // Stated only via EXT-X-START: give Shaka the HOLD-BACK too.
+                manifest = manifest.replace(/#EXTM3U[^\r\n]*/,
+                  (m) => m + '\n#EXT-X-SERVER-CONTROL:HOLD-BACK=' + hb);
+              }
+            } else if (!/[:,]HOLD-BACK=/.test(manifest)) {
+              // Nothing stated: keep the old fixed delay as the fallback.
+              manifest = manifest.replace(/#EXTM3U[^\r\n]*/,
+                (m) => m + '\n#EXT-X-SERVER-CONTROL:HOLD-BACK=' +
+                  LIVE_START_BEHIND_SECONDS);
+            }
+          }
+        } catch (e) {
+          // Never let the hold-back read break the playlist.
         }
         return manifest;
       };
@@ -1490,6 +1582,7 @@
         // Fresh tune: spinner up, counters zeroed, no status text yet.
         loadingSince = Date.now();
         manifestSeenAt = 0;
+        playlistHoldBack = null;
         bytesAppended = 0;
         renderingSince = 0;
         bufferingSince = 0;
