@@ -1371,7 +1371,9 @@
     // the first load. CastReceiverOptions.playbackConfig is the only place
     // this setting is honored; setting it inside the LOAD interceptor left
     // Shaka in charge (measured on the Chromecast Ultra, Shaka Error 4032).
-    const BOOT_MPL = /[?&]pipeline=mpl(&|$)/.test(location.search);
+    // TEMPORARY (2026-09-26 test, revert after): boot the legacy player on
+    // the production page too.
+    const BOOT_MPL = true || /[?&]pipeline=mpl(&|$)/.test(location.search);
     if (playbackConfig && BOOT_MPL) {
       playbackConfig.useShakaForHls = false;
       console.log('AerioTV: booting with the legacy media player for HLS (useShakaForHls=false)');
