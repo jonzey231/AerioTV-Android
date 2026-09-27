@@ -101,12 +101,6 @@ fun CastTransportCard(
     var sheetOpen by remember { mutableStateOf(false) }
     /** The Cast device picker, opened from the idle sheet's Change Cast Device. */
     var pickerOpen by remember { mutableStateOf(false) }
-    /** Change Cast Device handoff (iOS parity 2026-09-27): the channel the old
-     *  receiver was playing, so it follows the user to the receiver the picker
-     *  connects next instead of that session sitting idle. Held here, not in
-     *  the sender, because the channel pick path (onCastChannel) is what starts
-     *  a fresh proxy session; the old Content's proxy URL is dead after Stop. */
-    var handoffChannel by remember { mutableStateOf<M3UChannel?>(null) }
     var switchStreams by remember { mutableStateOf<List<StreamOption>?>(null) }
     var switchCurrentId by remember { mutableStateOf<Int?>(null) }
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
@@ -154,36 +148,6 @@ fun CastTransportCard(
             companionDiscovery = null,
             onDismiss = { pickerOpen = false },
         )
-    }
-
-    // The next session start consumes the handoff whatever happens, so it can
-    // never land on a later, unrelated session. A channel already loading
-    // (the user was watching locally, so the sender's pending content went to
-    // the new receiver) wins over the handoff.
-    LaunchedEffect(castState, companionConn) {
-        val connectedTo = castState as? AerioCastSender.State.Connected
-        if (companionTv != null) {
-            handoffChannel = null
-            castSender.takeSwitchHandoff()
-            return@LaunchedEffect
-        }
-        if (connectedTo == null) return@LaunchedEffect
-        // The picker's own receiver switch (sender side) hands over a mediaId;
-        // resolve it the same way the card resolves the cast channel.
-        val switched = castSender.takeSwitchHandoff()?.let { id ->
-            val bare = id.substringAfter(':', id)
-            channels.firstOrNull { it.id == id }
-                ?: channels.firstOrNull { it.id.substringAfter(':', it.id) == bare }
-                ?: channels.firstOrNull { it.name == id }
-        }
-        val seed = handoffChannel ?: switched ?: return@LaunchedEffect
-        handoffChannel = null
-        if (castSender.content.value != null) {
-            Log.i(TAG, "[Cast] picker selected ${connectedTo.deviceName} -> seed=local")
-            return@LaunchedEffect
-        }
-        Log.i(TAG, "[Cast] picker selected ${connectedTo.deviceName} -> seed=${seed.name}")
-        onCastChannel(seed)
     }
 
     if (!active) return
@@ -263,8 +227,6 @@ fun CastTransportCard(
     // otherwise leave the TV playing, so it is told to stop first and only then
     // disconnected.
     fun endSession() {
-        // Stop always drops a pending handoff; Change Device re-arms it after.
-        handoffChannel = null
         if (isCompanion) {
             Log.i(TAG, "[Remote] X: stop + close")
             companionRemote.stopRemotePlayback()
@@ -407,8 +369,10 @@ fun CastTransportCard(
                 // follows the user to whichever receiver the picker starts next.
                 val follow = if (isCompanion) null else currentChannel
                 endSession()
-                handoffChannel = follow
-                Log.i(TAG, "[Cast] handoff armed: ${follow?.name ?: "none"}")
+                // Held by the sender, not this card: the switch drops the
+                // session, which removes this card from composition (and any
+                // state remembered here) before the new session connects.
+                castSender.armHandoff(follow?.id)
                 // Let the sheet finish closing before the picker opens, so the
                 // two modals never animate over each other (iOS uses 350 ms too).
                 scope.launch {

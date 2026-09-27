@@ -1061,13 +1061,28 @@ class AerioCastSender @Inject constructor(
     /** Picker route switch in flight: the route to select once the current
      *  session reports its end. */
     private var switchTarget: Pair<MediaRouter, MediaRouter.RouteInfo>? = null
-    /** mediaId of what the old receiver was casting when the picker switched
-     *  receivers; the cast card resolves it to a channel and re-casts it on the
-     *  new session. Null when nothing was playing. */
-    private var switchHandoffMediaId: String? = null
+    /** Channel id (or cast mediaId) that follows the user to the next receiver
+     *  (Change Cast Device, or a picker switch while playing). Held here, not in
+     *  the cast card: a switch drops the session, which removes the card from
+     *  composition before the new session connects (Nothing Phone 2026-09-27).
+     *  Consumed by the next session start; cleared by Stop. */
+    private var handoffChannelId: String? = null
 
-    /** Consume the picker switch handoff (null when none). */
-    fun takeSwitchHandoff(): String? = switchHandoffMediaId.also { switchHandoffMediaId = null }
+    /** Emitted on session start with the handoff to load; the app shell, which
+     *  stays composed across the switch, resolves it to a channel and casts it
+     *  through the normal channel pick path (a fresh proxy session). */
+    private val _handoffSeed = kotlinx.coroutines.flow.MutableSharedFlow<String>(replay = 1)
+    val handoffSeed: kotlinx.coroutines.flow.SharedFlow<String> = _handoffSeed
+
+    /** Arm (or clear, with null) the handoff. Call AFTER the stop. */
+    fun armHandoff(channelId: String?) {
+        Log.i(TAG, "[Cast] handoff armed: ${channelId ?: "none"}")
+        handoffChannelId = channelId
+    }
+
+    /** Mark the emitted seed as handled so a late collector does not replay it. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun consumeHandoffSeed() = _handoffSeed.resetReplayCache()
 
     /**
      * Select [route] from the Cast to picker. With a session already connected
@@ -1084,10 +1099,12 @@ class AerioCastSender @Inject constructor(
         if (router != null && current != null && !route.isSelected) {
             Log.i(TAG, "[Cast] picker selected ${route.name} while ${current.deviceName} is connected: ending it first")
             val handoff = _content.value?.mediaId
+            val keep = handoffChannelId
             switchTarget = router to route
             stopCasting()
-            // Armed after the stop; nothing playing means no handoff.
-            switchHandoffMediaId = handoff
+            // Armed after the stop (which clears it); nothing playing and no
+            // Change Device handoff means nothing follows.
+            armHandoff(handoff ?: keep)
             return
         }
         runCatching { router?.selectRoute(route) }
@@ -1121,6 +1138,7 @@ class AerioCastSender @Inject constructor(
      */
     fun stopCasting() {
         endingGracefully = true
+        handoffChannelId = null
         // Best effort and deliberately not awaited: the session teardown below
         // must happen even if the receiver never answers (a wedged receiver is
         // exactly when the user reaches for the X).
@@ -1142,7 +1160,7 @@ class AerioCastSender @Inject constructor(
         // from a status update that still carries its MediaInfo.
         recoverySuppressed = true
         pending = null
-        switchHandoffMediaId = null
+        handoffChannelId = null
         _content.value = null
         _switchingTo.value = null
         flipEpoch++
@@ -1627,6 +1645,14 @@ class AerioCastSender @Inject constructor(
         // about why: this branch is the decision, and it printed nothing. The
         // iPhone logs an equivalent line. Logging only; the behaviour below is
         // unchanged.
+        // Any session start consumes the handoff so it never lands on a later,
+        // unrelated session; a locally playing channel (pending) wins over it.
+        val seed = handoffChannelId
+        handoffChannelId = null
+        if (seed != null && pending == null) {
+            Log.i(TAG, "[Cast] picker selected ${session.castDevice?.friendlyName} -> seed=$seed")
+            _handoffSeed.tryEmit(seed)
+        }
         Log.i(
             TAG,
             "[Cast] session started: pendingChannel=${pending?.mediaId ?: "none"} " +

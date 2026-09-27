@@ -1302,6 +1302,26 @@ fun MainScaffold(
                 // never a full-screen takeover. The local mini-player is
                 // suppressed while casting, so the cards never stack.
                 val casting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
+                // Change Cast Device handoff: collected here because this shell
+                // stays composed across the receiver switch, unlike the card.
+                // Cast through onChannelClick, the same path a channel tap uses.
+                // Latest channels / click handler, not the first composition's.
+                val handoffChannels by androidx.compose.runtime.rememberUpdatedState(state.channels)
+                val handoffCast by androidx.compose.runtime.rememberUpdatedState(onChannelClick)
+                androidx.compose.runtime.LaunchedEffect(castSender) {
+                    castSender.handoffSeed.collect { id ->
+                        castSender.consumeHandoffSeed()
+                        val bare = id.substringAfter(':', id)
+                        val ch = handoffChannels.firstOrNull { it.id == id }
+                            ?: handoffChannels.firstOrNull { it.id.substringAfter(':', it.id) == bare }
+                            ?: handoffChannels.firstOrNull { it.name == id }
+                        if (ch == null) {
+                            android.util.Log.w("AerioCast", "[Cast] handoff seed $id: no matching channel")
+                        } else {
+                            handoffCast(ch)
+                        }
+                    }
+                }
                 val companionTv = companionConn
                     as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
                 if ((casting || companionTv != null) && !isTv) {
