@@ -574,6 +574,11 @@
       'ec-3': 'audio/mp4; codecs="ec-3"',
       'mp4a.40.2': 'audio/mp4; codecs="mp4a.40.2"',
       'avc1.64002A': 'video/mp4; codecs="avc1.64002A"',
+      // HEVC Main: level 5.1 (1080p60 class), level 6.1 (4K60 class), and
+      // the hev1 sample entry (parameter sets in band).
+      'hvc1': 'video/mp4; codecs="hvc1.1.6.L153.B0"',
+      'hvc1.4k': 'video/mp4; codecs="hvc1.1.6.L183.B0"',
+      'hev1': 'video/mp4; codecs="hev1.1.6.L153.B0"',
     };
 
     function mseCapabilities() {
@@ -591,6 +596,33 @@
       return out;
     }
 
+    // What the DEVICE can put on screen at a given size and frame rate, as
+    // opposed to what MSE will accept (isTypeSupported ignores resolution
+    // and frame rate). Sent beside 'mse' as 'display'; senders that do not
+    // know the key ignore it.
+    const DISPLAY_PROBES = {
+      h264_1080p60: ['video/mp4', 'avc1.64002A', 1920, 1080, 60],
+      h264_1080p30: ['video/mp4', 'avc1.640028', 1920, 1080, 30],
+      hevc_1080p60: ['video/mp4', 'hvc1.1.6.L153.B0', 1920, 1080, 60],
+      hevc_4k60: ['video/mp4', 'hvc1.1.6.L183.B0', 3840, 2160, 60],
+      h264_4k60: ['video/mp4', 'avc1.640033', 3840, 2160, 60],
+    };
+
+    function displayCapabilities() {
+      const out = {};
+      for (const key in DISPLAY_PROBES) {
+        const a = DISPLAY_PROBES[key];
+        let ok = false;
+        try {
+          ok = !!context.canDisplayType(a[0], a[1], a[2], a[3], a[4]);
+        } catch (e) {
+          ok = false;
+        }
+        out[key] = ok;
+      }
+      return out;
+    }
+
     // Sent on READY (before any load, so the first load can use it) and
     // repeated with every telemetry snapshot, because a sender that
     // attached its channel after READY would otherwise never see it.
@@ -600,6 +632,7 @@
           type: 'caps',
           ev: reason,
           mse: mseCapabilities(),
+          display: displayCapabilities(),
         });
       } catch (e) {
         // Diagnostics must never be able to break playback.
@@ -1719,6 +1752,7 @@
           type: 'caps',
           ev: 'request',
           mse: mseCapabilities(),
+          display: displayCapabilities(),
         });
       };
       context.addCustomMessageListener(CONTROL_NAMESPACE, function (event) {
@@ -1736,6 +1770,7 @@
           // Same keys as the 'caps' message: the FIELD NAMES are the
           // contract both senders parse and must not change.
           mse: mseCapabilities(),
+          display: displayCapabilities(),
         });
       });
       context.addCustomMessageListener(DEBUG_NAMESPACE, function (event) {
@@ -1772,6 +1807,14 @@
     }
 
     context.addEventListener(cast.framework.system.EventType.READY, () => {
+      try {
+        console.log('AerioTV: caps ' + JSON.stringify({
+          mse: mseCapabilities(),
+          display: displayCapabilities(),
+        }));
+      } catch (e) {
+        // Diagnostics must never be able to break playback.
+      }
       sendCapabilities('ready');
       const caps = context.getDeviceCapabilities();
       if (!caps || !caps[cast.framework.system.DeviceCapabilities.TOUCH_INPUT_SUPPORTED]) {
