@@ -138,6 +138,18 @@ fun CastTransportCard(
         }
     }
 
+    // The picker is drawn ABOVE the early return: Change Device on the
+    // companion transport disconnects first, so the card goes inactive before
+    // the picker opens, and a picker below the return would never show.
+    if (pickerOpen) {
+        CastRouteChooserDialog(
+            sender = castSender,
+            companionRemote = companionRemote,
+            companionDiscovery = null,
+            onDismiss = { pickerOpen = false },
+        )
+    }
+
     if (!active) return
 
     // What the other screen is on, resolved back to a playlist channel so
@@ -295,14 +307,6 @@ fun CastTransportCard(
             onDismiss = { sheetOpen = false },
         )
     }
-    if (pickerOpen) {
-        CastRouteChooserDialog(
-            sender = castSender,
-            companionRemote = companionRemote,
-            companionDiscovery = null,
-            onDismiss = { pickerOpen = false },
-        )
-    }
 
     if (sheetOpen && !idleCast) {
         val remoteState by (if (isCompanion) companionRemote.remoteState else castSender.remoteState)
@@ -358,6 +362,17 @@ fun CastTransportCard(
             onChannelUp = { flipChannel(1) },
             onChannelDown = { flipChannel(-1) },
             onStopCasting = { endSession() },
+            changeDeviceLabel = if (isCompanion) "Change Device" else "Change Cast Device",
+            onChangeDevice = {
+                Log.i(TAG, "[Cast] playing sheet: change device")
+                endSession()
+                // Let the sheet finish closing before the picker opens, so the
+                // two modals never animate over each other (iOS uses 350 ms too).
+                scope.launch {
+                    kotlinx.coroutines.delay(350L)
+                    pickerOpen = true
+                }
+            },
             onSetAudioTrack = { id ->
                 if (isCompanion) companionRemote.setRemoteAudioTrack(id) else castSender.setRemoteAudioTrack(id)
             },

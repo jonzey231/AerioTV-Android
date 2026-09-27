@@ -512,7 +512,18 @@ class AerioCastSender @Inject constructor(
                 return@runCatching
             }
             when (json.optString(CastControl.KEY_CMD)) {
-                CastControl.CMD_STATE -> _remoteState.value = CastControl.decodeState(json)
+                CastControl.CMD_STATE -> {
+                    val st = CastControl.decodeState(json)
+                    // Logged so receiver-side results (Video Scale, speed, tracks)
+                    // can be verified from a device log.
+                    Log.i(
+                        TAG,
+                        "[Cast] state <- aspect=${st.aspect.key} speed=${st.speed} " +
+                            "audioOnly=${st.audioOnly} audio=${st.audio.size} " +
+                            "text=${st.text.size} textOff=${st.textOff}",
+                    )
+                    _remoteState.value = st
+                }
                 CastControl.CMD_POSITION -> _position.value = CastControl.decodePosition(json)
                 // Both receivers answer the hello probe and NAME themselves, so
                 // neither target is ever inferred from silence.
@@ -1525,6 +1536,9 @@ class AerioCastSender @Inject constructor(
 
     private fun sendControl(message: String) {
         val session = currentSession() ?: return
+        // Every control command is logged; without it a receiver that ignored
+        // a command looked the same in the log as one that was never sent.
+        Log.i(TAG, "[Cast] control -> $message")
         runCatching { session.sendMessage(CastControl.NAMESPACE, message) }
     }
 
@@ -1534,6 +1548,7 @@ class AerioCastSender @Inject constructor(
     private fun requestReceiverCaps() {
         val session = currentSession() ?: return
         val message = CastControl.command(CMD_CAPS)
+        Log.i(TAG, "[Cast] control -> $message")
         runCatching { session.sendMessage(CastControl.NAMESPACE, message) }
         runCatching { session.sendMessage(CastControl.DEBUG_NAMESPACE, message) }
     }

@@ -134,6 +134,11 @@ fun CastRemoteSheet(
     /** Label for the stop action: "Stop Casting" for Cast (iOS wording),
      *  "Stop" for the companion transport. */
     stopLabel: String = "Stop Casting",
+    /** "Change Cast Device" for Cast, "Change Device" for the companion. */
+    changeDeviceLabel: String = "Change Cast Device",
+    /** Stops the session, closes the sheet, then opens the device picker.
+     *  Null hides the button. */
+    onChangeDevice: (() -> Unit)? = null,
     /** Google Cast transport (Logan 2026-09-13): the skip back / skip forward 30 s
      *  buttons were only ever drawn for the AerioTV Remote transport, because
      *  the Cast receivers do not report a rewind window on the control channel.
@@ -395,6 +400,17 @@ fun CastRemoteSheet(
                     optionsOpen = true
                 },
             )
+            // Between Options and Stop, styled as Options (iOS parity 2026-09-27).
+            // Never dimmed by a flip: like Stop, it ends the session.
+            if (onChangeDevice != null) {
+                WideButton(
+                    icon = Icons.Filled.Cast,
+                    label = changeDeviceLabel,
+                    contentColor = Color.White,
+                    background = Color.White.copy(alpha = 0.12f),
+                    onClick = onChangeDevice,
+                )
+            }
             // Red text and stop glyph on translucent red, as iOS.
             WideButton(
                 icon = Icons.Filled.Stop,
