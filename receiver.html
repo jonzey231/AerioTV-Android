@@ -1750,6 +1750,359 @@
     // setPlaybackConfig/getPlaybackConfig.
     if (playbackConfig) receiverOptions.playbackConfig = playbackConfig;
 
+    // ---- remote player controls (urn:x-cast:com.aeriotv.control) ----
+    //
+    // The senders' Options sheet (audio, subtitles, speed, video scale,
+    // audio only, stream info) speaks the same protocol as the Android TV
+    // receiver (CastControl.kt): getState / setAudio / setText / setSpeed /
+    // setAspect / setAudioOnly in, one {cmd:"state"} snapshot out. Field
+    // names match CastControl.encodeState; the rewind fields that app also
+    // sends (canSeek, isLive, window*) are omitted, and the sender's decoder
+    // defaults them to "no rewind, live".
+    let remoteAspect = 'fit';
+    let remoteAudioOnly = false;
+    let remoteStateSentForLoad = false;
+    let infoLastFrames = null;
+    let infoLastAt = 0;
+    let infoFps = null;
+
+    function remoteShaka() {
+      if (loadPipeline === 'mpl') return null;
+      try {
+        const p = playerManager.getPlayer && playerManager.getPlayer();
+        return p && typeof p.getVariantTracks === 'function' ? p : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function channelText(n) {
+      if (typeof n !== 'number' || n <= 0) return '';
+      if (n === 1) return 'Mono';
+      if (n === 2) return 'Stereo';
+      if (n === 6) return '5.1';
+      if (n === 8) return '7.1';
+      return n + 'ch';
+    }
+
+    function languageName(code) {
+      if (!code || code === 'und') return '';
+      try {
+        const dn = new Intl.DisplayNames(['en'], { type: 'language' });
+        return dn.of(code) || code;
+      } catch (e) {
+        return code;
+      }
+    }
+
+    // Shaka audio "tracks" are the distinct audio renditions across the
+    // variants; the id encodes what selectAudioLanguage needs.
+    function remoteAudioTracks() {
+      const out = [];
+      const player = remoteShaka();
+      if (player) {
+        const seen = {};
+        let tracks = [];
+        try { tracks = player.getVariantTracks() || []; } catch (e) { tracks = []; }
+        for (const t of tracks) {
+          if (!t) continue;
+          const lang = t.language || 'und';
+          const role = (t.roles && t.roles[0]) || '';
+          const ch = typeof t.channelsCount === 'number' ? t.channelsCount : 0;
+          const id = [lang, role, ch, t.label || ''].join('|');
+          if (!seen[id]) {
+            const parts = [];
+            const name = t.label || languageName(t.language) || 'Audio';
+            parts.push(name);
+            const chs = channelText(ch);
+            if (chs) parts.push(chs);
+            seen[id] = { id: id, label: parts.join(' '), selected: false };
+            out.push(seen[id]);
+          }
+          if (t.active) seen[id].selected = true;
+        }
+        if (out.length && !out.some((t) => t.selected)) out[0].selected = true;
+        return out;
+      }
+      // MPL pipeline: CAF's own track manager.
+      try {
+        const m = playerManager.getAudioTracksManager();
+        const active = m.getActiveId ? m.getActiveId() : null;
+        for (const t of m.getTracks() || []) {
+          out.push({
+            id: String(t.trackId),
+            label: t.name || languageName(t.language) || ('Audio ' + t.trackId),
+            selected: t.trackId === active,
+          });
+        }
+      } catch (e) { /* no tracks yet */ }
+      return out;
+    }
+
+    function remoteSetAudio(id) {
+      id = String(id == null ? '' : id);
+      const player = remoteShaka();
+      if (player) {
+        const parts = id.split('|');
+        const lang = parts[0] || 'und';
+        const role = parts[1] || undefined;
+        const ch = parseInt(parts[2], 10) || undefined;
+        const label = parts.slice(3).join('|') || undefined;
+        try {
+          player.selectAudioLanguage(lang, role, ch, undefined, undefined, undefined, label);
+        } catch (e) {
+          try { player.selectAudioLanguage(lang, role, ch); } catch (e2) { /* ignore */ }
+        }
+        return;
+      }
+      try {
+        playerManager.getAudioTracksManager().setActiveById(parseInt(id, 10));
+      } catch (e) { /* ignore */ }
+    }
+
+    function remoteTextTracks() {
+      const out = [];
+      let off = true;
+      const player = remoteShaka();
+      if (player) {
+        let tracks = [];
+        try { tracks = player.getTextTracks() || []; } catch (e) { tracks = []; }
+        let visible = false;
+        try { visible = !!player.isTextTrackVisible(); } catch (e) { visible = false; }
+        for (const t of tracks) {
+          if (!t) continue;
+          const sel = !!t.active && visible;
+          if (sel) off = false;
+          out.push({
+            id: String(t.id),
+            label: t.label || languageName(t.language) || ('Subtitles ' + t.id),
+            selected: sel,
+          });
+        }
+        return { tracks: out, off: off };
+      }
+      try {
+        const m = playerManager.getTextTracksManager();
+        const active = (m.getActiveIds && m.getActiveIds()) || [];
+        for (const t of m.getTracks() || []) {
+          const sel = active.indexOf(t.trackId) >= 0;
+          if (sel) off = false;
+          out.push({
+            id: String(t.trackId),
+            label: t.name || languageName(t.language) || ('Subtitles ' + t.trackId),
+            selected: sel,
+          });
+        }
+      } catch (e) { /* no tracks yet */ }
+      return { tracks: out, off: off };
+    }
+
+    function remoteSetText(id) {
+      id = id == null ? '' : String(id);
+      const player = remoteShaka();
+      if (player) {
+        try {
+          if (id === '') {
+            player.setTextTrackVisibility(false);
+            return;
+          }
+          const t = (player.getTextTracks() || []).find((x) => String(x.id) === id);
+          if (!t) return;
+          player.selectTextTrack(t);
+          player.setTextTrackVisibility(true);
+        } catch (e) { /* ignore */ }
+        return;
+      }
+      try {
+        const m = playerManager.getTextTracksManager();
+        m.setActiveByIds(id === '' ? [] : [parseInt(id, 10)]);
+      } catch (e) { /* ignore */ }
+    }
+
+    function remoteSpeed() {
+      const video = mediaElement();
+      const r = video ? video.playbackRate : 1;
+      return typeof r === 'number' && r > 0 ? roundTo(r, 2) : 1;
+    }
+
+    function remoteSetSpeed(speed) {
+      let s = Number(speed);
+      if (!isFinite(s) || s <= 0) s = 1;
+      s = Math.min(2, Math.max(0.5, s));
+      try {
+        if (typeof playerManager.setPlaybackRate === 'function') {
+          playerManager.setPlaybackRate(s);
+        }
+      } catch (e) { /* fall through to the element */ }
+      const video = mediaElement();
+      if (video && video.playbackRate !== s) video.playbackRate = s;
+    }
+
+    // fit = letterbox, zoom = fill the screen cropping, fill = stretch.
+    // Applied as an inline object-fit only; no transform, so the video keeps
+    // its hardware overlay (see the COMPOSITING RULE at the top).
+    function applyRemoteVideoStyle() {
+      const video = mediaElement();
+      if (!video) return;
+      const fit = remoteAspect === 'zoom' ? 'cover' :
+        (remoteAspect === 'fill' ? 'fill' : 'contain');
+      if (video.style.objectFit !== fit) video.style.objectFit = fit;
+      // Audio only hides the picture but keeps the decode pipeline running,
+      // so turning it back off is instant.
+      const vis = remoteAudioOnly ? 'hidden' : '';
+      if (video.style.visibility !== vis) video.style.visibility = vis;
+    }
+
+    // Decoded fps over the interval since the previous state request, kept
+    // apart from videoQuality() so the telemetry deltas are not disturbed.
+    function remoteFps(video) {
+      try {
+        const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+        const total = q ? q.totalVideoFrames :
+          (typeof video.webkitDecodedFrameCount === 'number' ? video.webkitDecodedFrameCount : null);
+        const now = Date.now();
+        if (typeof total === 'number' && infoLastFrames !== null && infoLastAt) {
+          const el = (now - infoLastAt) / 1000;
+          if (el >= 0.5 && el <= 60) infoFps = roundTo((total - infoLastFrames) / el, 1);
+        }
+        infoLastFrames = typeof total === 'number' ? total : null;
+        infoLastAt = now;
+      } catch (e) { /* ignore */ }
+      return infoFps;
+    }
+
+    function remoteStreamInfo() {
+      const lines = [];
+      const video = mediaElement();
+      let active = null;
+      const player = remoteShaka();
+      if (player) {
+        try {
+          active = (player.getVariantTracks() || []).find((t) => t && t.active) || null;
+        } catch (e) { active = null; }
+      }
+      if (video && (video.videoWidth || video.videoHeight)) {
+        let res = video.videoWidth + 'x' + video.videoHeight;
+        const declared = active && typeof active.frameRate === 'number' ?
+          roundTo(active.frameRate, 3) : null;
+        if (declared) res += ' @ ' + declared + ' fps';
+        lines.push('Video: ' + res);
+      }
+      if (video) {
+        const fps = remoteFps(video);
+        if (fps !== null) lines.push('Decoded: ' + fps + ' fps');
+      }
+      if (active) {
+        if (active.videoCodec) lines.push('Video codec: ' + active.videoCodec);
+        if (active.audioCodec) {
+          const ch = channelText(active.channelsCount);
+          lines.push('Audio codec: ' + active.audioCodec + (ch ? ' ' + ch : ''));
+        }
+        const bw = active.videoBandwidth || active.bandwidth;
+        if (bw) lines.push('Bandwidth: ' + roundTo(bw / 1e6, 2) + ' Mbps');
+      }
+      if (player) {
+        try {
+          const st = player.getStats();
+          if (st && st.estimatedBandwidth) {
+            lines.push('Throughput: ' + roundTo(st.estimatedBandwidth / 1e6, 1) + ' Mbps');
+          }
+        } catch (e) { /* ignore */ }
+      }
+      lines.push('Player: ' + (loadPipeline === 'mpl' ? 'MPL' : 'Shaka') + ' (web receiver)');
+      return lines.join('\n');
+    }
+
+    function remoteState() {
+      const text = remoteTextTracks();
+      return {
+        cmd: 'state',
+        audio: remoteAudioTracks(),
+        text: text.tracks,
+        textOff: text.off,
+        speed: remoteSpeed(),
+        aspect: remoteAspect,
+        audioOnly: remoteAudioOnly,
+        streamInfo: remoteStreamInfo(),
+      };
+    }
+
+    // senderId undefined = every connected sender.
+    function sendRemoteState(senderId) {
+      try {
+        context.sendCustomMessage(CONTROL_NAMESPACE, senderId, remoteState());
+      } catch (e) {
+        console.warn('AerioTV: state not sent', e);
+      }
+    }
+
+    // Returns true when the command was one of the remote-control commands.
+    function handleRemoteCommand(cmd, data, senderId) {
+      switch (cmd) {
+        case 'getState':
+          break;
+        case 'setAudio':
+          remoteSetAudio(data.id);
+          break;
+        case 'setText':
+          remoteSetText(data.id);
+          break;
+        case 'setSpeed':
+          remoteSetSpeed(data.speed);
+          break;
+        case 'setAspect':
+          remoteAspect = (data.aspect === 'zoom' || data.aspect === 'fill') ? data.aspect : 'fit';
+          applyRemoteVideoStyle();
+          break;
+        case 'setAudioOnly':
+          remoteAudioOnly = !!data.audioOnly;
+          applyRemoteVideoStyle();
+          break;
+        default:
+          return false;
+      }
+      if (cmd === 'getState') {
+        sendRemoteState(senderId);
+      } else {
+        // Track switches settle a moment after the call; the snapshot goes
+        // to every sender so a second phone's sheet stays in step.
+        setTimeout(function () { sendRemoteState(undefined); }, 300);
+      }
+      return true;
+    }
+
+    // One snapshot per load once playback starts (tracks are known by then),
+    // and the aspect / audio-only choice re-applied to the element.
+    try {
+      const ET = cast.framework.events.EventType;
+      if (ET.PLAYER_LOADING) {
+        playerManager.addEventListener(ET.PLAYER_LOADING, function () {
+          remoteStateSentForLoad = false;
+          infoLastFrames = null;
+          infoLastAt = 0;
+          infoFps = null;
+        });
+      }
+      if (ET.PLAYER_STATE_CHANGED || ET.PLAYING) {
+        const onPlaying = function () {
+          applyRemoteVideoStyle();
+          const st = playerManager.getPlayerState();
+          if (remoteStateSentForLoad ||
+              st !== cast.framework.messages.PlayerState.PLAYING) return;
+          remoteStateSentForLoad = true;
+          sendRemoteState(undefined);
+        };
+        playerManager.addEventListener(ET.PLAYER_STATE_CHANGED || ET.PLAYING, onPlaying);
+      }
+      if (ET.RATE_CHANGE) {
+        playerManager.addEventListener(ET.RATE_CHANGE, function () {
+          if (remoteStateSentForLoad) sendRemoteState(undefined);
+        });
+      }
+    } catch (e) {
+      console.warn('AerioTV: remote state listeners not registered', e);
+    }
+
     // Answer the sender's receiver-type probe immediately, so a sender never
     // has to infer this page from silence. Registered before start() so a
     // probe that arrives with the first connection is not missed. Wrapped:
@@ -1778,6 +2131,7 @@
           answerCaps(CONTROL_NAMESPACE, event.senderId);
           return;
         }
+        if (handleRemoteCommand(cmd, data, event.senderId)) return;
         if (cmd !== 'hello') return;
         context.sendCustomMessage(CONTROL_NAMESPACE, event.senderId, {
           type: 'receiverInfo',
