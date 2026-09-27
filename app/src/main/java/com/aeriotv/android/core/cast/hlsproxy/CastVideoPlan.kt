@@ -1110,3 +1110,59 @@ object CastSpsParser {
         }
     }
 }
+
+/**
+ * Per-stage timing of the on-phone video transcode, summed over one stats
+ * interval (2026-09-27, Nothing Phone (2) sustained 42 of 50 fps). Every
+ * stage runs on the transcoder's work thread; [report] runs on the stats
+ * timer, so all access is synchronized. Pure: tested on the JVM.
+ *
+ * Stages per frame: waiting for a free decoder input buffer, decoded frames
+ * out of the decoder, waiting for the decoded frame to reach the
+ * SurfaceTexture, latch + draw, eglSwapBuffers (blocks when the encoder's
+ * input surface has no free buffer), waiting on the encoder in-flight cap.
+ */
+class CastTranscodeStageStats {
+    private var decoded = 0
+    private var renders = 0
+    private var frameWaitNs = 0L
+    private var drawNs = 0L
+    private var swapNs = 0L
+    private var renderMaxNs = 0L
+    private var inputWaitNs = 0L
+    private var capWaitNs = 0L
+    private var busyNs = 0L
+
+    @Synchronized fun noteDecoded() { decoded++ }
+
+    @Synchronized fun noteRender(frameWait: Long, draw: Long, swap: Long) {
+        renders++
+        frameWaitNs += frameWait
+        drawNs += draw
+        swapNs += swap
+        renderMaxNs = maxOf(renderMaxNs, frameWait + draw + swap)
+    }
+
+    @Synchronized fun noteInputWait(ns: Long) { inputWaitNs += ns }
+    @Synchronized fun noteCapWait(ns: Long) { capWaitNs += ns }
+    @Synchronized fun noteBusy(ns: Long) { busyNs += ns }
+
+    /** One line for [elapsedMs] of wall time; resets the sums. */
+    @Synchronized fun report(elapsedMs: Long): String {
+        val secs = maxOf(0.001, elapsedMs / 1000.0)
+        val n = maxOf(1, renders)
+        fun ms(ns: Long) = ns / 1_000_000.0
+        val line = String.format(
+            java.util.Locale.US,
+            "video transcode: stages decoded %.1f fps, rendered %.1f fps, render %.1f ms avg %.1f max " +
+                "(frame wait %.1f, draw %.1f, swap %.1f), waits decoder input %.0f ms/s encoder cap %.0f ms/s, " +
+                "work thread busy %.0f%%",
+            decoded / secs, renders / secs, ms(frameWaitNs + drawNs + swapNs) / n, ms(renderMaxNs),
+            ms(frameWaitNs) / n, ms(drawNs) / n, ms(swapNs) / n,
+            ms(inputWaitNs) / secs, ms(capWaitNs) / secs, minOf(100.0, ms(busyNs) / 10.0 / secs),
+        )
+        decoded = 0; renders = 0; frameWaitNs = 0; drawNs = 0; swapNs = 0; renderMaxNs = 0
+        inputWaitNs = 0; capWaitNs = 0; busyNs = 0
+        return line
+    }
+}

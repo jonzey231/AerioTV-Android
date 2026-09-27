@@ -267,23 +267,27 @@ class AerioCastSender @Inject constructor(
 
     /** Reads `res` / `fps` off a receiver telemetry snapshot. */
     private fun noteReceiverVideo(json: JSONObject) {
-        if (!json.has("res") || json.isNull("res")) return
-        val res = json.optString("res").takeIf { it.isNotBlank() && it != "0x0" } ?: return
-        val fps = if (json.has("fps") && !json.isNull("fps")) json.optDouble("fps").takeIf { it > 0 } else null
-        // Keep the last rate when a snapshot carries none (the first one
-        // after a load, or a stalled tick) so the stat does not blink.
-        val keep = _receiverVideo.value?.takeIf { it.resolution == res }?.fps
+        val res = json.optString("res").takeIf {
+            it.isNotBlank() && !it.startsWith("0x") && !it.endsWith("x0")
+        } ?: return
+        // Only a PLAYING tick (fps > 0) counts, exactly as on iOS. The old
+        // code let fps-less snapshots (paused / buffering ticks and event
+        // messages) through: they re-keyed the sample window on their res
+        // and republished that res with the stale "keep" rate, so the five
+        // samples were cleared before they ever filled and the line stayed
+        // "Receiver: 1280x720" with no rate (Nothing Phone, 2026-09-27).
+        // Now such a snapshot changes nothing and the last reading stays up.
+        val fps = json.optDouble("fps", Double.NaN).takeIf { !it.isNaN() && it > 0 } ?: return
         // The tick's rate is a one-second sample: the first few after a load
         // straddle the start and read 8 or 15 fps on a stream the receiver
         // then presents at 60 (iOS card, 2026-09-27). Median of the last
         // five playing ticks, nothing before five (same rule as iOS).
         if (receiverFpsResolution != res) { receiverFpsResolution = res; receiverFpsSamples.clear() }
-        if (fps != null) {
-            receiverFpsSamples.add(fps)
-            if (receiverFpsSamples.size > 5) receiverFpsSamples.removeAt(0)
-        }
-        val median = if (receiverFpsSamples.size == 5) receiverFpsSamples.sorted()[2] else keep
-        _receiverVideo.value = ReceiverVideo(res, median)
+        receiverFpsSamples.add(fps)
+        if (receiverFpsSamples.size > 5) receiverFpsSamples.removeAt(0)
+        if (receiverFpsSamples.size < 5) return
+        val next = ReceiverVideo(res, receiverFpsSamples.sorted()[2])
+        if (_receiverVideo.value != next) _receiverVideo.value = next
     }
     private var receiverFpsResolution = ""
     private val receiverFpsSamples = ArrayList<Double>(6)

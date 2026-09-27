@@ -40,7 +40,7 @@ import coil3.compose.AsyncImage
  * [com.aeriotv.android.feature.cast.CastRemoteSheet] over the current page; it
  * never takes the screen over.
  *
- *   [art]  Channel / program          [play/pause]  [x]
+ *   [art]  Channel                    [play/pause]  [x]
  *          Casting to Living Room
  *
  * Tap the row -> open the remote controls sheet.  Play/Pause -> transport on the
@@ -60,8 +60,6 @@ fun CastMiniController(
      *  this exact card with "Controlling <device>", and a session with nothing
      *  playing yet reads "Select a Channel". */
     subtitle: String? = null,
-    /** Current program on the other screen, shown under the title. */
-    programmeTitle: String? = null,
     /** Cast glyph for Google Cast, TV glyph for the AerioTV Remote transport. */
     transportIcon: ImageVector = Icons.Filled.Cast,
     /** Hidden while nothing is playing yet (there is nothing to pause). */
@@ -114,15 +112,8 @@ fun CastMiniController(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            programmeTitle?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            // TWO lines, as on iOS's RemoteSessionCard (Logan 2026-09-27):
+            // title, then the accent status. The program lives in the sheet.
             Text(
                 text = subtitle
                     ?: if (!deviceName.isNullOrBlank()) "Casting to $deviceName" else "Tap to control",
@@ -154,7 +145,8 @@ fun CastMiniController(
             Icon(
                 imageVector = Icons.Filled.Close,
                 contentDescription = stopDescription,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Accent, like the pause glyph beside it (iOS card parity).
+                tint = MaterialTheme.colorScheme.primary,
             )
         }
     }

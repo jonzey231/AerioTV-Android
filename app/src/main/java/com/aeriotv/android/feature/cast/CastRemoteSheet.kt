@@ -32,7 +32,8 @@ import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.MusicNote
@@ -49,6 +50,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -119,9 +123,9 @@ fun CastRemoteSheet(
     /** True while the sender holds a receiver stall (iOS incident
      *  2026-09-25): the status line reads "Buffering..." instead. */
     buffering: Boolean = false,
-    /** Label for the stop action: "Stop casting" for Cast, "Disconnect" for the
-     *  companion transport. */
-    stopLabel: String = "Stop casting",
+    /** Label for the stop action: "Stop Casting" for Cast (iOS wording),
+     *  "Stop" for the companion transport. */
+    stopLabel: String = "Stop Casting",
     /** Google Cast transport (Logan 2026-09-13): the skip back / skip forward 30 s
      *  buttons were only ever drawn for the AerioTV Remote transport, because
      *  the Cast receivers do not report a rewind window on the control channel.
@@ -157,71 +161,81 @@ fun CastRemoteSheet(
     androidx.compose.runtime.LaunchedEffect(Unit) { onRefreshState() }
 
     com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
+        // iOS RemoteSessionSheet.playingContent, top to bottom (Logan
+        // 2026-09-27, "Cast card doesn't match iOS"): header, program block,
+        // Channel Down / Channel Up, Back / Play-Pause / Forward, Options,
+        // Stop, then the receiver footnotes. 14 dp between blocks, as iOS's
+        // VStack(spacing: 14).
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+                .padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Header (iOS parity 2026-09-25): channel logo, channel, "Casting to
-            // <device>", programme with a LIVE badge, then its time range and
-            // progress, resolved from the guide exactly like the list rows.
-            if (!logoUrl.isNullOrBlank()) {
-                coil3.compose.AsyncImage(
-                    model = logoUrl,
-                    contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                    modifier = Modifier
-                        .size(width = 96.dp, height = 56.dp)
-                        .clip(RoundedCornerShape(10.dp)),
+            // Header: channel art (or the transport glyph), channel, then
+            // "Casting to <device>" in the accent color.
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (!logoUrl.isNullOrBlank()) {
+                    coil3.compose.AsyncImage(
+                        model = logoUrl,
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                        modifier = Modifier.size(width = 140.dp, height = 72.dp),
+                    )
+                } else {
+                    TransportGlyph(transportIcon)
+                }
+                Text(
+                    text = switchingTo?.let { "Switching to $it" }
+                        ?: channelTitle.ifBlank { "Nothing playing" },
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            } else {
-                Icon(
-                    imageVector = transportIcon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(32.dp),
+                Text(
+                    text = if (buffering && switchingTo == null) {
+                        "Buffering… on ${deviceName ?: "your TV"}"
+                    } else {
+                        "$statusVerb ${deviceName ?: "your TV"}"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.textAccent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = switchingTo?.let { "Switching to $it" }
-                    ?: channelTitle.ifBlank { "Nothing playing" },
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = if (buffering && switchingTo == null) {
-                    "Buffering\u2026 on ${deviceName ?: "your TV"}"
-                } else {
-                    "$statusVerb ${deviceName ?: "your TV"}"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.textAccent,
-            )
-            programmeTitle?.takeIf { it.isNotBlank() }?.let {
-                Spacer(Modifier.height(8.dp))
+
+            // Program block: title left, LIVE pill right, time range under it,
+            // then a full-width progress bar (an empty track when unknown,
+            // never a full one), as iOS's programBlock.
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = it,
+                        text = programmeTitle.orEmpty(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 2,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                        modifier = Modifier.weight(1f),
                     )
                     LiveBadge()
                 }
-            }
-            if (programmeEndMs > programmeStartMs && programmeStartMs > 0L) {
-                // Re-read the clock each minute so the bar advances while open.
+                val known = programmeEndMs > programmeStartMs && programmeStartMs > 0L
+                // Re-read the clock every 30 s so the bar advances while open.
                 var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
                 androidx.compose.runtime.LaunchedEffect(programmeStartMs, programmeEndMs) {
                     while (true) {
@@ -229,38 +243,42 @@ fun CastRemoteSheet(
                         kotlinx.coroutines.delay(30_000L)
                     }
                 }
-                val total = (programmeEndMs - programmeStartMs).coerceAtLeast(1L)
-                val progress = ((nowMs - programmeStartMs).toFloat() / total).coerceIn(0f, 1f)
-                val clock = com.aeriotv.android.core.ui.ClockFormat.short()
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = clock.format(java.util.Date(programmeStartMs)) + " \u2013 " +
-                        clock.format(java.util.Date(programmeEndMs)),
-                    style = MaterialTheme.typography.labelMedium.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(4.dp))
+                val progress = if (known) {
+                    ((nowMs - programmeStartMs).toFloat() / (programmeEndMs - programmeStartMs))
+                        .coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                if (known) {
+                    val clock = com.aeriotv.android.core.ui.ClockFormat.short()
+                    Text(
+                        text = clock.format(java.util.Date(programmeStartMs)) + " - " +
+                            clock.format(java.util.Date(programmeEndMs)),
+                        style = MaterialTheme.typography.bodySmall.subtext(),
+                        color = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 androidx.compose.material3.LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier
-                        .fillMaxWidth(0.7f)
-                        .height(3.dp)
+                        .fillMaxWidth()
+                        .height(4.dp)
                         .clip(RoundedCornerShape(2.dp)),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     drawStopIndicator = {},
                 )
             }
-            Spacer(Modifier.height(14.dp))
 
             // Skip Intervals setting, read live so a change re-renders.
             val backSeconds = rememberSkipBackSeconds()
             val forwardSeconds = rememberSkipForwardSeconds()
-            // Live-rewind controls: a draggable scrubber + skip FF/RW + LIVE pill.
-            // Shown as soon as the receiver reports a rewind buffer via EITHER the
-            // getState echo's canSeek or the ~1Hz position tick, so the buttons
-            // never wait a tick to appear; the draggable scrubber needs the tick's
-            // window, so it renders once position data arrives.
+            // Companion live rewind: the receiver reports a rewind buffer via
+            // EITHER the getState echo's canSeek or the ~1 Hz position tick.
+            // The scrubber (needs the tick's window) and the LIVE pill stay
+            // here; the skips are the Back / Forward buttons below, so they
+            // are never drawn twice.
             val rewindActive = position.canSeek || remoteState.canSeek
             val atLive = if (position.canSeek) position.isLive else remoteState.isLive
             if (rewindActive) {
@@ -313,93 +331,87 @@ fun CastRemoteSheet(
                         )
                     }
                 }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),
-                ) {
-                    RemoteButton(
-                        SkipIntervals.backIcon(backSeconds),
-                        SkipIntervals.backLabel(backSeconds),
-                        { onSeekBy(-backSeconds * 1_000L) },
-                    )
-                    if (!atLive) {
-                        GoLivePill(onClick = onGoLive)
-                    }
-                    RemoteButton(
-                        SkipIntervals.forwardIcon(forwardSeconds),
-                        SkipIntervals.forwardLabel(forwardSeconds),
-                        { onSeekBy(forwardSeconds * 1_000L) },
-                    )
+                if (!atLive) {
+                    GoLivePill(onClick = onGoLive)
                 }
             }
+
+            // Everything but Stop is inert (and dimmed to 40%) while a flip is
+            // warming up, as iOS's connecting mode.
+            val enabled = switchingTo == null
+            val groupAlpha = if (enabled) 1f else 0.4f
+            // Row 1: Channel Down, Channel Up.
+            if (canChangeChannel) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    LabeledRemoteButton(Icons.Filled.KeyboardArrowDown, "Channel Down", onChannelDown, enabled, groupAlpha)
+                    LabeledRemoteButton(Icons.Filled.KeyboardArrowUp, "Channel Up", onChannelUp, enabled, groupAlpha)
+                }
+            }
+            // Row 2: Back, Play / Pause, Forward, in equal fixed-width columns
+            // so unequal labels cannot pull the row off center.
+            val skipEnabled = enabled && (rewindActive || (showInlineSkip && inlineSkipEnabled))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.Top,
             ) {
-                if (canChangeChannel) {
-                    RemoteButton(Icons.Filled.KeyboardArrowDown, "Channel down", onChannelDown)
-                }
-                // Only when the dedicated rewind row above is absent, so the two
-                // transports never draw the skips twice.
-                val inlineSkip = showInlineSkip && !rewindActive
-                if (inlineSkip) {
-                    RemoteButton(
-                        SkipIntervals.backIcon(backSeconds),
-                        SkipIntervals.backLabel(backSeconds),
-                        { onSeekBy(-backSeconds * 1_000L) },
-                        enabled = inlineSkipEnabled,
-                    )
-                }
-                RemoteButton(
-                    icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    desc = if (isPlaying) "Pause" else "Play",
-                    onClick = onTogglePlayPause,
-                    emphasized = true,
+                LabeledRemoteButton(
+                    SkipIntervals.backIcon(backSeconds),
+                    "Back ${backSeconds}s",
+                    { onSeekBy(-backSeconds * 1_000L) },
+                    skipEnabled,
+                    groupAlpha,
                 )
-                if (inlineSkip) {
-                    RemoteButton(
-                        SkipIntervals.forwardIcon(forwardSeconds),
-                        SkipIntervals.forwardLabel(forwardSeconds),
-                        { onSeekBy(forwardSeconds * 1_000L) },
-                        enabled = inlineSkipEnabled,
-                    )
-                }
-                if (canChangeChannel) {
-                    RemoteButton(Icons.Filled.KeyboardArrowUp, "Channel up", onChannelUp)
-                }
-                RemoteButton(Icons.Filled.Tune, "Options", {
+                PlayPauseButton(isPlaying, onTogglePlayPause, enabled, groupAlpha)
+                LabeledRemoteButton(
+                    SkipIntervals.forwardIcon(forwardSeconds),
+                    "Forward ${forwardSeconds}s",
+                    { onSeekBy(forwardSeconds * 1_000L) },
+                    skipEnabled,
+                    groupAlpha,
+                )
+            }
+            WideButton(
+                icon = Icons.AutoMirrored.Filled.List,
+                label = "Options",
+                contentColor = Color.White,
+                background = Color.White.copy(alpha = 0.12f),
+                enabled = enabled,
+                modifier = Modifier.alpha(groupAlpha),
+                onClick = {
                     onRefreshState()
                     optionsOpen = true
-                })
-            }
-            Spacer(Modifier.height(16.dp))
-            // Red full-width stop, as on iOS ("Stop casting" / "Stop").
-            androidx.compose.material3.Button(
+                },
+            )
+            // Red text and stop glyph on translucent red, as iOS.
+            WideButton(
+                icon = Icons.Filled.Stop,
+                label = stopLabel,
+                contentColor = STOP_RED,
+                background = STOP_RED.copy(alpha = 0.15f),
                 onClick = onStopCasting,
-                modifier = Modifier.fillMaxWidth(),
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFD32F2F),
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text(stopLabel, fontWeight = FontWeight.SemiBold)
-            }
+            )
             // Under Stop, as on iOS (Logan 2026-09-27: the resolution lines
             // belong in the expanded sheet, not the collapsed card).
             if (castDetailLines.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                castDetailLines.forEach { line ->
-                    Text(
-                        text = line,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    castDetailLines.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.height(18.dp))
         }
     }
 
@@ -571,43 +583,46 @@ fun CastIdleSheet(
     onChangeDevice: () -> Unit,
     onDismiss: () -> Unit,
     transportIcon: ImageVector = Icons.Filled.Cast,
+    statusText: String = "Connected. Select a channel to start.",
 ) {
+    // iOS RemoteSessionSheet.idleContent: glyph, device name, accent status,
+    // one wide "Change Cast Device" button, 14 dp apart.
     com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+                .padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Icon(
-                imageVector = transportIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp),
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = deviceName ?: "your TV",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Connected. Select a channel to start.",
-                style = MaterialTheme.typography.bodyMedium.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(18.dp))
-            androidx.compose.material3.OutlinedButton(
-                onClick = onChangeDevice,
-                modifier = Modifier.fillMaxWidth(),
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("Change Cast Device")
+                TransportGlyph(transportIcon)
+                Text(
+                    text = deviceName ?: "your TV",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.textAccent,
+                    maxLines = 2,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
-            Spacer(Modifier.height(18.dp))
+            WideButton(
+                icon = transportIcon,
+                label = "Change Cast Device",
+                contentColor = Color.White,
+                background = Color.White.copy(alpha = 0.12f),
+                onClick = onChangeDevice,
+            )
         }
     }
 }
@@ -621,71 +636,156 @@ private fun CastControl.Track.toSubtitleTrack(): SubtitleTrack =
 private fun speedLabel(speed: Float): String =
     if (kotlin.math.abs(speed - 1f) < 0.01f) "Normal" else "${speed}x"
 
+/** iOS's system red in dark mode, for Stop and the LIVE pill. */
+private val STOP_RED = Color(0xFFFF453A)
+
+/** The shared column width of the transport rows (iOS buttonColumnWidth):
+ *  "Forward 60s" is wider than "Back 5s", and unequal columns pulled the
+ *  row's center off the sheet's. */
+private val REMOTE_COLUMN_WIDTH = 104.dp
+
+/** The transport glyph in a fixed 56 dp box, accent-tinted (iOS transportGlyph). */
 @Composable
-private fun RemoteButton(
-    icon: ImageVector,
-    desc: String,
-    onClick: () -> Unit,
-    emphasized: Boolean = false,
-    enabled: Boolean = true,
-) {
-    val size = if (emphasized) 60.dp else 48.dp
-    val contentAlpha = if (enabled) 1f else 0.35f
-    // Every button sits in the same fixed-width column (iOS parity,
-    // 2026-09-27): unequal button sizes or labels ("Forward 60s" vs
-    // "Back 5s") then cannot shift where the row's center lands.
-    Box(
-        modifier = Modifier.width(REMOTE_COLUMN_WIDTH),
-        contentAlignment = Alignment.Center,
-    ) {
-    Box(
-        modifier = Modifier
-            // required: the 60 dp Play / Pause may overhang its column
-            // evenly on both sides instead of being squeezed into it.
-            .requiredSize(size)
-            .clip(CircleShape)
-            .background(
-                if (emphasized) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        IconButton(onClick = onClick, enabled = enabled) {
-            Icon(
-                imageVector = icon,
-                contentDescription = desc,
-                tint = (
-                    if (emphasized) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                    ).copy(alpha = contentAlpha),
-                modifier = Modifier.size(if (emphasized) 30.dp else 24.dp),
-            )
-        }
-    }
+private fun TransportGlyph(icon: ImageVector) {
+    Box(modifier = Modifier.height(56.dp), contentAlignment = Alignment.Center) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(40.dp),
+        )
     }
 }
 
-/** The shared column width of the transport rows' buttons. Six columns
- *  (Channel Down, Back, Play / Pause, Forward, Channel Up, Options) at 56 dp
- *  plus 2 dp gaps keep the row no wider than before (346 dp vs 350 dp). */
-private val REMOTE_COLUMN_WIDTH = 56.dp
+/** A 52 dp circle on 12% white with a caption under it (iOS labeledButton). */
+@Composable
+private fun LabeledRemoteButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    groupAlpha: Float = 1f,
+) {
+    Column(
+        modifier = Modifier
+            .width(REMOTE_COLUMN_WIDTH)
+            .alpha(if (enabled) 1f else minOf(groupAlpha, 0.4f))
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = label },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.8f),
+            maxLines = 1,
+        )
+    }
+}
 
-/** Small red LIVE badge beside the programme title. */
+/** The 72 dp accent Play / Pause with its "Pause" / "Play" caption. */
+@Composable
+private fun PlayPauseButton(
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    groupAlpha: Float,
+) {
+    val label = if (isPlaying) "Pause" else "Play"
+    Column(
+        modifier = Modifier
+            .width(REMOTE_COLUMN_WIDTH)
+            .alpha(groupAlpha)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = label },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = null,
+                // Black on the accent, as iOS.
+                tint = Color.Black,
+                modifier = Modifier.size(36.dp),
+            )
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.8f),
+        )
+    }
+}
+
+/** Full-width icon + label button, 14 dp corners (iOS wideButton). */
+@Composable
+private fun WideButton(
+    icon: ImageVector,
+    label: String,
+    contentColor: Color,
+    background: Color,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(background)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(20.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+        )
+    }
+}
+
+/** Red dot + red LIVE on a red-tinted capsule, as iOS's program block. */
 @Composable
 private fun LiveBadge() {
-    Text(
-        text = "LIVE",
-        color = Color.White,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
+    Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(Color(0xFFD32F2F))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
+            .clip(RoundedCornerShape(50))
+            .background(STOP_RED.copy(alpha = 0.15f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(STOP_RED))
+        Text(
+            text = "LIVE",
+            color = STOP_RED,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
 }
 
 /** Red "LIVE" pill shown while the cast is rewound; tap returns to the live edge. */

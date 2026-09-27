@@ -261,7 +261,6 @@ fun CastTransportCard(
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
                 else -> null
             },
-            programmeTitle = programmeTitle,
             transportIcon = if (isCompanion) Icons.Filled.Tv else Icons.Filled.Cast,
             showTransport = hasContent,
             stopDescription = if (isCompanion) "Stop playback" else "Stop casting",
@@ -282,6 +281,7 @@ fun CastTransportCard(
     if (sheetOpen && idleCast) {
         CastIdleSheet(
             deviceName = deviceName,
+            statusText = "Connected. Select a channel to start.",
             onChangeDevice = {
                 Log.i(TAG, "[Cast] idle sheet: change device")
                 sheetOpen = false
@@ -325,7 +325,7 @@ fun CastTransportCard(
             position = position,
             transportIcon = if (isCompanion) Icons.Filled.Tv else Icons.Filled.Cast,
             statusVerb = if (isCompanion) "Controlling" else "Casting to",
-            stopLabel = if (isCompanion) "Stop" else "Stop casting",
+            stopLabel = if (isCompanion) "Stop" else "Stop Casting",
             // Only the companion transport can be dropped while the TV plays on.
             onDisconnect = if (isCompanion) ({ disconnectCompanionOnly() }) else null,
             canChangeChannel = currentChannel != null,

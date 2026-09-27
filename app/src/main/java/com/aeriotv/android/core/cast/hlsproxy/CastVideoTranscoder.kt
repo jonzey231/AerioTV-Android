@@ -133,6 +133,8 @@ class CastVideoTranscoder(
         private const val STALL_MS = 2_000L
         private const val FRAME_WAIT_MS = 500L
         private const val DEQUEUE_TIMEOUT_US = 10_000L
+        /** Blocking wait on decoder output while its input is full. */
+        private const val OUTPUT_WAIT_US = 2_000L
         private const val POLL_MS = 10L
         private const val POLL_IDLE_MS = 1_000L
 
@@ -209,6 +211,8 @@ class CastVideoTranscoder(
     private val bufferInfo = MediaCodec.BufferInfo()
 
     private val frameSync = Object()
+    /** Per-stage timing, logged beside the encoded fps line. */
+    private val stages = CastTranscodeStageStats()
     private var frameAvailable = false
 
     // ---- stats and thermal ----
@@ -300,7 +304,9 @@ class CastVideoTranscoder(
                     pending.removeFirst()
                 }
             } ?: break
+            val t0 = System.nanoTime()
             process(frame)
+            stages.noteBusy(System.nanoTime() - t0)
         }
         schedulePoll()
     }
@@ -320,8 +326,10 @@ class CastVideoTranscoder(
             pollScheduled = false
             if (isStopped) return
             val before = decoderHeld + rendered.size
+            val t0 = System.nanoTime()
             drainDecoder()
             drainEncoder(0)
+            stages.noteBusy(System.nanoTime() - t0)
             val after = decoderHeld + rendered.size
             val now = SystemClock.elapsedRealtime()
             if (after != before) lastProgressMs = now
@@ -349,17 +357,30 @@ class CastVideoTranscoder(
         }
         try {
             val deadline = SystemClock.elapsedRealtime() + STALL_MS
-            var index: Int
-            while (true) {
-                index = decoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
-                if (index >= 0) break
-                drainDecoder()
-                drainEncoder(0)
-                if (isStopped || this.decoder !== decoder) return
-                if (SystemClock.elapsedRealtime() > deadline) {
-                    fail("decoder stalled with no free input buffer")
-                    return
+            var index = decoder.dequeueInputBuffer(0)
+            if (index < 0) {
+                // No free input buffer: the decoder is waiting for its
+                // outputs to be taken. Block on the OUTPUT side (returns the
+                // moment a frame is ready) instead of a 10 ms input timeout,
+                // which quantized every full-queue wait to 10 ms while ready
+                // frames sat in the decoder (2026-09-27, 42 of 50 fps).
+                val waitStart = System.nanoTime()
+                while (true) {
+                    drainDecoder(OUTPUT_WAIT_US)
+                    drainEncoder(0)
+                    if (isStopped || this.decoder !== decoder) {
+                        stages.noteInputWait(System.nanoTime() - waitStart)
+                        return
+                    }
+                    index = decoder.dequeueInputBuffer(0)
+                    if (index >= 0) break
+                    if (SystemClock.elapsedRealtime() > deadline) {
+                        stages.noteInputWait(System.nanoTime() - waitStart)
+                        fail("decoder stalled with no free input buffer")
+                        return
+                    }
                 }
+                stages.noteInputWait(System.nanoTime() - waitStart)
             }
             val buf = decoder.getInputBuffer(index) ?: run {
                 noteError("decoder gave no input buffer")
@@ -413,11 +434,13 @@ class CastVideoTranscoder(
     }
 
     /** Pull every decoded frame the decoder has ready; render or drop. */
-    private fun drainDecoder() {
+    private fun drainDecoder(firstTimeoutUs: Long = 0) {
         val decoder = decoder ?: return
         try {
+            var timeout = firstTimeoutUs
             while (!isStopped) {
-                val idx = decoder.dequeueOutputBuffer(bufferInfo, 0)
+                val idx = decoder.dequeueOutputBuffer(bufferInfo, timeout)
+                timeout = 0
                 if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) break
                 if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     onDecoderFormat(decoder)
@@ -425,6 +448,7 @@ class CastVideoTranscoder(
                 }
                 if (idx < 0) continue // buffers changed
                 decoderHeld = maxOf(0, decoderHeld - 1)
+                stages.noteDecoded()
                 consecutiveErrors = 0
                 val ticks = usToTicks(bufferInfo.presentationTimeUs)
                 val render = admitDecoded(ticks)
@@ -459,17 +483,29 @@ class CastVideoTranscoder(
         if (spec.frameStep > 1 && (presentedIndex - 1) % spec.frameStep != 0) return false
         // In-flight cap: wait here (the work thread), never on the ingest.
         if (rendered.size >= MAX_IN_FLIGHT) {
+            val waitStart = System.nanoTime()
+            try {
+                waitForEncoderRoom()
+            } finally {
+                stages.noteCapWait(System.nanoTime() - waitStart)
+            }
+            if (encoder == null) return false
+        }
+        return !isStopped && encoder != null
+    }
+
+    private fun waitForEncoderRoom() {
+        run {
             val deadline = SystemClock.elapsedRealtime() + STALL_MS
             while (rendered.size >= MAX_IN_FLIGHT && !isStopped) {
                 drainEncoder(DEQUEUE_TIMEOUT_US)
-                if (encoder == null) return false
+                if (encoder == null) return
                 if (SystemClock.elapsedRealtime() > deadline) {
                     fail("encoder stalled with $MAX_IN_FLIGHT frames in flight")
-                    return false
+                    return
                 }
             }
         }
-        return !isStopped && encoder != null
     }
 
     /** The decoder just released [ticks] to the SurfaceTexture: wait for it,
@@ -477,6 +513,7 @@ class CastVideoTranscoder(
     private fun renderToEncoder(ticks: Long) {
         val gl = gl ?: return
         val encoder = encoder ?: return
+        val t0 = System.nanoTime()
         synchronized(frameSync) {
             val deadline = SystemClock.elapsedRealtime() + FRAME_WAIT_MS
             while (!frameAvailable && !isStopped) {
@@ -497,9 +534,12 @@ class CastVideoTranscoder(
                 lastKeyPts = ticks
                 encoder.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
             }
+            val t1 = System.nanoTime()
             gl.draw()
             val us = ticksToUs(ticks)
+            val t2 = System.nanoTime()
             gl.swap(us * 1000)
+            stages.noteRender(t1 - t0, t2 - t1, System.nanoTime() - t2)
             rendered.addLast(us to ticks)
             synchronized(lock) { inFlightSnapshot = rendered.size }
         } catch (e: RuntimeException) {
@@ -668,7 +708,12 @@ class CastVideoTranscoder(
             fail("hardware $sourceLabel decoder unavailable (none for ${source.width}x${source.height})")
             return false
         }
-        val format = MediaFormat.createVideoFormat(mime, source.width, source.height).apply {
+        val lowLatency = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && runCatching {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { it.name == name }
+                ?.getCapabilitiesForType(mime)
+                ?.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency) == true
+        }.getOrDefault(false)
+        fun format(boost: Boolean) = MediaFormat.createVideoFormat(mime, source.width, source.height).apply {
             val start = byteArrayOf(0, 0, 0, 1)
             if (sourceIsHevc) {
                 // HEVC takes VPS + SPS + PPS as one Annex B csd-0.
@@ -682,6 +727,16 @@ class CastVideoTranscoder(
             }
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(2 * 1024 * 1024, source.width * source.height))
             setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
+            if (boost) {
+                // Without an operating rate the vendor decoder sizes its
+                // clocks for the content rate (or 30 fps when it has none),
+                // while this decoder must run as fast as the backlog allows.
+                // Short.MAX_VALUE is the documented "as fast as possible".
+                source.fps?.let { setFloat(MediaFormat.KEY_FRAME_RATE, it.toFloat()) }
+                setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+                // Hand frames out as soon as they are decodable.
+                if (lowLatency) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
             // Preferred tone map: ask the platform decoder for SDR output
             // (API 33+). It maps with the vendor's own curve into the same
             // SurfaceTexture, so the GPU path below stays a plain copy.
@@ -689,20 +744,42 @@ class CastVideoTranscoder(
                 setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
             }
         }
+        var boosted = true
         val codec = try {
-            MediaCodec.createByCodecName(name).also {
-                it.configure(format, gl.decoderSurface, null, 0)
-                it.start()
-            }
+            startDecoder(name, format(boost = true), gl)
         } catch (e: Exception) {
-            fail("hardware $sourceLabel decoder unavailable (${describe(e)})")
-            return false
+            log("video transcode: decoder refused operating rate / low latency (${describe(e)}); plain config")
+            boosted = false
+            try {
+                startDecoder(name, format(boost = false), gl)
+            } catch (e2: Exception) {
+                fail("hardware $sourceLabel decoder unavailable (${describe(e2)})")
+                return false
+            }
+        }
+        if (decoderName.isEmpty()) {
+            log(
+                "video transcode: decoder $name (${if (boosted) "operating rate max" else "default clocks"}" +
+                    "${if (boosted && lowLatency) ", low latency" else ""})",
+            )
         }
         applyToneMapPath(codec, gl)
         decoder = codec
         decoderName = name
         decoderParams = parameterSets
         return true
+    }
+
+    private fun startDecoder(name: String, format: MediaFormat, gl: GlScaler): MediaCodec {
+        val c = MediaCodec.createByCodecName(name)
+        try {
+            c.configure(format, gl.decoderSurface, null, 0)
+            c.start()
+        } catch (e: Exception) {
+            runCatching { c.release() }
+            throw e
+        }
+        return c
     }
 
     /**
@@ -723,11 +800,28 @@ class CastVideoTranscoder(
             }
             return
         }
-        platformToneMap = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && runCatching {
+        fun echoed() = runCatching {
             val f = codec.outputFormat
             f.containsKey(MediaFormat.KEY_COLOR_TRANSFER_REQUEST) &&
                 f.getInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST) == MediaFormat.COLOR_TRANSFER_SDR_VIDEO
         }.getOrDefault(false)
+        platformToneMap = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && echoed()
+        if (!platformToneMap && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Second chance: the same request as a runtime parameter. Some
+            // Codec2 builds only read it there. Cheap; the shader stays the
+            // fallback and INFO_OUTPUT_FORMAT_CHANGED re-checks the result.
+            runCatching {
+                codec.setParameters(
+                    Bundle().apply {
+                        putInt(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                    },
+                )
+            }
+            platformToneMap = echoed()
+            if (!toneMapLogged) {
+                log("video transcode: SDR request via setParameters ${if (platformToneMap) "accepted" else "ignored too"}")
+            }
+        }
         gl.toneMap = if (platformToneMap) null else from
         if (!toneMapLogged) {
             toneMapLogged = true
@@ -808,6 +902,11 @@ class CastVideoTranscoder(
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Math.round(keySeconds + 1).toInt())
                 }
                 setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
+                // Clock for the backlog, not just the content rate: after a
+                // burst the encoder has to run above real time to catch up.
+                if (profile != EncoderProfile.NONE) {
+                    setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) setInteger(MediaFormat.KEY_LATENCY, 1)
                 if (withBitrateMode) {
@@ -1036,10 +1135,12 @@ class CastVideoTranscoder(
 
     private fun logStats() {
         val line: String
+        var elapsedMs = 0L
         synchronized(lock) {
             if (released || failed) return
             val now = SystemClock.elapsedRealtime()
-            val elapsed = maxOf(0.001, (now - statsStartedAt) / 1000.0)
+            elapsedMs = now - statsStartedAt
+            val elapsed = maxOf(0.001, elapsedMs / 1000.0)
             statsStartedAt = now
             val fps = encodedSinceStats / elapsed
             encodedSinceStats = 0
@@ -1059,6 +1160,7 @@ class CastVideoTranscoder(
             line = sb.toString()
         }
         log(line)
+        log(stages.report(elapsedMs))
     }
 
     private fun currentThermal(): Int =
