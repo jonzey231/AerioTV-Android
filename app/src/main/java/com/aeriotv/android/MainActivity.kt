@@ -980,7 +980,8 @@ class MainActivity : ComponentActivity() {
         // Cast Connect (GH #33) SENDER: warm CastContext so the phone/tablet can
         // discover cast devices and show the Cast button. No-op on a Cast-disabled
         // build (no App ID) or a device without Google Play services.
-        runCatching { castSender.warm(this) }
+        // Skipped on TV: the TV is a Cast Connect RECEIVER (CastReceiverContext), never a sender.
+        if (!isTelevisionDevice()) runCatching { castSender.warm(this) }
         // Cast Connect (GH #33): observe validated cast loads and route each into
         // the SAME deep-link path a channel/vod tap uses, so the fullscreen player
         // mounts the persistent surface and plays the raw TS with video enabled.

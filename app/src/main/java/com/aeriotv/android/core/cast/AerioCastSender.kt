@@ -981,14 +981,15 @@ class AerioCastSender @Inject constructor(
     fun warm(context: Context) {
         if (warmed || !castConfigured) return
         appContext = context.applicationContext
-        val ok = runCatching {
+        val result = runCatching {
             val cc = CastContext.getSharedInstance(context.applicationContext)
             cc.addCastStateListener(castStateListener)
             cc.sessionManager.addSessionManagerListener(sessionListener, CastSession::class.java)
             onCastState(cc.castState)
             Log.i(TAG, "warm ok; castState=${cc.castState} appId=${BuildConfig.CAST_RECEIVER_APP_ID}")
-        }.isSuccess
-        if (!ok) Log.w(TAG, "warm FAILED (no Play services, or invalid app id?)")
+        }
+        val ok = result.isSuccess
+        if (!ok) Log.w(TAG, "warm FAILED: ${result.exceptionOrNull()}")
         warmed = ok
         if (!ok) return
         // Drive route discovery while the app is foregrounded so CastState
