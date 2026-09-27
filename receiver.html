@@ -1517,8 +1517,10 @@
         // Pipeline experiment (2026-09-26): customData.pipeline === 'mpl'
         // plays this load (muxed MPEG-TS HLS) with the legacy Media Player
         // Library instead of Shaka/MSE. Every other load keeps Shaka.
-        const wantMpl = !!(loadRequestData.customData &&
-          loadRequestData.customData.pipeline === 'mpl');
+        const mediaCD = loadRequestData.media && loadRequestData.media.customData;
+        const wantMpl = !!((loadRequestData.customData &&
+          loadRequestData.customData.pipeline === 'mpl') ||
+          (mediaCD && mediaCD.pipeline === 'mpl'));
         loadPipeline = wantMpl ? 'mpl' : 'shaka';
         try {
           let cfg = playbackConfig;
