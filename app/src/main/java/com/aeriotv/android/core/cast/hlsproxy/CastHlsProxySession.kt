@@ -116,7 +116,12 @@ class CastHlsProxySession @Inject constructor(
     private val client by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            // 15 s like the iOS proxy (timeoutIntervalForRequest = 15): the
+            // Dispatcharr proxy sends bursts 8 to 11 s apart, so 15 s of
+            // silence is a dead feed. At 60 s the Nothing Phone sat on a
+            // silent socket for a minute before reconnecting while the
+            // receiver had drained (2026-09-27 10:51:16 to 10:52:16).
+            .readTimeout(15, TimeUnit.SECONDS)
             .followRedirects(true)
             // Ingest network policy (iOS incident 2026-09-25, Apple 2ceaaed):
             // logging only. The client is not bound to a Network, so the
