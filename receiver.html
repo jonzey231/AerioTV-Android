@@ -544,6 +544,10 @@
     // queued at and does nothing if a new load has begun since; see
     // unloadMediaElement's callers.
     let loadGeneration = 0;
+    // Playback pipeline of the current load: 'shaka' (Shaka/MSE, the
+    // default) or 'mpl' (legacy Media Player Library, selected per load by
+    // the sender's customData.pipeline for the muxed TS experiment).
+    let loadPipeline = 'shaka';
 
     // ---- measured MSE codec support (replaces the senders' model guess) ----
     //
@@ -838,6 +842,7 @@
     // for the instance, so this is best effort: whatever is reachable is
     // reported and the rest comes through as absent rather than as a guess.
     function shakaStats() {
+      if (loadPipeline === 'mpl') return {};
       let stats = null;
       try {
         const player = playerManager.getPlayer && playerManager.getPlayer();
@@ -882,6 +887,7 @@
     // version exposes the track list. Compared against fps= this says whether
     // the receiver is presenting every frame the stream declares.
     function variantFrameRate() {
+      if (loadPipeline === 'mpl') return null;
       try {
         const player = playerManager.getPlayer && playerManager.getPlayer();
         const tracks = player && player.getVariantTracks ?
@@ -918,6 +924,7 @@
       const payload = {
         type: 'state',
         ev: ev,
+        pipeline: loadPipeline,
         // Repeated here so the senders learn the measurement even if they
         // attached the debug channel after the READY message went out.
         mse: mseCapabilities(),
@@ -1059,6 +1066,7 @@
       // buffered range the whole time, so a gap jump was never going to
       // help and neither is a test for one.
       if (stuckTicks < 3) return;
+      if (loadPipeline === 'mpl') { stuckTicks = 0; return; }
       // Three seconds of a motionless playhead is NOT on its own a reason to
       // move it. On 2026-09-12 at 16:30 it was the reason the receiver threw
       // the picture away: Shaka's live seek range had collapsed to one
@@ -1135,6 +1143,9 @@
     }
 
     function resyncPlayhead(ev) {
+      // The resync corrects Shaka's start-position / MSE append ordering;
+      // MPL owns its own playhead, so never seek under it.
+      if (loadPipeline === 'mpl') return skipSeek(ev, 'mpl');
       const video = mediaElement();
       if (!video) return skipSeek(ev, 'noElement');
       // Never seek an element that has no timeline yet, and never stack a
@@ -1503,6 +1514,28 @@
         // One 1 s rAF measurement per load, reported as ev=raf.
         measureRefreshRate();
         showLoading();
+        // Pipeline experiment (2026-09-26): customData.pipeline === 'mpl'
+        // plays this load (muxed MPEG-TS HLS) with the legacy Media Player
+        // Library instead of Shaka/MSE. Every other load keeps Shaka.
+        const wantMpl = !!(loadRequestData.customData &&
+          loadRequestData.customData.pipeline === 'mpl');
+        loadPipeline = wantMpl ? 'mpl' : 'shaka';
+        try {
+          let cfg = playbackConfig;
+          if (!cfg && playerManager.getPlaybackConfig) {
+            cfg = playerManager.getPlaybackConfig();
+          }
+          if (cfg && (wantMpl || cfg.useShakaForHls === false)) {
+            cfg.useShakaForHls = !wantMpl;
+            playerManager.setPlaybackConfig(cfg);
+          }
+        } catch (e) {
+          console.warn('AerioTV: could not set useShakaForHls', e);
+        }
+        if (wantMpl) {
+          console.log('AerioTV: pipeline=mpl (useShakaForHls=false)');
+          sendReceiverSnapshot('pipeline=mpl');
+        }
         const media = loadRequestData.media;
         if (media) {
           media.contentType = media.contentType || 'video/mp4';
