@@ -286,6 +286,14 @@ class CastHlsProxySession @Inject constructor(
      *  sender's cast load log line. */
     @Volatile private var audioCodec: String = ""
 
+    /** The sender's video plan for the current channel (receiver caps plus
+     *  the Developer switches); the remuxer applies it at the source SPS. */
+    @Volatile private var videoPlan: CastVideoPlan = CastVideoPlan.PASSTHROUGH
+
+    /** Set when the on-phone video transcode fails: every later remuxer of
+     *  this proxy session passes H.264 through. Cleared by [stop]. */
+    @Volatile private var videoTranscodeDisabledReason: String? = null
+
     /**
      * Outcome of a successful [startChannel]: the playlist URL to hand to
      * MediaInfo.contentUrl, plus what the sender needs for its load log
@@ -335,11 +343,13 @@ class CastHlsProxySession @Inject constructor(
         headers: Map<String, String>,
         allowAc3Passthrough: Boolean = false,
         h264Level42Supported: Boolean = false,
+        videoPlan: CastVideoPlan = CastVideoPlan.PASSTHROUGH,
         @Suppress("UNUSED_PARAMETER") onNotice: ((String) -> Unit)? = null,
     ): Started = kotlinx.coroutines.withContext(Dispatchers.IO) {
         // The sender calls from its Main scope; the socket bind and the
         // address walk below are not Main-thread work.
         server.setReceiverH264Level42(h264Level42Supported)
+        this@CastHlsProxySession.videoPlan = videoPlan
         Started(
             demuxedPlaylistUrl = startChannelBlocking(rawTsUrl, headers, allowAc3Passthrough, false) +
                 "/demuxed.m3u8",
@@ -440,6 +450,7 @@ class CastHlsProxySession @Inject constructor(
         val hadSession = activeUrl != null || server.isRunning
         activeUrl = null
         stopIngest()
+        videoTranscodeDisabledReason = null
         stopLinkLog()
         stopNetworkWatch()
         server.stop()
@@ -483,6 +494,16 @@ class CastHlsProxySession @Inject constructor(
                 // with an unknown clock phase, so the remuxer realigns
                 // (sync scan, wait for SPS/PPS + keyframe) and the server
                 // presents the restart as a playlist discontinuity.
+                // Transcoder output enters the remuxer on the codec thread;
+                // this lock serializes it with feed and release. A delivery
+                // after release is dropped by the remuxer itself.
+                val remuxLock = Any()
+                val delivery: CastIngestDelivery = { block -> synchronized(remuxLock) { block() } }
+                var plan = videoPlan
+                videoTranscodeDisabledReason?.let { reason ->
+                    plan = plan.copy(disabledReason = "transcode failed earlier this session: $reason")
+                }
+                var remuxerRef: TsToFmp4Remuxer? = null
                 val remuxer = TsToFmp4Remuxer(object : TsToFmp4Remuxer.Listener {
                     private var segmentsLogged = 0
                     private var rollupBytes = 0L
@@ -506,6 +527,7 @@ class CastHlsProxySession @Inject constructor(
                     private var localSeq = 0
 
                     override fun onInitSegments(video: ByteArray, audio: ByteArray?) {
+                        server.setVideoTranscoded(currentGen, remuxerRef?.videoIsTranscoded == true)
                         server.setInitSegments(currentGen, video, audio)
                         debugLog(
                             context, TAG,
@@ -598,7 +620,26 @@ class CastHlsProxySession @Inject constructor(
                     override fun onAudioCodec(name: String) {
                         audioCodec = name
                     }
-                }, log = { msg -> debugLog(context, TAG, msg) }, allowAc3Passthrough = allowAc3Passthrough)
+
+                    override fun onVideoTranscodeFailed(reason: String) {
+                        // The next feed throws and the ingest reconnects
+                        // with a passthrough remuxer.
+                        videoTranscodeDisabledReason = reason
+                    }
+                },
+                    log = { msg -> debugLog(context, TAG, msg) },
+                    allowAc3Passthrough = allowAc3Passthrough,
+                    videoPlan = plan,
+                    videoDelivery = delivery,
+                    videoTranscoderFactory = { info, spec, keyTicks, sink, deliver ->
+                        CastVideoTranscoder(
+                            context, info, spec, keyTicks, sink, deliver,
+                            log = { msg -> debugLog(context, TAG, msg) },
+                        )
+                    },
+                )
+                remuxerRef = remuxer
+                var transcodeFallback = false
                 var endedCleanly = false
                 try {
                     val req = Request.Builder().url(url).apply {
@@ -649,10 +690,15 @@ class CastHlsProxySession @Inject constructor(
                             }
                             if (n > 0) {
                                 linkIngestBytes.addAndGet(n.toLong())
-                                remuxer.feed(buf, 0, n)
+                                synchronized(remuxLock) { remuxer.feed(buf, 0, n) }
                             }
                         }
                     }
+                } catch (e: CastVideoTranscodeException) {
+                    // Fallback: a fresh remuxer, built with the plan
+                    // disabled, passes H.264 through from the next IDR.
+                    debugLogWarn(context, TAG, "${e.message}; reconnecting with H.264 passthrough")
+                    transcodeFallback = true
                 } catch (e: UnsupportedCodecException) {
                     // Terminal by design: nothing in this path is ever
                     // re-encoded, so audio outside AAC and the AC-3 family
@@ -669,9 +715,13 @@ class CastHlsProxySession @Inject constructor(
                         debugLogWarn(context, TAG, "ingest stream error: $t")
                     }
                 } finally {
-                    remuxer.release()
+                    synchronized(remuxLock) { remuxer.release() }
                 }
                 if (!currentCoroutineContext().isActive) break
+                if (transcodeFallback) {
+                    currentGen = server.beginGeneration()
+                    continue
+                }
                 if (endedCleanly) {
                     val verifier = com.aeriotv.android.core.playback.StreamEndVerifier
                     val now = android.os.SystemClock.elapsedRealtime()

@@ -21,14 +21,17 @@ class UnsupportedCodecException(
 
 /**
  * MPEG-TS to fragmented-MP4 (CMAF) remuxer for the phone-local cast HLS
- * proxy (GH #33 web-receiver rework). H.264 video is pure passthrough
- * (Annex B in PES, converted to length-prefixed avc1 samples) and audio
- * is pure passthrough too: ADTS AAC (headers stripped, config carried in
+ * proxy (GH #33 web-receiver rework). H.264 video is passthrough (Annex
+ * B in PES, converted to length-prefixed avc1 samples) unless the
+ * sender's [CastVideoPlan] asks for the on-phone transcode (2026-09-26),
+ * in which case the access units go through [CastVideoTranscoder] and the
+ * video track becomes hvc1 (HEVC) or a re-encoded avc1 (H.264 High 4.1).
+ * Audio is pure passthrough: ADTS AAC (headers stripped, config carried in
  * esds) or, when [allowAc3Passthrough] is set because the receiver
  * decodes it, AC-3 / E-AC-3 syncframes in an ac-3 / ec-3 sample entry
  * with its dac3 / dec3 config box.
  *
- * No transcoding, in either direction: casting a Dispatcharr channel
+ * No audio transcoding: casting a Dispatcharr channel
  * requests the server's built-in "Web Player (AAC Audio)" output profile
  * (one server-side transcode shared by every client that asks for it),
  * so the common AC-3 lineup arrives here as stereo AAC already. The old
@@ -59,7 +62,9 @@ class UnsupportedCodecException(
  *    per-track unwrapper.
  *
  * Threading: single-caller. [feed] is invoked from the ingest thread
- * only; no internal locking.
+ * only; no internal locking. Transcoder output arrives through
+ * [videoDelivery], which the session serializes with [feed] and
+ * [release] on one per-remuxer lock.
  *
  * TS parsing idioms (0x47 triple-sync scan, packet-boundary carry,
  * adaptation-field walking) follow TimeshiftBufferStore, the parser that
@@ -75,6 +80,15 @@ class TsToFmp4Remuxer(
      *  (the safe default) refuses such a mux by name instead of sending
      *  a stream the receiver can only play silently. */
     private val allowAc3Passthrough: Boolean = false,
+    /** Decides passthrough vs transcode once the source SPS is known. */
+    private val videoPlan: CastVideoPlan = CastVideoPlan.PASSTHROUGH,
+    /** Hop into this remuxer's single-caller context for transcoder
+     *  output. null (the unit tests) keeps the video path passthrough
+     *  whatever the plan says. */
+    private val videoDelivery: CastIngestDelivery? = null,
+    /** Builds the transcoder (the MediaCodec one in production, a fake in
+     *  the unit tests). null keeps the video path passthrough. */
+    private val videoTranscoderFactory: CastVideoTranscoderFactory? = null,
 ) {
     interface Listener {
         /** The init segments of a generation: [video] is a video-only moov,
@@ -159,6 +173,11 @@ class TsToFmp4Remuxer(
         /** The mux's audio codec as soon as the PMT is parsed ("AAC",
          *  "AC-3", "E-AC-3", "none"), for the cast load log line. */
         fun onAudioCodec(name: String) {}
+
+        /** Fired once, through the delivery hop, when the on-phone video
+         *  transcode fails, before [feed] throws
+         *  [CastVideoTranscodeException]. */
+        fun onVideoTranscodeFailed(reason: String) {}
     }
 
     companion object {
@@ -252,6 +271,40 @@ class TsToFmp4Remuxer(
      *  of for every frame of the connection. */
     private var aacPceLogged = false
     private var initSent = false
+
+    // ---- video path (passthrough or transcode) ----
+
+    private enum class VideoMode { UNDECIDED, PASSTHROUGH, TRANSCODE }
+    private var videoMode = VideoMode.UNDECIDED
+    private var videoTranscoder: CastVideoTranscoding? = null
+
+    /** The transcoder's output format: gates the init segment in transcode
+     *  mode and supplies the sample entry. */
+    private class TranscodedFormat(
+        val codec: CastVideoOutputSpec.Codec,
+        val config: ByteArray,
+        val width: Int,
+        val height: Int,
+    )
+    private var transcodedFormat: TranscodedFormat? = null
+
+    /** Parameter sets in force for the transcoder input (the latest in-band
+     *  ones; [sps] / [pps] latch the first). */
+    private var transcodeSps = ByteArray(0)
+    private var transcodePps = ByteArray(0)
+
+    /** Last transcoded sample PTS; output must be strictly increasing. */
+    private var lastTranscodedPts = -1L
+    private var transcodeFailure: String? = null
+    private var released = false
+
+    /** "H.264 passthrough" / "H.264 -> HEVC 1920x1080@59.94". */
+    var videoPathDescription: String? = null
+        private set
+
+    /** True once the video track is re-encoded (the master then declares
+     *  the output codec verbatim, no level relabel). */
+    val videoIsTranscoded: Boolean get() = videoMode == VideoMode.TRANSCODE
 
     // ---- AC-3 / E-AC-3 passthrough ----
 
@@ -388,6 +441,7 @@ class TsToFmp4Remuxer(
     /** Feed raw TS bytes off the wire. Throws [UnsupportedCodecException]
      *  as soon as the PMT declares a codec the remux cannot carry. */
     fun feed(data: ByteArray, offset: Int, length: Int) {
+        transcodeFailure?.let { throw CastVideoTranscodeException(it) }
         var merged = if (carry.isEmpty()) data.copyOfRange(offset, offset + length) else carry + data.copyOfRange(offset, offset + length)
         if (needResync) {
             val sync = findSync(merged)
@@ -596,9 +650,23 @@ class TsToFmp4Remuxer(
         for (nal in nals) {
             when (nal[0].toInt() and 0x1F) {
                 5 -> keyframe = true
-                7 -> if (sps == null) sps = nal
-                8 -> if (pps == null) pps = nal
+                7 -> {
+                    if (sps == null) sps = nal
+                    transcodeSps = nal
+                }
+                8 -> {
+                    if (pps == null) pps = nal
+                    transcodePps = nal
+                }
             }
+        }
+        if (videoMode == VideoMode.UNDECIDED) {
+            if (sps == null || pps == null) return
+            decideVideoMode()
+        }
+        if (videoMode == VideoMode.TRANSCODE) {
+            onTranscodeSourceAccessUnit(nals, pts33, dts33, keyframe)
+            return
         }
         maybeEmitInit()
         if (!initSent) return
@@ -615,28 +683,123 @@ class TsToFmp4Remuxer(
             timelineBasePts = pts
         }
 
-        if (pendingCutDts < 0 &&
-            keyframe && videoQueue.isNotEmpty() &&
-            dts - videoQueue.first().dts >= targetSegmentTicks
-        ) {
-            pendingCutDts = dts
-        }
         // AVCC conversion: length-prefixed NALs, parameter sets kept
         // in-band (a mid-stream resolution change then stays decodable).
-        val sampleSize = nals.sumOf { 4 + it.size }
-        val sample = ByteArray(sampleSize)
-        var w = 0
-        for (nal in nals) {
-            writeU32(sample, w, nal.size); w += 4
-            System.arraycopy(nal, 0, sample, w, nal.size); w += nal.size
+        enqueueVideoSample(VideoSample(lengthPrefixed(nals, emptySet()), dts, pts, keyframe))
+    }
+
+    /** Queue one video sample for the segmenter (passthrough and transcode
+     *  paths alike). The cut rule: the first keyframe at or after
+     *  [targetSegmentTicks] of the segment's first DTS. */
+    private fun enqueueVideoSample(queued: VideoSample) {
+        if (pendingCutDts < 0 && queued.keyframe && videoQueue.isNotEmpty() &&
+            queued.dts - videoQueue.first().dts >= targetSegmentTicks
+        ) {
+            pendingCutDts = queued.dts
         }
-        val queued = VideoSample(sample, dts, pts, keyframe)
         if (pendingCutDts >= 0) {
             heldVideo.add(queued)
-            maybeCut(dts)
+            maybeCut(queued.dts)
             return
         }
         videoQueue.add(queued)
+    }
+
+    /** 4-byte-length NAL units, skipping the given nal_unit_types. */
+    private fun lengthPrefixed(nals: List<ByteArray>, dropping: Set<Int>): ByteArray {
+        val kept = if (dropping.isEmpty()) nals else nals.filter { (it[0].toInt() and 0x1F) !in dropping }
+        val sample = ByteArray(kept.sumOf { 4 + it.size })
+        var w = 0
+        for (nal in kept) {
+            writeU32(sample, w, nal.size); w += 4
+            System.arraycopy(nal, 0, sample, w, nal.size); w += nal.size
+        }
+        return sample
+    }
+
+    // ---- video transcode ----
+
+    /** Runs once, at the first access unit that completes SPS + PPS: the
+     *  sender's plan against the source's SPS. Logs the plan line. */
+    private fun decideVideoMode() {
+        val info = sps?.let { runCatching { CastSpsParser.parseSpsInfo(it) }.getOrNull() }
+        if (info == null) {
+            videoMode = VideoMode.PASSTHROUGH
+            videoPathDescription = "H.264 passthrough"
+            log("[Cast] video plan: source SPS unreadable -> passthrough")
+            return
+        }
+        var decision = videoPlan.decide(info)
+        if (decision.output != null && (videoDelivery == null || videoTranscoderFactory == null)) {
+            decision = CastVideoDecision(null, "no transcode delivery queue")
+        }
+        log(videoPlan.logLine(info, decision))
+        val spec = decision.output
+        val deliver = videoDelivery
+        val factory = videoTranscoderFactory
+        if (spec == null || deliver == null || factory == null) {
+            videoMode = VideoMode.PASSTHROUGH
+            videoPathDescription = "H.264 passthrough"
+            return
+        }
+        videoMode = VideoMode.TRANSCODE
+        val codecName = if (spec.codec == CastVideoOutputSpec.Codec.HEVC) "HEVC" else "H.264"
+        val fps = spec.outputFps(info.fps)?.let { "@" + CastVideoPlan.fpsLabel(it) } ?: ""
+        videoPathDescription = "H.264 -> $codecName ${spec.width}x${spec.height}$fps"
+        val sink = CastVideoTranscodeSink(
+            onFormat = { codec, config, width, height -> onTranscodedFormat(codec, config, width, height) },
+            onSample = { data, pts, key -> onTranscodedSample(data, pts, key) },
+            onFailure = { reason -> onTranscodeFailed(reason) },
+        )
+        videoTranscoder = factory(info, spec, targetSegmentTicks, sink, deliver)
+    }
+
+    /** Source access unit on the transcode path. The timeline is anchored
+     *  here, on the SOURCE IDR, not when the first encoded frame comes
+     *  back: output PTS are the source PTS, so the first encoded frame IS
+     *  this IDR's presentation time, and anchoring now lets the audio that
+     *  is demuxed while the encoder warms up queue instead of being gated. */
+    private fun onTranscodeSourceAccessUnit(nals: List<ByteArray>, pts33: Long, dts33: Long, keyframe: Boolean) {
+        val transcoder = videoTranscoder ?: return
+        if (released) return
+        // The audio config has to be known before anything is anchored, so
+        // the init segment can go out with the encoder's first frame.
+        if (timelineBase < 0 && !(keyframe && pmtSeen && audioConfigReady)) return
+        val dts = videoClock.unwrap(dts33)
+        val pts = unwrapPtsAgainstDts(pts33, dts)
+        if (timelineBase < 0) {
+            // Encoded samples carry DTS == PTS, so the video tfdt base is
+            // the IDR's presentation time.
+            timelineBase = pts
+            timelineBasePts = pts
+        }
+        // Parameter sets travel separately (the decoder format), AUD and
+        // filler mean nothing to the decoder.
+        val sample = lengthPrefixed(nals, setOf(7, 8, 9, 12))
+        if (sample.isEmpty()) return
+        transcoder.feed(sample, pts, dts, keyframe, transcodeSps, transcodePps)
+    }
+
+    private fun onTranscodedFormat(codec: CastVideoOutputSpec.Codec, config: ByteArray, width: Int, height: Int) {
+        if (released || transcodedFormat != null) return
+        transcodedFormat = TranscodedFormat(codec, config, width, height)
+        maybeEmitInit()
+    }
+
+    private fun onTranscodedSample(data: ByteArray, pts: Long, keyframe: Boolean) {
+        if (released || !initSent || transcodeFailure != null) return
+        // Monotonic output, and every segment (the first one included)
+        // opens on an encoder IDR.
+        if (pts <= lastTranscodedPts || pts < timelineBase) return
+        if (videoQueue.isEmpty() && heldVideo.isEmpty() && emittedTicks == 0L && !keyframe) return
+        lastTranscodedPts = pts
+        enqueueVideoSample(VideoSample(data, pts, pts, keyframe))
+    }
+
+    private fun onTranscodeFailed(reason: String) {
+        if (released || transcodeFailure != null) return
+        transcodeFailure = reason
+        listener.onVideoTranscodeFailed(reason)
     }
 
     /** Take the pending cut once the audio queue has caught up past it,
@@ -742,7 +905,7 @@ class TsToFmp4Remuxer(
             val durationTicks = info.samplesPerFrame.toLong() * TICKS_PER_SECOND / info.sampleRate
             val framePts = stampAudioFrame(pesAnchor, durationTicks)
             audioRunPts = framePts + durationTicks
-            if (initSent) {
+            if (audioQueueOpen) {
                 queueAudio(data.copyOfRange(p, next), framePts, durationTicks)
             }
             p = next
@@ -910,7 +1073,7 @@ class TsToFmp4Remuxer(
                 // the next segment's audio tfdt was 348000). Chromium
                 // gets a backwards audio append one segment in, which is
                 // the IDLE/ERROR a second after the first playlist fetch.
-                if (initSent) {
+                if (audioQueueOpen) {
                     queueAudio(data.copyOfRange(payloadStart, p + frameLen), framePts, audioFrameTicks)
                 }
             }
@@ -930,24 +1093,37 @@ class TsToFmp4Remuxer(
      *  irreducible part of the splice seam: the rest of it, the whole 100+
      *  ms, was the missing tail that [flushGenerationTail] now emits. */
     private fun queueAudio(data: ByteArray, framePts: Long, durationTicks: Long) {
-        if (!initSent || timelineBasePts < 0) return
+        if (!audioQueueOpen) return
         if (framePts < timelineBasePts) return
         audioQueue.add(AudioSample(data, framePts, durationTicks))
     }
 
     // ---- segmenter ----
 
-    private fun maybeEmitInit() {
-        if (initSent) return
-        if (!pmtSeen || sps == null || pps == null) return
-        // Audio config gate: the first ADTS header on the AAC path, the
-        // first syncframe header on the AC-3 / E-AC-3 path.
-        val audioReady = when {
+    /** Audio config gate: the first ADTS header on the AAC path, the first
+     *  syncframe header on the AC-3 / E-AC-3 path. */
+    private val audioConfigReady: Boolean
+        get() = when {
             audioPid < 0 -> true
             audioSource != null -> ac3Config != null
             else -> aacFreqIndex >= 0
         }
-        if (!audioReady) return
+
+    /** Audio may queue once video anchored the timeline. Passthrough video
+     *  anchors only after the init is out; transcoded video anchors on the
+     *  source IDR while the encoder is still warming up, and the audio
+     *  demuxed meanwhile belongs to the first segment. */
+    private val audioQueueOpen: Boolean
+        get() = timelineBasePts >= 0 && (initSent || videoMode == VideoMode.TRANSCODE)
+
+    private fun maybeEmitInit() {
+        if (initSent || !pmtSeen) return
+        when (videoMode) {
+            VideoMode.UNDECIDED -> return
+            VideoMode.PASSTHROUGH -> if (sps == null || pps == null) return
+            VideoMode.TRANSCODE -> if (transcodedFormat == null) return
+        }
+        if (!audioConfigReady) return
         listener.onInitSegments(
             video = buildInitSegment(Rendition.VIDEO_ONLY),
             audio = if (audioPid >= 0) buildInitSegment(Rendition.AUDIO_ONLY) else null,
@@ -962,6 +1138,11 @@ class TsToFmp4Remuxer(
      *  must still be emitted: see [flushGenerationTail]. */
     fun release() {
         flushGenerationTail()
+        // Frames still inside the video transcoder are the outgoing
+        // channel's last fraction of a second; they are dropped.
+        videoTranscoder?.release()
+        videoTranscoder = null
+        released = true
     }
 
     /** Emit this generation's pending tail as one last segment, with both
@@ -1103,8 +1284,26 @@ class TsToFmp4Remuxer(
         out.write(box("ftyp", bytes("iso5"), u32(0), bytes("iso5"), bytes("iso6"), bytes("mp41")))
         val traks = ArrayList<ByteArray>()
         if (hasVideo) {
-            val dims = runCatching { parseSpsDimensions(sps!!) }.getOrNull() ?: Pair(1280, 720)
-            traks.add(videoTrak(dims.first, dims.second))
+            val format = transcodedFormat
+            if (format != null) {
+                val hevc = format.codec == CastVideoOutputSpec.Codec.HEVC
+                traks.add(
+                    videoTrak(
+                        format.width, format.height,
+                        entryType = if (hevc) "hvc1" else "avc1",
+                        configType = if (hevc) "hvcC" else "avcC",
+                        config = format.config,
+                    ),
+                )
+            } else {
+                val dims = runCatching { parseSpsDimensions(sps!!) }.getOrNull() ?: Pair(1280, 720)
+                traks.add(
+                    videoTrak(
+                        dims.first, dims.second, entryType = "avc1", configType = "avcC",
+                        config = CastVideoCodecConfig.avcCPayload(sps!!, pps!!),
+                    ),
+                )
+            }
         }
         if (hasAudio) traks.add(audioTrak())
         val trexes = ArrayList<ByteArray>()
@@ -1294,22 +1493,13 @@ class TsToFmp4Remuxer(
         return out.toByteArray()
     }
 
-    private fun videoTrak(width: Int, height: Int): ByteArray {
-        val avcC = run {
-            val s = sps!!
-            val p = pps!!
-            val out = ByteArrayOutputStream(16 + s.size + p.size)
-            out.write(1) // configurationVersion
-            out.write(s[1].toInt() and 0xFF) // AVCProfileIndication
-            out.write(s[2].toInt() and 0xFF) // profile_compatibility
-            out.write(s[3].toInt() and 0xFF) // AVCLevelIndication
-            out.write(0xFF) // 4-byte NAL lengths
-            out.write(0xE1) // 1 SPS
-            out.write(u16(s.size)); out.write(s)
-            out.write(1) // 1 PPS
-            out.write(u16(p.size)); out.write(p)
-            box("avcC", out.toByteArray())
-        }
+    /** Video trak with an avc1 + avcC (passthrough, or re-encoded H.264)
+     *  or hvc1 + hvcC (HEVC transcode) sample entry. hvc1, not hev1: the
+     *  encoder output keeps its parameter sets out of the samples, so the
+     *  record in the sample entry is the only copy, which is what hvc1
+     *  means. */
+    private fun videoTrak(width: Int, height: Int, entryType: String, configType: String, config: ByteArray): ByteArray {
+        val configBox = box(configType, config)
         val avc1 = run {
             val body = ByteArrayOutputStream(96)
             body.write(ByteArray(6)); body.write(u16(1)) // reserved, data_reference_index
@@ -1319,8 +1509,8 @@ class TsToFmp4Remuxer(
             body.write(u32(0)); body.write(u16(1)) // reserved, frame_count
             body.write(ByteArray(32)) // compressorname
             body.write(u16(0x0018)); body.write(u16(0xFFFF)) // depth, pre_defined
-            body.write(avcC)
-            box("avc1", body.toByteArray())
+            body.write(configBox)
+            box(entryType, body.toByteArray())
         }
         return trak(
             trackId = VIDEO_TRACK_ID,
@@ -1671,93 +1861,12 @@ class TsToFmp4Remuxer(
         return -1
     }
 
-    // ---- SPS dimensions (best effort; tkhd/avc1 sizing only, decoders
-    // read the SPS itself from avcC) ----
+    // ---- SPS dimensions (tkhd/avc1 sizing; the full parse lives in
+    // CastSpsParser, shared with the video plan) ----
 
     private fun parseSpsDimensions(spsNal: ByteArray): Pair<Int, Int> {
-        // Strip emulation prevention bytes, skip the NAL header byte.
-        val rbsp = ByteArrayOutputStream(spsNal.size)
-        var i = 1
-        while (i < spsNal.size) {
-            if (i + 2 < spsNal.size && spsNal[i].toInt() == 0 && spsNal[i + 1].toInt() == 0 &&
-                spsNal[i + 2].toInt() == 3
-            ) {
-                rbsp.write(0); rbsp.write(0); i += 3
-            } else {
-                rbsp.write(spsNal[i].toInt()); i++
-            }
-        }
-        val r = BitReader(rbsp.toByteArray())
-        val profileIdc = r.bits(8)
-        r.bits(16) // constraints + level
-        r.ue() // seq_parameter_set_id
-        var chromaFormat = 1
-        if (profileIdc in intArrayOf(100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134)) {
-            chromaFormat = r.ue()
-            if (chromaFormat == 3) r.bits(1)
-            r.ue(); r.ue(); r.bits(1) // bit depths, qpprime
-            if (r.bits(1) == 1) { // seq_scaling_matrix_present
-                val lists = if (chromaFormat == 3) 12 else 8
-                for (l in 0 until lists) {
-                    if (r.bits(1) == 1) skipScalingList(r, if (l < 6) 16 else 64)
-                }
-            }
-        }
-        r.ue() // log2_max_frame_num_minus4
-        when (r.ue()) { // pic_order_cnt_type
-            0 -> r.ue()
-            1 -> {
-                r.bits(1); r.se(); r.se()
-                repeat(r.ue()) { r.se() }
-            }
-        }
-        r.ue(); r.bits(1) // max_num_ref_frames, gaps_allowed
-        val widthMbs = r.ue() + 1
-        val heightMapUnits = r.ue() + 1
-        val frameMbsOnly = r.bits(1)
-        if (frameMbsOnly == 0) r.bits(1)
-        r.bits(1) // direct_8x8
-        var cropL = 0; var cropR = 0; var cropT = 0; var cropB = 0
-        if (r.bits(1) == 1) {
-            cropL = r.ue(); cropR = r.ue(); cropT = r.ue(); cropB = r.ue()
-        }
-        val cropUnitX = if (chromaFormat == 0) 1 else 2
-        val cropUnitY = (if (chromaFormat <= 1) 2 else 1) * (2 - frameMbsOnly)
-        val width = widthMbs * 16 - (cropL + cropR) * cropUnitX
-        val height = heightMapUnits * 16 * (2 - frameMbsOnly) - (cropT + cropB) * cropUnitY
-        if (width <= 0 || height <= 0 || width > 8192 || height > 8192) error("implausible")
-        return Pair(width, height)
-    }
-
-    private fun skipScalingList(r: BitReader, size: Int) {
-        var lastScale = 8
-        var nextScale = 8
-        for (j in 0 until size) {
-            if (nextScale != 0) nextScale = (lastScale + r.se() + 256) % 256
-            if (nextScale != 0) lastScale = nextScale
-        }
-    }
-
-    private class BitReader(private val data: ByteArray) {
-        private var pos = 0
-        fun bits(n: Int): Int {
-            var v = 0
-            repeat(n) {
-                val byte = data[pos ushr 3].toInt() and 0xFF
-                v = (v shl 1) or ((byte shr (7 - (pos and 7))) and 1)
-                pos++
-            }
-            return v
-        }
-        fun ue(): Int {
-            var zeros = 0
-            while (bits(1) == 0 && zeros < 32) zeros++
-            return (1 shl zeros) - 1 + if (zeros > 0) bits(zeros) else 0
-        }
-        fun se(): Int {
-            val k = ue()
-            return if (k % 2 == 0) -(k / 2) else (k + 1) / 2
-        }
+        val info = CastSpsParser.parseSpsInfo(spsNal)
+        return Pair(info.width, info.height)
     }
 }
 

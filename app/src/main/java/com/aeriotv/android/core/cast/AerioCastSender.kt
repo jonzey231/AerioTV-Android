@@ -34,6 +34,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
@@ -56,6 +57,7 @@ import javax.inject.Singleton
 class AerioCastSender @Inject constructor(
     private val hlsProxy: CastHlsProxySession,
     private val nativeDevices: NativeCastDevices,
+    private val prefs: com.aeriotv.android.core.preferences.AppPreferences,
 ) {
 
     /** Sender connection state, surfaced to the player chrome. */
@@ -169,15 +171,54 @@ class AerioCastSender @Inject constructor(
      *  repeats the caps does not repeat the line. */
     private var loggedCaps: Map<String, Boolean>? = null
 
-    /** Reads the `mse` object from a receiver debug message (the dedicated
-     *  `type:"caps"` message on READY, and the copy that rides every
-     *  telemetry snapshot) and stores it for this session. */
+    /** The receiver's `display` map (cast.framework canDisplayType):
+     *  h264_1080p60, h264_1080p30, hevc_1080p60, hevc_4k60, h264_4k60. null
+     *  when the page sent none (an older receiver page). Measured 2026-09-26
+     *  on a Chromecast Ultra: h264_1080p60 false, h264_1080p30 true, every
+     *  HEVC key false; that is what drives the video plan. */
+    private var receiverDisplayCaps: Map<String, Boolean>? = null
+    private var loggedDisplayCaps: Map<String, Boolean>? = null
+
+    /** The video plan for a proxy load: receiver caps plus the Developer
+     *  switches. The remuxer applies it once it has read the source SPS
+     *  (the level, size and frame rate are not known before the ingest). */
+    private suspend fun videoPlan(caps: Map<String, Boolean>?): com.aeriotv.android.core.cast.hlsproxy.CastVideoPlan {
+        val force = runCatching { prefs.castForceHevcTranscode.first() }.getOrDefault(false)
+        val down = runCatching { prefs.castTranscodeDownProfile.first() }.getOrDefault("720p60")
+        return com.aeriotv.android.core.cast.hlsproxy.CastVideoPlan(
+            caps = caps?.let {
+                com.aeriotv.android.core.cast.hlsproxy.CastReceiverVideoCaps(mse = it, display = receiverDisplayCaps)
+            },
+            force = force,
+            downProfile = com.aeriotv.android.core.cast.hlsproxy.CastTranscodeDownProfile.fromRaw(down),
+        )
+    }
+
+    /** Reads the `mse` and `display` objects from a receiver debug message
+     *  (the dedicated `type:"caps"` message on READY, and the copy that
+     *  rides every telemetry snapshot) and stores them for this session. */
     private fun noteReceiverCaps(json: JSONObject) {
-        val mse = json.optJSONObject("mse") ?: return
-        val parsed = buildMap {
-            for (key in mse.keys()) put(key, mse.optBoolean(key, false))
+        fun bools(obj: JSONObject?): Map<String, Boolean>? {
+            if (obj == null) return null
+            val parsed = buildMap { for (key in obj.keys()) put(key, obj.optBoolean(key, false)) }
+            return parsed.ifEmpty { null }
         }
-        if (parsed.isEmpty()) return
+        // The display map arrives in the same message as `mse`; parsed
+        // first so a caps wait that wakes on `receiverCaps` already sees it.
+        bools(json.optJSONObject("display"))?.let { display ->
+            receiverDisplayCaps = display
+            if (loggedDisplayCaps != display) {
+                loggedDisplayCaps = display
+                fun cap(key: String) = if (display[key] == true) "yes" else "no"
+                Log.i(
+                    TAG,
+                    "[Cast] receiver display: h264_1080p60=${cap("h264_1080p60")} " +
+                        "h264_1080p30=${cap("h264_1080p30")} hevc_1080p60=${cap("hevc_1080p60")} " +
+                        "hevc_4k60=${cap("hevc_4k60")} h264_4k60=${cap("h264_4k60")}",
+                )
+            }
+        }
+        val parsed = bools(json.optJSONObject("mse")) ?: return
         receiverCaps = parsed
         if (loggedCaps == parsed) return
         loggedCaps = parsed
@@ -185,7 +226,8 @@ class AerioCastSender @Inject constructor(
         Log.i(
             TAG,
             "[Cast] receiver caps: ac-3=${cap("ac-3")} ec-3=${cap("ec-3")} " +
-                "aac=${cap("mp4a.40.2")} h264=${cap("avc1.64002A")}",
+                "aac=${cap("mp4a.40.2")} h264=${cap("avc1.64002A")} " +
+                "hvc1=${cap("hvc1")} hvc1.4k=${cap("hvc1.4k")} hev1=${cap("hev1")}",
         )
     }
 
@@ -489,7 +531,7 @@ class AerioCastSender @Inject constructor(
             // path above and would only repeat it here.
             val known = setOf(
                 "ev", "t", "buffered", "ready", "state", "rate",
-                "seek", "bufTime", "bw", "hist", "err", "type", "mse",
+                "seek", "bufTime", "bw", "hist", "err", "type", "mse", "display",
             )
             val extras = buildString {
                 val it = j.keys()
@@ -1248,12 +1290,24 @@ class AerioCastSender @Inject constructor(
                     "aac=${if (caps?.get("mp4a.40.2") == true) "yes" else "no"} " +
                     "-> ingest=plain audio=${if (ac3Ok) "passthrough" else "aac-only"}",
             )
+            // Video plan: decided per source once the proxy reads the SPS
+            // (the full `[Cast] video plan: source=...` line comes from
+            // there); this line records what the decision will work from.
+            val videoPlan = videoPlan(caps)
+            Log.i(
+                TAG,
+                "[Cast] video plan inputs: receiver=$receiverModel " +
+                    "hvc1=${if (caps?.get("hvc1") == true) "yes" else "no"} " +
+                    "display=${if (videoPlan.caps?.display == null) "none" else "measured"} " +
+                    "force=${if (videoPlan.force) "yes" else "no"} down=${videoPlan.downProfile.rawValue}",
+            )
             val started = try {
                 hlsProxy.startChannel(
                     rawTsUrl = rawTsUrl,
                     headers = headers,
                     allowAc3Passthrough = ac3Ok,
                     h264Level42Supported = caps?.get("avc1.64002A") == true,
+                    videoPlan = videoPlan,
                     onNotice = { message -> surfaceCastFailure(message) },
                 )
             } catch (e: com.aeriotv.android.core.cast.hlsproxy.IngestConnectionLimitException) {
@@ -1533,6 +1587,8 @@ class AerioCastSender @Inject constructor(
         deferredTune = null
         receiverCaps = null
         loggedCaps = null
+        receiverDisplayCaps = null
+        loggedDisplayCaps = null
         _remoteState.value = CastControl.RemoteState()
         _position.value = CastControl.PositionSnapshot()
         _canSkip.value = false

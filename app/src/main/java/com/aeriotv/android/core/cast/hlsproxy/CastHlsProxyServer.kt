@@ -320,6 +320,14 @@ class CastHlsProxyServer(
         if (audio != null) audioInits[gen] = audio else audioInits.remove(gen)
     }
 
+    /** Generations whose video track is re-encoded on the phone, set by the
+     *  session at init time. */
+    private val videoTranscodedGenerations = HashSet<Int>()
+
+    fun setVideoTranscoded(gen: Int, value: Boolean) = synchronized(lock) {
+        if (value) videoTranscodedGenerations.add(gen) else videoTranscodedGenerations.remove(gen)
+    }
+
     fun addSegment(
         gen: Int,
         videoData: ByteArray,
@@ -522,7 +530,12 @@ class CastHlsProxyServer(
     internal fun demuxedMasterPlaylistText(): String {
         val videoInit = synchronized(lock) { videoInits[generation] }
         val audioInit = synchronized(lock) { audioInits[generation] }
-        val videoCodec = videoInit?.let { avcCodecString(it) }?.let { capAvcLevel(it) } ?: "avc1.640028"
+        val transcoded = synchronized(lock) { generation in videoTranscodedGenerations }
+        val streamCodec = videoInit?.let { videoCodecString(it) } ?: "avc1.640028"
+        // A re-encoded track declares exactly what the encoder wrote
+        // (hvc1.x, or avc1.640029 for the H.264 High 4.1 profile); the
+        // level relabel exists only for passthrough H.264.
+        val videoCodec = if (transcoded) streamCodec else capAvcLevel(streamCodec)
         val audioCodec = audioInit?.let { audioCodecString(it) }
         val sb = StringBuilder(320)
         sb.append("#EXTM3U\n")
@@ -560,9 +573,29 @@ class CastHlsProxyServer(
         return false
     }
 
+    /** The video codec string of an init segment: hvc1.x from an hvcC box,
+     *  otherwise avc1.PPCCLL from the avcC box. */
+    internal fun videoCodecString(init: ByteArray): String? = hevcCodecString(init) ?: avcCodecString(init)
+
+    /** RFC 6381 hvc1 string from the hvcC box inside an init segment. */
+    internal fun hevcCodecString(init: ByteArray): String? {
+        for (i in 4..init.size - 4) {
+            if (init[i] == 'h'.code.toByte() && init[i + 1] == 'v'.code.toByte() &&
+                init[i + 2] == 'c'.code.toByte() && init[i + 3] == 'C'.code.toByte()
+            ) {
+                val size = ((init[i - 4].toInt() and 0xFF) shl 24) or ((init[i - 3].toInt() and 0xFF) shl 16) or
+                    ((init[i - 2].toInt() and 0xFF) shl 8) or (init[i - 1].toInt() and 0xFF)
+                val end = minOf(init.size, i - 4 + maxOf(8, size))
+                if (i + 4 >= end) return null
+                return CastVideoCodecConfig.hevcCodecString(init.copyOfRange(i + 4, end))
+            }
+        }
+        return null
+    }
+
     /** avc1.PPCCLL from the avcC box inside an init segment (profile,
      *  constraint flags, level right after the configuration version). */
-    private fun avcCodecString(init: ByteArray): String? {
+    internal fun avcCodecString(init: ByteArray): String? {
         for (i in 0..init.size - 8) {
             if (init[i] == 'a'.code.toByte() && init[i + 1] == 'v'.code.toByte() &&
                 init[i + 2] == 'c'.code.toByte() && init[i + 3] == 'C'.code.toByte() &&

@@ -65,6 +65,9 @@ import com.aeriotv.android.ui.settings.SettingsActionRow
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsInfoRow
+import com.aeriotv.android.ui.settings.SettingsPickerOption
+import com.aeriotv.android.ui.settings.SettingsPickerRow
+import com.aeriotv.android.ui.settings.SettingsSubPageHost
 import com.aeriotv.android.ui.settings.SettingsSection
 import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
@@ -107,6 +110,8 @@ fun DeveloperSettingsScreen(
         entry.debugLogger()
     }
     val loggingEnabled by settingsVm.debugLoggingEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val castForceHevc by settingsVm.castForceHevcTranscode.collectAsStateWithLifecycle(initialValue = false)
+    val castDownProfile by settingsVm.castTranscodeDownProfile.collectAsStateWithLifecycle(initialValue = "720p60")
 
     val isTv = rememberIsTvDevice()
     var pendingEnable by remember { mutableStateOf(false) }
@@ -126,6 +131,7 @@ fun DeveloperSettingsScreen(
     }
     val logFileExists = sizeBytes > 0L || debugLogger.logFile().exists()
 
+    SettingsSubPageHost {
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "Developer", onBack = onBack)
 
@@ -172,11 +178,21 @@ fun DeveloperSettingsScreen(
                 }
             }
 
+            item("cast") {
+                CastTestSection(
+                    forceTranscode = castForceHevc,
+                    onForceTranscodeChange = settingsVm::setCastForceHevcTranscode,
+                    downProfile = castDownProfile,
+                    onDownProfileChange = settingsVm::setCastTranscodeDownProfile,
+                )
+            }
+
             item("captured") { WhatsCapturedSection() }
 
             item("build") { BuildInfoSection() }
         }
         }
+    }
     }
 
     if (pendingEnable) {
@@ -284,6 +300,40 @@ private fun LoggingSection(
             checked = enabled,
             // Route through the confirm dialogs instead of flipping directly.
             onCheckedChange = { value -> if (value) onRequestEnable() else onRequestDisable() },
+        )
+    }
+}
+
+/**
+ * Cast video transcode test switches (iOS DeveloperSettingsView parity,
+ * 2026-09-26): re-encode any H.264 source on the phone, HEVC when the
+ * receiver presents it, else the H.264 profile picked below (720p at the
+ * source rate, or the source size at half rate).
+ */
+@Composable
+private fun CastTestSection(
+    forceTranscode: Boolean,
+    onForceTranscodeChange: (Boolean) -> Unit,
+    downProfile: String,
+    onDownProfileChange: (String) -> Unit,
+) {
+    SettingsSection(header = "Cast") {
+        SettingsToggleRow(
+            title = "Cast: transcode video to HEVC (test)",
+            subtitle = "Re-encode every H.264 channel; H.264 profile below when the receiver has no HEVC",
+            checked = forceTranscode,
+            onCheckedChange = onForceTranscodeChange,
+        )
+        SettingsPickerRow(
+            title = "Cast: H.264 transcode profile",
+            subtitle = "720p60 keeps motion; 1080p30 keeps resolution",
+            inlineTitle = true,
+            options = listOf(
+                SettingsPickerOption("720p60", "720p60"),
+                SettingsPickerOption("1080p30", "1080p30"),
+            ),
+            selected = if (downProfile == "1080p30") "1080p30" else "720p60",
+            onSelect = onDownProfileChange,
         )
     }
 }

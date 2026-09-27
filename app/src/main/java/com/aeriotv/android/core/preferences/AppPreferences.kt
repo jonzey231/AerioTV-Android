@@ -751,6 +751,26 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * iOS `castForceHEVCTranscode` parity (DeveloperSettingsView, 2026-09-26):
+     * re-encode every H.264 cast channel on the phone, HEVC when the receiver
+     * presents it, else the H.264 profile below. Per device, never synced.
+     */
+    val castForceHevcTranscode: Flow<Boolean> = store.data.map { it[KEY_CAST_FORCE_HEVC_TRANSCODE] ?: false }
+    suspend fun setCastForceHevcTranscode(value: Boolean) {
+        store.edit { it[KEY_CAST_FORCE_HEVC_TRANSCODE] = value }
+    }
+
+    /**
+     * iOS `castTranscodeDownProfile` parity: the H.264 transcode shape when
+     * the receiver cannot present the source or HEVC, "720p60" (default) or
+     * "1080p30". Per device, never synced.
+     */
+    val castTranscodeDownProfile: Flow<String> = store.data.map { it[KEY_CAST_TRANSCODE_DOWN_PROFILE] ?: "720p60" }
+    suspend fun setCastTranscodeDownProfile(value: String) {
+        store.edit { it[KEY_CAST_TRANSCODE_DOWN_PROFILE] = value }
+    }
+
+    /**
      * iOS `appBehaviorsAutoResumeLastChannel` parity. Stub for now (Android
      * has no mini-player surface yet). Stored anyway so a future port can
      * flip it on without losing the user's prior choice.
@@ -2019,6 +2039,8 @@ class AppPreferences @Inject constructor(
         val KEY_SKIP_LOADING_SCREEN = booleanPreferencesKey("app_behaviors_skip_loading_screen")
         val KEY_AUTO_ROTATE = booleanPreferencesKey("app_behaviors_auto_rotate")
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")
+        val KEY_CAST_FORCE_HEVC_TRANSCODE = booleanPreferencesKey("cast_force_hevc_transcode")
+        val KEY_CAST_TRANSCODE_DOWN_PROFILE = stringPreferencesKey("cast_transcode_down_profile")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
         val KEY_PLAYER_BRIGHTNESS_GESTURE = booleanPreferencesKey("in_player_gesture_brightness")
         val KEY_PLAYER_VOLUME_GESTURE = booleanPreferencesKey("in_player_gesture_volume")

@@ -489,6 +489,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setDebugLoggingEnabled(value) }
     }
 
+    val castForceHevcTranscode: Flow<Boolean> = prefs.castForceHevcTranscode
+    fun setCastForceHevcTranscode(value: Boolean) {
+        viewModelScope.launch { prefs.setCastForceHevcTranscode(value) }
+    }
+
+    val castTranscodeDownProfile: Flow<String> = prefs.castTranscodeDownProfile
+    fun setCastTranscodeDownProfile(value: String) {
+        viewModelScope.launch { prefs.setCastTranscodeDownProfile(value) }
+    }
+
     val autoResumeLastChannel: Flow<Boolean> = prefs.autoResumeLastChannel
     fun setAutoResumeLastChannel(value: Boolean) {
         viewModelScope.launch { prefs.setAutoResumeLastChannel(value) }
