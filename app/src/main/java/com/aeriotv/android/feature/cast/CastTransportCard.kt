@@ -161,13 +161,22 @@ fun CastTransportCard(
     // (the user was watching locally, so the sender's pending content went to
     // the new receiver) wins over the handoff.
     LaunchedEffect(castState, companionConn) {
-        val seed = handoffChannel ?: return@LaunchedEffect
         val connectedTo = castState as? AerioCastSender.State.Connected
         if (companionTv != null) {
             handoffChannel = null
+            castSender.takeSwitchHandoff()
             return@LaunchedEffect
         }
         if (connectedTo == null) return@LaunchedEffect
+        // The picker's own receiver switch (sender side) hands over a mediaId;
+        // resolve it the same way the card resolves the cast channel.
+        val switched = castSender.takeSwitchHandoff()?.let { id ->
+            val bare = id.substringAfter(':', id)
+            channels.firstOrNull { it.id == id }
+                ?: channels.firstOrNull { it.id.substringAfter(':', it.id) == bare }
+                ?: channels.firstOrNull { it.name == id }
+        }
+        val seed = handoffChannel ?: switched ?: return@LaunchedEffect
         handoffChannel = null
         if (castSender.content.value != null) {
             Log.i(TAG, "[Cast] picker selected ${connectedTo.deviceName} -> seed=local")

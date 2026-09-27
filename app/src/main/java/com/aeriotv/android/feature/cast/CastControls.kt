@@ -270,7 +270,7 @@ fun CastRouteChooserDialog(
                         .clickable {
                             // Mutual exclusion: one remote target at a time.
                             companionRemote?.disconnect()
-                            runCatching { router?.selectRoute(route) }
+                            sender.selectPickerRoute(router, route)
                             onDismiss()
                         }
                         .padding(vertical = 12.dp),

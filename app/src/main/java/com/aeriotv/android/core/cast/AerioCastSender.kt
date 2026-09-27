@@ -954,6 +954,12 @@ class AerioCastSender @Inject constructor(
                 )
             }
             endCleanup()
+            // Picker switch: the old session is gone, now start on the new device.
+            switchTarget?.let { (router, route) ->
+                switchTarget = null
+                Log.i(TAG, "[Cast] switch: previous session ended, selecting ${route.name}")
+                runCatching { router.selectRoute(route) }
+            }
         }
         override fun onSessionSuspended(session: CastSession, reason: Int) = refreshFromContext()
         override fun onSessionStartFailed(session: CastSession, error: Int) = endCleanup()
@@ -1052,6 +1058,41 @@ class AerioCastSender @Inject constructor(
 
     /** The MediaRouteSelector for AerioTV's receiver, used by the Compose route
      *  chooser to discover cast devices. Null when Cast is unavailable. */
+    /** Picker route switch in flight: the route to select once the current
+     *  session reports its end. */
+    private var switchTarget: Pair<MediaRouter, MediaRouter.RouteInfo>? = null
+    /** mediaId of what the old receiver was casting when the picker switched
+     *  receivers; the cast card resolves it to a channel and re-casts it on the
+     *  new session. Null when nothing was playing. */
+    private var switchHandoffMediaId: String? = null
+
+    /** Consume the picker switch handoff (null when none). */
+    fun takeSwitchHandoff(): String? = switchHandoffMediaId.also { switchHandoffMediaId = null }
+
+    /**
+     * Select [route] from the Cast to picker. With a session already connected
+     * to another device the current session is ended FIRST and the new route is
+     * selected from onSessionEnded, mirroring iOS (2026-09-27), where starting a
+     * session over a live one was refused ("can't connect"). Selecting over a
+     * live session on Android goes through MediaRouter's own unselect, which
+     * does not run our graceful stop (media STOP before the session ends) and
+     * can surface as an involuntary "disconnected" end, so the switch is made
+     * explicit here instead of relying on it.
+     */
+    fun selectPickerRoute(router: MediaRouter?, route: MediaRouter.RouteInfo) {
+        val current = _state.value as? State.Connected
+        if (router != null && current != null && !route.isSelected) {
+            Log.i(TAG, "[Cast] picker selected ${route.name} while ${current.deviceName} is connected: ending it first")
+            val handoff = _content.value?.mediaId
+            switchTarget = router to route
+            stopCasting()
+            // Armed after the stop; nothing playing means no handoff.
+            switchHandoffMediaId = handoff
+            return
+        }
+        runCatching { router?.selectRoute(route) }
+    }
+
     fun routeSelector(): MediaRouteSelector? =
         runCatching { CastContext.getSharedInstance()?.mergedSelector }.getOrNull()
 
@@ -1101,6 +1142,7 @@ class AerioCastSender @Inject constructor(
         // from a status update that still carries its MediaInfo.
         recoverySuppressed = true
         pending = null
+        switchHandoffMediaId = null
         _content.value = null
         _switchingTo.value = null
         flipEpoch++
