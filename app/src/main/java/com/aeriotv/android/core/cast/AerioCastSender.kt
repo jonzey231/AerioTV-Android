@@ -172,7 +172,9 @@ class AerioCastSender @Inject constructor(
     private var loggedCaps: Map<String, Boolean>? = null
 
     /** The receiver's `display` map (cast.framework canDisplayType):
-     *  h264_1080p60, h264_1080p30, hevc_1080p60, hevc_4k60, h264_4k60. null
+     *  h264_1080p60, h264_1080p30, hevc_1080p60, hevc_4k60, h264_4k60, and
+     *  the HDR forms hevc_1080p60_hlg / _pq, hevc_4k60_hlg / _pq (the
+     *  `mse` map adds hvc1.hlg / hvc1.pq). Every key is kept as sent. null
      *  when the page sent none (an older receiver page). Measured 2026-09-26
      *  on a Chromecast Ultra: h264_1080p60 false, h264_1080p30 true, every
      *  HEVC key false; that is what drives the video plan. */
@@ -214,7 +216,9 @@ class AerioCastSender @Inject constructor(
                     TAG,
                     "[Cast] receiver display: h264_1080p60=${cap("h264_1080p60")} " +
                         "h264_1080p30=${cap("h264_1080p30")} hevc_1080p60=${cap("hevc_1080p60")} " +
-                        "hevc_4k60=${cap("hevc_4k60")} h264_4k60=${cap("h264_4k60")}",
+                        "hevc_4k60=${cap("hevc_4k60")} h264_4k60=${cap("h264_4k60")} " +
+                        "hevc_1080p60_hlg=${cap("hevc_1080p60_hlg")} hevc_1080p60_pq=${cap("hevc_1080p60_pq")} " +
+                        "hevc_4k60_hlg=${cap("hevc_4k60_hlg")} hevc_4k60_pq=${cap("hevc_4k60_pq")}",
                 )
             }
         }
@@ -227,7 +231,8 @@ class AerioCastSender @Inject constructor(
             TAG,
             "[Cast] receiver caps: ac-3=${cap("ac-3")} ec-3=${cap("ec-3")} " +
                 "aac=${cap("mp4a.40.2")} h264=${cap("avc1.64002A")} " +
-                "hvc1=${cap("hvc1")} hvc1.4k=${cap("hvc1.4k")} hev1=${cap("hev1")}",
+                "hvc1=${cap("hvc1")} hvc1.4k=${cap("hvc1.4k")} hev1=${cap("hev1")} " +
+                "hvc1.hlg=${cap("hvc1.hlg")} hvc1.pq=${cap("hvc1.pq")}",
         )
     }
 
@@ -240,6 +245,48 @@ class AerioCastSender @Inject constructor(
     // after the user leaves the player screen. Null when nothing is cast.
     private val _content = MutableStateFlow<Content?>(null)
     val content: StateFlow<Content?> = _content.asStateFlow()
+
+    /** The proxy's video path for the channel being cast (source, transcode
+     *  spec or passthrough), straight from the proxy session's flow. The
+     *  cast card builds its transcode note from it. */
+    val videoPath: StateFlow<com.aeriotv.android.core.cast.hlsproxy.CastVideoPathInfo?> = hlsProxy.videoPath
+
+    /** What the web receiver reports it is actually presenting, from the
+     *  debug channel telemetry (`res`, `fps`). */
+    data class ReceiverVideo(
+        /** "1920x1080", the video element's decoded size. */
+        val resolution: String,
+        /** Decoded frames per second over the last tick, null before the
+         *  receiver has two samples. */
+        val fps: Double?,
+    )
+
+    private val _receiverVideo = MutableStateFlow<ReceiverVideo?>(null)
+    /** Null until the receiver reports a decoded size for the current load. */
+    val receiverVideo: StateFlow<ReceiverVideo?> = _receiverVideo.asStateFlow()
+
+    /** Reads `res` / `fps` off a receiver telemetry snapshot. */
+    private fun noteReceiverVideo(json: JSONObject) {
+        if (!json.has("res") || json.isNull("res")) return
+        val res = json.optString("res").takeIf { it.isNotBlank() && it != "0x0" } ?: return
+        val fps = if (json.has("fps") && !json.isNull("fps")) json.optDouble("fps").takeIf { it > 0 } else null
+        // Keep the last rate when a snapshot carries none (the first one
+        // after a load, or a stalled tick) so the stat does not blink.
+        val keep = _receiverVideo.value?.takeIf { it.resolution == res }?.fps
+        // The tick's rate is a one-second sample: the first few after a load
+        // straddle the start and read 8 or 15 fps on a stream the receiver
+        // then presents at 60 (iOS card, 2026-09-27). Median of the last
+        // five playing ticks, nothing before five (same rule as iOS).
+        if (receiverFpsResolution != res) { receiverFpsResolution = res; receiverFpsSamples.clear() }
+        if (fps != null) {
+            receiverFpsSamples.add(fps)
+            if (receiverFpsSamples.size > 5) receiverFpsSamples.removeAt(0)
+        }
+        val median = if (receiverFpsSamples.size == 5) receiverFpsSamples.sorted()[2] else keep
+        _receiverVideo.value = ReceiverVideo(res, median)
+    }
+    private var receiverFpsResolution = ""
+    private val receiverFpsSamples = ArrayList<Double>(6)
 
     // --- Full-parity cast remote (GH #33). Transport (play/pause) rides
     // RemoteMediaClient; the receiver-only controls (audio/subtitle/speed/aspect)
@@ -366,6 +413,12 @@ class AerioCastSender @Inject constructor(
             Log.i(TAG, "[Cast] target=android-tv-app, native playback (receiver answered)")
         } else if (answered) {
             Log.i(TAG, "[Cast] target=web-receiver (receiver answered)")
+            // Only an explicit web answer demotes a device: a timeout can be a
+            // slow Cast Connect cold start on a TV that still has the app.
+            val id = currentDeviceId
+            if (nativeDevices.forget(id)) {
+                Log.i(TAG, "[Cast] device $id no longer AerioTV on TV")
+            }
         } else {
             Log.i(TAG, "[Cast] target=web-receiver (no answer, handshake timed out)")
         }
@@ -484,6 +537,7 @@ class AerioCastSender @Inject constructor(
             // The dedicated caps message carries no player state; it is fully
             // handled above and must not print a row of "?" fields.
             if (j.optString("type") == "caps") return@runCatching
+            noteReceiverVideo(j)
             fun str(key: String): String = if (j.has(key) && !j.isNull(key)) j.optString(key) else "?"
             fun num(key: String, decimals: Int): String =
                 if (j.has(key) && !j.isNull(key)) {
@@ -1044,6 +1098,8 @@ class AerioCastSender @Inject constructor(
         clearStall(resumed = false)
         playedSinceLoad = false
         runCatching { currentSession()?.remoteMediaClient?.stop() }
+        _receiverVideo.value = null
+        receiverFpsSamples.clear()
         senderScope.launch(Dispatchers.IO) { runCatching { hlsProxy.stop() } }
     }
 
@@ -1231,6 +1287,8 @@ class AerioCastSender @Inject constructor(
         // loading state for the new channel, which is honest.
         val previous = _content.value
         val isFlip = previous != null && previous.mediaId != base.mediaId
+        _receiverVideo.value = null
+        receiverFpsSamples.clear()
         pending = base
         _content.value = base
         proxyLoadJob?.cancel()
@@ -1372,14 +1430,16 @@ class AerioCastSender @Inject constructor(
 
     /**
      * The specific reason this channel cannot be cast (Logan: "cannot cast
-     * this channel" was not detailed enough). Video is never re-encoded
-     * and audio is never transcoded, so the video arm names the codec and
-     * the audio arm names the fix the user can make in Dispatcharr.
+     * this channel" was not detailed enough). H.264 and HEVC always have a
+     * path (passthrough or the on-phone transcode), so the video arm only
+     * ever names a codec nothing handles (MPEG-1/2, MPEG-4 Part 2, VC-1,
+     * AVS) and blames this receiver, never Google Cast as a whole. Audio is
+     * never transcoded, so the audio arm names what the receiver lacks.
      */
     private fun describeRefusal(e: UnsupportedCodecException): String {
         val codec = e.codecName.removeSuffix(" audio").removeSuffix(" video")
         if (e.isVideo) {
-            return "This channel's video is $codec, which Google Cast receivers cannot play."
+            return "This channel's video is $codec, which cannot be cast to this receiver."
         }
         if (codec.startsWith("AC-3") || codec.startsWith("E-AC-3")) {
             return "This receiver cannot decode this channel's surround audio (AC-3)."
@@ -1589,6 +1649,8 @@ class AerioCastSender @Inject constructor(
         loggedCaps = null
         receiverDisplayCaps = null
         loggedDisplayCaps = null
+        _receiverVideo.value = null
+        receiverFpsSamples.clear()
         _remoteState.value = CastControl.RemoteState()
         _position.value = CastControl.PositionSnapshot()
         _canSkip.value = false

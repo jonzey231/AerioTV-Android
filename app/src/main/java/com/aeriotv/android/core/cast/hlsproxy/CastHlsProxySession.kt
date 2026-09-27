@@ -17,6 +17,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.TimeoutCancellationException
@@ -291,8 +293,16 @@ class CastHlsProxySession @Inject constructor(
     @Volatile private var videoPlan: CastVideoPlan = CastVideoPlan.PASSTHROUGH
 
     /** Set when the on-phone video transcode fails: every later remuxer of
-     *  this proxy session passes H.264 through. Cleared by [stop]. */
+     *  this proxy session passes the source through. Cleared by [stop]. */
     @Volatile private var videoTranscodeDisabledReason: String? = null
+
+    private val _videoPath = MutableStateFlow<CastVideoPathInfo?>(null)
+    /** The video path the current ingest connection settled on (source,
+     *  transcode spec or passthrough, reason); the sender hands it to the
+     *  cast card for the transcode note. null before the first SPS and
+     *  after [stop]. A transcode failure's passthrough reconnect replaces
+     *  it, so the note goes away with the transcode. */
+    val videoPath: StateFlow<CastVideoPathInfo?> = _videoPath.asStateFlow()
 
     /**
      * Outcome of a successful [startChannel]: the playlist URL to hand to
@@ -331,7 +341,7 @@ class CastHlsProxySession @Inject constructor(
      * event; it is kept for the ingest paths that still report one.
      *
      * Throws [UnsupportedCodecException] for a mux the proxy cannot
-     * serve (non-H.264 video, or audio that is neither AAC nor an AC-3
+     * serve (video other than H.264 / HEVC, or audio that is neither AAC nor an AC-3
      * family stream this receiver decodes), [IllegalStateException] when
      * the phone has no Wi-Fi LAN address (a Chromecast cannot fetch from
      * a cellular interface), and
@@ -373,6 +383,7 @@ class CastHlsProxySession @Inject constructor(
         activeUrl = rawTsUrl
         sessionError.value = null
         audioCodec = ""
+        _videoPath.value = null
         // Channel change keeps the ring: the receiver's cached playlist
         // still promises the old channel's last segments, so they stay
         // fetchable until the ring evicts them, and the new generation
@@ -451,6 +462,7 @@ class CastHlsProxySession @Inject constructor(
         activeUrl = null
         stopIngest()
         videoTranscodeDisabledReason = null
+        _videoPath.value = null
         stopLinkLog()
         stopNetworkWatch()
         server.stop()
@@ -621,6 +633,10 @@ class CastHlsProxySession @Inject constructor(
                         audioCodec = name
                     }
 
+                    override fun onVideoPath(info: CastVideoPathInfo) {
+                        _videoPath.value = info
+                    }
+
                     override fun onVideoTranscodeFailed(reason: String) {
                         // The next feed throws and the ingest reconnects
                         // with a passthrough remuxer.
@@ -696,14 +712,14 @@ class CastHlsProxySession @Inject constructor(
                     }
                 } catch (e: CastVideoTranscodeException) {
                     // Fallback: a fresh remuxer, built with the plan
-                    // disabled, passes H.264 through from the next IDR.
-                    debugLogWarn(context, TAG, "${e.message}; reconnecting with H.264 passthrough")
+                    // disabled, passes the source through from the next IDR.
+                    debugLogWarn(context, TAG, "${e.message}; reconnecting with passthrough")
                     transcodeFallback = true
                 } catch (e: UnsupportedCodecException) {
-                    // Terminal by design: nothing in this path is ever
-                    // re-encoded, so audio outside AAC and the AC-3 family
-                    // this receiver decodes cannot be served. Surfaced to
-                    // the sender's ready wait as the cast failure.
+                    // Terminal by design: video outside H.264 / HEVC and
+                    // audio outside AAC and the AC-3 family this receiver
+                    // decodes have no path. Surfaced to the sender's ready
+                    // wait as the cast failure.
                     debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
                     sessionError.value = e
                     return@launch

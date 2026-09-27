@@ -6,8 +6,9 @@ import java.io.ByteArrayOutputStream
  * A channel the cast HLS proxy cannot serve, with enough detail for the
  * user-facing refusal (see AerioCastSender.describeRefusal).
  *
- * The web/styled Cast receiver is a Chromium page: video is never
- * re-encoded, so non-H.264 video is refused up front by name. Audio is
+ * H.264 and HEVC video are carried (passthrough, or the on-phone
+ * transcode); any other video codec (MPEG-1/2, MPEG-4 Part 2, VC-1, AVS)
+ * is refused up front by name because no path handles it. Audio is
  * never transcoded either (Logan 2026-09-12): AAC always passes through,
  * AC-3 / E-AC-3 passes through only to a receiver that decodes it, and
  * everything else is refused by name so the message can point at
@@ -21,8 +22,9 @@ class UnsupportedCodecException(
 
 /**
  * MPEG-TS to fragmented-MP4 (CMAF) remuxer for the phone-local cast HLS
- * proxy (GH #33 web-receiver rework). H.264 video is passthrough (Annex
- * B in PES, converted to length-prefixed avc1 samples) unless the
+ * proxy (GH #33 web-receiver rework). H.264 and HEVC video are
+ * passthrough (Annex B in PES, converted to length-prefixed avc1 / hvc1
+ * samples) unless the
  * sender's [CastVideoPlan] asks for the on-phone transcode (2026-09-26),
  * in which case the access units go through [CastVideoTranscoder] and the
  * video track becomes hvc1 (HEVC) or a re-encoded avc1 (H.264 High 4.1).
@@ -174,6 +176,11 @@ class TsToFmp4Remuxer(
          *  "AC-3", "E-AC-3", "none"), for the cast load log line. */
         fun onAudioCodec(name: String) {}
 
+        /** The video path decided for this connection (passthrough or the
+         *  transcode spec), fired once at the first complete parameter sets.
+         *  The cast card's transcode note is built from it. */
+        fun onVideoPath(info: CastVideoPathInfo) {}
+
         /** Fired once, through the delivery hop, when the on-phone video
          *  transcode fails, before [feed] throws
          *  [CastVideoTranscodeException]. */
@@ -193,6 +200,8 @@ class TsToFmp4Remuxer(
 
         /** ISO 13818-1 stream_type values this remux understands. */
         private const val STREAM_TYPE_H264 = 0x1B
+        /** ISO 13818-1 HEVC (Annex B byte stream, same PES carriage). */
+        private const val STREAM_TYPE_HEVC = 0x24
         /** How long a segment cut may wait for the audio that belongs in
          *  it, in 90 kHz ticks. Provider audio trailed its video by about
          *  170 ms in the measured casts; half a second of video is a
@@ -228,6 +237,14 @@ class TsToFmp4Remuxer(
         private val VIDEO_STREAM_TYPES = setOf(0x01, 0x02, 0x10, 0x1B, 0x24, 0x42, 0xEA)
         private val AUDIO_STREAM_TYPES = setOf(0x03, 0x04, 0x0F, 0x11, 0x81, 0x87, 0x82, 0x8A)
 
+        /** nal_unit_types kept out of the samples. HEVC passthrough (hvc1):
+         *  VPS, SPS, PPS, AUD. The transcode input additionally drops filler
+         *  (H.264 12, HEVC 38); its parameter sets reach the decoder through
+         *  its format instead. */
+        private val HEVC_PASSTHROUGH_DROP = setOf(32, 33, 34, 35)
+        private val HEVC_TRANSCODE_DROP = setOf(32, 33, 34, 35, 38)
+        private val H264_TRANSCODE_DROP = setOf(7, 8, 9, 12)
+
         /** stream_types that can pass through as AC-3 / E-AC-3 when the
          *  receiver decodes them. MPEG audio is deliberately absent: no
          *  Cast receiver decodes it and the phone no longer transcodes. */
@@ -257,6 +274,11 @@ class TsToFmp4Remuxer(
 
     // ---- codec config ----
 
+    /** Source video codec, from the PMT stream_type. */
+    private var videoCodec = CastVideoOutputSpec.Codec.H264
+    private val isHevc: Boolean get() = videoCodec == CastVideoOutputSpec.Codec.HEVC
+
+    private var vps: ByteArray? = null
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
     private var aacObjectType = 0
@@ -290,6 +312,7 @@ class TsToFmp4Remuxer(
 
     /** Parameter sets in force for the transcoder input (the latest in-band
      *  ones; [sps] / [pps] latch the first). */
+    private var transcodeVps = ByteArray(0)
     private var transcodeSps = ByteArray(0)
     private var transcodePps = ByteArray(0)
 
@@ -298,7 +321,7 @@ class TsToFmp4Remuxer(
     private var transcodeFailure: String? = null
     private var released = false
 
-    /** "H.264 passthrough" / "H.264 -> HEVC 1920x1080@59.94". */
+    /** "HEVC passthrough" / "H.264 -> HEVC 1920x1080@59.94". */
     var videoPathDescription: String? = null
         private set
 
@@ -544,9 +567,10 @@ class TsToFmp4Remuxer(
         }
         // Refuse before any media flows: the ingest surfaces this as the
         // user-visible cast failure with the codec name.
-        if (video >= 0 && videoType != STREAM_TYPE_H264) {
+        if (video >= 0 && videoType != STREAM_TYPE_H264 && videoType != STREAM_TYPE_HEVC) {
             throw UnsupportedCodecException(STREAM_TYPE_NAMES[videoType] ?: "video stream_type 0x%02X".format(videoType))
         }
+        if (videoType == STREAM_TYPE_HEVC) videoCodec = CastVideoOutputSpec.Codec.HEVC
         if (audio >= 0 && audioType != STREAM_TYPE_AAC_ADTS) {
             // AC-3 / E-AC-3 passes through UNTOUCHED, but only to a
             // receiver that decodes it (the sender decides from the Cast
@@ -648,21 +672,40 @@ class TsToFmp4Remuxer(
         if (nals.isEmpty()) return
         var keyframe = false
         for (nal in nals) {
-            when (nal[0].toInt() and 0x1F) {
-                5 -> keyframe = true
-                7 -> {
-                    if (sps == null) sps = nal
-                    transcodeSps = nal
+            if (isHevc) {
+                when (nalType(nal)) {
+                    in 16..23 -> keyframe = true // IRAP: BLA, IDR, CRA
+                    32 -> {
+                        if (vps == null) vps = nal
+                        transcodeVps = nal
+                    }
+                    33 -> {
+                        if (sps == null) sps = nal
+                        transcodeSps = nal
+                    }
+                    34 -> {
+                        if (pps == null) pps = nal
+                        transcodePps = nal
+                    }
                 }
-                8 -> {
-                    if (pps == null) pps = nal
-                    transcodePps = nal
+            } else {
+                when (nalType(nal)) {
+                    5 -> keyframe = true
+                    7 -> {
+                        if (sps == null) sps = nal
+                        transcodeSps = nal
+                    }
+                    8 -> {
+                        if (pps == null) pps = nal
+                        transcodePps = nal
+                    }
                 }
             }
         }
         if (videoMode == VideoMode.UNDECIDED) {
-            if (sps == null || pps == null) return
+            if (sps == null || pps == null || (isHevc && vps == null)) return
             decideVideoMode()
+            if (videoMode == VideoMode.UNDECIDED) return
         }
         if (videoMode == VideoMode.TRANSCODE) {
             onTranscodeSourceAccessUnit(nals, pts33, dts33, keyframe)
@@ -685,7 +728,11 @@ class TsToFmp4Remuxer(
 
         // AVCC conversion: length-prefixed NALs, parameter sets kept
         // in-band (a mid-stream resolution change then stays decodable).
-        enqueueVideoSample(VideoSample(lengthPrefixed(nals, emptySet()), dts, pts, keyframe))
+        // HEVC is hvc1: the hvcC in the sample entry is the only copy of
+        // VPS / SPS / PPS, so they and the AUD come out of the samples, the
+        // same shape the HEVC transcode output has always had.
+        val dropping = if (isHevc) HEVC_PASSTHROUGH_DROP else emptySet()
+        enqueueVideoSample(VideoSample(lengthPrefixed(nals, dropping), dts, pts, keyframe))
     }
 
     /** Queue one video sample for the segmenter (passthrough and transcode
@@ -705,9 +752,13 @@ class TsToFmp4Remuxer(
         videoQueue.add(queued)
     }
 
+    /** nal_unit_type in the source codec's header layout. */
+    private fun nalType(nal: ByteArray): Int =
+        if (isHevc) (nal[0].toInt() shr 1) and 0x3F else nal[0].toInt() and 0x1F
+
     /** 4-byte-length NAL units, skipping the given nal_unit_types. */
     private fun lengthPrefixed(nals: List<ByteArray>, dropping: Set<Int>): ByteArray {
-        val kept = if (dropping.isEmpty()) nals else nals.filter { (it[0].toInt() and 0x1F) !in dropping }
+        val kept = if (dropping.isEmpty()) nals else nals.filter { nalType(it) !in dropping }
         val sample = ByteArray(kept.sumOf { 4 + it.size })
         var w = 0
         for (nal in kept) {
@@ -719,11 +770,28 @@ class TsToFmp4Remuxer(
 
     // ---- video transcode ----
 
-    /** Runs once, at the first access unit that completes SPS + PPS: the
-     *  sender's plan against the source's SPS. Logs the plan line. */
+    /** Runs once, at the first access unit that completes the parameter
+     *  sets (SPS + PPS, plus VPS for HEVC): the sender's plan against the
+     *  source's SPS. Logs the plan line and reports the path to the
+     *  listener for the cast card. */
     private fun decideVideoMode() {
-        val info = sps?.let { runCatching { CastSpsParser.parseSpsInfo(it) }.getOrNull() }
+        val srcName = CastVideoPlan.codecName(videoCodec)
+        val info = sps?.let {
+            runCatching {
+                if (isHevc) CastSpsParser.parseHevcStreamInfo(it) else CastSpsParser.parseSpsInfo(it)
+            }.getOrNull()
+        }
         if (info == null) {
+            if (isHevc) {
+                // Without a readable SPS there is no hvcC to declare, so
+                // HEVC cannot even pass through; wait for the next one.
+                if (!hevcSpsUnreadableLogged) {
+                    hevcSpsUnreadableLogged = true
+                    log("[Cast] video plan: HEVC SPS unreadable, waiting for the next parameter sets")
+                }
+                vps = null; sps = null; pps = null
+                return
+            }
             videoMode = VideoMode.PASSTHROUGH
             videoPathDescription = "H.264 passthrough"
             log("[Cast] video plan: source SPS unreadable -> passthrough")
@@ -739,13 +807,16 @@ class TsToFmp4Remuxer(
         val factory = videoTranscoderFactory
         if (spec == null || deliver == null || factory == null) {
             videoMode = VideoMode.PASSTHROUGH
-            videoPathDescription = "H.264 passthrough"
+            videoPathDescription = "$srcName passthrough"
+            listener.onVideoPath(CastVideoPathInfo(info, null, decision.reason))
             return
         }
         videoMode = VideoMode.TRANSCODE
-        val codecName = if (spec.codec == CastVideoOutputSpec.Codec.HEVC) "HEVC" else "H.264"
+        val codecName = CastVideoPlan.codecName(spec.codec)
         val fps = spec.outputFps(info.fps)?.let { "@" + CastVideoPlan.fpsLabel(it) } ?: ""
-        videoPathDescription = "H.264 -> $codecName ${spec.width}x${spec.height}$fps"
+        videoPathDescription = "$srcName${if (info.isHdr) " HDR" else ""} -> $codecName ${spec.width}x${spec.height}$fps" +
+            if (info.isHdr) (if (spec.hdr) " HDR" else " SDR (tone mapped)") else ""
+        listener.onVideoPath(CastVideoPathInfo(info, spec, decision.reason, decision.unsupported, decision.forced))
         val sink = CastVideoTranscodeSink(
             onFormat = { codec, config, width, height -> onTranscodedFormat(codec, config, width, height) },
             onSample = { data, pts, key -> onTranscodedSample(data, pts, key) },
@@ -753,6 +824,7 @@ class TsToFmp4Remuxer(
         )
         videoTranscoder = factory(info, spec, targetSegmentTicks, sink, deliver)
     }
+    private var hevcSpsUnreadableLogged = false
 
     /** Source access unit on the transcode path. The timeline is anchored
      *  here, on the SOURCE IDR, not when the first encoded frame comes
@@ -775,9 +847,14 @@ class TsToFmp4Remuxer(
         }
         // Parameter sets travel separately (the decoder format), AUD and
         // filler mean nothing to the decoder.
-        val sample = lengthPrefixed(nals, setOf(7, 8, 9, 12))
+        val sample = lengthPrefixed(nals, if (isHevc) HEVC_TRANSCODE_DROP else H264_TRANSCODE_DROP)
         if (sample.isEmpty()) return
-        transcoder.feed(sample, pts, dts, keyframe, transcodeSps, transcodePps)
+        val parameterSets = if (isHevc) {
+            listOf(transcodeVps, transcodeSps, transcodePps)
+        } else {
+            listOf(transcodeSps, transcodePps)
+        }
+        transcoder.feed(sample, pts, dts, keyframe, parameterSets)
     }
 
     private fun onTranscodedFormat(codec: CastVideoOutputSpec.Codec, config: ByteArray, width: Int, height: Int) {
@@ -1120,7 +1197,7 @@ class TsToFmp4Remuxer(
         if (initSent || !pmtSeen) return
         when (videoMode) {
             VideoMode.UNDECIDED -> return
-            VideoMode.PASSTHROUGH -> if (sps == null || pps == null) return
+            VideoMode.PASSTHROUGH -> if (sps == null || pps == null || (isHevc && vps == null)) return
             VideoMode.TRANSCODE -> if (transcodedFormat == null) return
         }
         if (!audioConfigReady) return
@@ -1293,6 +1370,16 @@ class TsToFmp4Remuxer(
                         entryType = if (hevc) "hvc1" else "avc1",
                         configType = if (hevc) "hvcC" else "avcC",
                         config = format.config,
+                    ),
+                )
+            } else if (isHevc) {
+                val info = runCatching { CastSpsParser.parseHevcStreamInfo(sps!!) }.getOrNull()
+                val hvcC = CastVideoCodecConfig.buildHvcc(vps!!, sps!!, pps!!)
+                    ?: error("HEVC parameter sets do not form an hvcC")
+                traks.add(
+                    videoTrak(
+                        info?.width ?: 1920, info?.height ?: 1080,
+                        entryType = "hvc1", configType = "hvcC", config = hvcC,
                     ),
                 )
             } else {

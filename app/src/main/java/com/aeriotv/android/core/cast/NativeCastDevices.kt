@@ -43,6 +43,19 @@ class NativeCastDevices @Inject constructor(
         prefs.edit().putStringSet(KEY_IDS, updated).apply()
     }
 
+    /** Drop a device from the native set, persisted like [remember]. Returns
+     *  true when it was known. A TV whose AerioTV app was uninstalled answers
+     *  the hello probe as the web receiver, and without this it stayed listed
+     *  under "AerioTV on TV" forever. */
+    fun forget(deviceId: String?): Boolean {
+        val id = deviceId?.takeIf { it.isNotBlank() } ?: return false
+        if (id !in _deviceIds.value) return false
+        val updated = _deviceIds.value - id
+        _deviceIds.value = updated
+        prefs.edit().putStringSet(KEY_IDS, updated).apply()
+        return true
+    }
+
     private companion object {
         const val PREFS = "aerio_native_cast_devices"
         const val KEY_IDS = "device_ids"

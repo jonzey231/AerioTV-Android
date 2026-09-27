@@ -53,10 +53,11 @@ class CastVideoTranscodeSink(
 /** Abstraction over the MediaCodec transcoder so the remuxer's pure logic
  *  stays testable off-device. */
 interface CastVideoTranscoding {
-    /** One source access unit: 4-byte-length H.264 NAL units with the
-     *  parameter sets, AUDs and filler already removed, 90 kHz unwrapped
-     *  timestamps, and the SPS / PPS in force for it. */
-    fun feed(sample: ByteArray, pts: Long, dts: Long, keyframe: Boolean, sps: ByteArray, pps: ByteArray)
+    /** One source access unit: 4-byte-length H.264 or HEVC NAL units with
+     *  the parameter sets, AUDs and filler already removed, 90 kHz
+     *  unwrapped timestamps, and the parameter sets in force for it (SPS,
+     *  PPS for H.264; VPS, SPS, PPS for HEVC). */
+    fun feed(sample: ByteArray, pts: Long, dts: Long, keyframe: Boolean, parameterSets: List<ByteArray>)
     fun release()
 }
 
@@ -67,7 +68,7 @@ interface CastVideoTranscoding {
 typealias CastIngestDelivery = (block: () -> Unit) -> Unit
 
 typealias CastVideoTranscoderFactory = (
-    source: CastH264StreamInfo,
+    source: CastVideoStreamInfo,
     spec: CastVideoOutputSpec,
     targetKeyTicks: Long,
     sink: CastVideoTranscodeSink,
@@ -75,7 +76,7 @@ typealias CastVideoTranscoderFactory = (
 ) -> CastVideoTranscoding
 
 /**
- * Decode (MediaCodec, hardware H.264) -> scale (GLES on the decoder's
+ * Decode (MediaCodec, hardware H.264 or HEVC) -> scale (GLES on the decoder's
  * SurfaceTexture, drawn into the encoder's input Surface) -> encode
  * (MediaCodec, hardware HEVC or H.264, realtime priority, no B-frames) on
  * a private HandlerThread; never on the ingest thread.
@@ -98,7 +99,7 @@ typealias CastVideoTranscoderFactory = (
  */
 class CastVideoTranscoder(
     context: Context,
-    private val source: CastH264StreamInfo,
+    private val source: CastVideoStreamInfo,
     private val spec: CastVideoOutputSpec,
     private val targetKeyTicks: Long,
     private val sink: CastVideoTranscodeSink,
@@ -139,13 +140,14 @@ class CastVideoTranscoder(
         private fun usToTicks(us: Long): Long = Math.round(us * 9 / 100.0)
     }
 
+    private enum class EncoderProfile { MAIN10, DEFAULT, NONE }
+
     private class InputFrame(
         val data: ByteArray,
         val pts: Long,
         val dts: Long,
         val keyframe: Boolean,
-        val sps: ByteArray,
-        val pps: ByteArray,
+        val parameterSets: List<ByteArray>,
     )
 
     // ---- state guarded by `lock` ----
@@ -177,8 +179,8 @@ class CastVideoTranscoder(
     // ---- work-thread state ----
     private var decoder: MediaCodec? = null
     private var decoderName = ""
-    private var decoderSps = ByteArray(0)
-    private var decoderPps = ByteArray(0)
+    /** Parameter sets the running decoder was configured with. */
+    private var decoderParams: List<ByteArray> = emptyList()
     private var encoder: MediaCodec? = null
     private var encoderName = ""
     private var encoderSurface: Surface? = null
@@ -234,13 +236,13 @@ class CastVideoTranscoder(
 
     // ---- ingest side ----
 
-    override fun feed(sample: ByteArray, pts: Long, dts: Long, keyframe: Boolean, sps: ByteArray, pps: ByteArray) {
+    override fun feed(sample: ByteArray, pts: Long, dts: Long, keyframe: Boolean, parameterSets: List<ByteArray>) {
         var dropped = 0
         var backlogSeconds = 0.0
         var schedule = false
         synchronized(lock) {
             if (released || failed) return
-            pending.addLast(InputFrame(sample, pts, dts, keyframe, sps, pps))
+            pending.addLast(InputFrame(sample, pts, dts, keyframe, parameterSets))
             // Drop whole GOPs from the front: a partial GOP cannot be
             // decoded, so the queue always restarts on a source IDR.
             while (pending.isNotEmpty() && pending.last().dts - pending.first().dts > MAX_BACKLOG_TICKS) {
@@ -336,11 +338,9 @@ class CastVideoTranscoder(
         if (waitingForKey && !frame.keyframe) return
         if (encoder == null) {
             if (!frame.keyframe) return
-            if (!makePipeline(frame.sps, frame.pps)) return
-        } else if (frame.keyframe && (decoder == null || !frame.sps.contentEquals(decoderSps) ||
-                !frame.pps.contentEquals(decoderPps))
-        ) {
-            if (!makeDecoder(frame.sps, frame.pps)) return
+            if (!makePipeline(frame.parameterSets)) return
+        } else if (frame.keyframe && (decoder == null || !sameParams(frame.parameterSets, decoderParams))) {
+            if (!makeDecoder(frame.parameterSets)) return
         }
         val decoder = decoder ?: return
         if (waitingForKey) {
@@ -419,7 +419,11 @@ class CastVideoTranscoder(
             while (!isStopped) {
                 val idx = decoder.dequeueOutputBuffer(bufferInfo, 0)
                 if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) break
-                if (idx < 0) continue // format / buffers changed
+                if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    onDecoderFormat(decoder)
+                    continue
+                }
+                if (idx < 0) continue // buffers changed
                 decoderHeld = maxOf(0, decoderHeld - 1)
                 consecutiveErrors = 0
                 val ticks = usToTicks(bufferInfo.presentationTimeUs)
@@ -578,6 +582,7 @@ class CastVideoTranscoder(
                 return
             }
             formatDelivered = true
+            logEncoderVui()
             val codec = spec.codec
             val w = spec.width
             val h = spec.height
@@ -593,17 +598,51 @@ class CastVideoTranscoder(
         deliver { sink.onSample(sample, ticks, keyframe) }
     }
 
+    /** What the encoder actually wrote into its SPS VUI (the hvcC the
+     *  receiver reads). The color keys are a request; an encoder that drops
+     *  the VUI makes kept HDR play as SDR on the TV, so it is logged. */
+    private fun logEncoderVui() {
+        if (spec.codec != CastVideoOutputSpec.Codec.HEVC || !source.isHdr) return
+        val sps = pendingConfig?.let { cfg ->
+            CastVideoCodecConfig.splitAnnexB(cfg).firstOrNull { it.isNotEmpty() && ((it[0].toInt() shr 1) and 0x3F) == 33 }
+        } ?: return
+        val info = runCatching { CastSpsParser.parseHevcStreamInfo(sps) }.getOrNull() ?: return
+        log(
+            "video transcode: encoder VUI primaries=${info.colourPrimaries ?: "none"} " +
+                "transfer=${info.transferCharacteristics ?: "none"} matrix=${info.matrixCoefficients ?: "none"}" +
+                if (spec.hdr && info.hdrTransfer == null) " (HDR tags missing: receiver will show SDR)" else "",
+        )
+    }
+
     // ---- sessions ----
 
     /** Encoder first (the decoder renders into the scaler, the scaler into
      *  the encoder's input surface), then the decoder. */
-    private fun makePipeline(sps: ByteArray, pps: ByteArray): Boolean {
+    private fun makePipeline(parameterSets: List<ByteArray>): Boolean {
         if (!makeEncoder()) return false
-        return makeDecoder(sps, pps)
+        return makeDecoder(parameterSets)
     }
 
-    private fun makeDecoder(sps: ByteArray, pps: ByteArray): Boolean {
-        if (sps.isEmpty() || pps.isEmpty()) return false
+    private fun sameParams(a: List<ByteArray>, b: List<ByteArray>): Boolean =
+        a.size == b.size && a.indices.all { a[it].contentEquals(b[it]) }
+
+    private val sourceIsHevc: Boolean get() = source.codec == CastVideoOutputSpec.Codec.HEVC
+
+    /** The HDR transfer to tone map away: an HDR source whose output the
+     *  receiver cannot present as HDR (the plan's [CastVideoOutputSpec.hdr]
+     *  is false, and always for H.264). null when there is nothing to map. */
+    private val toneMapFrom: CastHdrTransfer? = source.hdrTransfer?.takeIf { !spec.hdr }
+
+    /** Which tone map ran is logged once per transcoder, not per decoder
+     *  rebuild. */
+    private var toneMapLogged = false
+
+    /** The platform decoder accepted the SDR transfer request (API 33+). */
+    private var platformToneMap = false
+    private val sourceLabel: String get() = CastVideoPlan.codecName(source.codec)
+
+    private fun makeDecoder(parameterSets: List<ByteArray>): Boolean {
+        if (parameterSets.isEmpty() || parameterSets.any { it.isEmpty() }) return false
         val gl = gl ?: return false
         decoder?.let { old ->
             // Parameter set change: the frames the old decoder holds are
@@ -613,17 +652,42 @@ class CastVideoTranscoder(
             decoder = null
             decoderHeld = 0
         }
-        val name = decoderName.ifEmpty { findCodec(MediaFormat.MIMETYPE_VIDEO_AVC, encoder = false, source.width, source.height) }
+        val mime = if (sourceIsHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
+        // A 10-bit source needs a decoder that lists Main10; any hardware
+        // HEVC decoder is the fallback when none says so.
+        val needProfile = if (sourceIsHevc && source.bitDepth > 8) {
+            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+        } else {
+            null
+        }
+        val name = decoderName.ifEmpty {
+            needProfile?.let { findCodec(mime, encoder = false, source.width, source.height, it) }
+                ?: findCodec(mime, encoder = false, source.width, source.height)
+        }
         if (name == null) {
-            fail("hardware H.264 decoder unavailable (none for ${source.width}x${source.height})")
+            fail("hardware $sourceLabel decoder unavailable (none for ${source.width}x${source.height})")
             return false
         }
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, source.width, source.height).apply {
+        val format = MediaFormat.createVideoFormat(mime, source.width, source.height).apply {
             val start = byteArrayOf(0, 0, 0, 1)
-            setByteBuffer("csd-0", ByteBuffer.wrap(start + sps))
-            setByteBuffer("csd-1", ByteBuffer.wrap(start + pps))
+            if (sourceIsHevc) {
+                // HEVC takes VPS + SPS + PPS as one Annex B csd-0.
+                setByteBuffer(
+                    "csd-0",
+                    ByteBuffer.wrap(parameterSets.fold(ByteArray(0)) { acc, nal -> acc + start + nal }),
+                )
+            } else {
+                setByteBuffer("csd-0", ByteBuffer.wrap(start + parameterSets[0]))
+                setByteBuffer("csd-1", ByteBuffer.wrap(start + parameterSets[1]))
+            }
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(2 * 1024 * 1024, source.width * source.height))
             setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
+            // Preferred tone map: ask the platform decoder for SDR output
+            // (API 33+). It maps with the vendor's own curve into the same
+            // SurfaceTexture, so the GPU path below stays a plain copy.
+            if (toneMapFrom != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+            }
         }
         val codec = try {
             MediaCodec.createByCodecName(name).also {
@@ -631,14 +695,76 @@ class CastVideoTranscoder(
                 it.start()
             }
         } catch (e: Exception) {
-            fail("hardware H.264 decoder unavailable (${describe(e)})")
+            fail("hardware $sourceLabel decoder unavailable (${describe(e)})")
             return false
         }
+        applyToneMapPath(codec, gl)
         decoder = codec
         decoderName = name
-        decoderSps = sps
-        decoderPps = pps
+        decoderParams = parameterSets
         return true
+    }
+
+    /**
+     * Pick the tone map for this decoder. A decoder that honors
+     * KEY_COLOR_TRANSFER_REQUEST echoes it in its output format after
+     * configure; one that silently ignores it does not, and then the
+     * shader maps instead (also below API 33). The decoder's reported
+     * transfer is re-checked at INFO_OUTPUT_FORMAT_CHANGED, see
+     * [onDecoderFormat].
+     */
+    private fun applyToneMapPath(codec: MediaCodec, gl: GlScaler) {
+        val from = toneMapFrom
+        if (from == null) {
+            gl.toneMap = null
+            if (!toneMapLogged && source.isHdr && spec.hdr) {
+                toneMapLogged = true
+                log("video transcode: HDR ${source.hdrTransfer?.label} kept (receiver displays it)")
+            }
+            return
+        }
+        platformToneMap = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && runCatching {
+            val f = codec.outputFormat
+            f.containsKey(MediaFormat.KEY_COLOR_TRANSFER_REQUEST) &&
+                f.getInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST) == MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+        }.getOrDefault(false)
+        gl.toneMap = if (platformToneMap) null else from
+        if (!toneMapLogged) {
+            toneMapLogged = true
+            val why = when {
+                platformToneMap -> ""
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> ", Android ${Build.VERSION.SDK_INT} has no decoder tone map"
+                else -> ", decoder $decoderName ignored the SDR request"
+            }
+            log(
+                "video transcode: HDR ${from.label} -> SDR BT.709 (tone mapped on the phone: " +
+                    "${if (platformToneMap) "platform" else "shader"}$why)",
+            )
+        }
+    }
+
+    /** The decoder's real output format. On the platform path it must
+     *  report SDR; a decoder that accepted the request but still emits HLG
+     *  / PQ is caught here and the shader takes over. */
+    private fun onDecoderFormat(codec: MediaCodec) {
+        val from = toneMapFrom ?: return
+        val transfer = runCatching {
+            codec.outputFormat.let { if (it.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) it.getInteger(MediaFormat.KEY_COLOR_TRANSFER) else null }
+        }.getOrNull()
+        val name = when (transfer) {
+            MediaFormat.COLOR_TRANSFER_SDR_VIDEO -> "SDR_VIDEO"
+            MediaFormat.COLOR_TRANSFER_HLG -> "HLG"
+            MediaFormat.COLOR_TRANSFER_ST2084 -> "ST2084"
+            MediaFormat.COLOR_TRANSFER_LINEAR -> "LINEAR"
+            null -> "unreported"
+            else -> transfer.toString()
+        }
+        log("video transcode: decoder output color transfer $name")
+        if (platformToneMap && (transfer == MediaFormat.COLOR_TRANSFER_HLG || transfer == MediaFormat.COLOR_TRANSFER_ST2084)) {
+            platformToneMap = false
+            gl?.toneMap = from
+            log("video transcode: HDR ${from.label} -> SDR BT.709 (tone mapped on the phone: shader, decoder still outputs $name)")
+        }
     }
 
     private fun makeEncoder(): Boolean {
@@ -659,7 +785,19 @@ class CastVideoTranscoder(
         // IDR a frame BEFORE the target (179.82 frames at 59.94) and the
         // forced one right after, two IDRs per segment.
         val keySeconds = targetKeyTicks.toDouble() / TICKS
-        fun format(withProfile: Boolean, withBitrateMode: Boolean) =
+        // A 10-bit source keeps 10 bits when the output is HEVC, this
+        // encoder lists Main10, and the picture stays HDR (or was never
+        // HDR). A tone-mapped picture is SDR BT.709, so 8-bit Main; H.264
+        // output is always 8-bit 4:2:0.
+        val main10 = spec.codec == CastVideoOutputSpec.Codec.HEVC && source.bitDepth > 8 &&
+            (spec.hdr || !source.isHdr) &&
+            codecSupportsProfile(name, mime, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+        // The GPU hands the encoder RGB, and these tags set the encoder's
+        // RGB to YUV matrix and the VUI it writes into the SPS (and so the
+        // hvcC / avcC). Kept HDR carries the source's BT.2020 + HLG / PQ;
+        // every SDR output from an HDR source, and all H.264, is BT.709.
+        val sdr709 = spec.codec == CastVideoOutputSpec.Codec.H264 || (source.isHdr && !spec.hdr)
+        fun format(profile: EncoderProfile, withBitrateMode: Boolean) =
             MediaFormat.createVideoFormat(mime, spec.width, spec.height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, targetBitrate)
@@ -675,8 +813,10 @@ class CastVideoTranscoder(
                 if (withBitrateMode) {
                     setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                 }
-                if (withProfile) {
-                    when (spec.codec) {
+                when (profile) {
+                    EncoderProfile.MAIN10 ->
+                        setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+                    EncoderProfile.DEFAULT -> when (spec.codec) {
                         CastVideoOutputSpec.Codec.HEVC ->
                             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain)
                         CastVideoOutputSpec.Codec.H264 -> {
@@ -684,15 +824,22 @@ class CastVideoTranscoder(
                             setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel41)
                         }
                     }
+                    EncoderProfile.NONE -> Unit
                 }
-                colorStandard(source.colourPrimaries, source.matrixCoefficients)?.let {
-                    setInteger(MediaFormat.KEY_COLOR_STANDARD, it)
+                if (sdr709) {
+                    setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                    setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                    setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                } else {
+                    colorStandard(source.colourPrimaries, source.matrixCoefficients)?.let {
+                        setInteger(MediaFormat.KEY_COLOR_STANDARD, it)
+                    }
+                    colorTransfer(source.transferCharacteristics)?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
+                    setInteger(
+                        MediaFormat.KEY_COLOR_RANGE,
+                        if (source.fullRange) MediaFormat.COLOR_RANGE_FULL else MediaFormat.COLOR_RANGE_LIMITED,
+                    )
                 }
-                colorTransfer(source.transferCharacteristics)?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
-                setInteger(
-                    MediaFormat.KEY_COLOR_RANGE,
-                    if (source.fullRange) MediaFormat.COLOR_RANGE_FULL else MediaFormat.COLOR_RANGE_LIMITED,
-                )
             }
         val vbr = runCatching {
             MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { it.name == name }
@@ -702,11 +849,15 @@ class CastVideoTranscoder(
         var codec: MediaCodec? = null
         var surface: Surface? = null
         var lastError: Exception? = null
-        for (withProfile in listOf(true, false)) {
+        var used = EncoderProfile.NONE
+        val attempts = listOfNotNull(
+            EncoderProfile.MAIN10.takeIf { main10 }, EncoderProfile.DEFAULT, EncoderProfile.NONE,
+        )
+        for (profile in attempts) {
             try {
                 val c = MediaCodec.createByCodecName(name)
                 try {
-                    c.configure(format(withProfile, vbr), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    c.configure(format(profile, vbr), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                     surface = c.createInputSurface()
                     c.start()
                     codec = c
@@ -714,12 +865,17 @@ class CastVideoTranscoder(
                     runCatching { c.release() }
                     throw e
                 }
+                used = profile
                 break
             } catch (e: Exception) {
                 lastError = e
-                if (withProfile) {
-                    val profile = if (spec.codec == CastVideoOutputSpec.Codec.HEVC) "HEVC Main" else "High 4.1"
-                    log("video transcode: encoder refused profile $profile (${describe(e)})")
+                if (profile != EncoderProfile.NONE) {
+                    val label = when {
+                        profile == EncoderProfile.MAIN10 -> "HEVC Main10"
+                        spec.codec == CastVideoOutputSpec.Codec.HEVC -> "HEVC Main"
+                        else -> "High 4.1"
+                    }
+                    log("video transcode: encoder refused profile $label (${describe(e)})")
                 }
             }
         }
@@ -728,7 +884,7 @@ class CastVideoTranscoder(
             return false
         }
         val scaler = try {
-            GlScaler(surface, spec.width, spec.height, auxHandler) {
+            GlScaler(surface, spec.width, spec.height, tenBit = used == EncoderProfile.MAIN10, auxHandler) {
                 synchronized(frameSync) {
                     frameAvailable = true
                     frameSync.notifyAll()
@@ -745,32 +901,46 @@ class CastVideoTranscoder(
         encoderName = name
         encoderSurface = surface
         gl = scaler
-        val target = when (spec.codec) {
-            CastVideoOutputSpec.Codec.HEVC -> "HEVC Main"
-            CastVideoOutputSpec.Codec.H264 -> "H.264 High 4.1"
+        val target = when {
+            used == EncoderProfile.MAIN10 -> "HEVC Main10"
+            spec.codec == CastVideoOutputSpec.Codec.HEVC -> "HEVC Main"
+            else -> "H.264 High 4.1"
         }
         val outLabel = outFps?.let { CastVideoPlan.fpsLabel(it) } ?: "?"
+        val depth = (if (source.bitDepth > 8) " ${source.bitDepth}-bit" else "") +
+            (source.hdrTransfer?.let { " HDR ${it.label}" } ?: "")
         log(
-            "video transcode: H.264 ${source.width}x${source.height}@${source.fps?.let { CastVideoPlan.fpsLabel(it) } ?: "?"} " +
-                "level ${source.levelLabel} -> $target ${spec.width}x${spec.height}@$outLabel, " +
+            "video transcode: $sourceLabel$depth ${source.width}x${source.height}@" +
+                "${source.fps?.let { CastVideoPlan.fpsLabel(it) } ?: "?"} " +
+                "level ${source.levelLabel} -> $target ${spec.width}x${spec.height}@$outLabel" +
+                "${if (spec.hdr) " HDR ${source.hdrTransfer?.label}" else if (sdr709) " BT.709" else ""}, " +
                 "target ${targetBitrate / 1000} kbps (MediaCodec hardware $name)",
         )
         return true
     }
 
-    /** First hardware codec for [mime] that takes [w]x[h]; null when the
-     *  device has none (the transcode then fails over to passthrough). */
-    private fun findCodec(mime: String, encoder: Boolean, w: Int, h: Int): String? {
+    /** First hardware codec for [mime] that takes [w]x[h] (and lists
+     *  [profile] when given); null when the device has none (the transcode
+     *  then fails over to passthrough). */
+    private fun findCodec(mime: String, encoder: Boolean, w: Int, h: Int, profile: Int? = null): String? {
         val infos = runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }.getOrNull() ?: return null
         return infos.firstOrNull { info ->
             info.isEncoder == encoder &&
                 info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
                 isHardware(info) &&
                 runCatching {
-                    info.getCapabilitiesForType(mime).videoCapabilities?.isSizeSupported(w, h) == true
+                    val caps = info.getCapabilitiesForType(mime)
+                    caps.videoCapabilities?.isSizeSupported(w, h) == true &&
+                        (profile == null || caps.profileLevels.any { it.profile == profile })
                 }.getOrDefault(false)
         }?.name
     }
+
+    /** Whether the named codec lists [profile] for [mime]. */
+    private fun codecSupportsProfile(name: String, mime: String, profile: Int): Boolean = runCatching {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { it.name == name }
+            ?.getCapabilitiesForType(mime)?.profileLevels?.any { it.profile == profile } == true
+    }.getOrDefault(false)
 
     private fun isHardware(info: MediaCodecInfo): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -787,8 +957,7 @@ class CastVideoTranscoder(
         log("video transcode: $reason; rebuilding at the next IDR (reset $sessionResets)")
         decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
         decoder = null
-        decoderSps = ByteArray(0)
-        decoderPps = ByteArray(0)
+        decoderParams = emptyList()
         decoderHeld = 0
         waitingForKey = true
         if (sessionResets >= 5) fail("$reason, $sessionResets resets")
@@ -808,8 +977,7 @@ class CastVideoTranscoder(
     private fun teardownSessions() {
         decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
         decoder = null
-        decoderSps = ByteArray(0)
-        decoderPps = ByteArray(0)
+        decoderParams = emptyList()
         decoderHeld = 0
         encoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
         encoder = null
@@ -837,7 +1005,7 @@ class CastVideoTranscoder(
             failed = true
             pending.clear()
         }
-        log("video transcode failed: $reason; falling back to H.264 passthrough")
+        log("video transcode failed: $reason; falling back to passthrough")
         deliver { sink.onFailure(reason) }
     }
 
@@ -973,6 +1141,10 @@ private class GlScaler(
     encoderSurface: Surface,
     private val width: Int,
     private val height: Int,
+    /** Main10 output: draw into a 10-bit window surface so the encoder is
+     *  not handed 8-bit buffers for a 10-bit stream. Falls back to 8 bits
+     *  when the display has no such config. */
+    tenBit: Boolean,
     frameHandler: Handler,
     onFrame: () -> Unit,
 ) {
@@ -984,7 +1156,13 @@ private class GlScaler(
     private val aPosition: Int
     private val aTexCoord: Int
     private val uTexMatrix: Int
+    private val uToneMap: Int
     private val texMatrix = FloatArray(16)
+
+    /** Shader tone map: null draws a straight copy; HLG / PQ maps that
+     *  transfer to SDR BT.709 (the fallback when the decoder does not). */
+    @Volatile
+    var toneMap: CastHdrTransfer? = null
     val surfaceTexture: SurfaceTexture
     val decoderSurface: Surface
 
@@ -996,18 +1174,20 @@ private class GlScaler(
         check(display != EGL14.EGL_NO_DISPLAY) { "no EGL display" }
         val version = IntArray(2)
         check(EGL14.eglInitialize(display, version, 0, version, 1)) { "eglInitialize failed" }
-        val attribs = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
+        fun attribs(rgb: Int, alpha: Int) = intArrayOf(
+            EGL14.EGL_RED_SIZE, rgb, EGL14.EGL_GREEN_SIZE, rgb, EGL14.EGL_BLUE_SIZE, rgb, EGL14.EGL_ALPHA_SIZE, alpha,
             EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
             EGL_RECORDABLE_ANDROID, 1,
             EGL14.EGL_NONE,
         )
-        val configs = arrayOfNulls<EGLConfig>(1)
-        val count = IntArray(1)
-        check(EGL14.eglChooseConfig(display, attribs, 0, configs, 0, 1, count, 0) && count[0] > 0) {
-            "no recordable EGL config"
+        fun choose(a: IntArray): EGLConfig? {
+            val configs = arrayOfNulls<EGLConfig>(1)
+            val count = IntArray(1)
+            return if (EGL14.eglChooseConfig(display, a, 0, configs, 0, 1, count, 0) && count[0] > 0) configs[0] else null
         }
-        val config = configs[0]!!
+        val config = (if (tenBit) choose(attribs(10, 2)) else null)
+            ?: choose(attribs(8, 8))
+            ?: error("no recordable EGL config")
         context = EGL14.eglCreateContext(
             display, config, EGL14.EGL_NO_CONTEXT,
             intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0,
@@ -1021,6 +1201,7 @@ private class GlScaler(
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
         aTexCoord = GLES20.glGetAttribLocation(program, "aTexCoord")
         uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
+        uToneMap = GLES20.glGetUniformLocation(program, "uToneMap")
         val tex = IntArray(1)
         GLES20.glGenTextures(1, tex, 0)
         textureId = tex[0]
@@ -1043,6 +1224,14 @@ private class GlScaler(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, texMatrix, 0)
+        GLES20.glUniform1f(
+            uToneMap,
+            when (toneMap) {
+                null -> 0f
+                CastHdrTransfer.HLG -> 1f
+                CastHdrTransfer.PQ -> 2f
+            },
+        )
         GLES20.glEnableVertexAttribArray(aPosition)
         GLES20.glVertexAttribPointer(aPosition, 2, GLES20.GL_FLOAT, false, 8, quad)
         GLES20.glEnableVertexAttribArray(aTexCoord)
@@ -1105,13 +1294,87 @@ private class GlScaler(
             }
         """
 
+        // The fallback tone map (uToneMap 1 = HLG, 2 = PQ; 0 = copy). The
+        // external sampler has already converted the decoder's BT.2020 YUV
+        // to non-linear R'G'B', so per pixel:
+        //  1. EOTF to linear light, normalized so SDR reference white
+        //     (203 nits, BT.2408) is 1.0. HLG: inverse OETF, then the
+        //     BT.2100 OOTF at a 1000 nit nominal peak (system gamma 1.2).
+        //     PQ: the ST 2084 EOTF.
+        //  2. BT.2020 to BT.709 primaries in linear light, negatives
+        //     clipped (out-of-gamut colors).
+        //  3. Highlight roll-off on max(R,G,B), hue preserving: linear up
+        //     to the knee, then a curve with slope 1 at the knee that
+        //     approaches 1.0, so specular highlights compress instead of
+        //     clipping flat (the BT.2390 idea, simplified).
+        //  4. BT.709 OETF.
+        // highp where the GPU has it: PQ needs more than mediump's ~11 bits.
         const val FRAGMENT_SHADER = """
             #extension GL_OES_EGL_image_external : require
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
             precision mediump float;
+            #endif
             varying vec2 vTexCoord;
             uniform samplerExternalOES sTexture;
+            uniform float uToneMap;
+
+            vec3 hlgToLinear(vec3 e) {
+                const float a = 0.17883277;
+                const float b = 0.28466892;
+                const float c = 0.55991073;
+                vec3 lo = e * e / 3.0;
+                vec3 hi = (exp((e - c) / a) + b) / 12.0;
+                vec3 scene = mix(lo, hi, step(vec3(0.5), e));
+                float ys = dot(scene, vec3(0.2627, 0.6780, 0.0593));
+                vec3 display = scene * pow(max(ys, 1e-6), 0.2);
+                return display * (1000.0 / 203.0);
+            }
+
+            vec3 pqToLinear(vec3 e) {
+                const float m1 = 0.1593017578125;
+                const float m2 = 78.84375;
+                const float c1 = 0.8359375;
+                const float c2 = 18.8515625;
+                const float c3 = 18.6875;
+                vec3 p = pow(max(e, 0.0), vec3(1.0 / m2));
+                vec3 nits = 10000.0 * pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1));
+                return nits / 203.0;
+            }
+
+            vec3 bt2020To709(vec3 c) {
+                return vec3(
+                    dot(c, vec3(1.6605, -0.5876, -0.0728)),
+                    dot(c, vec3(-0.1246, 1.1329, -0.0083)),
+                    dot(c, vec3(-0.0182, -0.1006, 1.1187))
+                );
+            }
+
+            vec3 rollOff(vec3 c) {
+                const float knee = 0.75;
+                float m = max(max(c.r, c.g), c.b);
+                if (m <= knee) return c;
+                float x = m - knee;
+                float mapped = knee + (1.0 - knee) * x / (x + (1.0 - knee));
+                return c * (mapped / m);
+            }
+
+            vec3 bt709Oetf(vec3 l) {
+                vec3 lo = 4.5 * l;
+                vec3 hi = 1.099 * pow(max(l, 0.0), vec3(0.45)) - 0.099;
+                return mix(lo, hi, step(vec3(0.018), l));
+            }
+
             void main() {
-                gl_FragColor = texture2D(sTexture, vTexCoord);
+                vec4 src = texture2D(sTexture, vTexCoord);
+                if (uToneMap < 0.5) {
+                    gl_FragColor = src;
+                    return;
+                }
+                vec3 lin = uToneMap < 1.5 ? hlgToLinear(src.rgb) : pqToLinear(src.rgb);
+                vec3 sdr = rollOff(max(bt2020To709(lin), 0.0));
+                gl_FragColor = vec4(clamp(bt709Oetf(sdr), 0.0, 1.0), 1.0);
             }
         """
 

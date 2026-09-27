@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -136,6 +137,9 @@ fun CastRemoteSheet(
     onDisconnect: (() -> Unit)? = null,
     /** Channel logo for the header; the transport glyph stands in when null. */
     logoUrl: String? = null,
+    /** Google Cast: the card's "Receiver: ..." stat and transcode note, shown
+     *  again at the top of Stream Info. */
+    castDetailLines: List<String> = emptyList(),
     /** Current programme's start / end (epoch ms) for the time range and
      *  progress bar; 0 hides both. */
     programmeStartMs: Long = 0L,
@@ -312,7 +316,7 @@ fun CastRemoteSheet(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),
                 ) {
                     RemoteButton(
                         SkipIntervals.backIcon(backSeconds),
@@ -331,7 +335,7 @@ fun CastRemoteSheet(
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (canChangeChannel) {
@@ -365,7 +369,6 @@ fun CastRemoteSheet(
                 if (canChangeChannel) {
                     RemoteButton(Icons.Filled.KeyboardArrowUp, "Channel up", onChannelUp)
                 }
-                Spacer(Modifier.width(6.dp))
                 RemoteButton(Icons.Filled.Tune, "Options", {
                     onRefreshState()
                     optionsOpen = true
@@ -382,6 +385,19 @@ fun CastRemoteSheet(
                 ),
             ) {
                 Text(stopLabel, fontWeight = FontWeight.SemiBold)
+            }
+            // Under Stop, as on iOS (Logan 2026-09-27: the resolution lines
+            // belong in the expanded sheet, not the collapsed card).
+            if (castDetailLines.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                castDetailLines.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
             Spacer(Modifier.height(18.dp))
         }
@@ -485,11 +501,23 @@ fun CastRemoteSheet(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(10.dp))
-                Text(
-                    text = remoteState.streamInfo.ifBlank { "No stream details available" },
-                    style = MaterialTheme.typography.bodyMedium.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                castDetailLines.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodyMedium.subtext(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (castDetailLines.isNotEmpty() && remoteState.streamInfo.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (castDetailLines.isEmpty() || remoteState.streamInfo.isNotBlank()) {
+                    Text(
+                        text = remoteState.streamInfo.ifBlank { "No stream details available" },
+                        style = MaterialTheme.typography.bodyMedium.subtext(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
             }
         }
@@ -603,9 +631,18 @@ private fun RemoteButton(
 ) {
     val size = if (emphasized) 60.dp else 48.dp
     val contentAlpha = if (enabled) 1f else 0.35f
+    // Every button sits in the same fixed-width column (iOS parity,
+    // 2026-09-27): unequal button sizes or labels ("Forward 60s" vs
+    // "Back 5s") then cannot shift where the row's center lands.
+    Box(
+        modifier = Modifier.width(REMOTE_COLUMN_WIDTH),
+        contentAlignment = Alignment.Center,
+    ) {
     Box(
         modifier = Modifier
-            .size(size)
+            // required: the 60 dp Play / Pause may overhang its column
+            // evenly on both sides instead of being squeezed into it.
+            .requiredSize(size)
             .clip(CircleShape)
             .background(
                 if (emphasized) MaterialTheme.colorScheme.primary
@@ -628,7 +665,13 @@ private fun RemoteButton(
             )
         }
     }
+    }
 }
+
+/** The shared column width of the transport rows' buttons. Six columns
+ *  (Channel Down, Back, Play / Pause, Forward, Channel Up, Options) at 56 dp
+ *  plus 2 dp gaps keep the row no wider than before (346 dp vs 350 dp). */
+private val REMOTE_COLUMN_WIDTH = 56.dp
 
 /** Small red LIVE badge beside the programme title. */
 @Composable

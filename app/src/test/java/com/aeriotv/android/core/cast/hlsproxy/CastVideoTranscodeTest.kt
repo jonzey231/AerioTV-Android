@@ -105,6 +105,45 @@ class CastVideoTranscodeTest {
         return Triple(vps, sps, pps)
     }
 
+    /** HEVC Main10 level 5.1 3840x2160 SPS with a full body and VUI:
+     *  BT.2020 primaries, HLG transfer (18), BT.2020 matrix, 50 fps
+     *  (1 / 50), sps_max_num_reorder_pics 2, two short-term RPS (the second
+     *  inter-predicted) so the parser has to walk st_ref_pic_set. */
+    private fun hevcSps4K50Hlg(): ByteArray {
+        val w = BitWriter()
+        w.put(0, 4); w.put(0, 3); w.put(1, 1) // vps id, max_sub_layers_minus1 0, nesting
+        w.put(0, 2); w.put(0, 1); w.put(2, 5) // space, tier, profile_idc 2 (Main10)
+        w.put(0x2000_0000L, 32) // compat flag 2
+        w.put(0xB0, 8); w.put(0L, 40)
+        w.put(153, 8) // level 5.1
+        w.ue(0) // sps id
+        w.ue(1) // 4:2:0
+        w.ue(3840); w.ue(2160)
+        w.put(0, 1) // no conformance window
+        w.ue(2); w.ue(2) // 10-bit luma and chroma
+        w.ue(4) // log2_max_pic_order_cnt_lsb_minus4
+        w.put(1, 1); w.ue(4); w.ue(2); w.ue(0) // ordering info: dpb, reorder 2, latency
+        w.ue(0); w.ue(3); w.ue(0); w.ue(3); w.ue(0); w.ue(0) // block sizes, depths
+        w.put(0, 1) // scaling_list_enabled
+        w.put(1, 1); w.put(1, 1) // amp, sao
+        w.put(0, 1) // pcm
+        w.ue(2) // num_short_term_ref_pic_sets
+        w.ue(1); w.ue(0); w.ue(0); w.put(1, 1) // RPS 0: one negative picture
+        w.put(1, 1); w.put(0, 1); w.ue(0) // RPS 1: inter predicted, sign, abs_delta
+        w.put(1, 1); w.put(0, 1); w.put(1, 1) // j0 used; j1 not used, use_delta
+        w.put(0, 1) // long_term_ref_pics_present
+        w.put(1, 1); w.put(1, 1) // temporal mvp, strong intra smoothing
+        w.put(1, 1) // vui
+        w.put(0, 1); w.put(0, 1) // aspect, overscan
+        w.put(1, 1); w.put(5, 3); w.put(0, 1); w.put(1, 1); w.put(9, 8); w.put(18, 8); w.put(9, 8)
+        w.put(0, 1); w.put(0, 1); w.put(0, 1); w.put(0, 1); w.put(0, 1) // chroma loc .. display window
+        w.put(1, 1); w.put(1L, 32); w.put(50L, 32); w.put(0, 1); w.put(0, 1) // timing, no hrd
+        w.put(0, 1) // bitstream_restriction
+        w.put(0, 1) // sps_extension_present
+        w.trailing()
+        return byteArrayOf(0x42, 0x01) + escapeRbsp(w.toByteArray())
+    }
+
     private fun box(type: String, payload: ByteArray): ByteArray {
         val size = 8 + payload.size
         return byteArrayOf(
@@ -134,7 +173,7 @@ class CastVideoTranscodeTest {
         ),
     )
 
-    private val src: CastH264StreamInfo by lazy { CastSpsParser.parseSpsInfo(h264Sps1080p60()) }
+    private val src: CastVideoStreamInfo by lazy { CastSpsParser.parseSpsInfo(h264Sps1080p60()) }
 
     // ---- SPS facts ----
 
@@ -151,6 +190,36 @@ class CastVideoTranscodeTest {
         assertTrue(info.progressive)
         assertEquals("1920x1080@59.94", info.label)
         assertEquals("4.2", info.levelLabel)
+    }
+
+    @Test
+    fun `hevc sps info reads size, depth, level, VUI timing and colour`() {
+        val info = CastSpsParser.parseHevcStreamInfo(hevcSps4K50Hlg())
+        assertEquals(CastVideoOutputSpec.Codec.HEVC, info.codec)
+        assertEquals(3840, info.width)
+        assertEquals(2160, info.height)
+        assertEquals(10, info.bitDepth)
+        assertEquals(1, info.chromaFormatIdc)
+        assertEquals(2, info.profileIdc)
+        assertEquals(153, info.levelIdc)
+        assertEquals("5.1", info.levelLabel)
+        assertEquals("hvc1.2.4.L153.B0", info.codecString)
+        assertEquals(50.0, info.fps!!, 0.0)
+        assertEquals(9, info.colourPrimaries)
+        assertEquals(18, info.transferCharacteristics)
+        assertEquals(9, info.matrixCoefficients)
+        assertEquals(2, info.maxNumReorderFrames)
+        assertTrue(info.progressive)
+        assertEquals("HEVC", info.codecName)
+        assertEquals("3840x2160@50", info.label)
+
+        // The 1080p Main fixture has no VUI: size and crop still read, no fps.
+        val main = CastSpsParser.parseHevcStreamInfo(hevcParameterSets().second)
+        assertEquals(1920, main.width)
+        assertEquals("conformance window crop", 1080, main.height)
+        assertEquals(8, main.bitDepth)
+        assertNull(main.fps)
+        assertEquals("hvc1.1.6.L153.B0", main.codecString)
     }
 
     // ---- the plan ----
@@ -261,6 +330,226 @@ class CastVideoTranscodeTest {
         assertEquals(CastVideoDecision(null, "MediaCodec failed"), disabled.decide(src))
     }
 
+    /** Google TV Streamer web receiver, measured 2026-09-27. */
+    private val streamerCaps = CastReceiverVideoCaps(
+        mse = mapOf("avc1.64002A" to true, "hvc1" to true, "hvc1.4k" to false, "hev1" to true),
+        display = mapOf(
+            "h264_1080p60" to true, "h264_1080p30" to true, "hevc_1080p60" to true,
+            "hevc_4k60" to false, "h264_4k60" to true,
+        ),
+    )
+
+    private val hevc4K50: CastVideoStreamInfo by lazy { CastSpsParser.parseHevcStreamInfo(hevcSps4K50Hlg()) }
+    private val hevc1080p50: CastVideoStreamInfo by lazy {
+        // SDR BT.709 8-bit: the HDR rules have their own tests below.
+        hevc4K50.copy(
+            width = 1920, height = 1080, levelIdc = 123, bitDepth = 8,
+            colourPrimaries = 1, transferCharacteristics = 1, matrixCoefficients = 1,
+        )
+    }
+
+    @Test
+    fun `hevc source decisions per receiver`() {
+        val streamer = CastVideoPlan(caps = streamerCaps)
+        assertEquals(
+            "Streamer: 4K HEVC falls to HEVC 1080 at the source rate",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.HEVC, 1920, 1080, frameStep = 1, bitrateCap = 12_000_000),
+            streamer.decide(hevc4K50).output,
+        )
+        assertEquals(
+            "[Cast] video plan: source=hvc1.2.4.L153.B0 3840x2160@50 10-bit HDR HLG receiver display " +
+                "h264_1080p60=yes h264_1080p30=yes hevc_1080p60=yes hvc1=yes hevc_4k60=no " +
+                "hevc_1080p60_hlg=no hevc_4k60_hlg=no hvc1.hlg=no " +
+                "-> transcode HEVC 1080p50 (12000 kbps) tone mapped to SDR BT.709",
+            streamer.logLine(hevc4K50, streamer.decide(hevc4K50)),
+        )
+        assertNull("Streamer: 1080 HEVC passes through", streamer.decide(hevc1080p50).output)
+        assertNull(
+            "720 HEVC needs only MSE hvc1",
+            streamer.decide(hevc1080p50.copy(width = 1280, height = 720)).output,
+        )
+        val hevc4KRx = CastVideoPlan(
+            caps = streamerCaps.copy(display = streamerCaps.display!! + ("hevc_4k60" to true) + ("hevc_4k60_hlg" to true)),
+        )
+        assertNull("4K HLG HEVC passes through to hevc_4k60 + hevc_4k60_hlg", hevc4KRx.decide(hevc4K50).output)
+
+        val ultra = CastVideoPlan(caps = ultraCaps)
+        assertEquals(
+            "Ultra: no HEVC at all -> H.264 720p at the source rate",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1280, 720, frameStep = 1, bitrateCap = 8_000_000),
+            ultra.decide(hevc4K50).output,
+        )
+        assertEquals(
+            "Ultra, 1080p30 profile: 1080 at half rate",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1920, 1080, frameStep = 2, bitrateCap = 8_000_000),
+            ultra.copy(downProfile = CastTranscodeDownProfile.P1080P30).decide(hevc1080p50).output,
+        )
+        val displayOnly = CastVideoPlan(
+            caps = CastReceiverVideoCaps(mse = mapOf("hvc1" to false), display = mapOf("hevc_1080p60" to true)),
+        )
+        assertEquals(
+            "720 HEVC without MSE hvc1 is not HEVC-transcoded down to itself",
+            CastVideoOutputSpec.Codec.H264,
+            displayOnly.decide(hevc1080p50.copy(width = 1280, height = 720)).output?.codec,
+        )
+    }
+
+    @Test
+    fun `hevc without caps transcodes, force and disabled keep their meaning`() {
+        val none = CastVideoPlan.PASSTHROUGH.decide(hevc4K50)
+        assertEquals(
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1280, 720, frameStep = 1, bitrateCap = 8_000_000),
+            none.output,
+        )
+        assertEquals("receiver caps not measured", none.reason)
+        val oldPage = CastVideoPlan(caps = CastReceiverVideoCaps(mse = mapOf("hvc1" to true), display = null))
+        assertNull("old page, MSE hvc1, 1080 HEVC fits", oldPage.decide(hevc1080p50).output)
+        assertEquals(
+            "old page, 4K HEVC -> HEVC 1080",
+            CastVideoOutputSpec.Codec.HEVC, oldPage.decide(hevc4K50).output?.codec,
+        )
+        val forced = CastVideoPlan(caps = streamerCaps, force = true)
+        val d = forced.decide(hevc1080p50)
+        assertEquals(
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.HEVC, 1920, 1080, frameStep = 1, bitrateCap = 12_000_000),
+            d.output,
+        )
+        assertEquals("Developer switch", d.reason)
+        val disabled = CastVideoPlan(caps = ultraCaps, disabledReason = "MediaCodec failed")
+        assertEquals(CastVideoDecision(null, "MediaCodec failed"), disabled.decide(hevc4K50))
+    }
+
+    /** Travel Chromecast class: no HEVC, no HDR, 1080p30 H.264 only. */
+    private val travelCaps = CastReceiverVideoCaps(
+        mse = mapOf("hvc1" to false, "hvc1.hlg" to false, "hvc1.pq" to false),
+        display = mapOf("h264_1080p60" to false, "h264_1080p30" to true, "hevc_1080p60" to false, "hevc_4k60" to false),
+    )
+
+    @Test
+    fun `HDR HEVC needs the HDR key for its size class`() {
+        val hlg4K = hevc4K50
+        assertEquals(CastHdrTransfer.HLG, hlg4K.hdrTransfer)
+        assertTrue(hlg4K.isHdr && hlg4K.isBt2020)
+        val pq4K = hlg4K.copy(transferCharacteristics = 16)
+        assertEquals(CastHdrTransfer.PQ, pq4K.hdrTransfer)
+        val hlg1080 = hlg4K.copy(width = 1920, height = 1080, levelIdc = 123)
+        val hlg720 = hlg4K.copy(width = 1280, height = 720, levelIdc = 93)
+        val sdr = mapOf("hevc_1080p60" to true, "hevc_4k60" to true, "h264_1080p60" to true, "h264_1080p30" to true)
+        fun plan(display: Map<String, Boolean>, mse: Map<String, Boolean> = mapOf("hvc1" to true)) =
+            CastVideoPlan(caps = CastReceiverVideoCaps(mse = mse, display = display))
+
+        // 4K class.
+        assertNull("4K HLG + hevc_4k60_hlg: passthrough", plan(sdr + ("hevc_4k60_hlg" to true)).decide(hlg4K).output)
+        assertEquals(
+            "4K HLG, SDR 4K key only: transcode to HEVC 1080 SDR",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.HEVC, 1920, 1080, 1, 12_000_000, hdr = false),
+            plan(sdr).decide(hlg4K).output,
+        )
+        assertEquals(listOf("HDR"), plan(sdr).decide(hlg4K).unsupported)
+        assertEquals(
+            "4K HLG, 1080 HLG yes: HEVC 1080 keeps HDR",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.HEVC, 1920, 1080, 1, 12_000_000, hdr = true),
+            plan(sdr + ("hevc_1080p60_hlg" to true)).decide(hlg4K).output,
+        )
+        assertNotNull(
+            "4K PQ is not passed by the HLG key",
+            plan(sdr + ("hevc_4k60_hlg" to true)).decide(pq4K).output,
+        )
+        assertNull("4K PQ + hevc_4k60_pq: passthrough", plan(sdr + ("hevc_4k60_pq" to true)).decide(pq4K).output)
+
+        // 1080 class.
+        assertNull("1080 HLG + hevc_1080p60_hlg", plan(sdr + ("hevc_1080p60_hlg" to true)).decide(hlg1080).output)
+        val sdrOnly1080 = plan(sdr).decide(hlg1080)
+        assertEquals(
+            "1080 HLG, SDR HEVC yes: HEVC 1080 tone mapped",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.HEVC, 1920, 1080, 1, 12_000_000, hdr = false),
+            sdrOnly1080.output,
+        )
+        assertEquals("receiver does not display HLG at the source size", sdrOnly1080.reason)
+        assertNotNull("MSE hvc1.hlg does not pass 1080", plan(sdr, mapOf("hvc1" to true, "hvc1.hlg" to true)).decide(hlg1080).output)
+
+        // 720 class.
+        assertNull("720 HLG + MSE hvc1.hlg", plan(sdr, mapOf("hvc1" to true, "hvc1.hlg" to true)).decide(hlg720).output)
+        assertEquals(
+            "720 HLG without hvc1.hlg: HEVC 720 SDR",
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.HEVC, 1280, 720, 1, 12_000_000, hdr = false),
+            plan(sdr).decide(hlg720).output,
+        )
+
+        // No HEVC at all: H.264 720p SDR, never HDR.
+        val ultra = CastVideoPlan(caps = ultraCaps).decide(hlg4K)
+        assertEquals(
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1280, 720, 1, 8_000_000, hdr = false),
+            ultra.output,
+        )
+        assertEquals(listOf("HEVC", "4K", "HDR"), ultra.unsupported)
+        assertEquals(listOf("HEVC", "4K", "HDR"), CastVideoPlan(caps = travelCaps).decide(hlg4K).unsupported)
+        val d = CastVideoPlan(caps = travelCaps).decide(hlg4K)
+        assertEquals(
+            listOf(
+                "Source: HEVC 3840x2160 at 50fps HDR",
+                "Transcoding on this phone to H.264 1280x720 at 50fps",
+                "Your Travel Chromecast TV doesn't support HEVC, 4K, HDR",
+            ),
+            CastVideoPlan.transcodeNote(
+                "Travel Chromecast TV", "phone", CastVideoPathInfo(hlg4K, d.output, d.reason, d.unsupported, d.forced),
+            ),
+        )
+        val kept = plan(sdr + ("hevc_1080p60_hlg" to true)).decide(hlg4K)
+        assertEquals(
+            "Transcoding on this phone to HEVC 1920x1080 at 50fps HDR",
+            CastVideoPlan.transcodeNote("TV", "phone", CastVideoPathInfo(hlg4K, kept.output, "x", kept.unsupported))[1],
+        )
+
+        // H.264 source ruled-out list.
+        val h264NoThirty = CastVideoPlan(caps = ultraCaps.copy(display = ultraCaps.display!! + ("h264_1080p30" to false)))
+        assertEquals(listOf("1080p"), h264NoThirty.decide(src).unsupported)
+    }
+
+    @Test
+    fun `transcode note and receiver stat copy`() {
+        val streamer = CastVideoPlan(caps = streamerCaps)
+        val d = streamer.decide(hevc4K50)
+        val path = CastVideoPathInfo(hevc4K50, d.output, "x", d.unsupported, d.forced)
+        assertEquals(
+            listOf(
+                "Source: HEVC 3840x2160 at 50fps HDR",
+                "Transcoding on this phone to HEVC 1920x1080 at 50fps",
+                "Your Living Room Google TV doesn't support 4K, HDR",
+            ),
+            CastVideoPlan.transcodeNote("Living Room Google TV", "phone", path),
+        )
+        val ud = CastVideoPlan(caps = ultraCaps).decide(src)
+        val ultraPath = CastVideoPathInfo(src, ud.output, "x", ud.unsupported, ud.forced)
+        assertEquals(
+            listOf(
+                "Source: H.264 1920x1080 at 59.94fps",
+                "Transcoding on this tablet to H.264 1280x720 at 59.94fps",
+                "This receiver doesn't support 1080p60",
+            ),
+            CastVideoPlan.transcodeNote(null, "tablet", ultraPath),
+        )
+        val halfRate = CastVideoPathInfo(
+            src, CastVideoPlan(caps = ultraCaps, downProfile = CastTranscodeDownProfile.P1080P30).decide(src).output, "x",
+        )
+        assertEquals(
+            "Transcoding on this phone to H.264 1920x1080 at 29.97fps",
+            CastVideoPlan.transcodeNote(" ", "phone", halfRate)[1],
+        )
+        val fd = CastVideoPlan(caps = streamerCaps, force = true).decide(hevc1080p50)
+        assertEquals(
+            "Transcode forced by the Developer switch",
+            CastVideoPlan.transcodeNote("TV", "phone", CastVideoPathInfo(hevc1080p50, fd.output, "x", fd.unsupported, fd.forced))[2],
+        )
+        assertTrue("no transcode, no note", CastVideoPlan.transcodeNote("TV", "phone", CastVideoPathInfo(src, null, "fits")).isEmpty())
+        assertTrue(CastVideoPlan.transcodeNote("TV", "phone", null).isEmpty())
+        assertEquals("1920x1080 at 60fps", CastVideoPlan.receiverPlayingText("1920x1080", 60.0))
+        assertEquals("1280x720 at 52fps", CastVideoPlan.receiverPlayingText("1280x720", 52.3))
+        assertEquals("1280x720", CastVideoPlan.receiverPlayingText("1280x720", null))
+        assertEquals("59.94", CastVideoPlan.fpsText(60000.0 / 1001))
+        assertEquals("50", CastVideoPlan.fpsText(50.0))
+    }
+
     @Test
     fun `fit, fps labels and the Developer picker values`() {
         assertEquals(Pair(1280, 720), CastVideoPlan.fit(1920, 1080, 1280, 720))
@@ -359,7 +648,7 @@ class CastVideoTranscodeTest {
         var fed = 0
         var released = false
 
-        override fun feed(sample: ByteArray, pts: Long, dts: Long, keyframe: Boolean, sps: ByteArray, pps: ByteArray) {
+        override fun feed(sample: ByteArray, pts: Long, dts: Long, keyframe: Boolean, parameterSets: List<ByteArray>) {
             fed++
             if (failAfter != null && fed == failAfter) { sink.onFailure("fake MediaCodec error"); return }
             if (held.isEmpty() && lastKey < 0 && !keyframe) return
@@ -480,21 +769,64 @@ class CastVideoTranscodeTest {
         assertFalse(remuxer.videoIsTranscoded)
     }
 
-    // ---- TS fixture: 30 fps H.264 (1 s GOP) + AAC-LC 48 kHz, one frame per PES ----
+    @Test
+    fun `hevc passes through as hvc1 with the parameter sets only in the sample entry`() {
+        val (bytes, _) = testTs(videoFrames = 120, audioLagTicks = 0, hevc = true)
+        val paths = ArrayList<CastVideoPathInfo>()
+        val cap = object : TsToFmp4Remuxer.Listener by Capture() {
+            val segments = ArrayList<ByteArray>()
+            var init: ByteArray? = null
+            override fun onInitSegments(video: ByteArray, audio: ByteArray?) { init = video }
+            override fun onMediaSegment(video: ByteArray, audio: ByteArray?, videoDurationTicks: Long, audioDurationTicks: Long) {
+                segments.add(video)
+            }
+            override fun onVideoPath(info: CastVideoPathInfo) { paths.add(info) }
+        }
+        val remuxer = TsToFmp4Remuxer(cap, videoPlan = CastVideoPlan(caps = streamerCaps))
+        remuxer.feed(bytes, 0, bytes.size)
+        remuxer.release()
+
+        val init = cap.init!!
+        assertTrue("hvc1 + hvcC", contains(init, "hvc1") && contains(init, "hvcC") && !contains(init, "avcC"))
+        assertEquals("hvc1.1.6.L153.B0", CastHlsProxyServer(log = {}).videoCodecString(init))
+        assertFalse(remuxer.videoIsTranscoded)
+        assertEquals("HEVC passthrough", remuxer.videoPathDescription)
+        assertEquals(1, paths.size)
+        assertNull(paths[0].output)
+        assertEquals(CastVideoOutputSpec.Codec.HEVC, paths[0].source.codec)
+        assertTrue(cap.segments.isNotEmpty())
+        val (vps, sps, _) = hevcParameterSets()
+        for (seg in cap.segments) {
+            assertFalse("no in-band VPS", containsBytes(seg, vps))
+            assertFalse("no in-band SPS", containsBytes(seg, sps))
+            assertTrue("slices ride as 4-byte-length NALs", containsBytes(seg, byteArrayOf(0, 0, 1, 0x90.toByte())))
+        }
+    }
+
+    private fun containsBytes(data: ByteArray, needle: ByteArray): Boolean {
+        outer@ for (i in 0..data.size - needle.size) {
+            for (j in needle.indices) if (data[i + j] != needle[j]) continue@outer
+            return true
+        }
+        return false
+    }
+
+    // ---- TS fixture: 30 fps H.264 or HEVC (1 s GOP) + AAC-LC 48 kHz, one frame per PES ----
 
     private val audioFrameTicks = 1024L * 90_000 / 48_000
 
-    private fun testTs(videoFrames: Int, audioLagTicks: Long): Pair<ByteArray, Int> {
+    private fun testTs(videoFrames: Int, audioLagTicks: Long, hevc: Boolean = false): Pair<ByteArray, Int> {
         val videoFrameTicks = 3_000L
         val base = 10_000L
         val ts = TsWriter()
         ts.psi(0, patTable())
-        ts.psi(0x1000, pmtTable())
+        ts.psi(0x1000, pmtTable(if (hevc) 0x24 else 0x1B))
         val audioFrames = ((videoFrames * videoFrameTicks) / audioFrameTicks).toInt()
         var nextAudio = 0
         for (i in 0 until videoFrames) {
             val dts = base + i * videoFrameTicks
-            ts.pes(0x100, pesPacket(0xE0, videoAu(i % 30 == 0), dts, dts))
+            val au = if (hevc) hevcAu(i % 30 == 0) else videoAu(i % 30 == 0)
+            ts.pes(0x100, pesPacket(0xE0, au, dts, dts))
             while (nextAudio < audioFrames && base + nextAudio * audioFrameTicks <= dts - audioLagTicks) {
                 ts.pes(0x101, pesPacket(0xC0, adtsFrame(400), base + nextAudio * audioFrameTicks, null))
                 nextAudio++
@@ -578,12 +910,12 @@ class CastVideoTranscodeTest {
         return byteArrayOf(0x00, 0xB0.toByte(), (body.size + 4).toByte()) + body + ByteArray(4)
     }
 
-    private fun pmtTable(): ByteArray {
+    private fun pmtTable(videoType: Int): ByteArray {
         val body = byteArrayOf(
             0x00, 0x01, 0xC1.toByte(), 0, 0,
             0xE1.toByte(), 0x00,
             0xF0.toByte(), 0x00,
-            0x1B, 0xE1.toByte(), 0x00, 0xF0.toByte(), 0x00, // H.264 on 0x100
+            videoType.toByte(), 0xE1.toByte(), 0x00, 0xF0.toByte(), 0x00, // H.264 or HEVC on 0x100
             0x0F, 0xE1.toByte(), 0x01, 0xF0.toByte(), 0x00, // ADTS AAC on 0x101
         )
         return byteArrayOf(0x02, 0xB0.toByte(), (body.size + 4).toByte()) + body + ByteArray(4)
@@ -599,6 +931,18 @@ class CastVideoTranscodeTest {
         f[5] = (((frameLen and 0x07) shl 5) or 0x1F).toByte()
         f[6] = 0xFC.toByte()
         return f
+    }
+
+    /** AUD, VPS, SPS, PPS then one 400-byte slice: IDR_W_RADL (19) or
+     *  TRAIL_R (1). */
+    private fun hevcAu(keyframe: Boolean): ByteArray {
+        val (vps, sps, pps) = hevcParameterSets()
+        val slice = ByteArray(400) { 0x10 }
+        slice[0] = if (keyframe) 0x26 else 0x02
+        slice[1] = 0x01
+        val start = byteArrayOf(0, 0, 0, 1)
+        val aud = byteArrayOf(0x46, 0x01, 0x10)
+        return start + aud + start + vps + start + sps + start + pps + start + slice
     }
 
     private fun videoAu(keyframe: Boolean): ByteArray {

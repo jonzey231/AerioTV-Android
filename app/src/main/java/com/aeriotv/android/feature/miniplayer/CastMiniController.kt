@@ -67,6 +67,10 @@ fun CastMiniController(
     /** Hidden while nothing is playing yet (there is nothing to pause). */
     showTransport: Boolean = true,
     stopDescription: String = "Stop casting",
+    /** Stats and notes under the status line, one Text each: the
+     *  "Receiver: ..." stat, then the two-line transcode note while the
+     *  phone is transcoding. Empty for the companion transport. */
+    detailLines: List<String> = emptyList(),
 ) {
     Row(
         modifier = modifier
@@ -127,6 +131,15 @@ fun CastMiniController(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            detailLines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         if (showTransport) {
             IconButton(onClick = onTogglePlayPause) {

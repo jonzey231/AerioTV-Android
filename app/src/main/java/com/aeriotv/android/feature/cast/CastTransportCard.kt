@@ -79,6 +79,11 @@ fun CastTransportCard(
     // A held receiver stall (iOS incident 2026-09-25): the session is kept
     // through a rebuffer and the card says so.
     val castBuffering by castSender.receiverBuffering.collectAsStateWithLifecycle()
+    // What the proxy decided for this channel and what the receiver reports
+    // presenting: the "Receiver" stat and the transcode note.
+    val castVideoPath by castSender.videoPath.collectAsStateWithLifecycle()
+    val castReceiverVideo by castSender.receiverVideo.collectAsStateWithLifecycle()
+    val isTabletDevice = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp >= 600
     val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
     val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
     val companionNowPlaying by companionRemote.nowPlaying.collectAsStateWithLifecycle()
@@ -176,6 +181,21 @@ fun CastTransportCard(
     }
     val hasContent = title.isNotBlank()
     val switchingTo = if (isCompanion) null else castSwitchingTo
+    // Google Cast only, and only for the channel actually on the receiver.
+    val showCastVideo = !isCompanion && hasContent && switchingTo == null
+    val receiverLine = castReceiverVideo?.takeIf { showCastVideo }?.let {
+        "Receiver: " + com.aeriotv.android.core.cast.hlsproxy.CastVideoPlan.receiverPlayingText(it.resolution, it.fps)
+    }
+    val transcodeNote = if (showCastVideo) {
+        com.aeriotv.android.core.cast.hlsproxy.CastVideoPlan.transcodeNote(
+            receiverName = castDevice,
+            deviceNoun = if (isTabletDevice) "tablet" else "phone",
+            path = castVideoPath,
+        )
+    } else {
+        emptyList()
+    }
+    val castDetailLines = listOfNotNull(receiverLine) + transcodeNote
 
     fun flipChannel(delta: Int) {
         val idx = channels.indexOfFirst { it.id == currentChannel?.id }
@@ -312,6 +332,7 @@ fun CastTransportCard(
             showInlineSkip = !isCompanion,
             inlineSkipEnabled = castCanSkip || position.canSeek || remoteState.canSeek,
             canSwitchStream = canSwitchStream,
+            castDetailLines = castDetailLines,
             onTogglePlayPause = {
                 if (isCompanion) companionRemote.togglePlayPause() else castSender.togglePlayPause()
             },

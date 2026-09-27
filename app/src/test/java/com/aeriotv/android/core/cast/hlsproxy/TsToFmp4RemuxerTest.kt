@@ -322,10 +322,11 @@ class TsToFmp4RemuxerTest {
     }
 
     @Test
-    fun `non-h264 video is refused with the codec name`() {
-        val thrown = refusalFor(videoType = 0x24, audioType = 0x0F) // HEVC
+    fun `video no path handles is refused with the codec name`() {
+        // HEVC (0x24) has a path since 2026-09-27; MPEG-2 still has none.
+        val thrown = refusalFor(videoType = 0x02, audioType = 0x0F)
         assertTrue(thrown is UnsupportedCodecException)
-        assertEquals("HEVC video", (thrown as UnsupportedCodecException).codecName)
+        assertEquals("MPEG-2 video", (thrown as UnsupportedCodecException).codecName)
     }
 
     @Test
