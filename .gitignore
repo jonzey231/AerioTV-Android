@@ -38,3 +38,6 @@ keystore.properties
 *.bak
 *.orig
 *.swp
+
+# AI-assistant instructions, local only
+CLAUDE.md
