@@ -544,10 +544,6 @@
     // queued at and does nothing if a new load has begun since; see
     // unloadMediaElement's callers.
     let loadGeneration = 0;
-    // Playback pipeline of the current load: 'shaka' (Shaka/MSE, the
-    // default) or 'mpl' (legacy Media Player Library, selected per load by
-    // the sender's customData.pipeline for the muxed TS experiment).
-    let loadPipeline = 'shaka';
 
     // ---- measured MSE codec support (replaces the senders' model guess) ----
     //
@@ -891,7 +887,6 @@
     // for the instance, so this is best effort: whatever is reachable is
     // reported and the rest comes through as absent rather than as a guess.
     function shakaStats() {
-      if (loadPipeline === 'mpl') return {};
       let stats = null;
       try {
         const player = playerManager.getPlayer && playerManager.getPlayer();
@@ -936,7 +931,6 @@
     // version exposes the track list. Compared against fps= this says whether
     // the receiver is presenting every frame the stream declares.
     function variantFrameRate() {
-      if (loadPipeline === 'mpl') return null;
       try {
         const player = playerManager.getPlayer && playerManager.getPlayer();
         const tracks = player && player.getVariantTracks ?
@@ -973,7 +967,6 @@
       const payload = {
         type: 'state',
         ev: ev,
-        pipeline: loadPipeline,
         // Repeated here so the senders learn the measurement even if they
         // attached the debug channel after the READY message went out.
         mse: mseCapabilities(),
@@ -1115,7 +1108,6 @@
       // buffered range the whole time, so a gap jump was never going to
       // help and neither is a test for one.
       if (stuckTicks < 3) return;
-      if (loadPipeline === 'mpl') { stuckTicks = 0; return; }
       // Three seconds of a motionless playhead is NOT on its own a reason to
       // move it. On 2026-09-12 at 16:30 it was the reason the receiver threw
       // the picture away: Shaka's live seek range had collapsed to one
@@ -1192,9 +1184,7 @@
     }
 
     function resyncPlayhead(ev) {
-      // The resync corrects Shaka's start-position / MSE append ordering;
-      // MPL owns its own playhead, so never seek under it.
-      if (loadPipeline === 'mpl') return skipSeek(ev, 'mpl');
+      // The resync corrects Shaka's start-position / MSE append ordering.
       const video = mediaElement();
       if (!video) return skipSeek(ev, 'noElement');
       // Never seek an element that has no timeline yet, and never stack a
@@ -1415,16 +1405,6 @@
     } catch (e) {
       console.warn('AerioTV: PlaybackConfig unavailable, using CAF defaults', e);
     }
-    // Preview-only boot switch (2026-09-26): receiver-preview.html is served
-    // with ?pipeline=mpl so the legacy Media Player Library handles HLS from
-    // the first load. CastReceiverOptions.playbackConfig is the only place
-    // this setting is honored; setting it inside the LOAD interceptor left
-    // Shaka in charge (measured on the Chromecast Ultra, Shaka Error 4032).
-    const BOOT_MPL = /[?&]pipeline=mpl(&|$)/.test(location.search);
-    if (playbackConfig && BOOT_MPL) {
-      playbackConfig.useShakaForHls = false;
-      console.log('AerioTV: booting with the legacy media player for HLS (useShakaForHls=false)');
-    }
     if (playbackConfig) {
       playbackConfig.shakaConfig = {
         manifest: {
@@ -1573,30 +1553,6 @@
         // One 1 s rAF measurement per load, reported as ev=raf.
         measureRefreshRate();
         showLoading();
-        // Pipeline experiment (2026-09-26): customData.pipeline === 'mpl'
-        // plays this load (muxed MPEG-TS HLS) with the legacy Media Player
-        // Library instead of Shaka/MSE. Every other load keeps Shaka.
-        const mediaCD = loadRequestData.media && loadRequestData.media.customData;
-        const wantMpl = !!((loadRequestData.customData &&
-          loadRequestData.customData.pipeline === 'mpl') ||
-          (mediaCD && mediaCD.pipeline === 'mpl'));
-        loadPipeline = (wantMpl || BOOT_MPL) ? 'mpl' : 'shaka';
-        try {
-          let cfg = playbackConfig;
-          if (!cfg && playerManager.getPlaybackConfig) {
-            cfg = playerManager.getPlaybackConfig();
-          }
-          if (cfg && (wantMpl || cfg.useShakaForHls === false)) {
-            cfg.useShakaForHls = !wantMpl;
-            playerManager.setPlaybackConfig(cfg);
-          }
-        } catch (e) {
-          console.warn('AerioTV: could not set useShakaForHls', e);
-        }
-        if (wantMpl) {
-          console.log('AerioTV: pipeline=mpl (useShakaForHls=false)');
-          sendReceiverSnapshot('pipeline=mpl');
-        }
         const media = loadRequestData.media;
         if (media) {
           media.contentType = media.contentType || 'video/mp4';
@@ -1767,7 +1723,6 @@
     let infoFps = null;
 
     function remoteShaka() {
-      if (loadPipeline === 'mpl') return null;
       try {
         const p = playerManager.getPlayer && playerManager.getPlayer();
         return p && typeof p.getVariantTracks === 'function' ? p : null;
@@ -1824,18 +1779,6 @@
         if (out.length && !out.some((t) => t.selected)) out[0].selected = true;
         return out;
       }
-      // MPL pipeline: CAF's own track manager.
-      try {
-        const m = playerManager.getAudioTracksManager();
-        const active = m.getActiveId ? m.getActiveId() : null;
-        for (const t of m.getTracks() || []) {
-          out.push({
-            id: String(t.trackId),
-            label: t.name || languageName(t.language) || ('Audio ' + t.trackId),
-            selected: t.trackId === active,
-          });
-        }
-      } catch (e) { /* no tracks yet */ }
       return out;
     }
 
@@ -1853,11 +1796,7 @@
         } catch (e) {
           try { player.selectAudioLanguage(lang, role, ch); } catch (e2) { /* ignore */ }
         }
-        return;
       }
-      try {
-        playerManager.getAudioTracksManager().setActiveById(parseInt(id, 10));
-      } catch (e) { /* ignore */ }
     }
 
     function remoteTextTracks() {
@@ -1879,21 +1818,7 @@
             selected: sel,
           });
         }
-        return { tracks: out, off: off };
       }
-      try {
-        const m = playerManager.getTextTracksManager();
-        const active = (m.getActiveIds && m.getActiveIds()) || [];
-        for (const t of m.getTracks() || []) {
-          const sel = active.indexOf(t.trackId) >= 0;
-          if (sel) off = false;
-          out.push({
-            id: String(t.trackId),
-            label: t.name || languageName(t.language) || ('Subtitles ' + t.trackId),
-            selected: sel,
-          });
-        }
-      } catch (e) { /* no tracks yet */ }
       return { tracks: out, off: off };
     }
 
@@ -1911,12 +1836,7 @@
           player.selectTextTrack(t);
           player.setTextTrackVisibility(true);
         } catch (e) { /* ignore */ }
-        return;
       }
-      try {
-        const m = playerManager.getTextTracksManager();
-        m.setActiveByIds(id === '' ? [] : [parseInt(id, 10)]);
-      } catch (e) { /* ignore */ }
     }
 
     function remoteSpeed() {
@@ -2009,7 +1929,7 @@
           }
         } catch (e) { /* ignore */ }
       }
-      lines.push('Player: ' + (loadPipeline === 'mpl' ? 'MPL' : 'Shaka') + ' (web receiver)');
+      lines.push('Player: ' + 'Shaka (web receiver)');
       return lines.join('\n');
     }
 
