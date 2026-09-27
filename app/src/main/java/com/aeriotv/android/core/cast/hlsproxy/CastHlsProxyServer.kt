@@ -316,6 +316,7 @@ class CastHlsProxyServer(
     /** Init segments for [gen]. [audio] is null for a video-only mux, in
      *  which case the master carries no audio rendition. */
     fun setInitSegments(gen: Int, video: ByteArray, audio: ByteArray?) = synchronized(lock) {
+        if (!storeOpen) return@synchronized // stopped: see addSegment
         videoInits[gen] = video
         if (audio != null) audioInits[gen] = audio else audioInits.remove(gen)
     }
@@ -337,6 +338,13 @@ class CastHlsProxyServer(
     ) {
         synchronized(lock) {
             if (gen != generation) return // stale ingest racing a channel change
+            // Stopped store: the old ingest thread publishes its splice tail
+            // AFTER stop() cleared the ring and the inits (nothing4.log
+            // 09:18:00: "splice tail" then "proxy stopped"). That orphan
+            // (seq 201, gen 5) survived into the next session's window with
+            // its init gone, so both playlists opened on EXT-X-MAP vinit5 /
+            // ainit5 -> 404 -> Shaka 1001, load IDLE.
+            if (!storeOpen) return
             val entry = SegmentEntry(
                 seq = nextSeq++,
                 generation = gen,

@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -103,6 +104,13 @@ fun CastRemoteSheet(
     onSetAudioOnly: (Boolean) -> Unit,
     onSwitchStream: () -> Unit,
     onSleepMinutes: (Int) -> Unit,
+    /** Sleep Timer row subtitle: "N min remaining" while armed, else "Off". */
+    sleepLabel: String = "Off",
+    /** Opens the shared Record sheet for the program airing on the cast
+     *  channel; null hides the row (no channel or no guide data to record). */
+    onRecordCurrentProgram: (() -> Unit)? = null,
+    /** Record row subtitle: the program now airing. */
+    recordProgramTitle: String? = null,
     onSeekBy: (Long) -> Unit,
     onSeekToWall: (Long) -> Unit,
     onGoLive: () -> Unit,
@@ -429,10 +437,24 @@ fun CastRemoteSheet(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
+                // Row order and titles are shared with iOS (Logan 2026-09-27
+                // parity ruling); keep both lists identical when editing.
                 if (canSwitchStream) {
                     OptionRow(Icons.Filled.SwapHoriz, "Switch Stream", null) {
                         optionsOpen = false
                         onSwitchStream()
+                    }
+                    Text(
+                        text = "Swaps this channel's upstream. The TV keeps playing; the picture follows in a few seconds.",
+                        style = MaterialTheme.typography.bodySmall.subtext(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 52.dp, end = 12.dp, bottom = 6.dp),
+                    )
+                }
+                onRecordCurrentProgram?.let { record ->
+                    OptionRow(Icons.Filled.FiberManualRecord, "Record Current Program", recordProgramTitle) {
+                        optionsOpen = false
+                        record()
                     }
                 }
                 OptionRow(Icons.Outlined.MusicNote, "Audio Track", remoteState.audio.firstOrNull { it.selected }?.label) {
@@ -450,16 +472,16 @@ fun CastRemoteSheet(
                 OptionRow(Icons.Outlined.AspectRatio, "Video Scale", remoteState.aspect.label) {
                     onSetAspect(remoteState.aspect.next())
                 }
-                OptionRow(Icons.Filled.Timer, "Sleep Timer", null) {
+                OptionRow(Icons.Filled.Timer, "Sleep Timer", sleepLabel) {
                     optionsOpen = false
                     sleepOpen = true
+                }
+                OptionRow(Icons.Filled.VideocamOff, "Audio Only", if (remoteState.audioOnly) "On" else "Off") {
+                    onSetAudioOnly(!remoteState.audioOnly)
                 }
                 OptionRow(Icons.Filled.Info, "Stream Info", null) {
                     optionsOpen = false
                     infoOpen = true
-                }
-                OptionRow(Icons.Filled.VideocamOff, "Audio Only", if (remoteState.audioOnly) "On" else "Off") {
-                    onSetAudioOnly(!remoteState.audioOnly)
                 }
                 // Companion only: the X above stops the TV, this one just lets go
                 // of the remote. Both hide the card.

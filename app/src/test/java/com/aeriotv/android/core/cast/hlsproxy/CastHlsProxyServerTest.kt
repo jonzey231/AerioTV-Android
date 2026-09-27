@@ -178,4 +178,46 @@ class CastHlsProxyServerTest {
         assertNull("behind the ring is gone", server.awaitSegment(0, 5_000))
         assertTrue(System.currentTimeMillis() - start < 2_000)
     }
+
+    // ---- init segments the playlists name (nothing4.log 2026-09-27) ----
+
+    private fun mapUris(text: String) =
+        Regex("#EXT-X-MAP:URI=\"([^\"]+)\"").findAll(text).map { it.groupValues[1] }.toList()
+
+    private fun assertEveryMapResolves() {
+        for ((text, lookup) in listOf(
+            server.videoPlaylistText() to { g: Int -> server.videoInitSegment(g) },
+            server.audioPlaylistText() to { g: Int -> server.audioInitSegment(g) },
+        )) {
+            val uris = mapUris(text)
+            assertTrue("playlist names an init: $text", uris.isNotEmpty())
+            for (uri in uris) {
+                val gen = uri.removeSuffix(".mp4").filter { it.isDigit() }.toInt()
+                assertNotNull("$uri is served", lookup(gen))
+            }
+        }
+    }
+
+    @Test
+    fun `stale tail published after stop never names a missing init in the next session`() {
+        server.start()
+        try {
+            val gen1 = server.beginGeneration()
+            server.setInitSegments(gen1, byteArrayOf(1), byteArrayOf(2))
+            publish(gen1, 5)
+            server.stop()
+            // The old ingest thread's splice tail lands after stop().
+            addSegment(gen1, 9)
+            server.setInitSegments(gen1, byteArrayOf(1), byteArrayOf(2))
+            server.start()
+            // HEVC passthrough session: hvcC init, passthrough segments.
+            val gen2 = server.beginGeneration()
+            server.setInitSegments(gen2, byteArrayOf(3), byteArrayOf(4))
+            publish(gen2, 4)
+            assertEveryMapResolves()
+            assertFalse(server.videoPlaylistText().contains("vinit$gen1"))
+        } finally {
+            server.stop()
+        }
+    }
 }

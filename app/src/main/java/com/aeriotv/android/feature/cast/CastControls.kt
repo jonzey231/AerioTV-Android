@@ -35,6 +35,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.text.input.KeyboardType
@@ -215,64 +219,86 @@ fun CastRouteChooserDialog(
     }
     val otherRoutes = routes - nativeRoutes.toSet()
 
+    val companionConnected = companionConn is CompanionRemoteController.Conn.Connected
+
+    // Sectioned picker, iOS CastPickerSheet twin (same order, headers, footer
+    // and copy; iOS alone adds an AirPlay section):
+    //   [Stop casting] / [Disconnect TV]  active connection first
+    //   pairing code entry / "Connecting to ..."
+    //   "AerioTV Remote"  companion TVs (hidden when none)
+    //   "AerioTV on TV"   native Cast Connect devices + footer (hidden when none)
+    //   "Google Cast"     other cast devices, "Searching for devices…" when none
+    // Devices keep discovery order within a section, as on iOS.
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (connected) "Casting" else "Cast to") },
+        title = { Text(if (connected || companionConnected) "Connected" else "Cast to") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (routes.isEmpty() && tvs.isEmpty() &&
-                    companionConn !is CompanionRemoteController.Conn.NeedsPairing
+            val typo = androidx.compose.material3.MaterialTheme.typography
+            val colors = androidx.compose.material3.MaterialTheme.colorScheme
+            @Composable
+            fun sectionHeader(title: String) {
+                Text(
+                    title,
+                    style = typo.labelLarge,
+                    color = colors.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 2.dp),
+                )
+            }
+            @Composable
+            fun actionRow(label: String, onClick: () -> Unit) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onClick)
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Searching for devices...")
-                }
-                @Composable
-                fun routeRow(route: MediaRouter.RouteInfo) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                // Mutual exclusion: one remote target at a time.
-                                companionRemote?.disconnect()
-                                runCatching { router?.selectRoute(route) }
-                                onDismiss()
-                            }
-                            .padding(vertical = 12.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (route.isSelected) Icons.Filled.CastConnected
-                            else Icons.Filled.Cast,
-                            contentDescription = null,
-                            modifier = Modifier.padding(end = 12.dp),
-                        )
-                        Text(route.name)
-                    }
-                }
-                if (nativeRoutes.isNotEmpty()) {
-                    Text(
-                        "AerioTV on TV",
-                        style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.textAccent,
+                    Icon(
+                        imageVector = Icons.Filled.StopCircle,
+                        contentDescription = null,
+                        tint = colors.error,
+                        modifier = Modifier.padding(end = 12.dp),
                     )
-                    Text(
-                        "Plays in the AerioTV app on the TV: no phone processing, full quality.",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall.subtext(),
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    nativeRoutes.forEach { routeRow(it) }
-                    if (otherRoutes.isNotEmpty()) {
-                        Text(
-                            "Other devices",
-                            style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
-                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(label, color = colors.error)
                 }
-                otherRoutes.forEach { routeRow(it) }
-                // AerioTV TVs (GH #33 companion remote). A pending pairing takes
-                // over the section with the code entry.
+            }
+            @Composable
+            fun routeRow(route: MediaRouter.RouteInfo) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            // Mutual exclusion: one remote target at a time.
+                            companionRemote?.disconnect()
+                            runCatching { router?.selectRoute(route) }
+                            onDismiss()
+                        }
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = if (route.isSelected) Icons.Filled.CastConnected
+                        else Icons.Filled.Cast,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 12.dp),
+                    )
+                    Text(route.name)
+                }
+            }
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                // Active connection first, with its teardown action.
+                if (connected) {
+                    actionRow("Stop casting") { sender.stopCasting(); onDismiss() }
+                }
+                if (companionConnected) {
+                    actionRow("Disconnect TV") { companionRemote?.disconnect(); onDismiss() }
+                }
                 when (companionConn) {
                     is CompanionRemoteController.Conn.NeedsPairing -> {
-                        Text("Enter the code shown on ${companionConn.name ?: "the TV"}")
+                        sectionHeader("Enter the code shown on ${companionConn.name ?: "the TV"}")
                         OutlinedTextField(
                             value = pairCode,
                             onValueChange = { v ->
@@ -282,17 +308,33 @@ fun CastRouteChooserDialog(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                             singleLine = true,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { companionRemote?.disconnect() }) { Text("Cancel") }
-                            TextButton(
-                                onClick = { companionRemote?.submitPairingCode(pairCode) },
-                                enabled = pairCode.length == 6,
-                            ) { Text("Pair") }
-                        }
+                        TextButton(
+                            onClick = {
+                                companionRemote?.submitPairingCode(pairCode)
+                                pairCode = ""
+                            },
+                            enabled = pairCode.length == 6,
+                        ) { Text("Pair") }
                     }
                     is CompanionRemoteController.Conn.Connecting ->
-                        Text("Connecting to ${companionConn.name ?: "TV"}...")
-                    else -> tvs.forEach { tv ->
+                        Row(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Text(
+                                "Connecting to ${companionConn.name ?: "TV"}…",
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    else -> Unit
+                }
+                if (tvs.isNotEmpty()) {
+                    sectionHeader("AerioTV Remote")
+                    tvs.forEach { tv ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -302,42 +344,40 @@ fun CastRouteChooserDialog(
                                     companionRemote?.connect(tv)
                                 }
                                 .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Tv,
                                 contentDescription = null,
                                 modifier = Modifier.padding(end = 12.dp),
                             )
-                            Column {
-                                Text(tv.name)
-                                Text(
-                                    "AerioTV Remote",
-                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                                    color = androidx.compose.material3.MaterialTheme.colorScheme.textAccent,
-                                )
-                            }
+                            Text(tv.name)
                         }
                     }
                 }
+                if (nativeRoutes.isNotEmpty()) {
+                    sectionHeader("AerioTV on TV")
+                    nativeRoutes.forEach { routeRow(it) }
+                    Text(
+                        "Plays in the AerioTV app on the TV: no phone processing, full quality.",
+                        style = typo.bodySmall.subtext(),
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+                sectionHeader("Google Cast")
+                if (routes.isEmpty()) {
+                    Text("Searching for devices…", color = colors.onSurfaceVariant)
+                }
+                otherRoutes.forEach { routeRow(it) }
             }
         },
         confirmButton = {
-            when {
-                connected -> TextButton(onClick = {
-                    sender.stopCasting()
-                    onDismiss()
-                }) { Text("Stop casting") }
-                companionConn is CompanionRemoteController.Conn.Connected -> TextButton(onClick = {
-                    companionRemote?.disconnect()
-                    onDismiss()
-                }) { Text("Disconnect TV") }
-                else -> TextButton(onClick = onDismiss) { Text("Close") }
-            }
-        },
-        dismissButton = if (connected || companionConn is CompanionRemoteController.Conn.Connected) {
-            { TextButton(onClick = onDismiss) { Text("Close") } }
-        } else {
-            null
+            TextButton(onClick = {
+                // Cancel an in-flight / unpaired companion attempt; a fully
+                // connected session is left alone (iOS Close parity).
+                if (!companionConnected) companionRemote?.disconnect()
+                onDismiss()
+            }) { Text("Close") }
         },
     )
 }

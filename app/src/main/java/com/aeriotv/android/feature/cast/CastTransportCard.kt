@@ -104,6 +104,10 @@ fun CastTransportCard(
     var switchStreams by remember { mutableStateOf<List<StreamOption>?>(null) }
     var switchCurrentId by remember { mutableStateOf<Int?>(null) }
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
+    // Published once per second so the Options row can show the countdown.
+    var sleepRemainingMs by remember { mutableStateOf<Long?>(null) }
+    // Program handed to the shared Record sheet; null = sheet closed.
+    var recordTarget by remember { mutableStateOf<com.aeriotv.android.core.data.ProgramInfoTarget?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     // The session ended (stop, disconnect, TV powered off): drop the sheet with
@@ -121,9 +125,10 @@ fun CastTransportCard(
     // Sleep timer (the only one the remote transports have): pause whatever is
     // playing on the other screen when it expires. The session stays connected.
     LaunchedEffect(sleepEndsAt) {
-        val endsAt = sleepEndsAt ?: return@LaunchedEffect
+        val endsAt = sleepEndsAt ?: run { sleepRemainingMs = null; return@LaunchedEffect }
         while (true) {
             val remaining = endsAt - System.currentTimeMillis()
+            sleepRemainingMs = remaining.coerceAtLeast(0L)
             if (remaining <= 0L) {
                 if (isCompanion) companionRemote.pause() else castSender.pause()
                 sleepEndsAt = null
@@ -311,6 +316,20 @@ fun CastTransportCard(
         val castCanSkip by castSender.canSkip.collectAsStateWithLifecycle()
         val canSwitchStream = currentChannel?.dispatcharrChannelId != null &&
             currentChannel.id.startsWith("disp:")
+        // The program airing now on the cast channel, in the shape the guide and
+        // channel list hand to the shared Record sheet, so recording from the
+        // remote goes through exactly the same Dispatcharr / local paths.
+        val recordableTarget = currentChannel?.takeIf { programmeEndMs > System.currentTimeMillis() }?.let { ch ->
+            com.aeriotv.android.core.data.ProgramInfoTarget(
+                channelName = ch.name,
+                title = programmeTitle.orEmpty(),
+                startMillis = programmeStartMs,
+                endMillis = programmeEndMs,
+                description = castProgramme?.description.orEmpty(),
+                category = castProgramme?.category.orEmpty(),
+                channelDispatcharrId = ch.dispatcharrChannelId,
+            )
+        }
         CastRemoteSheet(
             deviceName = deviceName,
             channelTitle = title,
@@ -367,6 +386,19 @@ fun CastTransportCard(
                     }
                 }
             },
+            sleepLabel = sleepRemainingMs?.let { ms ->
+                // Same wording as the local player's remaining-time label.
+                val minutes = (ms + 59_999L) / 60_000L
+                when {
+                    minutes < 60L -> "$minutes min remaining"
+                    minutes % 60L == 0L -> "${minutes / 60L} h remaining"
+                    else -> "${minutes / 60L} h ${minutes % 60L} min remaining"
+                }
+            } ?: "Off",
+            recordProgramTitle = recordableTarget?.title,
+            onRecordCurrentProgram = recordableTarget?.let { target ->
+                { recordTarget = target }
+            },
             onSleepMinutes = { minutes ->
                 sleepEndsAt = if (minutes == 0) null else System.currentTimeMillis() + minutes * 60_000L
             },
@@ -383,6 +415,13 @@ fun CastTransportCard(
                 if (isCompanion) companionRemote.requestRemoteState() else castSender.requestRemoteState()
             },
             onDismiss = { sheetOpen = false },
+        )
+    }
+
+    recordTarget?.let { target ->
+        com.aeriotv.android.feature.livetv.RecordProgramSheet(
+            target = target,
+            onDismiss = { recordTarget = null },
         )
     }
 
