@@ -1366,6 +1366,16 @@
     } catch (e) {
       console.warn('AerioTV: PlaybackConfig unavailable, using CAF defaults', e);
     }
+    // Preview-only boot switch (2026-09-26): receiver-preview.html is served
+    // with ?pipeline=mpl so the legacy Media Player Library handles HLS from
+    // the first load. CastReceiverOptions.playbackConfig is the only place
+    // this setting is honored; setting it inside the LOAD interceptor left
+    // Shaka in charge (measured on the Chromecast Ultra, Shaka Error 4032).
+    const BOOT_MPL = /[?&]pipeline=mpl(&|$)/.test(location.search);
+    if (playbackConfig && BOOT_MPL) {
+      playbackConfig.useShakaForHls = false;
+      console.log('AerioTV: booting with the legacy media player for HLS (useShakaForHls=false)');
+    }
     if (playbackConfig) {
       playbackConfig.shakaConfig = {
         manifest: {
@@ -1521,7 +1531,7 @@
         const wantMpl = !!((loadRequestData.customData &&
           loadRequestData.customData.pipeline === 'mpl') ||
           (mediaCD && mediaCD.pipeline === 'mpl'));
-        loadPipeline = wantMpl ? 'mpl' : 'shaka';
+        loadPipeline = (wantMpl || BOOT_MPL) ? 'mpl' : 'shaka';
         try {
           let cfg = playbackConfig;
           if (!cfg && playerManager.getPlaybackConfig) {
