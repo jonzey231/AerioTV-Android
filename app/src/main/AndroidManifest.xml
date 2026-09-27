@@ -129,6 +129,16 @@
                 <action android:name="com.google.android.gms.cast.tv.action.LAUNCH" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!--
+                Cast Connect LOAD (Google's core_features guide): a load request
+                for a contentId / queue arrives as this action. MainActivity hands
+                every intent to MediaManager.onNewIntent (AerioCastReceiverController
+                .handleIntent), which dispatches it to the MediaLoadCommandCallback.
+            -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.cast.tv.action.LOAD" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <service

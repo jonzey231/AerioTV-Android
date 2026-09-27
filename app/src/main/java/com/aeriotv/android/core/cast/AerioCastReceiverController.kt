@@ -316,8 +316,17 @@ class AerioCastReceiverController @Inject constructor(
                         // before telling the sender the load succeeded, so a channel
                         // this receiver isn't signed into fails loudly rather than
                         // black-screening.
-                        val playable = runCatching { browseTree.resolveForPlayback(mediaId) }
-                            .getOrNull() != null
+                        val resolved = runCatching { browseTree.resolveForPlayback(mediaId) }
+                            .getOrNull()
+                        val playable = resolved != null
+                        val channelName = resolved
+                            ?.let { it.items.getOrNull(it.startIndex)?.mediaMetadata?.title }
+                            ?.toString() ?: "<not found>"
+                        android.util.Log.i(
+                            "CastReceiver",
+                            "[Cast] android receiver: launched by ${senderLabel(senderId)} " +
+                                "load id=$mediaId kind=${kind.name.lowercase()} -> channel $channelName",
+                        )
                         if (playable) {
                             _loadRequests.trySend(CastLoadRequest(mediaId, kind))
                             source.setResult(loadRequestData)
@@ -328,6 +337,11 @@ class AerioCastReceiverController @Inject constructor(
                         }
                     }
                     Kind.VOD -> {
+                        android.util.Log.i(
+                            "CastReceiver",
+                            "[Cast] android receiver: launched by ${senderLabel(senderId)} " +
+                                "load id=$mediaId kind=vod -> rejected (VOD cast not supported)",
+                        )
                         // VOD casting is not yet wired end-to-end: the receiver would
                         // land on the movie DETAIL screen (not auto-play), so the
                         // sender would report success while nothing plays. Reject
@@ -355,6 +369,15 @@ class AerioCastReceiverController @Inject constructor(
             custom.optString(KEY_MEDIA_ID).takeIf { it.isNotBlank() }?.let { return it }
         }
         return info.contentId?.takeIf { it.isNotBlank() }
+    }
+
+    /** "<senderId> (<user agent>)" for the load log line; the user agent names the
+     *  sender platform (iOS vs Android), which is what a device test needs. */
+    private fun senderLabel(senderId: String?): String {
+        val id = senderId ?: return "unknown sender"
+        val agent = runCatching { CastReceiverContext.getInstance().getSender(id)?.userAgent }
+            .getOrNull()
+        return if (agent.isNullOrBlank()) id else "$id ($agent)"
     }
 
     private fun resolveKind(info: MediaInfo?): Kind {
