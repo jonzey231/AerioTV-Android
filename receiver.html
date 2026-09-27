@@ -577,7 +577,10 @@
       // HEVC Main: level 5.1 (1080p60 class), level 6.1 (4K60 class), and
       // the hev1 sample entry (parameter sets in band).
       'hvc1': 'video/mp4; codecs="hvc1.1.6.L153.B0"',
-      'hvc1.4k': 'video/mp4; codecs="hvc1.1.6.L183.B0"',
+      // 4K60 is HEVC level 5.1 (L153: 3840x2160 at up to 64 fps); L183 is
+      // level 6.1 (8K), which a Google TV Streamer refused on 2026-09-27
+      // while decoding this very source, itself L153 at 3840x2160@50.
+      'hvc1.4k': 'video/mp4; codecs="hvc1.1.6.L153.B0"',
       'hev1': 'video/mp4; codecs="hev1.1.6.L153.B0"',
       // HDR: HEVC Main10 with the transfer named by the Cast `eotf` MIME
       // parameter (smpte2084 = PQ, arib-std-b67 = HLG). The sender keeps an
@@ -610,15 +613,15 @@
       h264_1080p60: ['video/mp4', 'avc1.64002A', 1920, 1080, 60],
       h264_1080p30: ['video/mp4', 'avc1.640028', 1920, 1080, 30],
       hevc_1080p60: ['video/mp4', 'hvc1.1.6.L153.B0', 1920, 1080, 60],
-      hevc_4k60: ['video/mp4', 'hvc1.1.6.L183.B0', 3840, 2160, 60],
+      hevc_4k60: ['video/mp4', 'hvc1.1.6.L153.B0', 3840, 2160, 60],
       h264_4k60: ['video/mp4', 'avc1.640033', 3840, 2160, 60],
       // HDR display: the codecs and eotf ride in the MIME string (codecs
       // argument left undefined) because canDisplayType has no argument
       // for the transfer. HEVC Main10. The READY caps log prints these too.
       hevc_1080p60_hlg: ['video/mp4; codecs="hvc1.2.4.L153.B0"; eotf=arib-std-b67', undefined, 1920, 1080, 60],
       hevc_1080p60_pq: ['video/mp4; codecs="hvc1.2.4.L153.B0"; eotf=smpte2084', undefined, 1920, 1080, 60],
-      hevc_4k60_hlg: ['video/mp4; codecs="hvc1.2.4.L183.B0"; eotf=arib-std-b67', undefined, 3840, 2160, 60],
-      hevc_4k60_pq: ['video/mp4; codecs="hvc1.2.4.L183.B0"; eotf=smpte2084', undefined, 3840, 2160, 60],
+      hevc_4k60_hlg: ['video/mp4; codecs="hvc1.2.4.L153.B0"; eotf=arib-std-b67', undefined, 3840, 2160, 60],
+      hevc_4k60_pq: ['video/mp4; codecs="hvc1.2.4.L153.B0"; eotf=smpte2084', undefined, 3840, 2160, 60],
     };
 
     function displayCapabilities() {
