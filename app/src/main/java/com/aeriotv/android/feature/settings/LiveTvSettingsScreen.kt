@@ -14,6 +14,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.Subject
+import androidx.compose.material.icons.automirrored.filled.ViewSidebar
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.FilterNone
+import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Numbers
+import androidx.compose.material.icons.filled.Sell
+import androidx.compose.material.icons.filled.SmartButton
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.ViewAgenda
+import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -101,56 +117,70 @@ fun LiveTvSettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 // MARK: Guide Presentation
+                //
+                // Copy is Apple's word for word. `listViewShown` stands in
+                // for Apple's split: iOS (and tvOS with TVListView on) uses
+                // the "Live TV list" strings, tvOS with the list removed uses
+                // the Guide-column strings. Leading glyphs and the section
+                // footer exist only in Apple's tvOS body; the iOS List rows
+                // carry neither, so both are TV only here.
                 item("guide-presentation") {
                     SettingsSection(
                         header = "Guide Presentation",
-                        footer = (
-                            if (listViewShown) {
-                                "Turn logos or numbers off to give long channel names more row width. Applies to the Live TV list and the Guide."
-                            } else {
-                                "Turn logos or numbers off to give long channel names more room in the Guide's channel column."
-                            }
-                            ) + " Rounded corners round channel logos and program artwork to match the card " +
-                            "or cell they sit in. Artwork that floats on a transparent background stays square either way.",
+                        footer = if (isTv) {
+                            "Turn logos or numbers off to give long channel names more room in the Guide's channel column."
+                        } else {
+                            null
+                        },
                     ) {
                         SettingsToggleRow(
                             title = "Show Channel Logos",
                             subtitle = if (listViewShown) {
-                                "Display each channel's logo in the Live TV list."
+                                "Turn off to hide channel logos so longer channel names get the full row width."
                             } else {
                                 "Display each channel's logo in the Guide's channel column."
                             },
+                            leadingIcon = if (isTv) Icons.Filled.Tv else null,
                             checked = showChannelLogos,
                             onCheckedChange = viewModel::setShowChannelLogos,
                         )
                         SettingsToggleRow(
                             title = "Show Channel Numbers",
                             subtitle = if (listViewShown) {
-                                "Display each channel's number in the Live TV list and Guide."
+                                "Turn off to hide channel numbers in the Live TV list and Guide."
                             } else {
                                 "Display each channel's number in the Guide's channel column."
                             },
+                            leadingIcon = if (isTv) Icons.Filled.Numbers else null,
                             checked = showChannelNumbers,
                             onCheckedChange = viewModel::setShowChannelNumbers,
                         )
                         SettingsToggleRow(
                             title = "Show Channel Names",
-                            subtitle = "Display each channel's name in the Guide's channel column.",
+                            subtitle = if (listViewShown) {
+                                "Turn off to hide channel names in the Live TV list and the Guide's channel column."
+                            } else {
+                                "Turn off to hide channel names in the Guide's channel column."
+                            },
+                            leadingIcon = if (isTv) Icons.Filled.TextFields else null,
                             checked = showChannelNames,
                             onCheckedChange = viewModel::setShowChannelNames,
                         )
                         SettingsToggleRow(
                             title = "Show Program Subtitles",
                             subtitle = if (listViewShown) {
-                                "Display the episode or match name under each program title in the Guide and Live TV list. Turn off if your EPG repeats the description there."
+                                "Turn off to hide the episode or match name under each program title in the Guide and Live TV list, for EPGs that repeat the description there."
                             } else {
-                                "Display the episode or match name under each program title in the Guide. Turn off if your EPG repeats the description there."
+                                "Turn off to hide the episode or match name under each program title in the Guide, for EPGs that repeat the description there."
                             },
+                            leadingIcon = if (isTv) Icons.AutoMirrored.Filled.Subject else null,
                             checked = showProgramSubtitles,
                             onCheckedChange = viewModel::setShowProgramSubtitles,
                         )
                         SettingsToggleRow(
                             title = "Rounded Corners in Guide View",
+                            subtitle = "Rounds channel logos in the Guide's channel column.",
+                            leadingIcon = if (isTv) Icons.Filled.GridOn else null,
                             checked = roundedArtworkGuide,
                             onCheckedChange = viewModel::setRoundedArtworkGuide,
                         )
@@ -160,17 +190,15 @@ fun LiveTvSettingsScreen(
                 // MARK: List view
                 //
                 // Hidden on TV under the TvListView gate, exactly as the two
-                // source screens gated these rows before the regroup.
+                // source screens gated these rows before the regroup. Apple
+                // has no section footer here: the Default Live TV View copy
+                // lives on the picker's own page (iOS only; tvOS passes none).
                 if (listViewShown) item("list-view") {
-                    SettingsSection(
-                        header = "List View",
-                        footer = "Which layout Live TV opens in. Automatic uses the List on " +
-                            "phones and the Guide on TV and larger tablets. On phones you " +
-                            "can still switch for the current session with the List / Guide " +
-                            "button; on TV this setting is the only switch.",
-                    ) {
+                    SettingsSection(header = "List view") {
                         SettingsToggleRow(
                             title = "Rounded Corners in List View",
+                            subtitle = "Rounds channel logos and program artwork in the Live TV list and on the app's cards.",
+                            leadingIcon = if (isTv) Icons.Filled.FilterNone else null,
                             checked = roundedArtwork,
                             onCheckedChange = viewModel::setRoundedArtwork,
                         )
@@ -178,10 +206,16 @@ fun LiveTvSettingsScreen(
                             title = "Default Live TV View",
                             inlineTitle = true,
                             options = DEFAULT_LIVE_TV_VIEW_OPTIONS.map {
-                                SettingsPickerOption(it.first, it.second)
+                                SettingsPickerOption(it.first, it.second, icon = liveTvViewIcon(it.first))
                             },
                             selected = defaultLiveTVView.lowercase(),
                             onSelect = viewModel::setDefaultLiveTVView,
+                            leadingIcon = Icons.Filled.ViewAgenda,
+                            footer = if (isTv) {
+                                null
+                            } else {
+                                "The layout Live TV opens in. Automatic uses List on compact, portrait phones and Guide on regular width (unfolded foldable, iPad, Apple TV). You can still switch anytime with the List / Guide button; that switch lasts for the current session and does not change this default."
+                            },
                         )
                     }
                 }
@@ -191,12 +225,14 @@ fun LiveTvSettingsScreen(
                     SettingsSection(header = "Guide Layout") {
                         SettingsSelectionRow(
                             label = "Basic",
+                            leadingIcon = Icons.Filled.ViewAgenda,
                             subtitle = "Full program details in every guide cell",
                             selected = liveTvLayout != "preview",
                             onClick = { viewModel.setLiveTvLayout("basic") },
                         )
                         SettingsSelectionRow(
                             label = "Channel Preview",
+                            leadingIcon = Icons.Filled.Web,
                             subtitle = "A banner shows the highlighted program; cells keep the title and tags",
                             selected = liveTvLayout == "preview",
                             onClick = { viewModel.setLiveTvLayout("preview") },
@@ -242,9 +278,12 @@ fun LiveTvSettingsScreen(
                             SettingsPickerRow(
                                 title = "Group Selection",
                                 options = listOf(
-                                    SettingsPickerOption("sidebar", "Sidebar Menu"),
-                                    SettingsPickerOption("pills", "Top Group Pills"),
+                                    SettingsPickerOption("sidebar", "Sidebar Menu", icon = Icons.AutoMirrored.Filled.ViewSidebar),
+                                    SettingsPickerOption("pills", "Top Group Pills", icon = Icons.Filled.SmartButton),
                                 ),
+                                // iOS: icon "sidebar.leading" on the row and
+                                // on each choice (tvOS lists them bare).
+                                leadingIcon = Icons.AutoMirrored.Filled.ViewSidebar,
                                 selected = if (phoneGroupSelector == "pills") "pills" else "sidebar",
                                 onSelect = viewModel::setPhoneGroupSelector,
                             )
@@ -266,6 +305,8 @@ fun LiveTvSettingsScreen(
                         SettingsToggleRow(
                             title = "Show Program Badges",
                             subtitle = "LIVE, NEW, and season/episode pills on the guide",
+                            // tvOS "tag" glyph; the iOS toggle has none.
+                            leadingIcon = if (isTv) Icons.Filled.Sell else null,
                             checked = showEpgBadges,
                             onCheckedChange = { viewModel.setShowEpgBadges(isTv, it) },
                         )
@@ -278,6 +319,8 @@ fun LiveTvSettingsScreen(
                             SettingsSubGroup(
                                 title = "Badge Types",
                                 summary = settingsCountSummary(shown, badges.size),
+                                leadingIcon = Icons.Filled.Sell,
+                                footer = "Which badges appear. Turning one off hides it everywhere badges are shown.",
                             ) {
                                 badges.forEach { badge ->
                                     SettingsToggleRow(
@@ -422,6 +465,13 @@ fun LiveTvSettingsScreen(
  *  are explicit overrides. Written to the same [defaultLiveTVView] pref the
  *  Live TV screen reads; the in-screen List / Guide button is session-only and
  *  never writes here. */
+/** Apple's liveTVViewIcon: wand.and.stars / list.bullet / calendar. */
+private fun liveTvViewIcon(value: String): ImageVector = when (value) {
+    "list" -> Icons.AutoMirrored.Filled.FormatListBulleted
+    "guide" -> Icons.Filled.CalendarMonth
+    else -> Icons.Filled.AutoAwesome
+}
+
 private val DEFAULT_LIVE_TV_VIEW_OPTIONS = listOf(
     "" to "Automatic",
     "list" to "List",

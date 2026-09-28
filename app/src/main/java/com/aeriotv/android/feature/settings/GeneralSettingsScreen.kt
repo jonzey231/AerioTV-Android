@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,6 +28,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.feature.main.AppTab
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
+import com.aeriotv.android.ui.adaptive.rememberViewport
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
@@ -53,6 +55,10 @@ fun GeneralSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val isTv = rememberIsTvDevice()
+    // Apple branches Startup and Auto-Rotate copy on the iPad idiom. The
+    // physical diagonal is the closest Android analog: it does not flip with
+    // orientation the way width classes do.
+    val isTablet = rememberViewport().diagonalInches >= 8f
     val defaultTab by viewModel.defaultTab.collectAsStateWithLifecycle(initialValue = "")
     val skipLoadingScreen by viewModel.skipLoadingScreen.collectAsStateWithLifecycle(initialValue = false)
     val autoResumeLastChannel by viewModel.autoResumeLastChannel.collectAsStateWithLifecycle(initialValue = false)
@@ -87,12 +93,21 @@ fun GeneralSettingsScreen(
                 // Auto-rotate are ONE section with one combined footer.
                 SettingsSection(
                     header = "Startup",
-                    footer = "The tab shown when the app first launches. Skip loading screen may cause brief stutter while data hydrates. Resume last channel re-opens the player on launch if the saved channel still exists in your playlist." +
-                        if (isTv) {
-                            ""
-                        } else {
-                            " The player's fullscreen button can still rotate into landscape whatever Auto-rotate says."
-                        },
+                    // Apple parity (Phase 3): tvOS carries only the picker's
+                    // footer, and the inline TV picker cannot hold one, so it
+                    // lands here. iOS moved that line onto the pushed picker
+                    // page and keeps two short paragraphs in the section.
+                    footer = when {
+                        isTv -> "The tab shown when the app first launches."
+                        isTablet ->
+                            "Skipping the loading screen may cause brief UI stutter while data loads. " +
+                                "Resume picks up the last channel you watched in the corner mini-player; " +
+                                "press Play/Pause to expand.\n\n" +
+                                "The player's fullscreen button can still rotate into landscape either way."
+                        else ->
+                            "Skipping the loading screen may cause brief UI stutter while data loads.\n\n" +
+                                "The player's fullscreen button can still rotate into landscape either way."
+                    },
                 ) {
                     // Search is a TV-only nav tab and not a sensible launch tab;
                     // on phones it does not exist at all. On Demand and Favorites
@@ -107,6 +122,7 @@ fun GeneralSettingsScreen(
                         // launch lands; keep that reading as an explicit pick.
                         selected = if (defaultTab.isEmpty()) AppTab.LiveTV.name else defaultTab,
                         onSelect = { viewModel.setDefaultTab(it) },
+                        footer = "The tab shown when the app first launches.",
                     )
                     SettingsToggleRow(
                         title = "Skip Loading Screen",
@@ -116,7 +132,7 @@ fun GeneralSettingsScreen(
                     )
                     SettingsToggleRow(
                         title = "Resume Last Channel",
-                        subtitle = "Auto-start the last-played channel on launch.",
+                        subtitle = "Auto-start the last-played channel in the corner mini-player on launch",
                         checked = autoResumeLastChannel,
                         onCheckedChange = viewModel::setAutoResumeLastChannel,
                     )
@@ -128,8 +144,12 @@ fun GeneralSettingsScreen(
                             .collectAsStateWithLifecycle(initialValue = true)
                         SettingsToggleRow(
                             title = "Auto-Rotate",
-                            subtitle = "Follow the device orientation. When off, " +
-                                "AerioTV stays in its current orientation",
+                            // Apple's per-idiom wording, word for word.
+                            subtitle = if (isTablet) {
+                                "Follow the device orientation. When off, AerioTV stays in its current orientation"
+                            } else {
+                                "Follow the device orientation. When off, AerioTV stays portrait"
+                            },
                             checked = autoRotate,
                             onCheckedChange = viewModel::setAutoRotate,
                         )
@@ -137,28 +157,32 @@ fun GeneralSettingsScreen(
                 }
 
                 // MARK: Refresh
+                //
+                // Apple parity: toggle title, icon and subtitle, and the
+                // footer that states the current schedule when on. Apple's
+                // "iOS may delay or skip" clause is platform-specific; the
+                // Android equivalent is WorkManager's Wi-Fi + battery
+                // constraints, which is what this build actually applies.
                 SettingsSection(
                     header = "Refresh",
-                    footer = "Refresh channels + the EPG in the background on Wi-Fi while the battery isn't low, so the guide is current the moment you open the app. " +
-                        if (isTv) {
-                            "Off here means data refreshes only when you launch AerioTV or refresh from the playlist menu."
-                        } else {
-                            "Off here means data refreshes only when you launch AerioTV or pull to refresh."
-                        },
+                    footer = if (backgroundRefreshEnabled) {
+                        "Refresh every ${intervalLabel(backgroundRefreshIntervalMins)}. " +
+                            "Android runs background refreshes on Wi-Fi while the battery isn't low, and may delay them to preserve battery."
+                    } else {
+                        "Automatically refresh channel lists and guide data while the app is in the background."
+                    },
                 ) {
                     SettingsToggleRow(
-                        title = "Refresh in the Background",
+                        title = "Background Refresh",
+                        subtitle = "Update EPG & playlists automatically",
+                        leadingIcon = Icons.Filled.Refresh,
                         checked = backgroundRefreshEnabled,
                         onCheckedChange = viewModel::setBackgroundRefreshEnabled,
                     )
                     if (backgroundRefreshEnabled) {
-                        // iOS bgRefreshIntervalMins (audit P1 #7): how often the
-                        // periodic refresh fires. Hidden when the master toggle is
-                        // off so the UI doesn't suggest setting frequency on a
-                        // disabled worker. Phase 3 review: a named picker row
-                        // (sub-page on phone, inline on TV) like Apple's
-                        // "Interval" choice, not a bare list of checks under a
-                        // toggle that never said what it was choosing.
+                        // Apple's "Schedule" (Interval / Time of Day) picker
+                        // is not here: Android persists only an interval and
+                        // the periodic worker has no time-of-day mode.
                         SettingsPickerRow(
                             title = "Interval",
                             options = BG_REFRESH_INTERVAL_OPTIONS.map {
@@ -167,6 +191,7 @@ fun GeneralSettingsScreen(
                             selected = backgroundRefreshIntervalMins,
                             onSelect = { viewModel.setBackgroundRefreshIntervalMins(it) },
                             inlineTitle = true,
+                            footer = "How often AerioTV asks for fresh channel lists and guide data.",
                         )
                     }
                 }
@@ -246,11 +271,21 @@ private data class BgRefreshIntervalOption(val mins: Int, val label: String)
 
 /** iOS bgRefreshIntervalMins picker options. 360 (6h) is the default;
  *  match the iOS picker so synced preferences round-trip cleanly. */
+// Labels in Apple's "12 Hours" style. The VALUES stay Android's: 360 is the
+// stored default and existing users hold 180 or 2880, which Apple's list
+// (15 min to 24 h) would leave with no checked row.
 private val BG_REFRESH_INTERVAL_OPTIONS: List<BgRefreshIntervalOption> = listOf(
-    BgRefreshIntervalOption(60, "Every hour"),
-    BgRefreshIntervalOption(180, "Every 3 hours"),
-    BgRefreshIntervalOption(360, "Every 6 hours"),
-    BgRefreshIntervalOption(720, "Every 12 hours"),
-    BgRefreshIntervalOption(1440, "Every 24 hours"),
-    BgRefreshIntervalOption(2880, "Every 48 hours"),
+    BgRefreshIntervalOption(60, "1 Hour"),
+    BgRefreshIntervalOption(180, "3 Hours"),
+    BgRefreshIntervalOption(360, "6 Hours"),
+    BgRefreshIntervalOption(720, "12 Hours"),
+    BgRefreshIntervalOption(1440, "24 Hours"),
+    BgRefreshIntervalOption(2880, "48 Hours"),
 )
+
+/** Apple's intervalLabel: lowercase units for the footer sentence. */
+private fun intervalLabel(mins: Int): String {
+    if (mins < 60) return "$mins minutes"
+    val h = mins / 60
+    return if (h == 1) "1 hour" else "$h hours"
+}

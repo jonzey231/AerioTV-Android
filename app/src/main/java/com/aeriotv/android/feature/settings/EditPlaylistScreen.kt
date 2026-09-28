@@ -47,6 +47,7 @@ import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.core.network.dispatcharrDefaultUserAgent
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.settings.SettingsActionRow
+import com.aeriotv.android.ui.settings.SettingsInfoRow
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.SettingsSection
@@ -374,11 +375,11 @@ fun EditPlaylistScreen(
                         Spacer(Modifier.height(12.dp))
                         SettingsTextField(
                             // Apple labels every source type's address field
-                            // "URL"; the type it belongs to is in the helper.
+                            // "URL" with no helper; the type is shown in the
+                            // Info section at the end, as EditServerPage does.
                             label = "URL",
                             value = url,
                             onValueChange = { url = it; clearSaveError() },
-                            helper = "Type: ${sourceType.displayName}. To switch types, use Change Playlist.",
                             keyboardOptions = aerioTextFieldKeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
                                 imeAction = androidx.compose.ui.text.input.ImeAction.Next,
@@ -509,10 +510,12 @@ fun EditPlaylistScreen(
             // is M3U / Xtream Codes only.
             if (sourceType == SourceType.M3uUrl || sourceType == SourceType.XtreamCodes) {
                 item("epg") {
+                    // Apple: M3U's EPG field has no helper; Xtream Codes carries
+                    // this exact one.
                     val footerText = if (sourceType == SourceType.M3uUrl) {
-                        "Optional XMLTV URL. Leave empty if your M3U doesn't ship with a separate EPG."
+                        null
                     } else {
-                        "Optional override. When set, AerioTV pulls the guide from this XMLTV URL instead of the server's xmltv.php. Useful when an external provider supplies richer category tags."
+                        "Optional. Adds Sports/News/Movies/Kids color tints from this XMLTV feed's category tags. Xtream Codes doesn't expose categories on its own. Leave blank to skip."
                     }
                     SettingsSection(header = "EPG Source", footer = footerText) {
                         FieldGroup {
@@ -536,9 +539,8 @@ fun EditPlaylistScreen(
             item("lan") {
                 SettingsSection(
                     header = "Local Network",
-                    footer = "Used automatically whenever the server answers at this address " +
-                        "(checked at launch, on network changes, and after edits). Leave blank " +
-                        "to always use the server URL.",
+                    footer = "Used automatically whenever the server is reachable on your local " +
+                        "network. No setup needed. Leave blank to always use the main URL.",
                 ) {
                     FieldGroup {
                         SettingsTextField(
@@ -637,8 +639,8 @@ fun EditPlaylistScreen(
                 item("channel-profile") {
                     SettingsSection(
                         header = "Channel Profile",
-                        footer = "Limit this playlist to the channels in a Dispatcharr profile. " +
-                            "\"All Channels\" shows everything on the server.",
+                        footer = "Sync only the channels in a Dispatcharr Channel Profile. " +
+                            "Changes apply on the next channel refresh.",
                     ) {
                         if (state.profilesLoading && state.availableProfiles.isEmpty()) {
                             Row(
@@ -678,6 +680,22 @@ fun EditPlaylistScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Apple's closing "Info" section: the read-only source type, which
+            // replaced the old "To switch types, use Change Playlist" helper.
+            item("info") {
+                SettingsSection(header = "Info") {
+                    SettingsInfoRow(
+                        label = "Type",
+                        value = when (sourceType) {
+                            SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass ->
+                                "Dispatcharr Direct Connect"
+                            SourceType.XtreamCodes -> "Xtream Codes"
+                            SourceType.M3uUrl -> "M3U + EPG"
+                        },
+                    )
                 }
             }
 

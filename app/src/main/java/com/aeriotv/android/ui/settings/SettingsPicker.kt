@@ -45,6 +45,8 @@ data class SettingsPickerOption<T>(
     val value: T,
     val label: String,
     val subtitle: String? = null,
+    /** Leading glyph on the choice row, as Apple's SettingsChoice(icon:). */
+    val icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
 )
 
 /**
@@ -75,6 +77,15 @@ fun <T> ColumnScope.SettingsPickerRow(
      * Start Early / End Late pair) are indistinguishable on a TV.
      */
     inlineTitle: Boolean = false,
+    /**
+     * Caption under the choices, on the pushed page and inline alike. Apple's
+     * SettingsChoicePicker carries its footer with the choices, so the
+     * explanation sits beside the options it explains; callers must not repeat
+     * it in their section footer.
+     */
+    footer: String? = null,
+    /** Glyph on the collapsed (touch) row, as Apple's SettingsChoicePicker(icon:). */
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
 ) {
     val push = settingsPushesSubPages()
     val host = rememberSubPageRegistration(pageKey) {
@@ -83,6 +94,7 @@ fun <T> ColumnScope.SettingsPickerRow(
             SettingsSelectionRow(
                 label = option.label,
                 subtitle = option.subtitle,
+                leadingIcon = option.icon,
                 selected = option.value == selected,
                 onClick = {
                     onSelect(option.value)
@@ -92,6 +104,7 @@ fun <T> ColumnScope.SettingsPickerRow(
                 },
             )
         }
+        if (footer != null) SettingsSectionFooter(footer)
     }
     if (push && host != null) {
         SettingsSubPageRow(
@@ -100,6 +113,7 @@ fun <T> ColumnScope.SettingsPickerRow(
             value = options.firstOrNull { it.value == selected }?.label,
             onOpen = { host.open(pageKey, title) },
             modifier = modifier,
+            leadingIcon = leadingIcon,
         )
     } else {
         if (inlineTitle) {
@@ -115,11 +129,13 @@ fun <T> ColumnScope.SettingsPickerRow(
             SettingsSelectionRow(
                 label = option.label,
                 subtitle = option.subtitle,
+                leadingIcon = option.icon,
                 selected = option.value == selected,
                 onClick = { onSelect(option.value) },
                 modifier = modifier,
             )
         }
+        if (footer != null) SettingsSectionFooter(footer)
     }
 }
 
@@ -136,11 +152,22 @@ fun ColumnScope.SettingsSubGroup(
     summary: String,
     modifier: Modifier = Modifier,
     pageKey: String = title,
+    /** Glyph on the master row, as Apple's SettingsSubgroup(icon:). */
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    /**
+     * Footer under the pushed page only (Apple's SettingsSubgroup footer).
+     * On TV the rows render inline inside the caller's section, whose own
+     * footer already carries the explanation, so it is not repeated there.
+     */
+    footer: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val push = settingsPushesSubPages()
     val host = rememberSubPageRegistration(pageKey) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            content()
+            if (footer != null) SettingsSectionFooter(footer)
+        }
     }
     if (push && host != null) {
         SettingsSubPageRow(
@@ -148,6 +175,7 @@ fun ColumnScope.SettingsSubGroup(
             subtitle = summary,
             onOpen = { host.open(pageKey, title) },
             modifier = modifier,
+            leadingIcon = leadingIcon,
         )
     } else {
         content()

@@ -8,11 +8,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.CropSquare
+import androidx.compose.material.icons.filled.FilterNone
+import androidx.compose.material.icons.filled.FirstPage
+import androidx.compose.material.icons.automirrored.filled.LastPage
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.VerticalSplit
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,11 +37,13 @@ import com.aeriotv.android.core.preferences.PLAYER_EDGE_LEFT
 import com.aeriotv.android.core.preferences.PLAYER_EDGE_RIGHT
 import com.aeriotv.android.core.ui.SkipIntervals
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
+import com.aeriotv.android.ui.settings.LocalSettingsSubPageHost
 import com.aeriotv.android.ui.settings.SettingsSliderRow
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.SettingsSectionFooter
 import com.aeriotv.android.ui.settings.SettingsSelectionRow
 import com.aeriotv.android.ui.settings.SettingsSubGroup
 import com.aeriotv.android.ui.settings.SettingsSubPageHost
@@ -116,11 +131,13 @@ fun PlayerSettingsScreen(
                     ),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                // MARK: Info Card
+                // MARK: On-Screen Display
+                //
+                // Apple's eyebrow is "On-Screen Display" on both platforms;
+                // the master row below is what says "Info Card".
                 SettingsSection(
-                    header = "Info Card",
-                    footer = "Choose what appears on the program info card in the " +
-                        "player while the controls are showing.",
+                    header = "On-Screen Display",
+                    footer = PLAYER_INFO_CARD_FOOTER,
                 ) {
                     // Phase 3, item 4: six toggles behind one master row whose
                     // subtitle names what is on ("Logo, name, time" / "All 6").
@@ -153,10 +170,15 @@ fun PlayerSettingsScreen(
                                 },
                             total = cardParts.size,
                         ),
+                        // Apple: rectangle.on.rectangle.
+                        leadingIcon = Icons.Filled.FilterNone,
+                        footer = PLAYER_INFO_CARD_FOOTER,
                     ) {
                         cardParts.forEach { (part, setter) ->
                             SettingsToggleRow(
                                 title = part.first,
+                                // tvOS rows carry info.circle; iOS toggles are bare.
+                                leadingIcon = if (isTv) Icons.Outlined.Info else null,
                                 checked = part.third,
                                 onCheckedChange = setter,
                             )
@@ -165,69 +187,78 @@ fun PlayerSettingsScreen(
                 }
 
                 // MARK: Live Rewind
-                // Phase 3, item 4: Keep Available and Keep Recent Channels
-                // were their own sections; they are sub-settings of the master
-                // toggle, so they now sit under it in ONE card and still appear
-                // only while it is on.
+                //
+                // Apple layout: the master toggle, then (while it is on) one
+                // "Live Rewind" subgroup whose subtitle is the depth ("30
+                // minutes") and whose page holds Rewind Up To, Keep Recent
+                // Channels Live and Channels to Keep. On TV the subgroup
+                // renders inline with no master row, as tvOS does
+                // (showsMasterRow: false). The depth estimate moved onto the
+                // Rewind Up To footer, where Apple prints it.
                 SettingsSection(
                     header = "Live Rewind",
-                    footer = buildString {
-                        append(
-                            "Buffers the channel you are watching so you can pause and " +
-                                "rewind live TV. Uses device storage while you watch; " +
-                                "buffered video is removed automatically.",
-                        )
-                        if (liveRewindEnabled) {
-                            append(" ")
-                            append(depthEstimateText(liveRewindDepth))
-                            append(
-                                if (keepRecent) {
-                                    " Channels you flip away from keep buffering so you " +
-                                        "can flip back and rewind across the time you were " +
-                                        "away. Each kept channel uses an extra connection " +
-                                        "to your provider; accounts limited to one " +
-                                        "connection should leave this off."
-                                } else {
-                                    " Keep recent channels live buffers the channels you " +
-                                        "most recently flipped away from, at one extra " +
-                                        "provider connection per kept channel."
-                                },
-                            )
-                        }
-                    },
+                    footer = "Buffers the channel you are watching so you can pause and " +
+                        "rewind live TV. Uses device storage while you watch; " +
+                        "buffered video is removed automatically.",
                 ) {
                     SettingsToggleRow(
                         title = "Pause & Rewind Live TV",
                         subtitle = "Buffer fullscreen live playback on this device",
+                        leadingIcon = if (isTv) Icons.Filled.Replay30 else null,
                         checked = liveRewindEnabled,
                         onCheckedChange = viewModel::setLiveRewindEnabled,
                     )
                     if (liveRewindEnabled) {
-                        SettingsPickerRow(
-                            title = "Rewind Up To",
-                            inlineTitle = true,
-                            options = REWIND_DEPTH_MINUTES.map {
-                                SettingsPickerOption(it, formatDepthMinutes(it))
-                            },
-                            selected = REWIND_DEPTH_MINUTES.minByOrNull {
-                                abs(it - liveRewindDepth)
-                            } ?: liveRewindDepth,
-                            onSelect = viewModel::setLiveRewindDepthMinutes,
-                        )
-                        SettingsToggleRow(
-                            title = "Keep Recent Channels Live",
-                            subtitle = "Buffer flipped-away channels in the background",
-                            checked = keepRecent,
-                            onCheckedChange = viewModel::setLiveRewindKeepRecent,
-                        )
-                        if (keepRecent) {
-                            SteppedSliderRow(
-                                label = "Channels to Keep",
-                                values = listOf(1, 2, 3, 4, 5),
-                                selected = keepCount,
-                                format = { it.toString() },
-                                onSelect = viewModel::setLiveRewindKeepCount,
+                        val snappedDepth = REWIND_DEPTH_MINUTES.minByOrNull {
+                            abs(it - liveRewindDepth)
+                        } ?: liveRewindDepth
+                        SettingsSubGroup(
+                            title = "Live Rewind",
+                            summary = formatDepthMinutes(snappedDepth),
+                            leadingIcon = Icons.Filled.Replay30,
+                            footer = "How far back you can rewind the channel you are watching. Buffered video is released as soon as you leave the channel. Keeping recent channels live holds an extra stream connection per channel; opening a channel beyond the limit drops the oldest.",
+                        ) {
+                            // The sub-page host shows one page at a time and
+                            // drops a body whose row leaves composition, so a
+                            // picker pushed from inside this pushed page would
+                            // close itself on open. With the host hidden the
+                            // picker lays its choices out inline on this page
+                            // (title, options, footer), one level deep.
+                            CompositionLocalProvider(LocalSettingsSubPageHost provides null) {
+                                SettingsPickerRow(
+                                    title = "Rewind Up To",
+                                    inlineTitle = true,
+                                    options = REWIND_DEPTH_MINUTES.map {
+                                        SettingsPickerOption(it, formatDepthMinutes(it))
+                                    },
+                                    selected = snappedDepth,
+                                    onSelect = viewModel::setLiveRewindDepthMinutes,
+                                    footer = "How far back you can rewind the channel you are watching. Buffered video is released as soon as you leave the channel. " +
+                                        depthEstimateText(liveRewindDepth),
+                                )
+                            }
+                            SettingsToggleRow(
+                                title = "Keep Recent Channels Live",
+                                subtitle = "Flipped-away channels keep buffering so their rewind timeline survives",
+                                leadingIcon = if (isTv) Icons.AutoMirrored.Filled.PlaylistPlay else null,
+                                checked = keepRecent,
+                                onCheckedChange = viewModel::setLiveRewindKeepRecent,
                             )
+                            if (keepRecent) {
+                                SteppedSliderRow(
+                                    label = "Channels to Keep",
+                                    values = listOf(1, 2, 3, 4, 5),
+                                    selected = keepCount,
+                                    format = { it.toString() },
+                                    onSelect = viewModel::setLiveRewindKeepCount,
+                                )
+                            }
+                            // tvOS prints this under the rows (its subgroup has
+                            // no page); the phone reads it on the pushed page's
+                            // footer above.
+                            if (isTv) {
+                                SettingsSectionFooter("Each kept channel holds an extra stream connection and uses bandwidth while it runs. Opening a channel beyond the limit drops the oldest.")
+                            }
                         }
                     }
                 }
@@ -235,26 +266,20 @@ fun PlayerSettingsScreen(
 
                 // MARK: Playback
                 //
-                // Apple phase 1 parity: skip intervals, buffer size and stream
-                // recovery share one section.
+                // Apple order: Skip Back, Skip Forward, (Stream Buffer),
+                // Buffer Size, Auto-Recover. Android has no Stream Buffer
+                // preference, so that row and its footer sentence are absent
+                // until one exists. tvOS prints the skip footer right under
+                // the skip rows and gives Auto-Recover a subtitle; iOS folds
+                // both into the section footer.
                 SettingsSection(
                     header = "Playback",
-                    footer = (
-                        if (isTv) {
-                            "How far the skip buttons and a single left or right press move " +
-                                "in live rewind, catch-up, recordings, movies, and TV shows. " +
-                                "Holding left or right still scrubs faster the longer you hold."
-                        } else {
-                            "How far the skip buttons move in live rewind, catch-up, " +
-                                "recordings, movies, and TV shows, including the cast remote " +
-                                "and the playback notification."
-                        }
-                        ) + " Buffer Size controls how much stream data is pre-loaded: larger " +
-                        "buffers reduce stuttering on poor connections but add startup delay. " +
-                        "If a live stream stops sending video, Auto-Recover reloads it; turn " +
-                        "that off if live channels restart or stutter during commercial " +
-                        "breaks, and a brief freeze may show instead. Recovery applies to the " +
-                        "next channel you tune.",
+                    footer = if (isTv) {
+                        null
+                    } else {
+                        "How far the skip buttons move in live rewind, catch-up, recordings, movies, and TV shows, including the cast remote and the Lock Screen controls.\n\n" +
+                            "If a live stream stops sending video, the player reloads it to recover. Turn Auto-Recover off if live channels restart or stutter during commercial breaks (a brief freeze may show instead). Applies to the next channel you tune."
+                    },
                 ) {
                     SteppedSliderRow(
                         label = "Skip Back",
@@ -270,6 +295,9 @@ fun PlayerSettingsScreen(
                         format = ::formatSkipSeconds,
                         onSelect = viewModel::setSkipForwardSeconds,
                     )
+                    if (isTv) {
+                        SettingsSectionFooter("How far the skip buttons and a single left or right press move in live rewind, catch-up, recordings, movies, and TV shows. Holding left or right still scrubs faster the longer you hold.")
+                    }
                     SettingsPickerRow(
                         title = "Buffer Size",
                         inlineTitle = true,
@@ -280,10 +308,16 @@ fun PlayerSettingsScreen(
                         selected = BUFFER_OPTIONS.firstOrNull { it.id == bufferSize }?.id
                             ?: BUFFER_OPTIONS.first().id,
                         onSelect = viewModel::setStreamBufferSize,
+                        footer = "Buffer Size controls how much stream data is pre-loaded. Larger buffers reduce stuttering on poor connections but add startup delay.",
                     )
                     SettingsToggleRow(
                         title = "Auto-Recover Frozen Streams",
-                        subtitle = "Reload a live stream that stops sending video. Off keeps the stream as-is through commercial-break stutters.",
+                        subtitle = if (isTv) {
+                            "If a live stream stops sending video, the player reloads it to recover. Turn this off if live channels restart or stutter during commercial breaks; a brief freeze may show instead."
+                        } else {
+                            null
+                        },
+                        leadingIcon = if (isTv) Icons.Filled.Refresh else null,
                         checked = autoRecoverFrozenStreams,
                         onCheckedChange = viewModel::setAutoRecoverFrozenStreams,
                     )
@@ -325,6 +359,8 @@ fun PlayerSettingsScreen(
                         } else {
                             "While the player chrome is visible, swipe up for the next channel and down for the previous. Live single-stream playback only."
                         },
+                        // tvOS arrow.up.and.down; the iOS toggle is bare.
+                        leadingIcon = if (isTv) Icons.Filled.SwapVert else null,
                         checked = appleTVChannelFlip,
                         onCheckedChange = viewModel::setAppleTVChannelFlip,
                     )
@@ -342,12 +378,14 @@ fun PlayerSettingsScreen(
                             onCheckedChange = viewModel::setPlayerVolumeGesture,
                         )
                         if (playerBrightnessGesture || playerVolumeGesture) {
+                            // Apple icons: arrow.left.to.line / arrow.right.to.line.
                             listOf(
-                                PLAYER_EDGE_LEFT to "Brightness: Left, Volume: Right",
-                                PLAYER_EDGE_RIGHT to "Brightness: Right, Volume: Left",
-                            ).forEach { (wire, label) ->
+                                Triple(PLAYER_EDGE_LEFT, "Brightness: Left, Volume: Right", Icons.Filled.FirstPage),
+                                Triple(PLAYER_EDGE_RIGHT, "Brightness: Right, Volume: Left", Icons.AutoMirrored.Filled.LastPage),
+                            ).forEach { (wire, label, icon) ->
                                 SettingsSelectionRow(
                                     label = label,
+                                    leadingIcon = icon,
                                     selected = playerBrightnessEdge == wire,
                                     onClick = { viewModel.setPlayerBrightnessEdge(wire) },
                                 )
@@ -358,13 +396,10 @@ fun PlayerSettingsScreen(
 
                 // MARK: Multiview
                 //
-                // Apple phase 1 parity: indicator, spacing and tile corners
-                // share one section. tvOS presents corners as a Square /
-                // Rounded selection (s_09); same underlying Boolean.
-                SettingsSection(
-                    header = "Multiview",
-                    footer = "How the grid shows which tile is unmuted. Center Icon fades with the chrome, Gray Outline stays visible, Accent Outline appears on switch and fades after 5 seconds. Padding inserts a small gap between tiles so each stream stands on its own.",
-                ) {
+                // Apple has no section footer here: each picker carries its
+                // own copy (pushed page on touch, inline under the options on
+                // TV).
+                SettingsSection(header = "Multiview") {
                     SettingsPickerRow(
                         title = "Audio Focus Indicator",
                         inlineTitle = true,
@@ -374,22 +409,32 @@ fun PlayerSettingsScreen(
                         selected = AUDIO_FOCUS_OPTIONS.firstOrNull { it.id == multiviewStyle }?.id
                             ?: AUDIO_FOCUS_OPTIONS.first().id,
                         onSelect = viewModel::setMultiviewAudioFocusStyle,
+                        // Apple says "Aerio" here; user-facing copy is
+                        // "AerioTV" by standing rule, so that one word differs.
+                        footer = "Choose how AerioTV marks the tile that currently owns audio when watching multiple streams at once.",
                     )
                     SettingsToggleRow(
                         title = "Padding Between Tiles",
-                        subtitle = "Add a small gap between tiles for visual separation.",
+                        subtitle = if (isTv) {
+                            "Insert a small gap between tiles so each stream stands on its own."
+                        } else {
+                            "Insert a small gap between tiles so each stream stands on its own. Off keeps adjacent tiles meeting flush."
+                        },
+                        leadingIcon = if (isTv) Icons.Filled.VerticalSplit else null,
                         checked = multiviewPadding,
                         onCheckedChange = viewModel::setMultiviewTilePadding,
                     )
                     SettingsPickerRow(
                         title = "Tile Corners",
                         inlineTitle = true,
+                        // Apple icons: square / square.dashed, on both platforms.
                         options = listOf(
-                            SettingsPickerOption(false, "Square"),
-                            SettingsPickerOption(true, "Rounded"),
+                            SettingsPickerOption(false, "Square", icon = Icons.Filled.CropSquare),
+                            SettingsPickerOption(true, "Rounded", icon = Icons.Filled.CropFree),
                         ),
                         selected = multiviewRounded,
                         onSelect = viewModel::setMultiviewTileCornersRounded,
+                        footer = "Square keeps the cinema-grid look; rounded softens each tile with a 12pt radius.",
                     )
                 }
 
@@ -429,6 +474,10 @@ fun PlayerSettingsScreen(
     }
     }
 }
+
+/** Apple's playerInfoCardFooter; used by the section and the pushed page. */
+private const val PLAYER_INFO_CARD_FOOTER =
+    "Choose what appears on the program info card in the player while the controls are showing."
 
 private data class AudioFocusOption(val id: String, val label: String, val detail: String)
 
@@ -522,6 +571,8 @@ internal fun SteppedSliderRow(
     SettingsSliderRow(
         label = label,
         valueText = format(values[idx]),
+        // Apple's stepped rows print the value in labelSmall, tertiary tint.
+        dimValue = true,
         index = idx,
         lastIndex = values.lastIndex,
         onIndexChange = { newIdx -> if (values[newIdx] != selected) onSelect(values[newIdx]) },

@@ -35,11 +35,16 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Feedback
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -71,6 +76,9 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.db.entity.playlistRowSubtitle
+import com.aeriotv.android.core.data.db.entity.sourceTypeBadgeLabel
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.CheckCircle
 import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -134,6 +142,9 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     onOpenPlaylistDetail: (String) -> Unit = {},
     onOpenPlaylists: () -> Unit = {},
+    /** Long-press Edit on a playlist row (Apple's context menu). Falls back to
+     *  the detail page, which carries Edit, when a host does not wire it. */
+    onEditPlaylist: (String) -> Unit = onOpenPlaylistDetail,
     onAddPlaylist: () -> Unit = {},
     onOpenLicenses: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
@@ -263,7 +274,8 @@ fun SettingsScreen(
                     // as the detail page's Set Active, without opening details.
                     onActivate = { pl -> viewModel.switchToPlaylist(pl.id) },
                     onAdd = onAddPlaylist,
-                    onManage = onOpenPlaylists,
+                    onEdit = { pl -> onEditPlaylist(pl.id) },
+                    onDelete = { pl -> viewModel.deletePlaylist(pl.id) },
                 )
             }
 
@@ -379,8 +391,16 @@ private fun PlaylistsSection(
      *  single focus stop per row. */
     onActivate: ((PlaylistEntity) -> Unit)? = null,
     onAdd: () -> Unit,
-    onManage: () -> Unit,
+    onEdit: (PlaylistEntity) -> Unit,
+    onDelete: (PlaylistEntity) -> Unit,
 ) {
+    val isTv = rememberIsTvDevice()
+    // Apple's row context menu (long press): on tvOS "Use This Playlist"
+    // (only with 2+ playlists), Edit, Delete; on iPhone/iPad Edit, Delete,
+    // because the radio already activates there.
+    val tvGuard = com.aeriotv.android.core.tv.rememberTvMenuGuard()
+    var menuFor by remember { mutableStateOf<PlaylistEntity?>(null) }
+    var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
     Column {
         if (showHeader) {
             SectionHeader("Playlists")
@@ -410,8 +430,14 @@ private fun PlaylistsSection(
                     PlaylistRow(
                         playlist = pl,
                         isActive = pl.id == activeId,
-                        onTap = { onTap(pl) },
-                        onActivate = onActivate?.let { act -> { act(pl) } },
+                        // Guarded so the OK release after a TV long press does
+                        // not also open the detail.
+                        onTap = tvGuard.wrap { onTap(pl) },
+                        onLongPress = {
+                            menuFor = pl
+                            tvGuard.arm()
+                        },
+                        onActivate = if (isTv) null else onActivate?.let { act -> { act(pl) } },
                     )
                 }
                 RowDivider()
@@ -442,51 +468,114 @@ private fun PlaylistsSection(
                     fontWeight = FontWeight.Medium,
                 )
             }
-            if (playlists.size > 1) {
-                RowDivider()
-                var manageFocused by remember { mutableStateOf(false) }
+            // No Manage Playlists row: Apple has none on any platform (the
+            // list is name-sorted, so there is nothing to reorder).
+        }
+        if (playlists.isNotEmpty()) {
+            // Apple's playlistFooterHint, verbatim per platform: the TV row
+            // is one focus stop with no circle, so tvOS points at Actions.
+            if (isTv) {
+                // tvOS pane: plain sentence, no glyph (Apple Phase 3 item 10).
+                SectionFooter("Select a playlist to open it; Set Active is in its Actions")
+            } else {
+                // iPhone/iPad: Label with the list.bullet glyph. Apple's second
+                // line ("Tap Edit to reorder") is NOT mirrored: Apple removed
+                // reordering on 2026-09-18 and the hint now names a control
+                // that does not exist on either platform.
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { manageFocused = it.isFocused }
-                        .groupRowFocus(manageFocused)
-                        .clickable(onClick = onManage)
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Manage Playlists",
-                        style = settingsRowValueStyle(),
-                        color = MaterialTheme.colorScheme.textAccent,
-                        modifier = Modifier.weight(1f),
-                    )
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        imageVector = Icons.AutoMirrored.Filled.List,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = com.aeriotv.android.ui.settings.settingsDimTint(),
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        text = "Tap a playlist to open it, or its circle to make it active.",
+                        style = MaterialTheme.typography.labelSmall.subtext(),
+                        color = com.aeriotv.android.ui.settings.settingsDimTint(),
                     )
                 }
             }
         }
-        if (playlists.isNotEmpty()) {
-            // One rule now, so one string. Input-appropriate verbs only: a
-            // remote has no "tap".
-            val verb = if (paneHost) "Select" else "Tap"
-            SectionFooter("$verb a playlist to open it, or its circle to make it active.")
-        }
+    }
+
+    menuFor?.let { pl ->
+        val isActive = pl.id == activeId
+        com.aeriotv.android.core.tv.TvActionMenuDialog(
+            title = pl.name,
+            actions = buildList {
+                if (isTv && playlists.size > 1) {
+                    // Apple disables this item on the active row and relabels
+                    // it; a disabled entry has no Android menu equivalent, so
+                    // the active row simply omits it.
+                    if (!isActive) {
+                        add(
+                            com.aeriotv.android.core.tv.TvMenuAction(
+                                "Use This Playlist",
+                                Icons.Filled.RadioButtonChecked,
+                            ) { onActivate?.invoke(pl) },
+                        )
+                    }
+                }
+                // Active row only: EditPlaylistScreen saves through the
+                // ACTIVE playlist, so editing another row would overwrite the
+                // active one's URL and credentials (same gate as the detail).
+                if (isActive) {
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Edit", Icons.Filled.Edit) { onEdit(pl) })
+                }
+                add(
+                    com.aeriotv.android.core.tv.TvMenuAction("Delete", Icons.Filled.Delete, destructive = true) {
+                        pendingDelete = pl
+                    },
+                )
+            },
+            guard = tvGuard,
+            onDismiss = { menuFor = null },
+        )
+    }
+
+    pendingDelete?.let { pl ->
+        // Apple's root-list alert, word for word.
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete Playlist?") },
+            text = {
+                Text("This will remove \"${pl.name}\" from the app. Your server data will not be affected.")
+            },
+            confirmButton = {
+                com.aeriotv.android.ui.settings.SettingsDialogTextButton(
+                    label = "Delete",
+                    destructive = true,
+                    onClick = {
+                        pendingDelete = null
+                        onDelete(pl)
+                    },
+                )
+            },
+            dismissButton = {
+                com.aeriotv.android.ui.settings.SettingsDialogTextButton(
+                    label = "Cancel",
+                    onClick = { pendingDelete = null },
+                )
+            },
+        )
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistRow(
     playlist: PlaylistEntity,
     isActive: Boolean,
     onTap: () -> Unit,
+    onLongPress: () -> Unit,
     /** Non-null on touch: the radio becomes its own 44dp control. */
     onActivate: (() -> Unit)? = null,
 ) {
-    // No long-press menu: editing and deleting live on the Playlist Detail
-    // screen (open the active playlist), so the row is a plain click target.
     val isTv = rememberIsTvDevice()
     var focused by remember { mutableStateOf(false) }
     Box {
@@ -495,7 +584,7 @@ private fun PlaylistRow(
                 .fillMaxWidth()
                 .onFocusChanged { focused = it.isFocused }
                 .groupRowFocus(focused)
-                .clickable(onClick = onTap)
+                .combinedClickable(onClick = onTap, onLongClick = onLongPress)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -507,7 +596,8 @@ private fun PlaylistRow(
             // row keeps exactly one focus stop.
             val glyph: @Composable () -> Unit = {
                 Icon(
-                    imageVector = if (isActive) Icons.Filled.RadioButtonChecked
+                    // Apple: checkmark.circle.fill when active, circle otherwise.
+                    imageVector = if (isActive) Icons.Filled.CheckCircle
                     else Icons.Outlined.RadioButtonUnchecked,
                     contentDescription = if (isActive) "Active" else "Set as active playlist",
                     tint = if (isActive) MaterialTheme.colorScheme.primary
@@ -552,13 +642,29 @@ private fun PlaylistRow(
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = playlist.playlistRowSubtitle(),
+                    // Apple ServerListRow.subtitleText: the count only for the
+                    // ACTIVE playlist (the only one whose channels are loaded);
+                    // other rows read their type alone.
+                    text = if (isActive) playlist.playlistRowSubtitle() else playlist.sourceTypeBadgeLabel(),
                     style = settingsFootnoteStyle().subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
+            // Apple's status dot: statusOnline (the theme accent) once the
+            // source has verified (Android's signal is a successful channel
+            // load), muted otherwise.
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .size(if (isTv) 12.dp else 8.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(
+                        if (playlist.channelCount > 0) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    ),
+            )
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
@@ -662,6 +768,7 @@ private fun AboutSection(
     onReportIssue: () -> Unit,
     onOpenLicenses: () -> Unit,
 ) {
+    val isTv = rememberIsTvDevice()
     Column {
         if (showHeader) {
             SectionHeader("About")
@@ -688,27 +795,44 @@ private fun AboutSection(
                 if (updatedAt > 0 && updatedAt != installedAt) formatInstallTime(updatedAt) else "Never",
             )
             RowDivider()
-            AboutActionRow("Copy to Clipboard", Icons.Filled.ContentCopy, onClick = onCopy)
-            RowDivider()
+            // Apple's order differs per platform (AboutSettingsView): iOS is
+            // Copy to Clipboard, Open Source Licenses, Developer Website,
+            // Report an Issue; tvOS has no Copy (no clipboard to paste into)
+            // and ends with Open Source Licenses.
+            if (!isTv) {
+                AboutActionRow("Copy to Clipboard", Icons.Filled.ContentCopy, onClick = onCopy)
+                RowDivider()
+                AboutActionRow(
+                    "Open Source Licenses",
+                    Icons.Outlined.Description,
+                    onClick = onOpenLicenses,
+                    chevron = true,
+                )
+                RowDivider()
+            }
             AboutActionRow(
                 "Developer Website",
-                Icons.Outlined.OpenInNew,
+                Icons.Outlined.Link,
                 onClick = onOpenWebsite,
                 external = true,
             )
             RowDivider()
             AboutActionRow(
                 "Report an Issue",
-                Icons.Outlined.BugReport,
+                // Apple: exclamationmark.bubble.
+                Icons.Outlined.Feedback,
                 onClick = onReportIssue,
                 external = true,
             )
-            RowDivider()
-            AboutActionRow(
-                "Open Source Licenses",
-                Icons.Outlined.Description,
-                onClick = onOpenLicenses,
-            )
+            if (isTv) {
+                RowDivider()
+                AboutActionRow(
+                    "Open Source Licenses",
+                    Icons.Outlined.Description,
+                    onClick = onOpenLicenses,
+                    chevron = true,
+                )
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text(
@@ -778,15 +902,15 @@ private fun AboutVersionRow(value: String, onClick: () -> Unit) {
         )
         Spacer(Modifier.size(10.dp))
         Text(
+            // Apple: caption in textTertiary, dim chevron.
             text = "What's New",
-            style = settingsFootnoteStyle(),
-            color = MaterialTheme.colorScheme.textAccent,
-            fontWeight = FontWeight.Medium,
+            style = settingsFootnoteStyle().subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
         )
         Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             modifier = Modifier.size(16.dp),
         )
     }
@@ -798,6 +922,7 @@ private fun AboutActionRow(
     icon: ImageVector,
     onClick: () -> Unit,
     external: Boolean = false,
+    chevron: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     Row(
@@ -809,20 +934,28 @@ private fun AboutActionRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Apple draws these link rows in textSecondary, not the accent.
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.size(10.dp))
         Text(
             text = label,
-            style = settingsRowValueStyle(),
-            color = MaterialTheme.colorScheme.textAccent,
-            fontWeight = FontWeight.Medium,
+            style = settingsRowValueStyle().subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
+        if (chevron) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
         if (external) {
             Icon(
                 imageVector = Icons.Outlined.OpenInNew,
@@ -880,7 +1013,8 @@ private fun deviceDisplayName(): String {
 
 private fun formatInstallTime(ms: Long): String {
     if (ms <= 0L) return "Unknown"
-    return DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(ms))
+    // Apple .long: "September 25, 2026".
+    return DateFormat.getDateInstance(DateFormat.LONG).format(Date(ms))
 }
 
 private fun buildAboutClipboard(
@@ -986,8 +1120,11 @@ enum class SettingsSection(
  * Drive sync is currently on.
  */
 fun settingsSectionSubtitle(section: SettingsSection, syncEnabled: Boolean): String? =
-    if (section == SettingsSection.Sync) {
-        if (syncEnabled) "On" else "Off"
-    } else {
-        section.subtitle
+    when (section) {
+        SettingsSection.Sync -> if (syncEnabled) "On" else "Off"
+        // Apple shows AboutInfo.version, "1.8.40 (123)", under About on every
+        // platform; same shape here so the rails read identically.
+        SettingsSection.About ->
+            "${com.aeriotv.android.BuildConfig.VERSION_NAME} (${com.aeriotv.android.BuildConfig.VERSION_CODE})"
+        else -> section.subtitle
     }

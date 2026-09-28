@@ -68,6 +68,13 @@ sealed interface SettingsRoute {
      * documents that read badly in a narrow detail column.
      */
     data object Licenses : SettingsRoute
+
+    /**
+     * Sync > Sync Categories, Apple's pushed SyncCategoriesSettingsView. A
+     * real route rather than an in-page sub-page because it must work on TV,
+     * where SettingsSubPageHost does not push.
+     */
+    data object SyncCategories : SettingsRoute
 }
 
 /**
@@ -250,6 +257,7 @@ class SettingsNavState(initial: List<SettingsRoute> = emptyList()) {
             is SettingsRoute.AddMoreCategories -> "addmore"
             is SettingsRoute.About -> "about"
             is SettingsRoute.Licenses -> "licenses"
+            is SettingsRoute.SyncCategories -> "synccategories"
         }
 }
 
@@ -273,12 +281,14 @@ internal fun encodeSettingsRoute(route: SettingsRoute): String = when (route) {
     is SettingsRoute.AddMoreCategories -> "addmore"
     is SettingsRoute.About -> "about"
     is SettingsRoute.Licenses -> "licenses"
+    is SettingsRoute.SyncCategories -> "synccategories"
 }
 
 internal fun decodeSettingsRoute(raw: String): SettingsRoute? = when {
     raw == "root" -> SettingsRoute.Root
     raw == "about" -> SettingsRoute.About
     raw == "licenses" -> SettingsRoute.Licenses
+    raw == "synccategories" -> SettingsRoute.SyncCategories
     raw == "playlists" -> SettingsRoute.Playlists
     raw == "log" -> SettingsRoute.LogViewer
     raw == "addmore" -> SettingsRoute.AddMoreCategories

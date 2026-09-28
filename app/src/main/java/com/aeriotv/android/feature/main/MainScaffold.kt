@@ -2482,6 +2482,7 @@ private fun SettingsTabContent(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
             onOpenPlaylistDetail = { id -> nav.push(SettingsRoute.PlaylistDetail(id)) },
             onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
+            onEditPlaylist = { id -> nav.push(SettingsRoute.EditPlaylist(id)) },
             onAddPlaylist = {
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
             },
@@ -2500,6 +2501,7 @@ private fun SettingsTabContent(
             onSectionClick = { nav.push(SettingsRoute.Section(it)) },
             onOpenPlaylistDetail = { id -> nav.push(SettingsRoute.PlaylistDetail(id)) },
             onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
+            onEditPlaylist = { id -> nav.push(SettingsRoute.EditPlaylist(id)) },
             onAddPlaylist = {
                 nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
             },
@@ -2539,6 +2541,7 @@ private fun SettingsTabContent(
                         nav.push(SettingsRoute.PlaylistDetail(id))
                     },
                     onOpenPlaylists = { nav.push(SettingsRoute.Playlists) },
+                    onEditPlaylist = { id -> nav.push(SettingsRoute.EditPlaylist(id)) },
                     onAddPlaylist = {
                         nav.push(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
                     },
@@ -2569,6 +2572,8 @@ private fun SettingsTabContent(
                 viewModel = playlistVm,
             )
         is SettingsRoute.AddMoreCategories -> AddMoreCategoriesScreen(onBack = { nav.pop() })
+        is SettingsRoute.SyncCategories ->
+            com.aeriotv.android.feature.settings.SyncCategoriesScreen(onBack = { nav.pop() })
         is SettingsRoute.LogViewer -> com.aeriotv.android.feature.settings.LogViewerScreen(
             onBack = { nav.pop() },
         )
@@ -2593,6 +2598,7 @@ private fun SettingsTabContent(
                 com.aeriotv.android.feature.settings.AppUpdatesScreen(onBack = { nav.pop() })
             SettingsSection.Sync -> com.aeriotv.android.feature.settings.SyncSettingsScreen(
                 onBack = { nav.pop() },
+                onOpenSyncCategories = { nav.push(SettingsRoute.SyncCategories) },
             )
             SettingsSection.DvrSettings -> DvrSettingsScreen(onBack = { nav.pop() })
             SettingsSection.Developer -> DeveloperSettingsScreen(

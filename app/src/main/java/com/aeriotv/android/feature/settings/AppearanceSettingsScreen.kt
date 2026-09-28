@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -171,7 +172,7 @@ fun AppearanceSettingsScreen(
                 // / Accent; Android matches that structure here.
                 settingsCard(
                     header = "Color Theme",
-                    footer = "Sets the palette only. Light and Dark Mode below picks the surfaces, so any theme works in either mode. Changes apply live.",
+                    footer = "Colors used throughout the app.",
                 ) {
                     // Plan B5: "theme swatch grid at doubled density" on
                     // tablet. A theme row is a 36dp swatch plus two short
@@ -224,7 +225,7 @@ fun AppearanceSettingsScreen(
                 item("light-dark-mode") {
                     SettingsSection(
                         header = "Light and Dark Mode",
-                        footer = "System follows your device's light or dark setting. Light and Dark force it for AerioTV only.",
+                        footer = "Light or dark surfaces, independent of the color theme.",
                     ) {
                         SettingsPickerRow(
                             title = "Mode",
@@ -246,7 +247,7 @@ fun AppearanceSettingsScreen(
                 item("accent") {
                     SettingsSection(
                         header = "Accent",
-                        footer = "The accent tints titles, checkmarks and focus. Leave the override off to use the theme's own accent.",
+                        footer = "Override the theme's accent color with one of your own.",
                     ) {
                         CustomAccentRow(
                             enabled = useCustomAccent,
@@ -380,10 +381,10 @@ private val TIME_FORMAT_OPTIONS = listOf(
 )
 
 /**
- * Divider inset for the theme rows: 16dp row padding + the 36dp swatch + the
+ * Divider inset for the theme rows: 16dp row padding + the 22dp swatch + the
  * 14dp spacer, so the hairline starts at the title text like Apple's.
  */
-internal val ThemeRowDividerInset = 66.dp
+internal val ThemeRowDividerInset = 52.dp
 
 @Composable
 internal fun DividerRow(startInset: Dp = 16.dp) {
@@ -408,25 +409,20 @@ internal fun ThemeRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Apple parity: a plain 22dp accent dot with a hairline ring, no
+        // background tile. The ring keeps a light accent visible on a light
+        // card.
         Box(
             modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(theme.appBackground)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(theme.accentPrimary)
                 .border(
                     width = 1.dp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = CircleShape,
                 ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(theme.accentPrimary),
-            )
-        }
+        )
         Spacer(Modifier.size(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -458,7 +454,7 @@ private fun themeSubtitle(theme: AppTheme): String = when (theme) {
     AppTheme.Forest -> "Green on near-black"
     AppTheme.Lavender -> "Purple on near-black"
     AppTheme.Monochrome -> "Grayscale on near-black"
-    AppTheme.Light -> "Neutral teal-grey on white"
+    AppTheme.Light -> "Neutral teal-gray that reads on white"
 }
 
 /** Picker order for the Light and Dark Mode card, matching Apple. */
@@ -475,9 +471,9 @@ private fun appearanceModeLabel(mode: AppearanceMode): String = when (mode) {
 }
 
 private fun appearanceModeSubtitle(mode: AppearanceMode): String = when (mode) {
-    AppearanceMode.Dark -> "Dark surfaces everywhere (default)"
-    AppearanceMode.Light -> "Light surfaces everywhere"
-    AppearanceMode.System -> "Follow the device light or dark setting"
+    AppearanceMode.Dark -> "Dark surfaces (default)"
+    AppearanceMode.Light -> "Light surfaces"
+    AppearanceMode.System -> "Follow the system setting"
 }
 
 /**

@@ -43,6 +43,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.aeriotv.android.ui.settings.SettingsActionRow
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,6 +95,10 @@ fun DvrSettingsScreen(
     val customFolderUri by settingsVm.dvrCustomFolderUri.collectAsStateWithLifecycle(initialValue = "")
     val keepAwake by settingsVm.dvrKeepAwakeDuringRecording.collectAsStateWithLifecycle(initialValue = true)
     val context = LocalContext.current
+    val isTv = rememberIsTvDevice()
+    val scope = rememberCoroutineScope()
+    var customBuffer by remember { mutableStateOf<CustomBuffer?>(null) }
+    var showClearConfirmation by remember { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -101,8 +115,45 @@ fun DvrSettingsScreen(
     val usedBytes = dvrState.recordings
         .filter { it.source == DvrViewModel.Source.Local }
         .sumOf { it.fileSizeBytes }
-    val usedMB = (usedBytes / (1024L * 1024L)).toInt()
-    val usedFraction = if (capMB > 0) (usedMB.toFloat() / capMB.toFloat()).coerceIn(0f, 1f) else 0f
+    val usedFraction = if (capMB > 0)
+        (usedBytes.toDouble() / (capMB.toDouble() * 1024.0 * 1024.0)).toFloat().coerceIn(0f, 1f)
+    else 0f
+
+    customBuffer?.let { which ->
+        val current = if (which == CustomBuffer.Pre) preRoll else postRoll
+        CustomBufferDialog(
+            title = if (which == CustomBuffer.Pre) "Custom Pre-Roll" else "Custom Post-Roll",
+            // Apple seeds the stepper with the current value, or 5 when None.
+            initial = if (current > 0) current else 5,
+            onConfirm = { mins ->
+                if (which == CustomBuffer.Pre) settingsVm.setDvrDefaultPreRollMins(mins)
+                else settingsVm.setDvrDefaultPostRollMins(mins)
+                customBuffer = null
+            },
+            onDismiss = { customBuffer = null },
+        )
+    }
+    if (showClearConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmation = false },
+            title = { Text("Delete All Local Recordings?") },
+            text = { Text("This will permanently remove all locally stored recordings from this device. Server-side recordings are not affected.") },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Delete",
+                    destructive = true,
+                    onClick = {
+                        showClearConfirmation = false
+                        // Local only: server rows are Dispatcharr's to manage.
+                        scope.launch { dvrVm.deleteAllCompleted(includeServer = false) }
+                    },
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { showClearConfirmation = false })
+            },
+        )
+    }
 
     com.aeriotv.android.ui.settings.SettingsSubPageHost {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -124,41 +175,19 @@ fun DvrSettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            item {
-                // Task #50 (iOS parity): where new recordings go by default.
-                // The record sheet still shows its Destination toggle for
-                // server-capable accounts; this only pre-selects it.
-                val defaultDestination by settingsVm.dvrDefaultDestination
-                    .collectAsStateWithLifecycle(initialValue = "server")
-                SettingsSection(
-                    header = "Default Destination",
-                    footer = "Where new recordings are saved unless you change it in the record sheet. Accounts without server recording always record to this device.",
-                ) {
-                    SettingsPickerRow(
-                        title = "Default Destination",
-                        options = listOf(
-                            SettingsPickerOption("server", "Server (Dispatcharr)"),
-                            SettingsPickerOption("local", "This device"),
-                        ),
-                        selected = if (defaultDestination == "local") "local" else "server",
-                        onSelect = settingsVm::setDvrDefaultDestination,
-                    )
-                }
-            }
-
+            // Section order is Apple's: Default Recording Buffers, Recording
+            // Destination, Local Storage, Storage Location, Behavior, Danger Zone.
             item {
                 SettingsSection(
                     header = "Default Recording Buffers",
-                    footer = "Buffers extend new recordings beyond the scheduled window. Existing recordings aren't touched. Useful for sports and live events that run over.",
+                    footer = "Applied to new recordings by default. Sports events often run past their scheduled time.",
                 ) {
-                    // Phase 3: these were DropdownMenus anchored to a value
-                    // row, which a remote could not sensibly drive. Same
-                    // options, same keys, through the shared picker.
-                    // TV: six option rows each is far too much list for a
-                    // remote, so each buffer is ONE stepper row driven by
-                    // D-pad Left/Right (Logan on the Streamer; Apple matches).
-                    // Touch keeps the pushed picker page.
-                    if (rememberIsTvDevice()) {
+                    // TV: ONE stepper row per buffer driven by D-pad Left/Right,
+                    // as Apple's tvOS page does; the TV has no Custom row
+                    // because typing a number on a remote is worse than a stop.
+                    // Touch: Apple's iOS picker page plus a "Custom…" row under
+                    // each picker for off-stop values.
+                    if (isTv) {
                         SettingsIntStepperRow(
                             title = "Start Early (Pre-Roll)",
                             options = ROLL_OPTIONS,
@@ -174,30 +203,57 @@ fun DvrSettingsScreen(
                             format = ::formatRoll,
                         )
                     } else {
-                        val rolls = ROLL_OPTIONS.map { SettingsPickerOption(it, formatRoll(it)) }
                         SettingsPickerRow(
                             title = "Start Early (Pre-Roll)",
-                            inlineTitle = true,
-                            options = rolls,
+                            options = bufferOptions(preRoll),
                             selected = preRoll,
                             onSelect = settingsVm::setDvrDefaultPreRollMins,
                         )
+                        SettingsActionRow(
+                            label = "Custom…",
+                            leadingIcon = Icons.Filled.Tune,
+                            onClick = { customBuffer = CustomBuffer.Pre },
+                        )
                         SettingsPickerRow(
                             title = "End Late (Post-Roll)",
-                            inlineTitle = true,
-                            options = rolls,
+                            options = bufferOptions(postRoll),
                             selected = postRoll,
                             onSelect = settingsVm::setDvrDefaultPostRollMins,
+                        )
+                        SettingsActionRow(
+                            label = "Custom…",
+                            leadingIcon = Icons.Filled.Tune,
+                            onClick = { customBuffer = CustomBuffer.Post },
                         )
                     }
                 }
             }
 
             item {
-                Card(
-                    header = "Local Storage",
-                    footer = "Cap applies to local recordings on this device only. Server recordings live on Dispatcharr and are tracked there.",
+                // Task #50 (iOS parity): where new recordings go by default.
+                // The record sheet still shows its Destination toggle for
+                // server-capable accounts; this only pre-selects it.
+                val defaultDestination by settingsVm.dvrDefaultDestination
+                    .collectAsStateWithLifecycle(initialValue = "server")
+                SettingsSection(
+                    header = "Recording Destination",
+                    footer = "Server-side recordings are recommended: they continue even when AerioTV is closed.",
                 ) {
+                    SettingsPickerRow(
+                        title = "Default Destination",
+                        options = listOf(
+                            SettingsPickerOption("server", "Dispatcharr server", "Keeps recording even when AerioTV is closed"),
+                            SettingsPickerOption("local", "This device", "Requires AerioTV to remain open"),
+                        ),
+                        selected = if (defaultDestination == "local") "local" else "server",
+                        onSelect = settingsVm::setDvrDefaultDestination,
+                    )
+                }
+            }
+
+            item {
+                // No footer: Apple's iOS Local Storage section has none.
+                Card(header = "Local Storage", footer = null) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -208,54 +264,66 @@ fun DvrSettingsScreen(
                                 modifier = Modifier.weight(1f),
                             )
                             Text(
-                                text = formatStorage(capMB),
+                                text = formatGb(capMB),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.textAccent,
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }
-                        // 1 GB - 100 GB range, step 1 GB (1024 MB). The shared
-                        // Settings slider owns the track, the thumb and the
-                        // D-pad escape (v0.1.6 report: UP/DOWN must move focus
-                        // off the slider on Android TV).
+                        // 1 GB - 200 GB, step 1 GB: Apple's range. The shared
+                        // Settings slider owns the D-pad escape on TV.
                         SettingsSlider(
                             value = capMB.toFloat(),
                             onValueChange = { settingsVm.setDvrMaxLocalStorageMB(it.toInt()) },
-                            valueRange = 1024f..102400f,
-                            steps = 99,
+                            valueRange = 1024f..204800f,
+                            steps = 198,
                         )
                         Spacer(Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "${formatStorage(usedMB)} of ${formatStorage(capMB)} used",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (usedFraction > 0.8f)
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = "Used",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
                                 modifier = Modifier.weight(1f),
                             )
                             Text(
-                                text = "${(usedFraction * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (usedFraction > 0.8f)
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold,
+                                text = "${formatBytes(context, usedBytes)} of ${formatGb(capMB)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         Spacer(Modifier.height(4.dp))
+                        // Apple's usage colors: green, yellow from 80%, red from 95%.
+                        val usageColor = when {
+                            usedFraction >= 0.95f -> androidx.compose.ui.graphics.Color(0xFFFF3B30)
+                            usedFraction >= 0.80f -> androidx.compose.ui.graphics.Color(0xFFFFCC00)
+                            else -> androidx.compose.ui.graphics.Color(0xFF34C759)
+                        }
                         LinearProgressIndicator(
                             progress = { usedFraction },
-                            modifier = Modifier.fillMaxWidth().height(4.dp),
-                            color = if (usedFraction > 0.8f)
-                                MaterialTheme.colorScheme.error
-                            else
-                                MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                            color = usageColor,
+                            trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                            gapSize = 0.dp,
                             drawStopIndicator = {},
                         )
+                        if (usedFraction >= 0.80f) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Filled.Warning,
+                                    contentDescription = null,
+                                    tint = androidx.compose.ui.graphics.Color(0xFFFFCC00),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    text = "Storage is running low. Future recordings may not complete if the limit is reached.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -320,15 +388,32 @@ fun DvrSettingsScreen(
             }
 
             item {
+                // Apple's footer says the SCREEN stays on; Android holds a CPU
+                // wake lock instead (LocalRecordingService), so the footer
+                // keeps describing what Android actually does.
                 SettingsSection(
                     header = "Behavior",
-                    footer = "Holds a CPU wake lock while a local recording is downloading so Doze can't stall it. Server-side recordings are unaffected (they run on Dispatcharr). Leave on unless you're debugging battery drain.",
+                    footer = if (isTv) null else "Holds a CPU wake lock while a local recording is downloading so Doze can't stall it. Server-side recordings are unaffected (they run on Dispatcharr). Leave on unless you're debugging battery drain.",
                 ) {
                     SettingsToggleRow(
-                        title = "Keep Device Awake During Recording",
-                        subtitle = "Recommended for long local recordings.",
+                        title = if (isTv) "Keep Device Awake" else "Keep Device Awake During Recording",
+                        subtitle = if (isTv) "Prevents sleep during local recording" else null,
                         checked = keepAwake,
                         onCheckedChange = settingsVm::setDvrKeepAwakeDuringRecording,
+                    )
+                }
+            }
+
+            item {
+                SettingsSection(
+                    header = "Danger Zone",
+                    footer = if (isTv) null else "Deletes every recording saved on this device. Server recordings on Dispatcharr are not affected.",
+                ) {
+                    SettingsActionRow(
+                        label = "Delete All Local Recordings",
+                        leadingIcon = Icons.Filled.Delete,
+                        destructive = true,
+                        onClick = { showClearConfirmation = true },
                     )
                 }
             }
@@ -355,15 +440,54 @@ private fun Card(
     }
 }
 
+/** Apple's compact stepper spelling: the value sits between two keys. */
 private fun formatRoll(mins: Int): String = if (mins == 0) "None" else "$mins min"
 
-private fun formatStorage(mb: Int): String {
-    if (mb >= 1024) {
-        val gb = mb / 1024.0
-        return if (gb >= 10) "${gb.toInt()} GB" else String.format("%.1f GB", gb)
-    }
-    return "$mb MB"
+/**
+ * Apple's picker-page choices: long form ("5 minutes"), with a custom stored
+ * value appended so the collapsed row never reads blank for, say, 20 minutes.
+ */
+private fun bufferOptions(current: Int): List<SettingsPickerOption<Int>> {
+    val options = ROLL_OPTIONS.map { SettingsPickerOption(it, if (it == 0) "None" else "$it minutes") }
+    return if (current in ROLL_OPTIONS) options else options + SettingsPickerOption(current, "$current minutes")
 }
+
+private enum class CustomBuffer { Pre, Post }
+
+/** Apple's Custom Pre-Roll / Post-Roll sheet: one 1...120 minute stepper. */
+@Composable
+private fun CustomBufferDialog(
+    title: String,
+    initial: Int,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var value by remember { mutableStateOf(initial.coerceIn(1, 120)) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("$value minutes", modifier = Modifier.weight(1f))
+                IconButton(onClick = { if (value > 1) value-- }, enabled = value > 1) {
+                    Icon(Icons.Filled.Remove, contentDescription = "Less")
+                }
+                IconButton(onClick = { if (value < 120) value++ }, enabled = value < 120) {
+                    Icon(Icons.Filled.Add, contentDescription = "More")
+                }
+            }
+        },
+        confirmButton = { SettingsDialogTextButton(label = "Done", onClick = { onConfirm(value) }) },
+        dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onDismiss) },
+    )
+}
+
+/** Apple formatGB: whole gigabytes. */
+private fun formatGb(mb: Int): String = String.format(java.util.Locale.US, "%.0f GB", mb / 1024.0)
+
+/** Apple formatBytes: "0 KB" for an empty library rather than "0 B". */
+private fun formatBytes(context: android.content.Context, bytes: Long): String =
+    if (bytes <= 0) "0 KB" else android.text.format.Formatter.formatShortFileSize(context, bytes)
 
 private val ROLL_OPTIONS: List<Int> = listOf(0, 5, 10, 15, 30, 60)
 

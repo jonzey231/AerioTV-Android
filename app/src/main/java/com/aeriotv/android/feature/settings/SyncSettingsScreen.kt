@@ -29,7 +29,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
@@ -65,15 +64,34 @@ import com.aeriotv.android.core.sync.DriveSyncManager
 import com.aeriotv.android.core.sync.SyncCategory
 import com.aeriotv.android.core.sync.SyncConfig
 import com.aeriotv.android.ui.settings.settingsFormWidth
-import com.aeriotv.android.ui.settings.SettingsActionRow
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsSection
-import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.settingsRowCard
-import java.text.DateFormat
-import java.util.Date
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.aeriotv.android.ui.settings.SettingsRowContainer
+import com.aeriotv.android.ui.settings.SettingsToggleAffordance
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.settingsFootnoteStyle
+import com.aeriotv.android.ui.settings.settingsRowTitleStyle
+import com.aeriotv.android.ui.theme.textAccent
 import kotlinx.coroutines.launch
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
@@ -88,14 +106,17 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
  *      token directly. Otherwise we launch the consent IntentSender via
  *      an ActivityResultLauncher and parse the result on return.
  *
- * After step 2 succeeds the per-category toggles + Push / Pull / Clear
- * unlock. The "missing OAuth config" red banner shows only when the
+ * After step 2 succeeds Push / Pull / Clear unlock. The per-category
+ * toggles live on the pushed [SyncCategoriesScreen], as Apple's do. The "missing OAuth config" red banner shows only when the
  * BuildConfig.GOOGLE_DRIVE_WEB_CLIENT_ID field is empty.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SyncSettingsScreen(
     onBack: () -> Unit,
+    /** Pushes Sync Categories (Apple's NavigationLink). Defaulted so a host
+     *  that has not wired the route yet still compiles. */
+    onOpenSyncCategories: () -> Unit = {},
     viewModel: SyncSettingsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -110,6 +131,7 @@ fun SyncSettingsScreen(
     val pullStatus by viewModel.pullStatus.collectAsState()
     var pushConfirmOpen by remember { mutableStateOf(false) }
     var pullConfirmOpen by remember { mutableStateOf(false) }
+    var clearConfirmOpen by remember { mutableStateOf(false) }
     val configured = remember { SyncConfig.isConfigured() }
 
     // One-time disclosure that server credentials sync to Drive in cleartext
@@ -189,15 +211,22 @@ fun SyncSettingsScreen(
             }
         }
 
+        // Apple locks both directions (and Clear) while any one runs so a
+        // double tap cannot stack operations on each other.
+        val actionRunning =
+            clearStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                pushStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                pullStatus is SyncSettingsViewModel.ActionStatus.Running
+        // Apple shows one "Last synced" stamp; Android records the two
+        // directions separately, so the newer of the two is the last sync.
+        val lastSynced = maxOf(lastPush, lastPull)
+
         LazyColumn(
             // fillMaxHeight bounds the LazyColumn so its inner viewport can
             // scroll past the first screen of content - without it, the column
             // sized to wrap its contents and Settings -> Sync was stuck on
             // whatever fit above the bottom edge.
             modifier = Modifier.settingsFormWidth().fillMaxHeight(),
-            // 104dp bottom clears the MainScaffold NavigationBar so the
-            // Actions card (Push/Pull + Clear Drive Data) isn't clipped
-            // when signed in.
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
@@ -210,20 +239,23 @@ fun SyncSettingsScreen(
                 item { SignedOutWelcomeBanner() }
             }
             item {
+                // Apple SyncSettingsView parity: ONE section holding the
+                // toggle, Push, Pull, Sync Categories and Clear, each on a
+                // tinted icon tile, with Drive in place of iCloud. The
+                // account row stays first because Drive, unlike iCloud,
+                // needs an in-app sign-in.
                 SettingsSection(
-                    header = "Drive Sync",
-                    footer = "Playlists, watch progress, reminders, app preferences and credentials sync via your Drive AppData folder. Files are scoped per-app and never appear in your main Drive UI.",
+                    header = "",
+                    footer = "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read.",
                 ) {
                     AccountRow(
                         signedIn = signedIn,
                         email = accountEmail,
                     )
-                    SettingsToggleRow(
-                        title = "Sync Enabled",
-                        subtitle = if (signedIn)
-                            "Auto-syncing the categories you've toggled below."
-                        else
-                            "Sign in below, then enable sync to push and pull data.",
+                    SyncTileToggleRow(
+                        icon = Icons.Filled.Cloud,
+                        title = "Drive Sync",
+                        subtitle = "Sync playlists, preferences, and watch progress",
                         checked = masterEnabled,
                         onCheckedChange = { enabled ->
                             viewModel.setMasterEnabled(enabled)
@@ -234,148 +266,93 @@ fun SyncSettingsScreen(
                             }
                         },
                     )
-                }
-            }
-            // Sign-in / sign-out lives in its own row below the account card so
-            // the button has breathing room instead of getting squeezed into
-                // the right edge of a multi-line description row.
-                item {
-                    if (signedIn) {
-                        SignOutButton(
-                            enabled = !inFlight,
-                            onClick = {
-                                viewModel.signOut()
-                                Toast.makeText(context, "Signed out of Drive.", Toast.LENGTH_SHORT).show()
+                    // Apple shows Push and Pull only while sync is on; Drive
+                    // also needs a signed-in token to run either.
+                    if (masterEnabled && signedIn) {
+                        SyncTileActionRow(
+                            icon = Icons.Filled.CloudSync,
+                            title = "Push to Drive",
+                            subtitle = if (lastSynced > 0L) {
+                                "Send this device's data up  ·  Last synced ${lastSyncedAgo(lastSynced)}"
+                            } else {
+                                "Send this device's playlists, preferences and progress up"
                             },
-                        )
-                    } else {
-                        SignInWithGoogleButton(
-                            // Stay enabled even without OAuth config so the
-                            // tap surfaces the explanation dialog. inFlight
-                            // is the only true disabled state - prevents
-                            // double-launching the credential picker.
-                            enabled = !inFlight,
-                            onClick = {
-                                if (!configured) {
-                                    notConfiguredDialogOpen = true
-                                } else {
-                                    triggerSignIn()
-                                }
-                            },
-                        )
-                        if (!configured) {
-                            Spacer(Modifier.height(8.dp))
-                            DeveloperConfigHint()
-                        }
-                    }
-                }
-
-            item {
-                SettingsSection(
-                    header = "Categories",
-                    // Glitzbr had to ask what triggers a sync, so say it.
-                    // Android is NOT Apple's model: no live KVS push, just
-                    // DriveSyncWorker every PERIOD_HOURS on an unmetered
-                    // connection, plus the manual buttons below.
-                    footer = "Choose what syncs across your devices. Syncing runs " +
-                        "automatically about every 6 hours while you are on Wi-Fi and " +
-                        "the battery is not low. Use Push or Pull below when you want " +
-                        "it to happen right now.",
-                ) {
-                    SyncCategory.entries.forEach { category ->
-                        val enabled by viewModel.categoryEnabled(category).collectAsStateWithLifecycle(initialValue = true)
-                        SettingsToggleRow(
-                            title = category.displayName,
-                            subtitle = category.subtitle,
-                            checked = enabled,
-                            onCheckedChange = { viewModel.setCategoryEnabled(category, it) },
-                        )
-                        // Slice of App Preferences rather than a category of
-                        // its own: the map rides preferences.v1.json and each
-                        // SyncCategory owns exactly one Drive file, so a second
-                        // category pointing at that file would upload it twice.
-                        // Sits directly under its parent so the nesting reads.
-                        if (category == SyncCategory.Preferences) {
-                            val shareRemoteMap by viewModel.syncRemoteControlMap
-                                .collectAsStateWithLifecycle(initialValue = true)
-                            SettingsToggleRow(
-                                title = "Remote Button Map",
-                                subtitle = "Part of App Preferences. Turn off on a device whose " +
-                                    "remote differs from your others. This choice stays on this " +
-                                    "device and is not shared.",
-                                checked = shareRemoteMap,
-                                onCheckedChange = { viewModel.setSyncRemoteControlMap(it) },
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (signedIn) {
-                item {
-                    SettingsSection(
-                        header = "Actions",
-                        footer = "Push overwrites the Drive backup with this device; Pull overwrites this device with the backup. Last Push: ${formatTimestamp(lastPush)}. Last Pull: ${formatTimestamp(lastPull)}.",
-                    ) {
-                        // Inline spinner + result line replaced the old Toasts,
-                        // which never surfaced on Android TV (rows looked dead).
-                        val actionRunning =
-                            clearStatus is SyncSettingsViewModel.ActionStatus.Running ||
-                                pushStatus is SyncSettingsViewModel.ActionStatus.Running ||
-                                pullStatus is SyncSettingsViewModel.ActionStatus.Running
-                        // "Sync Now" (push-then-pull in one tap) was removed in
-                        // favor of the explicit one-way Push/Pull actions: after a
-                        // blank install overwrote a good Drive backup, the user
-                        // wants every manual sync to state its direction. The
-                        // periodic background worker still does push-then-pull.
-                        SettingsActionRow(
-                            label = "Push Config to Drive",
-                            subtitle = "Overwrite the Drive backup with this device's setup",
-                            leadingIcon = Icons.Filled.CloudUpload,
                             running = pushStatus is SyncSettingsViewModel.ActionStatus.Running,
-                            statusLine = when (val s = pushStatus) {
-                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
-                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
-                                else -> null
-                            },
-                            statusIsError = pushStatus is SyncSettingsViewModel.ActionStatus.Failure,
+                            status = pushStatus,
                             onClick = {
-                                if (inFlight || actionRunning) return@SettingsActionRow
+                                if (inFlight || actionRunning) return@SyncTileActionRow
                                 pushConfirmOpen = true
                             },
                         )
-                        SettingsActionRow(
-                            label = "Pull Config from Drive",
-                            subtitle = "Overwrite this device with the Drive backup",
-                            leadingIcon = Icons.Filled.CloudDownload,
+                        SyncTileActionRow(
+                            icon = Icons.Filled.CloudDownload,
+                            title = "Pull from Drive",
+                            subtitle = "Replace this device's data with the Drive copy",
                             running = pullStatus is SyncSettingsViewModel.ActionStatus.Running,
-                            statusLine = when (val s = pullStatus) {
-                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
-                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
-                                else -> null
-                            },
-                            statusIsError = pullStatus is SyncSettingsViewModel.ActionStatus.Failure,
+                            status = pullStatus,
                             onClick = {
-                                if (inFlight || actionRunning) return@SettingsActionRow
+                                if (inFlight || actionRunning) return@SyncTileActionRow
                                 pullConfirmOpen = true
                             },
                         )
-                        SettingsActionRow(
-                            label = "Clear Drive Data",
-                            leadingIcon = Icons.Filled.CloudOff,
+                    }
+                    // Reachable even with sync off, as Apple: the Delete
+                    // actions there work for stale-state cleanup.
+                    SyncTileActionRow(
+                        icon = Icons.Filled.Tune,
+                        title = "Sync Categories",
+                        subtitle = "Choose what syncs across your devices",
+                        chevron = true,
+                        onClick = onOpenSyncCategories,
+                    )
+                    // Always offered on Apple, even with sync off. Drive needs
+                    // a token to delete anything, so it waits for sign-in.
+                    if (signedIn) {
+                        SyncTileActionRow(
+                            icon = Icons.Filled.Delete,
+                            title = "Clear Drive Data",
+                            subtitle = "Wipe synced playlists, preferences, watch progress, and credentials from Drive",
                             destructive = true,
                             running = clearStatus is SyncSettingsViewModel.ActionStatus.Running,
-                            statusLine = when (val s = clearStatus) {
-                                is SyncSettingsViewModel.ActionStatus.Success -> s.message
-                                is SyncSettingsViewModel.ActionStatus.Failure -> s.message
-                                else -> null
-                            },
-                            statusIsError = clearStatus is SyncSettingsViewModel.ActionStatus.Failure,
+                            status = clearStatus,
                             onClick = {
-                                if (inFlight || actionRunning) return@SettingsActionRow
-                                viewModel.runClearRemote()
+                                if (inFlight || actionRunning) return@SyncTileActionRow
+                                clearConfirmOpen = true
                             },
                         )
+                    }
+                }
+            }
+            // Sign-in / sign-out lives in its own row below the card so the
+            // button has breathing room instead of getting squeezed into the
+            // right edge of a multi-line description row.
+            item {
+                if (signedIn) {
+                    SignOutButton(
+                        enabled = !inFlight,
+                        onClick = {
+                            viewModel.signOut()
+                            Toast.makeText(context, "Signed out of Drive.", Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                } else {
+                    SignInWithGoogleButton(
+                        // Stay enabled even without OAuth config so the
+                        // tap surfaces the explanation dialog. inFlight
+                        // is the only true disabled state - prevents
+                        // double-launching the credential picker.
+                        enabled = !inFlight,
+                        onClick = {
+                            if (!configured) {
+                                notConfiguredDialogOpen = true
+                            } else {
+                                triggerSignIn()
+                            }
+                        },
+                    )
+                    if (!configured) {
+                        Spacer(Modifier.height(8.dp))
+                        DeveloperConfigHint()
                     }
                 }
             }
@@ -384,9 +361,11 @@ fun SyncSettingsScreen(
     }
 
     if (pushConfirmOpen) {
+        // Kept although Apple pushes without asking: a blank install once
+        // overwrote a good Drive backup, so an Android push states its cost.
         com.aeriotv.android.ui.scale.AlertDialog(
             onDismissRequest = { pushConfirmOpen = false },
-            title = { Text("Push Config to Drive?") },
+            title = { Text("Push to Drive?") },
             text = {
                 Text(
                     "This replaces the entire Drive backup with this device's " +
@@ -410,19 +389,22 @@ fun SyncSettingsScreen(
     }
 
     if (pullConfirmOpen) {
+        // Apple's "Pull from iCloud?" alert with Drive substituted. Apple's
+        // "Playlists or progress on this device that are not in iCloud are
+        // removed" sentence is left out: Android's pull merges onto local
+        // rows and removes nothing, so that line would be false here.
         com.aeriotv.android.ui.scale.AlertDialog(
             onDismissRequest = { pullConfirmOpen = false },
-            title = { Text("Pull Config from Drive?") },
+            title = { Text("Pull from Drive?") },
             text = {
                 Text(
-                    "This replaces this device's playlists, preferences, and " +
-                        "watch progress with the Drive backup. The current setup " +
-                        "on this device is overwritten.",
+                    "This replaces this device's playlists and watch progress with the copy in Drive. " +
+                        "Preferences merge normally. If this device has the newest changes, push them up first.",
                 )
             },
             confirmButton = {
                 SettingsDialogTextButton(
-                    label = "Pull from Drive",
+                    label = "Replace This Device",
                     onClick = {
                         pullConfirmOpen = false
                         viewModel.runPullOnly()
@@ -432,6 +414,35 @@ fun SyncSettingsScreen(
             },
             dismissButton = {
                 SettingsDialogTextButton(label = "Cancel", onClick = { pullConfirmOpen = false })
+            },
+        )
+    }
+
+    if (clearConfirmOpen) {
+        // Apple's "Clear iCloud Data?" alert, word for word with Drive in
+        // place of iCloud. Clearing leaves sync on, exactly as Apple does.
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { clearConfirmOpen = false },
+            title = { Text("Clear Drive Data?") },
+            text = {
+                Text(
+                    "Wipes synced playlists, preferences, watch progress, and credentials from Drive. " +
+                        "This device's data is preserved. Drive Sync stays enabled, so your local state " +
+                        "will replace whatever was on Drive the next time the app pushes.",
+                )
+            },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Clear",
+                    onClick = {
+                        clearConfirmOpen = false
+                        viewModel.runClearRemote()
+                    },
+                    destructive = true,
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { clearConfirmOpen = false })
             },
         )
     }
@@ -451,7 +462,7 @@ fun SyncSettingsScreen(
                         "app data, are reachable only by AerioTV, and never appear in your " +
                         "Drive UI, but they are stored without an extra password. On this " +
                         "device the same credentials are encrypted at rest.\n\n" +
-                        "You can turn this off any time with the Credentials toggle below.",
+                        "You can turn this off any time with the Credentials toggle in Sync Categories.",
                 )
             },
             confirmButton = {
@@ -696,8 +707,372 @@ private fun SignInWithGoogleButton(enabled: Boolean, onClick: () -> Unit) {
 // Phase 61b: removed the inline GoogleGMark approximation - the button now
 // renders the official four-color brand mark from res/drawable/ic_google_g.xml.
 
-private fun formatTimestamp(value: Long): String {
-    if (value <= 0L) return "never"
-    val df = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-    return df.format(Date(value))
+
+// MARK: - Apple-style tiled rows
+//
+// Apple's Sync rows are SettingsRow: a 32pt rounded tile in the icon color at
+// 20% with the glyph in full color. The shared Android rows draw a bare
+// glyph, so this page builds on SettingsRowContainer instead of changing
+// every other page's rows.
+
+@Composable
+private fun SyncIconTile(icon: ImageVector, color: Color) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .background(color.copy(alpha = 0.20f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun SyncRowText(
+    title: String,
+    subtitle: String?,
+    titleColor: Color,
+    statusLine: String? = null,
+    statusIsError: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = title,
+            style = settingsRowTitleStyle(),
+            color = titleColor,
+            fontWeight = FontWeight.Medium,
+        )
+        if (subtitle != null) {
+            Text(
+                text = subtitle,
+                style = settingsFootnoteStyle().subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (statusLine != null) {
+            Text(
+                text = statusLine,
+                style = settingsFootnoteStyle(),
+                color = if (statusIsError) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.textAccent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SyncTileToggleRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String?,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+) {
+    SettingsRowContainer(
+        onClick = { if (enabled) onCheckedChange(!checked) },
+        // Apple dims disabled category rows to 50% rather than hiding them.
+        modifier = Modifier.alpha(if (enabled) 1f else 0.5f),
+    ) {
+        SyncIconTile(icon, MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(14.dp))
+        SyncRowText(
+            title = title,
+            subtitle = subtitle,
+            titleColor = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        SettingsToggleAffordance(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+        )
+    }
+}
+
+/**
+ * Tiled action row. While [running] the click is swallowed rather than the
+ * row disabled, so it stays in D-pad traversal (SettingsActionRow's rule).
+ */
+@Composable
+private fun SyncTileActionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String?,
+    onClick: () -> Unit,
+    destructive: Boolean = false,
+    running: Boolean = false,
+    status: SyncSettingsViewModel.ActionStatus = SyncSettingsViewModel.ActionStatus.Idle,
+    chevron: Boolean = false,
+) {
+    val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    SettingsRowContainer(onClick = { if (!running) onClick() }) {
+        SyncIconTile(icon, tint)
+        Spacer(Modifier.width(14.dp))
+        SyncRowText(
+            title = title,
+            subtitle = subtitle,
+            titleColor = if (destructive) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onBackground,
+            statusLine = when (status) {
+                is SyncSettingsViewModel.ActionStatus.Success -> status.message
+                is SyncSettingsViewModel.ActionStatus.Failure -> status.message
+                else -> null
+            },
+            statusIsError = status is SyncSettingsViewModel.ActionStatus.Failure,
+            modifier = Modifier.weight(1f),
+        )
+        if (running) {
+            Spacer(Modifier.width(12.dp))
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        }
+        if (chevron) {
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Apple's lastSyncedString: "just now", "5m ago", "3h ago", "2d ago". */
+private fun lastSyncedAgo(millis: Long): String {
+    val secs = (System.currentTimeMillis() - millis) / 1000
+    return when {
+        secs < 60 -> "just now"
+        secs < 3600 -> "${secs / 60}m ago"
+        secs < 86400 -> "${secs / 3600}h ago"
+        else -> "${secs / 86400}d ago"
+    }
+}
+
+// MARK: - Sync Categories copy
+//
+// Settings-page titles and subtitles, kept here rather than on SyncCategory
+// because the onboarding chooser reads the enum's shorter copy (Apple splits
+// the two the same way: subtitle vs briefSubtitle). Where Apple has the
+// category its wording is used with Drive in place of iCloud; a clause that
+// is false on Android is dropped instead of copied.
+
+/** Row title on the Sync Categories page; also names a category in results. */
+internal fun settingsCategoryTitle(category: SyncCategory): String = when (category) {
+    SyncCategory.WatchProgress -> "VOD Watch Progress"
+    else -> category.displayName
+}
+
+private fun settingsCategorySubtitle(category: SyncCategory): String = when (category) {
+    // Apple adds "and reorder positions": Android's snapshot carries no order.
+    SyncCategory.Playlists -> "Server configurations, playlist URLs, and per-server toggles."
+    SyncCategory.WatchProgress -> "Resume points and last-watched timestamps for movies and TV episodes."
+    SyncCategory.Reminders -> "Upcoming-program reminders you scheduled from the EPG."
+    SyncCategory.Favorites -> "Favorite channels and your manual order."
+    SyncCategory.Watchlist -> "Movies and TV shows you saved for later, and titles you hid."
+    SyncCategory.Preferences -> "Theme, appearance mode, accent color, default tab, hidden groups, and palette overrides."
+    SyncCategory.Credentials -> "Server passwords and API keys, stored in your Drive app data."
+}
+
+private fun settingsCategoryIcon(category: SyncCategory): ImageVector = when (category) {
+    SyncCategory.Playlists -> Icons.Filled.Inbox
+    SyncCategory.WatchProgress -> Icons.Filled.PlayCircle
+    SyncCategory.Reminders -> Icons.Filled.NotificationsActive
+    SyncCategory.Favorites -> Icons.Filled.Star
+    SyncCategory.Watchlist -> Icons.Filled.Bookmark
+    SyncCategory.Preferences -> Icons.Filled.Settings
+    SyncCategory.Credentials -> Icons.Filled.Key
+}
+
+/**
+ * Settings > Sync > Sync Categories. Apple SyncCategoriesSettingsView: one
+ * toggle per category plus a destructive "Delete from Drive" per category.
+ * Touch pairs each toggle with its Delete button (iOS); TV lists the toggles,
+ * then a "Delete from Drive" section of "Delete <category>" rows (tvOS),
+ * because a small inline button is a poor D-pad target.
+ */
+@Composable
+fun SyncCategoriesScreen(
+    onBack: () -> Unit,
+    viewModel: SyncSettingsViewModel = hiltViewModel(),
+) {
+    val isTv = rememberIsTvDevice()
+    val masterEnabled by viewModel.masterEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val clearStatuses by viewModel.categoryClearStatus.collectAsState()
+    var pendingDelete by remember { mutableStateOf<SyncCategory?>(null) }
+
+    // Delete needs a live token; restore it silently as the Sync page does.
+    LaunchedEffect(Unit) { viewModel.restoreSessionIfPossible() }
+    DisposableEffect(Unit) { onDispose { viewModel.clearCategoryStatuses() } }
+
+    // Apple's footer with Drive in place of iCloud. Apple's "sent a few
+    // seconds later" and "toggle states sync across your devices" are not
+    // true on Android (DriveSyncWorker runs every 6 hours; the toggles are
+    // per-device), so those sentences state what Android actually does.
+    val footer = if (masterEnabled) {
+        "Syncing is automatic: AerioTV syncs about every 6 hours while you are on Wi-Fi and the battery is not low. Push to Drive on the previous screen just forces that round trip immediately.\n\n" +
+            "Each toggle controls whether this device pushes and pulls that category. The toggles apply to this device only. Use the Delete buttons to remove a category's cloud copy without affecting local data."
+    } else {
+        "Drive Sync is off. Per-category toggles take effect when you re-enable Sync at the top. The Delete buttons still work: useful for scrubbing stale Drive state before re-enabling Sync."
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        SettingsDetailTopBar(title = "Sync Categories", onBack = onBack)
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            LazyColumn(
+                modifier = Modifier.settingsFormWidth().fillMaxHeight(),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 12.dp,
+                    bottom = LocalTabBarBottomInset.current,
+                ),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                item {
+                    SettingsSection(header = "Categories", footer = if (isTv) null else footer) {
+                        SyncCategory.entries.forEach { category ->
+                            val enabled by viewModel.categoryEnabled(category)
+                                .collectAsStateWithLifecycle(initialValue = true)
+                            SyncTileToggleRow(
+                                icon = settingsCategoryIcon(category),
+                                title = settingsCategoryTitle(category),
+                                subtitle = settingsCategorySubtitle(category),
+                                checked = enabled,
+                                onCheckedChange = { viewModel.setCategoryEnabled(category, it) },
+                                enabled = masterEnabled,
+                            )
+                            if (!isTv) {
+                                CategoryDeleteButton(
+                                    status = clearStatuses[category],
+                                    onClick = { pendingDelete = category },
+                                )
+                            }
+                            // Slice of App Preferences rather than a category of
+                            // its own: the map rides preferences.v1.json and each
+                            // SyncCategory owns exactly one Drive file, so it has
+                            // no Delete of its own. Sits under its parent so the
+                            // nesting reads.
+                            if (category == SyncCategory.Preferences) {
+                                val shareRemoteMap by viewModel.syncRemoteControlMap
+                                    .collectAsStateWithLifecycle(initialValue = true)
+                                SyncTileToggleRow(
+                                    icon = Icons.Filled.SettingsRemote,
+                                    title = "Remote Button Map",
+                                    subtitle = "Your customized remote button assignments. Turn this off on a TV whose remote is a different model from your others.",
+                                    checked = shareRemoteMap,
+                                    onCheckedChange = { viewModel.setSyncRemoteControlMap(it) },
+                                    enabled = masterEnabled,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (isTv) {
+                    item {
+                        SettingsSection(header = "Delete from Drive", footer = footer) {
+                            SyncCategory.entries.forEach { category ->
+                                val status = clearStatuses[category]
+                                SyncTileActionRow(
+                                    icon = Icons.Filled.CloudOff,
+                                    title = "Delete ${settingsCategoryTitle(category)}",
+                                    subtitle = null,
+                                    destructive = true,
+                                    running = status is SyncSettingsViewModel.ActionStatus.Running,
+                                    status = status ?: SyncSettingsViewModel.ActionStatus.Idle,
+                                    onClick = { pendingDelete = category },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pendingDelete?.let { category ->
+        val name = settingsCategoryTitle(category)
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Remove $name from Drive?") },
+            text = { Text("This will remove your $name from Drive. Other devices will keep their local copy.") },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Delete",
+                    onClick = {
+                        pendingDelete = null
+                        viewModel.runClearRemoteCategory(category)
+                    },
+                    destructive = true,
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { pendingDelete = null })
+            },
+        )
+    }
+}
+
+/**
+ * iOS's trailing red bordered "Delete from iCloud" button under each toggle,
+ * with the result line where Apple shows its toast.
+ */
+@Composable
+private fun CategoryDeleteButton(
+    status: SyncSettingsViewModel.ActionStatus?,
+    onClick: () -> Unit,
+) {
+    val error = MaterialTheme.colorScheme.error
+    val running = status is SyncSettingsViewModel.ActionStatus.Running
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
+    ) {
+        val line = when (status) {
+            is SyncSettingsViewModel.ActionStatus.Success -> status.message
+            is SyncSettingsViewModel.ActionStatus.Failure -> status.message
+            else -> null
+        }
+        if (line != null) {
+            Text(
+                text = line,
+                style = settingsFootnoteStyle(),
+                color = if (status is SyncSettingsViewModel.ActionStatus.Failure) error
+                else MaterialTheme.colorScheme.textAccent,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(error.copy(alpha = 0.15f))
+                .dpadFocusRing(RoundedCornerShape(8.dp), washTint = error)
+                .clickable { if (!running) onClick() }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (running) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = error)
+            } else {
+                Icon(Icons.Filled.CloudOff, contentDescription = null, tint = error, modifier = Modifier.size(16.dp))
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Delete from Drive",
+                style = settingsFootnoteStyle(),
+                color = error,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
 }

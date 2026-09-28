@@ -226,6 +226,45 @@ class SyncSettingsViewModel @Inject constructor(
     }
 
     /**
+     * Per-category result for the Sync Categories page's Delete actions.
+     * Keyed by category so each row shows its own spinner and result line
+     * (the Apple toast has no Android TV equivalent that reliably surfaces).
+     */
+    private val _categoryClearStatus =
+        MutableStateFlow<Map<SyncCategory, ActionStatus>>(emptyMap())
+    val categoryClearStatus: StateFlow<Map<SyncCategory, ActionStatus>> = _categoryClearStatus
+
+    /** Reset the Sync Categories result lines; called when that page leaves. */
+    fun clearCategoryStatuses() {
+        _categoryClearStatus.value = emptyMap()
+    }
+
+    /**
+     * Delete ONE category's Drive file, leaving local data (and every other
+     * device's copy) alone. Apple SyncManager.clearCloudCategory parity.
+     */
+    fun runClearRemoteCategory(category: SyncCategory) {
+        if (_categoryClearStatus.value[category] is ActionStatus.Running) return
+        fun set(status: ActionStatus) {
+            _categoryClearStatus.value = _categoryClearStatus.value + (category to status)
+        }
+        viewModelScope.launch {
+            set(ActionStatus.Running)
+            val token = (sync.status.value as? DriveSyncManager.Status.SignedIn)?.accessToken
+            if (token == null) {
+                set(ActionStatus.Failure("Not signed in to Drive"))
+                return@launch
+            }
+            set(
+                runCatching { sync.clearRemoteCategory(token, category) }.fold(
+                    onSuccess = { ActionStatus.Success("${settingsCategoryTitle(category)} removed from Drive") },
+                    onFailure = { ActionStatus.Failure(it.message ?: "Couldn't remove from Drive") },
+                ),
+            )
+        }
+    }
+
+    /**
      * Pull-only counterpart to [syncNow], used by the Welcome onboarding
      * "Sign in with Google" pill. Right after the user authorizes the Drive
      * scope on a fresh device, we want to lift any playlists / watch progress

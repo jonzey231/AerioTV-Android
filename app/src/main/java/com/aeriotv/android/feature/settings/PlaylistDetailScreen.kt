@@ -57,11 +57,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.text.format.DateUtils
+import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.capability.Capability
 import com.aeriotv.android.core.data.db.entity.capabilities
 import com.aeriotv.android.core.data.db.entity.dispatcharrEffectiveDvrAccess
 import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
-import com.aeriotv.android.core.data.db.entity.sourceTypeDisplayLabel
 import com.aeriotv.android.core.preferences.DispatcharrAccountFacts
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.settings.settingsFormWidth
@@ -199,6 +200,10 @@ fun PlaylistDetailScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // Apple's order: iOS/iPadOS put the read-only Connection Details
+            // and Permissions first; tvOS puts Actions first so a focusable
+            // row is on the first screen (ServerDetailView readOnlyInfoSections).
+            val infoSections: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             item {
                 Section(
                     header = "Connection Details",
@@ -207,7 +212,7 @@ fun PlaylistDetailScreen(
                     footer = if (!playlist.lanUrlString.isNullOrBlank()) {
                         "A checkmark marks the connection in use right now. The local URL is used " +
                             "automatically whenever the server answers on your home network; run " +
-                            "Refresh LAN Detection below after a network change."
+                            "Refresh LAN Detection after a network change."
                     } else {
                         null
                     },
@@ -237,7 +242,7 @@ fun PlaylistDetailScreen(
                             )
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                     ) {
-                        DetailRow("Type", playlist.sourceTypeDisplayLabel())
+                        DetailRow("Type", playlist.detailTypeLabel())
                         // Checkmark marks whichever URL is currently in effect
                         // per PlaylistRepository.effectiveBaseUrl's decision.
                         val activeRoute = state.activeRoute
@@ -258,30 +263,27 @@ fun PlaylistDetailScreen(
                         playlist.username?.takeIf { it.isNotBlank() }?.let { user ->
                             DetailRow("Username", user)
                         }
-                        // Reflect a real signal -- whether the source has ever
-                        // loaded channels -- instead of asserting "Verified"
-                        // unconditionally (which read as connected even for a
-                        // source that never reached the server). The "Last
-                        // Connected" row below dates the last successful load.
-                        val hasConnected = playlist.channelCount > 0
+                        // Apple reads "Verified"/"Unverified" as plain text. Android
+                        // has no stored verify flag; a source that has loaded
+                        // channels has passed a real connection, so that is the
+                        // signal (never asserted unconditionally).
                         DetailRow(
                             label = "Status",
-                            value = if (hasConnected) "Connected" else "Not connected yet",
-                            valueColor = if (hasConnected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            icon = Icons.Filled.CheckCircle.takeIf { hasConnected },
+                            value = if (playlist.channelCount > 0) "Verified" else "Unverified",
                         )
                         playlist.lastRefreshedAt?.let { ts ->
+                            // Apple: relative, named ("2 weeks ago").
                             DetailRow(
                                 "Last Connected",
-                                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
-                                    .format(Date(ts)),
+                                DateUtils.getRelativeTimeSpanString(
+                                    ts,
+                                    System.currentTimeMillis(),
+                                    DateUtils.MINUTE_IN_MILLIS,
+                                ).toString(),
                             )
                         }
-                        DetailRow("Channels", playlist.channelCount.toString())
+                        // Apple shows the count for the active playlist only.
+                        if (isActivePlaylist) DetailRow("Channels", playlist.channelCount.toString())
                         if (!playlist.epgUrl.isNullOrBlank()) {
                             DetailRow("EPG", playlist.epgUrl!!)
                         }
@@ -434,6 +436,8 @@ fun PlaylistDetailScreen(
                 }
             }
 
+            }
+            if (isTv) {
             item {
                 Section(header = "Actions", footer = null) {
                     // Rev 2 canon amendment 1: activation lives here on every
@@ -485,6 +489,64 @@ fun PlaylistDetailScreen(
                         )
                     }
                 }
+            }
+
+                infoSections()
+            } else {
+                infoSections()
+            item {
+                Section(header = "Actions", footer = null) {
+                    // Rev 2 canon amendment 1: activation lives here on every
+                    // form factor. The rail and sidebar make selection show the
+                    // detail, so OK-to-activate cannot survive on those roots;
+                    // this row replaces it one move away. Mirrors Apple's
+                    // ServerDetailView.swift:243-253.
+                    ActionRow(
+                        icon = if (isActivePlaylist) Icons.Filled.CheckCircle
+                        else Icons.Outlined.PowerSettingsNew,
+                        label = if (isActivePlaylist) "Active Playlist" else "Set Active",
+                        onClick = { playlist?.id?.let { viewModel.switchToPlaylist(it) } },
+                        enabled = !isActivePlaylist,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                    if (isTv && isActivePlaylist) {
+                        ActionRow(
+                            icon = Icons.Outlined.Edit,
+                            label = "Edit Playlist",
+                            onClick = onEdit,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                    }
+                    if (isActivePlaylist) {
+                    ActionRow(
+                        icon = Icons.Outlined.Public,
+                        label = "Test Connection",
+                        onClick = { viewModel.testConnection() },
+                        running = state.testStatus is PlaylistViewModel.ActionStatus.Running,
+                        status = state.testStatus,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                    ActionRow(
+                        icon = Icons.Filled.Refresh,
+                        label = "Refresh Playlist",
+                        onClick = { viewModel.refreshPlaylist() },
+                        running = state.playlistRefreshStatus is PlaylistViewModel.ActionStatus.Running,
+                        status = state.playlistRefreshStatus,
+                    )
+                    }
+                    if (isActivePlaylist && !playlist.lanUrlString.isNullOrBlank()) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        ActionRow(
+                            icon = Icons.Outlined.Wifi,
+                            label = "Refresh LAN Detection",
+                            onClick = { viewModel.refreshLanDetection() },
+                            running = state.lanRefreshStatus is PlaylistViewModel.ActionStatus.Running,
+                            status = state.lanRefreshStatus,
+                        )
+                    }
+                }
+            }
+
             }
 
             if (isActivePlaylist) item {
@@ -621,38 +683,59 @@ private fun DetailRow(
     // Lets the URL rows show a primary checkmark without tinting the URL text.
     iconTint: androidx.compose.ui.graphics.Color = valueColor,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium.subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(0.4f),
-        )
+    // Apple infoRow: label left, value pushed to the trailing edge on one line
+    // with middle truncation, a hairline between rows on touch (List
+    // separators; the tvOS read-only card draws none).
+    val isTv = rememberIsTvDevice()
+    Column {
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(0.6f),
         ) {
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.size(6.dp))
-            }
             Text(
-                text = value,
-                style = MaterialTheme.typography.bodyMedium,
-                color = valueColor,
+                text = label,
+                style = MaterialTheme.typography.bodyMedium.subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.size(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier.weight(1f),
+            ) {
+                if (icon != null) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.size(6.dp))
+                }
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = valueColor,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.MiddleEllipsis,
+                )
+            }
+        }
+        if (!isTv) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
         }
     }
+}
+
+/** Apple ServerType.displayName: the Type row names the source kind only, no
+ *  auth-mode suffix (the old "- Admin API Key" tail was Android-only). */
+private fun PlaylistEntity.detailTypeLabel(): String = when (sourceType) {
+    SourceType.DispatcharrUserPass.name, SourceType.DispatcharrApiKey.name -> "Dispatcharr Direct Connect"
+    SourceType.XtreamCodes.name -> "Xtream Codes"
+    SourceType.M3uUrl.name -> "M3U + EPG"
+    else -> sourceType
 }
 
 @Composable

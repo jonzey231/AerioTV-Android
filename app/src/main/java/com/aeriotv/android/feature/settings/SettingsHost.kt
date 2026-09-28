@@ -393,13 +393,23 @@ fun SettingsTvRailHost(
     val detailFocus = remember { FocusRequester() }
     var railHasFocus by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<SettingsRoute?>(null) }
+    // Bumped on EVERY rail focus. Keying the commit on the route alone missed
+    // re-focusing the same route after the selection moved elsewhere without
+    // touching `pending` (deep link, posture remap): the effect never
+    // restarted, so the row read as selected while the pane kept the old page
+    // (Player highlighted over the Live TV pane).
+    var pendingSeq by remember { mutableStateOf(0) }
+    // The effect outlives the composition it launched in; read the CURRENT
+    // selection and callback when the debounce fires, not the launch-time ones.
+    val currentSelection by androidx.compose.runtime.rememberUpdatedState(selection)
+    val currentOnSelect by androidx.compose.runtime.rememberUpdatedState(onSelect)
 
-    // Debounced commit. Keyed on `pending`, so each new focus restarts the
-    // timer and a fast scroll through the rail commits only where it stops.
-    androidx.compose.runtime.LaunchedEffect(pending) {
+    // Debounced commit. Each new focus restarts the timer and a fast scroll
+    // through the rail commits only where it stops.
+    androidx.compose.runtime.LaunchedEffect(pendingSeq) {
         val next = pending ?: return@LaunchedEffect
         kotlinx.coroutines.delay(RailSelectDebounceMs)
-        if (next != selection) onSelect(next)
+        if (next != currentSelection) currentOnSelect(next)
     }
     val flushPending = {
         pending?.let { if (it != selection) onSelect(it) }
@@ -453,7 +463,7 @@ fun SettingsTvRailHost(
             sections = sections,
             activePlaylistName = activePlaylistName,
             syncEnabled = syncEnabled,
-            onFocusRoute = { pending = it },
+            onFocusRoute = { pending = it; pendingSeq++ },
             onClickRoute = { route ->
                 pending = route
                 if (route != selection) onSelect(route)

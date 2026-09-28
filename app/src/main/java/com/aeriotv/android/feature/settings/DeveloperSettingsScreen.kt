@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.NetworkCheck
@@ -61,14 +63,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.core.debug.DebugLogger
 import com.aeriotv.android.ui.settings.settingsFormWidth
-import com.aeriotv.android.ui.settings.SettingsActionRow
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
-import com.aeriotv.android.ui.settings.SettingsInfoRow
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.SettingsSubPageHost
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.settingsRowCard
+import com.aeriotv.android.ui.settings.SettingsRowContainer
+import com.aeriotv.android.ui.settings.SettingsToggleAffordance
+import com.aeriotv.android.ui.settings.settingsFootnoteStyle
+import com.aeriotv.android.ui.settings.settingsRowTitleStyle
+import com.aeriotv.android.ui.theme.textAccent
 import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.android.EntryPointAccessors
@@ -163,7 +169,26 @@ fun DeveloperSettingsScreen(
                     onRequestDisable = { pendingDisable = true },
                 )
             }
-            if (logFileExists) {
+            // Section order follows Apple per platform. Phone: Logging, What's
+            // Captured, Cast, Log File. TV: Logging, Log File, What's Captured,
+            // and no Cast section at all (casting is a phone-sender feature).
+            // Apple's Playback Engine section sits after What's Captured on
+            // iOS and after Logging on tvOS; Android has no engine choice yet.
+            if (!isTv) {
+                item("captured") { WhatsCapturedSection() }
+                item("cast") {
+                    CastTestSection(
+                        forceTranscode = castForceHevc,
+                        onForceTranscodeChange = settingsVm::setCastForceHevcTranscode,
+                        downProfile = castDownProfile,
+                        onDownProfileChange = settingsVm::setCastTranscodeDownProfile,
+                    )
+                }
+            }
+            // Apple shows the file rows as soon as logging is on, not only once
+            // the first write lands, so the user sees the rows the moment they
+            // enable it.
+            if (loggingEnabled || logFileExists) {
                 item("log-file") {
                     LogFileSection(
                         sizeBytes = sizeBytes,
@@ -177,17 +202,7 @@ fun DeveloperSettingsScreen(
                     )
                 }
             }
-
-            item("cast") {
-                CastTestSection(
-                    forceTranscode = castForceHevc,
-                    onForceTranscodeChange = settingsVm::setCastForceHevcTranscode,
-                    downProfile = castDownProfile,
-                    onDownProfileChange = settingsVm::setCastTranscodeDownProfile,
-                )
-            }
-
-            item("captured") { WhatsCapturedSection() }
+            if (isTv) item("captured") { WhatsCapturedSection() }
 
             item("build") { BuildInfoSection() }
         }
@@ -292,11 +307,11 @@ private fun LoggingSection(
             "storage. Logs include network requests, playback events, EPG activity, errors, " +
             "and app lifecycle events. No personally identifiable information is collected.",
     ) {
-        SettingsToggleRow(
+        DevToggleRow(
+            icon = if (enabled) Icons.Filled.BugReport else Icons.Outlined.BugReport,
             title = "Debug Logging",
-            subtitle = if (enabled) "Active, writing to aerio_debug_logs.txt"
-            else "Off, no data is collected",
-            leadingIcon = Icons.Filled.BugReport,
+            subtitle = if (enabled) "Active: writing to aerio_debug_logs.txt"
+            else "Off: no data is collected",
             checked = enabled,
             // Route through the confirm dialogs instead of flipping directly.
             onCheckedChange = { value -> if (value) onRequestEnable() else onRequestDisable() },
@@ -319,15 +334,16 @@ private fun CastTestSection(
 ) {
     SettingsSection(header = "Cast") {
         SettingsToggleRow(
-            title = "Cast: transcode video to HEVC (test)",
+            title = "Transcode Video to HEVC (Test)",
             subtitle = "Re-encode every H.264 channel; H.264 profile below when the receiver has no HEVC",
             checked = forceTranscode,
             onCheckedChange = onForceTranscodeChange,
         )
+        // Phone only (the section is hidden on TV), where the picker pushes
+        // its choices from a row inside this card.
         SettingsPickerRow(
-            title = "Cast: H.264 transcode profile",
+            title = "H.264 Transcode Profile",
             subtitle = "720p60 keeps motion; 1080p30 keeps resolution",
-            inlineTitle = true,
             options = listOf(
                 SettingsPickerOption("720p60", "720p60"),
                 SettingsPickerOption("1080p30", "1080p30"),
@@ -351,27 +367,23 @@ private fun LogFileSection(
         footer = "Logs rotate automatically when the file exceeds 10 MB. The previous log is " +
             "preserved as aerio_debug_logs_archive.txt.",
     ) {
-        SettingsInfoRow(
-            label = "Total Log Size",
-            value = formatBytes(sizeBytes),
-            leadingIcon = Icons.Outlined.Description,
-        )
-        SettingsActionRow(
+        DevLogSizeRow(sizeText = formatBytes(sizeBytes))
+        DevActionRow(
+            icon = Icons.Outlined.Article,
             label = "View Log File",
             subtitle = "Scroll through entries in the app",
-            leadingIcon = Icons.Outlined.Article,
             onClick = onView,
         )
-        SettingsActionRow(
+        DevActionRow(
+            icon = Icons.Filled.Share,
             label = "Share Log File",
             subtitle = if (isTv) "Scan a QR code with your phone" else "Email, Messages, Drive, etc.",
-            leadingIcon = Icons.Filled.Share,
             onClick = onShare,
         )
-        SettingsActionRow(
+        DevActionRow(
+            icon = Icons.Filled.Delete,
             label = "Delete All Logs",
             subtitle = "Removes the current log and rotated archives",
-            leadingIcon = Icons.Filled.Delete,
             onClick = onClear,
             destructive = true,
         )
@@ -516,15 +528,9 @@ private fun CategoryRow(icon: ImageVector, title: String, detail: String) {
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .size(18.dp)
-                .padding(top = 2.dp),
-        )
-        Spacer(Modifier.size(10.dp))
+        // Tiled in the secondary accent, as Apple's What's Captured rows are.
+        DevIconTile(icon = icon, tint = MaterialTheme.colorScheme.secondary)
+        Spacer(Modifier.size(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -538,6 +544,135 @@ private fun CategoryRow(icon: ImageVector, title: String, detail: String) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+// MARK: - Icon tile rows
+
+/**
+ * Apple's DevIconTile: every row on this page leads with a rounded tile at a
+ * low tint opacity, and off-state rows sit on the neutral fill instead, so the
+ * page reads like the rest of Settings rather than a list of bare glyphs.
+ * Sizes are Apple's (36/16/8 on phone, 48/22/10 on tvOS halved for the TV
+ * canvas, the same conversion TvSettingsMetrics uses).
+ */
+@Composable
+private fun DevIconTile(
+    icon: ImageVector,
+    tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
+    isActive: Boolean = true,
+) {
+    val isTv = rememberIsTvDevice()
+    val box = if (isTv) 24.dp else 36.dp
+    val glyph = if (isTv) 11.dp else 16.dp
+    val corner = if (isTv) 5.dp else 8.dp
+    Box(
+        modifier = Modifier
+            .size(box)
+            .clip(RoundedCornerShape(corner))
+            .background(
+                if (isActive) tint.copy(alpha = 0.18f)
+                else MaterialTheme.colorScheme.surfaceVariant,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (isActive) tint else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(glyph),
+        )
+    }
+}
+
+/** Toggle row with the icon tile; the tile and subtitle go accent while on, as Apple's do. */
+@Composable
+private fun DevToggleRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    SettingsRowContainer(onClick = { onCheckedChange(!checked) }) {
+        DevIconTile(icon = icon, isActive = checked)
+        Spacer(Modifier.size(14.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                style = settingsRowTitleStyle(),
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = subtitle,
+                style = settingsFootnoteStyle(),
+                color = if (checked) MaterialTheme.colorScheme.textAccent
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.size(12.dp))
+        SettingsToggleAffordance(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/** Action row with the icon tile; destructive rows tile in the error color. */
+@Composable
+private fun DevActionRow(
+    icon: ImageVector,
+    label: String,
+    subtitle: String?,
+    onClick: () -> Unit,
+    destructive: Boolean = false,
+) {
+    val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    SettingsRowContainer(onClick = onClick) {
+        DevIconTile(icon = icon, tint = tint)
+        Spacer(Modifier.size(14.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = label,
+                style = settingsRowTitleStyle(),
+                color = if (destructive) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Medium,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = settingsFootnoteStyle().subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** Read-only size row; its tile is the neutral off-state one, as on Apple. */
+@Composable
+private fun DevLogSizeRow(sizeText: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .settingsRowCard(focused = false)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DevIconTile(icon = Icons.Outlined.Description, isActive = false)
+        Spacer(Modifier.size(14.dp))
+        Text(
+            text = "Log File Size",
+            style = settingsRowTitleStyle(),
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = sizeText,
+            style = settingsFootnoteStyle().subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

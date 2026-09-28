@@ -40,6 +40,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import com.aeriotv.android.ui.tv.dpadFocusEscape
 
@@ -147,6 +148,10 @@ fun SettingsSliderRow(
     lastIndex: Int,
     onIndexChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    // Apple's iOS slider rows print the value small and in the tertiary
+    // tint (labelSmall, textTertiary). Opt-in so other pages keep the
+    // accent readout until they are matched.
+    dimValue: Boolean = false,
 ) {
     Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -157,12 +162,20 @@ fun SettingsSliderRow(
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.weight(1f),
             )
-            Text(
-                text = valueText,
-                style = settingsRowValueStyle(),
-                color = MaterialTheme.colorScheme.textAccent,
-                fontWeight = FontWeight.SemiBold,
-            )
+            if (dimValue) {
+                Text(
+                    text = valueText,
+                    style = settingsFootnoteStyle().subtext(),
+                    color = settingsDimTint(),
+                )
+            } else {
+                Text(
+                    text = valueText,
+                    style = settingsRowValueStyle(),
+                    color = MaterialTheme.colorScheme.textAccent,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
         SettingsSlider(
             value = index.toFloat(),

@@ -36,6 +36,7 @@ import com.aeriotv.android.ui.settings.settingsFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsRowContainer
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.SettingsSelectionRow
 import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
@@ -133,9 +134,9 @@ private val RemoteSlot.displayName: String
         RemoteSlot.OK_SHORT -> "Select"
         RemoteSlot.OK_LONG -> "Select (Hold)"
         RemoteSlot.UP_SHORT -> "Up"
-        RemoteSlot.UP_LONG -> "Up (hold)"
+        RemoteSlot.UP_LONG -> "Up (Hold)"
         RemoteSlot.DOWN_SHORT -> "Down"
-        RemoteSlot.DOWN_LONG -> "Down (hold)"
+        RemoteSlot.DOWN_LONG -> "Down (Hold)"
         RemoteSlot.LEFT_SHORT -> "Left"
         RemoteSlot.LEFT_LONG -> "Left (Hold)"
         RemoteSlot.RIGHT_SHORT -> "Right"
@@ -219,7 +220,6 @@ fun RemoteControlSettingsScreen(
     val tuneInMini by viewModel.guideTuneInMini.collectAsStateWithLifecycle(
         initialValue = false,
     )
-    var editingTuneTarget by remember { mutableStateOf(false) }
     val showRemoteHints by viewModel.showRemoteHints.collectAsStateWithLifecycle(
         initialValue = true,
     )
@@ -240,10 +240,7 @@ fun RemoteControlSettingsScreen(
                     .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = LocalTabBarBottomInset.current),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                SettingsSection(
-                    header = "Hints",
-                    footer = "The one-line key reminder under the tab bar on Live TV and at the bottom of the player controls. Turn it off once the buttons are second nature.",
-                ) {
+                SettingsSection(header = "On-Screen Hints") {
                     SettingsToggleRow(
                         title = "Show Remote Hints",
                         subtitle = "Key reminders on Live TV and in the player",
@@ -252,9 +249,27 @@ fun RemoteControlSettingsScreen(
                     )
                 }
 
+                // Pick-one rows rather than a value row + dialog, matching the
+                // tvOS page, which lists both targets inline with a checkmark.
+                SettingsSection(
+                    header = "Play Channels In",
+                    footer = "Where a channel starts playing when you press Select on it in Live TV. Mini Player keeps you browsing with the channel in the corner; press Select on it again to go full screen.",
+                ) {
+                    SettingsSelectionRow(
+                        label = "Full Screen",
+                        selected = !tuneInMini,
+                        onClick = { viewModel.setGuideTuneInMini(false) },
+                    )
+                    SettingsSelectionRow(
+                        label = "Mini Player",
+                        selected = tuneInMini,
+                        onClick = { viewModel.setGuideTuneInMini(true) },
+                    )
+                }
+
                 SettingsSection(
                     header = "While Watching",
-                    footer = "What each button does while a channel is playing fullscreen. Changes apply immediately. Back always navigates and cannot be reassigned.",
+                    footer = "What each button does while a channel is playing full screen. Changes apply immediately. Back always navigates and cannot be reassigned.",
                 ) {
                     PLAYER_SLOTS.forEach { slot ->
                         SlotRow(
@@ -299,17 +314,6 @@ fun RemoteControlSettingsScreen(
                 }
 
                 SettingsSection(
-                    header = "Tuning",
-                    footer = "Where a channel starts playing when you press OK on it in Live TV. Mini player keeps you browsing with the channel in the corner; press OK on it again (or hold Right) to go fullscreen.",
-                ) {
-                    SlotRow(
-                        slotName = "Play Channels In",
-                        valueName = if (tuneInMini) "Mini player" else "Full screen",
-                        onClick = { editingTuneTarget = true },
-                    )
-                }
-
-                SettingsSection(
                     header = "Reset",
                     footer = "Restore every button to the standard AerioTV scheme.",
                 ) {
@@ -321,28 +325,6 @@ fun RemoteControlSettingsScreen(
                 }
             }
         }
-    }
-
-    if (editingTuneTarget) {
-        TvActionMenuDialog(
-            title = "Play Channels In",
-            actions = listOf(
-                TvMenuAction(
-                    label = if (!tuneInMini) "Full screen  (current)" else "Full screen",
-                ) {
-                    viewModel.setGuideTuneInMini(false)
-                    editingTuneTarget = false
-                },
-                TvMenuAction(
-                    label = if (tuneInMini) "Mini player  (current)" else "Mini player",
-                ) {
-                    viewModel.setGuideTuneInMini(true)
-                    editingTuneTarget = false
-                },
-            ),
-            onDismiss = { editingTuneTarget = false },
-            guard = menuGuard,
-        )
     }
 
     editingPlayerSlot?.let { slot ->

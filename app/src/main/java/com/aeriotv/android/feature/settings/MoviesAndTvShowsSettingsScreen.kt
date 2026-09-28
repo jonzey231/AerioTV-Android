@@ -11,10 +11,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,96 +80,112 @@ fun MoviesAndTvShowsSettingsScreen(
                     // MARK: Refresh library
                     //
                     // Shown on every form factor (Apple parity): the cadence is
-                    // read by the shared OnDemandViewModel, so it always applied
-                    // everywhere even while the rows were TV-only.
+                    // read by the shared OnDemandViewModel. Apple's iOS page is
+                    // one picker row with no section header (the row already
+                    // says "Refresh Library") and the explanation on the choice
+                    // page; its tvOS page keeps the header and shows the choices
+                    // inline; the picker itself draws the explanation under them.
                     item("refresh-library") {
                         SettingsSection(
-                            header = "Refresh Library",
-                            footer = "Live TV channels refresh on every launch. Movies and TV Shows open from the saved library and re-sweep the provider on this schedule. Pull down on either tab to refresh right away.",
+                            header = if (isTv) "Refresh Library" else "",
                         ) {
                             SettingsPickerRow(
                                 title = "Refresh Library",
                                 options = listOf(
-                                    SettingsPickerOption(0, "Every Launch"),
-                                    SettingsPickerOption(24, "Daily"),
-                                    SettingsPickerOption(168, "Weekly"),
+                                    SettingsPickerOption(0, "Every Launch", "Re-sweep the provider library on every launch"),
+                                    SettingsPickerOption(24, "Daily", "Open from the saved library; re-sweep the provider once a day"),
+                                    SettingsPickerOption(168, "Weekly", "Open from the saved library; re-sweep the provider once a week"),
                                 ),
                                 selected = vodRefreshHours,
                                 onSelect = viewModel::setVodLibraryRefreshHours,
+                                footer = VOD_REFRESH_FOOTNOTE,
                             )
                         }
                     }
 
                     // MARK: Posters
                     item("posters") {
-                        SettingsSection(
-                            header = "Posters",
-                            footer = "Show posters in the Program Info panel and fill in missing artwork on On Demand detail screens, looked up on TMDB with your own free API key (themoviedb.org). Off by default. The key syncs across your devices via Google Drive (kept in your private app data).",
-                        ) {
-                            SettingsToggleRow(
-                                title = "Fetch Posters from TMDB",
-                                subtitle = "Fill in program artwork your provider doesn't supply, using TMDB.",
-                                checked = programPostersTmdb,
-                                onCheckedChange = viewModel::setProgramPostersTmdbEnabled,
-                            )
-                            if (programPostersTmdb) {
-                                var keyDraft by remember(savedTmdbKey) { mutableStateOf(savedTmdbKey) }
-                                TmdbAttribution(
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
-                                    long = false,
-                                    isTv = isTv,
+                        Column {
+                            SettingsSection(
+                                header = "Posters",
+                                // Apple iOS: the footer is always shown. Apple tvOS:
+                                // the same text sits under the buttons, only while
+                                // the toggle is on (rendered below the card here).
+                                footer = if (isTv) null else TMDB_FOOTER_PHONE,
+                            ) {
+                                SettingsToggleRow(
+                                    title = "Fetch Posters from TMDB",
+                                    subtitle = "Fill in program artwork your provider doesn't supply, using The Movie Database.",
+                                    checked = programPostersTmdb,
+                                    onCheckedChange = viewModel::setProgramPostersTmdbEnabled,
                                 )
-                                SettingsTextField(
-                                    label = "TMDB API key (v3) or read token (v4)",
-                                    value = keyDraft,
-                                    onValueChange = {
-                                        keyDraft = it
-                                        viewModel.resetTmdbKeyTestState()
-                                    },
-                                    secure = true,
-                                    secureLabel = "key",
-                                    modifier = Modifier.padding(top = 8.dp),
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    OutlinedButton(
-                                        onClick = { viewModel.testTmdbKey(keyDraft) },
-                                        enabled = keyDraft.isNotBlank() &&
-                                            tmdbKeyState != SettingsViewModel.TmdbKeyTestState.Testing,
-                                        modifier = Modifier.dpadFocusRing(RoundedCornerShape(50)),
-                                    ) { Text("Test") }
-                                    TextButton(
-                                        onClick = { viewModel.saveTmdbKey(keyDraft) },
-                                        enabled = keyDraft.isNotBlank() || savedTmdbKey.isNotBlank(),
-                                        modifier = Modifier.dpadFocusRing(RoundedCornerShape(50)),
-                                    ) { Text("Save") }
-                                    Spacer(Modifier.weight(1f))
-                                    val (statusText, statusColor) = when (tmdbKeyState) {
-                                        SettingsViewModel.TmdbKeyTestState.Testing ->
-                                            "Checking..." to MaterialTheme.colorScheme.onSurfaceVariant
-                                        SettingsViewModel.TmdbKeyTestState.Valid ->
-                                            "Valid key" to androidx.compose.ui.graphics.Color(0xFF4CAF50)
-                                        SettingsViewModel.TmdbKeyTestState.Invalid ->
-                                            "Invalid key" to MaterialTheme.colorScheme.error
-                                        SettingsViewModel.TmdbKeyTestState.Saved ->
-                                            "Saved" to androidx.compose.ui.graphics.Color(0xFF4CAF50)
-                                        SettingsViewModel.TmdbKeyTestState.Idle ->
-                                            "" to MaterialTheme.colorScheme.onSurfaceVariant
-                                    }
-                                    if (statusText.isNotEmpty()) {
-                                        Text(
-                                            statusText,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = statusColor,
-                                        )
+                                if (programPostersTmdb) {
+                                    var keyDraft by remember(savedTmdbKey) { mutableStateOf(savedTmdbKey) }
+                                    val testing = tmdbKeyState == SettingsViewModel.TmdbKeyTestState.Testing
+                                    SettingsTextField(
+                                        label = "TMDB API Key",
+                                        placeholder = "API Key or Read Access Token",
+                                        value = keyDraft,
+                                        onValueChange = {
+                                            keyDraft = it
+                                            viewModel.resetTmdbKeyTestState()
+                                        },
+                                        secure = true,
+                                        secureLabel = "key",
+                                        modifier = Modifier.padding(top = 8.dp),
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        // Test is the outlined secondary, Save the
+                                        // filled primary, as Apple pairs them.
+                                        OutlinedButton(
+                                            onClick = { viewModel.testTmdbKey(keyDraft) },
+                                            // Apple tvOS does not gate Test on an empty
+                                            // key: a disabled button cannot take D-pad
+                                            // focus. Touch gates it, as Apple iOS does.
+                                            enabled = !testing && (isTv || keyDraft.isNotBlank()),
+                                            modifier = Modifier.dpadFocusRing(RoundedCornerShape(50)),
+                                        ) { Text(if (testing && isTv) "Testing..." else "Test") }
+                                        val (statusText, statusColor) = when (tmdbKeyState) {
+                                            SettingsViewModel.TmdbKeyTestState.Valid ->
+                                                "Valid key" to androidx.compose.ui.graphics.Color(0xFF4CAF50)
+                                            SettingsViewModel.TmdbKeyTestState.Invalid ->
+                                                "Invalid key" to MaterialTheme.colorScheme.error
+                                            SettingsViewModel.TmdbKeyTestState.Saved ->
+                                                "Saved" to androidx.compose.ui.graphics.Color(0xFF4CAF50)
+                                            // Apple shows no status text while idle or testing.
+                                            else -> "" to MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                        if (!isTv && statusText.isNotEmpty()) {
+                                            Text(statusText, style = MaterialTheme.typography.labelMedium, color = statusColor)
+                                        }
+                                        Spacer(Modifier.weight(1f))
+                                        Button(
+                                            onClick = { viewModel.saveTmdbKey(keyDraft) },
+                                            enabled = !testing,
+                                            modifier = Modifier.dpadFocusRing(RoundedCornerShape(50)),
+                                        ) { Text("Save") }
+                                        if (isTv && statusText.isNotEmpty()) {
+                                            Text(statusText, style = MaterialTheme.typography.labelMedium, color = statusColor)
+                                        }
                                     }
                                 }
                             }
+                            if (isTv && programPostersTmdb) {
+                                com.aeriotv.android.ui.settings.SettingsSectionFooter(TMDB_FOOTER_TV)
+                            }
+                            // Apple iOS: short attribution inside the footer, always.
+                            // Apple tvOS: long attribution below, always.
+                            TmdbAttribution(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                long = isTv,
+                                isTv = isTv,
+                            )
                         }
                     }
 
@@ -181,7 +197,7 @@ fun MoviesAndTvShowsSettingsScreen(
                             "no restart needed.",
                     ) {
                         ScaleSliderRow(
-                            label = "Movies & Series",
+                            label = "Movies & TV Shows",
                             value = scaleMovies,
                             onValueChange = viewModel::setDisplayScaleMovies,
                             segments = MOVIES_SCALE_SEGMENTS,
@@ -193,3 +209,17 @@ fun MoviesAndTvShowsSettingsScreen(
     }
     }
 }
+
+/** Apple MoviesTVSettingsView.vodRefreshFootnote, word for word. */
+private const val VOD_REFRESH_FOOTNOTE =
+    "Live TV channels refresh on every launch. Movies and TV Shows open from the saved library and re-sweep the provider on this schedule. Pull down on either tab to refresh right away."
+
+// Apple's footers say iCloud Keychain; Android carries the key in the Sync
+// snapshot to the user's own Google Drive app data (AppPreferences sync
+// export), so the sentence names that instead. The rest is Apple's text.
+private const val TMDB_SYNC_SENTENCE =
+    "If Sync is enabled, your key is saved to your Google Drive app data and syncs to your other devices."
+private const val TMDB_FOOTER_PHONE = TMDB_SYNC_SENTENCE +
+    " Get a free key at themoviedb.org under Settings, then API; paste either the API Key or the Read Access Token. With a key, artwork and details for Movies and TV Shows come from TMDB first and your provider fills any gaps."
+private const val TMDB_FOOTER_TV = TMDB_SYNC_SENTENCE +
+    " Get a free key at themoviedb.org; paste either the API Key or the Read Access Token. With a key, artwork and details for Movies and TV Shows come from TMDB first and your provider fills any gaps."

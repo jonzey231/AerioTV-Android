@@ -236,8 +236,20 @@ fun SettingsSubPageRow(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     value: String? = null,
+    // Optional so existing callers are unchanged; Apple's pushed rows
+    // (SettingsChoicePicker / SettingsSubgroup) carry an accent glyph.
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
 ) {
     SettingsRowContainer(onClick = onOpen, modifier = modifier) {
+        if (leadingIcon != null) {
+            Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+        }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,

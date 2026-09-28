@@ -187,6 +187,19 @@ class DriveSyncManager @Inject constructor(
     }
 
     /**
+     * Drop ONE category's appData file (Apple SyncCategoriesSettingsView's
+     * per-category "Delete from iCloud"). Local rows are untouched, so other
+     * devices keep their copy. Matches by name rather than findFileId so a
+     * duplicate left by an interrupted first upload goes too. Throws on the
+     * first failed delete, like [clearRemote]'s callers expect.
+     */
+    suspend fun clearRemoteCategory(token: String, category: SyncCategory) {
+        driveClient.listAll(token)
+            .filter { (_, name) -> name == category.fileName }
+            .forEach { (id, _) -> driveClient.delete(token, id).getOrThrow() }
+    }
+
+    /**
      * Push enabled categories to Drive. Bails on the first failure but
      * continues across categories — a Reminders push fail doesn't block
      * Playlists. Returns a map of category → success.
