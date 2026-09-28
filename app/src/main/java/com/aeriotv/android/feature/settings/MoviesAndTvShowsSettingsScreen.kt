@@ -23,6 +23,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import com.aeriotv.android.ui.settings.SettingsRowDivider
+import kotlin.math.roundToInt
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.ui.TmdbAttribution
@@ -99,6 +104,8 @@ fun MoviesAndTvShowsSettingsScreen(
                                 selected = vodRefreshHours,
                                 onSelect = viewModel::setVodLibraryRefreshHours,
                                 footer = VOD_REFRESH_FOOTNOTE,
+                                // Apple: arrow.clockwise.
+                                leadingIcon = Icons.Filled.Refresh,
                             )
                         }
                     }
@@ -120,6 +127,12 @@ fun MoviesAndTvShowsSettingsScreen(
                                     onCheckedChange = viewModel::setProgramPostersTmdbEnabled,
                                 )
                                 if (programPostersTmdb) {
+                                    // The key field and buttons are not a row
+                                    // helper, so they get the card's divider and
+                                    // row inset here; without it they ran to the
+                                    // card edge (Apple insets them like any row).
+                                    SettingsRowDivider()
+                                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                                     var keyDraft by remember(savedTmdbKey) { mutableStateOf(savedTmdbKey) }
                                     val testing = tmdbKeyState == SettingsViewModel.TmdbKeyTestState.Testing
                                     SettingsTextField(
@@ -174,6 +187,7 @@ fun MoviesAndTvShowsSettingsScreen(
                                             Text(statusText, style = MaterialTheme.typography.labelMedium, color = statusColor)
                                         }
                                     }
+                                    }
                                 }
                             }
                             if (isTv && programPostersTmdb) {
@@ -196,12 +210,21 @@ fun MoviesAndTvShowsSettingsScreen(
                             "85-150% lets you trade density for readability. Changes apply live, " +
                             "no restart needed.",
                     ) {
-                        ScaleSliderRow(
-                            label = "Movies & TV Shows",
-                            value = scaleMovies,
-                            onValueChange = viewModel::setDisplayScaleMovies,
-                            segments = MOVIES_SCALE_SEGMENTS,
-                        )
+                        if (isTv) {
+                            // tvOS keeps percentage segments (remote friendly).
+                            ScaleSliderRow(
+                                label = "Movies & TV Shows",
+                                value = scaleMovies,
+                                onValueChange = viewModel::setDisplayScaleMovies,
+                                segments = MOVIES_SCALE_SEGMENTS,
+                            )
+                        } else {
+                            ScaleAToASliderRow(
+                                label = "Movies & TV Shows",
+                                value = scaleMovies,
+                                onValueChange = viewModel::setDisplayScaleMovies,
+                            )
+                        }
                     }
                 }
             }
@@ -223,3 +246,50 @@ private const val TMDB_FOOTER_PHONE = TMDB_SYNC_SENTENCE +
     " Get a free key at themoviedb.org under Settings, then API; paste either the API Key or the Read Access Token. With a key, artwork and details for Movies and TV Shows come from TMDB first and your provider fills any gaps."
 private const val TMDB_FOOTER_TV = TMDB_SYNC_SENTENCE +
     " Get a free key at themoviedb.org; paste either the API Key or the Read Access Token. With a key, artwork and details for Movies and TV Shows come from TMDB first and your provider fills any gaps."
+
+/**
+ * Apple iOS scaleSliderRow_iOS: title with the percent small and dim at the
+ * right, then a small "A", the 85-150% slider in 5% steps, and a large "A".
+ */
+@Composable
+private fun ScaleAToASliderRow(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "${(value * 100f).roundToInt()}%",
+                style = MaterialTheme.typography.labelSmall,
+                color = com.aeriotv.android.ui.settings.settingsDimTint(),
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("A", fontSize = 12.sp, color = com.aeriotv.android.ui.settings.settingsDimTint())
+            com.aeriotv.android.ui.settings.SettingsSlider(
+                value = value.coerceIn(0.85f, 1.5f),
+                // Snap to Apple's 5% step so the stored value is one of its stops.
+                onValueChange = { raw -> onValueChange((raw * 20f).roundToInt() / 20f) },
+                valueRange = 0.85f..1.5f,
+                steps = 12,
+                modifier = Modifier.weight(1f),
+            )
+            Text("A", fontSize = 16.sp, color = com.aeriotv.android.ui.settings.settingsDimTint())
+        }
+    }
+}

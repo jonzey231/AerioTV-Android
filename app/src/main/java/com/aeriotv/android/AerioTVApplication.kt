@@ -229,15 +229,23 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
             // re-anchors the WorkManager schedule (UPDATE policy on the
             // worker side). The pair is observed once at startup; a fresh
             // install collects the default (true, 360min).
+            // The schedule kind and time of day join the pair (Apple's
+            // Schedule picker), so a change to either re-anchors the job.
             combine(
                 appPreferences.backgroundRefreshEnabled,
                 appPreferences.backgroundRefreshIntervalMins,
-            ) { enabled, mins -> enabled to mins }
-                .collectLatest { (enabled, mins) ->
-                    if (enabled) {
+                appPreferences.backgroundRefreshType,
+                appPreferences.backgroundRefreshHour,
+                appPreferences.backgroundRefreshMinute,
+            ) { enabled, mins, type, hour, minute ->
+                listOf(enabled, mins, if (type == "time") hour * 60 + minute else -1)
+            }
+                .collectLatest { (enabled, mins, dailyAt) ->
+                    if (enabled == true) {
                         PlaylistRefreshWorker.enqueuePeriodic(
                             this@AerioTVApplication,
-                            intervalMins = mins,
+                            intervalMins = mins as Int,
+                            dailyAtMinuteOfDay = (dailyAt as Int).takeIf { it >= 0 },
                         )
                     } else {
                         PlaylistRefreshWorker.cancel(this@AerioTVApplication)

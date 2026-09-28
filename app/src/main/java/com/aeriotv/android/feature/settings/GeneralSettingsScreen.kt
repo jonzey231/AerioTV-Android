@@ -35,6 +35,10 @@ import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.SettingsSection
 import com.aeriotv.android.ui.settings.SettingsSubPageHost
 import com.aeriotv.android.ui.settings.SettingsToggleRow
+import com.aeriotv.android.ui.settings.SettingsRowContainer
+import com.aeriotv.android.ui.settings.SettingsSliderRow
+import com.aeriotv.android.ui.settings.settingsRowTitleStyle
+import com.aeriotv.android.ui.settings.settingsRowValueStyle
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.settings.settingsFormWidth
@@ -66,6 +70,11 @@ fun GeneralSettingsScreen(
         .collectAsStateWithLifecycle(initialValue = true)
     val backgroundRefreshIntervalMins by viewModel.backgroundRefreshIntervalMins
         .collectAsStateWithLifecycle(initialValue = 360)
+    val backgroundRefreshType by viewModel.backgroundRefreshType
+        .collectAsStateWithLifecycle(initialValue = "interval")
+    val backgroundRefreshHour by viewModel.backgroundRefreshHour.collectAsStateWithLifecycle(initialValue = 8)
+    val backgroundRefreshMinute by viewModel.backgroundRefreshMinute.collectAsStateWithLifecycle(initialValue = 0)
+    val context = androidx.compose.ui.platform.LocalContext.current
     val timeoutSecs by viewModel.networkTimeoutSecs.collectAsStateWithLifecycle(initialValue = 15.0)
     val maxRetries by viewModel.maxRetries.collectAsStateWithLifecycle(initialValue = 3)
 
@@ -166,7 +175,11 @@ fun GeneralSettingsScreen(
                 SettingsSection(
                     header = "Refresh",
                     footer = if (backgroundRefreshEnabled) {
-                        "Refresh every ${intervalLabel(backgroundRefreshIntervalMins)}. " +
+                        (if (backgroundRefreshType == "time") {
+                            "Refresh daily at ${timeLabel(backgroundRefreshHour, backgroundRefreshMinute)}. "
+                        } else {
+                            "Refresh every ${intervalLabel(backgroundRefreshIntervalMins)}. "
+                        }) +
                             "Android runs background refreshes on Wi-Fi while the battery isn't low, and may delay them to preserve battery."
                     } else {
                         "Automatically refresh channel lists and guide data while the app is in the background."
@@ -176,23 +189,61 @@ fun GeneralSettingsScreen(
                         title = "Background Refresh",
                         subtitle = "Update EPG & playlists automatically",
                         leadingIcon = Icons.Filled.Refresh,
+                        // Apple tiles this icon on every platform.
+                        tiledIcon = true,
                         checked = backgroundRefreshEnabled,
                         onCheckedChange = viewModel::setBackgroundRefreshEnabled,
                     )
                     if (backgroundRefreshEnabled) {
-                        // Apple's "Schedule" (Interval / Time of Day) picker
-                        // is not here: Android persists only an interval and
-                        // the periodic worker has no time-of-day mode.
+                        // Apple's Schedule picker: Interval repeats on a
+                        // timer, Time of Day runs once a day at a set time.
                         SettingsPickerRow(
-                            title = "Interval",
-                            options = BG_REFRESH_INTERVAL_OPTIONS.map {
-                                SettingsPickerOption(it.mins, it.label)
-                            },
-                            selected = backgroundRefreshIntervalMins,
-                            onSelect = { viewModel.setBackgroundRefreshIntervalMins(it) },
+                            title = "Schedule",
+                            options = listOf(
+                                SettingsPickerOption("interval", "Interval", "Repeat on a timer"),
+                                SettingsPickerOption("time", "Time of Day", "Once a day at a set time"),
+                            ),
+                            selected = backgroundRefreshType,
+                            onSelect = viewModel::setBackgroundRefreshType,
                             inlineTitle = true,
-                            footer = "How often AerioTV asks for fresh channel lists and guide data.",
+                            footer = "Interval refreshes on a repeating timer. Time of Day refreshes once a day at the time you pick.",
                         )
+                        if (backgroundRefreshType == "time") {
+                            // Apple's "Refresh At" time picker. The platform
+                            // TimePickerDialog works with touch and the D-pad.
+                            SettingsRowContainer(onClick = {
+                                android.app.TimePickerDialog(
+                                    context,
+                                    { _, h, m -> viewModel.setBackgroundRefreshTime(h, m) },
+                                    backgroundRefreshHour,
+                                    backgroundRefreshMinute,
+                                    android.text.format.DateFormat.is24HourFormat(context),
+                                ).show()
+                            }) {
+                                Text(
+                                    text = "Refresh At",
+                                    style = settingsRowTitleStyle(),
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = timeLabel(backgroundRefreshHour, backgroundRefreshMinute),
+                                    style = settingsRowValueStyle(),
+                                    color = MaterialTheme.colorScheme.textAccent,
+                                )
+                            }
+                        } else {
+                            SettingsPickerRow(
+                                title = "Interval",
+                                options = BG_REFRESH_INTERVAL_OPTIONS.map {
+                                    SettingsPickerOption(it.mins, it.label)
+                                },
+                                selected = backgroundRefreshIntervalMins,
+                                onSelect = { viewModel.setBackgroundRefreshIntervalMins(it) },
+                                inlineTitle = true,
+                                footer = "How often AerioTV asks for fresh channel lists and guide data.",
+                            )
+                        }
                     }
                 }
 
@@ -204,16 +255,16 @@ fun GeneralSettingsScreen(
                     header = "Network",
                     footer = "Adjust timeouts if you have a slow or unstable connection.",
                 ) {
-                    // Phase 3 review: same picker row Apple uses ("Request
-                    // Timeout"); the unlabeled list of seconds never said what
-                    // it set.
-                    SettingsPickerRow(
-                        title = "Request Timeout",
-                        options = TIMEOUT_OPTIONS.map {
-                            SettingsPickerOption(it, if (it == 1) "1 second" else "$it seconds")
-                        },
-                        selected = timeoutSecs.toInt(),
-                        onSelect = { viewModel.setNetworkTimeoutSecs(it.toDouble()) },
+                    // Apple iOS: a 5-60 s slider in 5 s steps reading "15s".
+                    val timeoutIdx = TIMEOUT_STOPS.indices
+                        .minByOrNull { kotlin.math.abs(TIMEOUT_STOPS[it] - timeoutSecs.toInt()) } ?: 0
+                    SettingsSliderRow(
+                        label = "Request Timeout",
+                        valueText = "${TIMEOUT_STOPS[timeoutIdx]}s",
+                        index = timeoutIdx,
+                        lastIndex = TIMEOUT_STOPS.lastIndex,
+                        onIndexChange = { viewModel.setNetworkTimeoutSecs(TIMEOUT_STOPS[it].toDouble()) },
+                        dimValue = true,
                     )
                 }
 
@@ -264,8 +315,14 @@ fun GeneralSettingsScreen(
     }
 }
 
-/** tvOS Request Timeout options (s_10): 5/10/15/30/60 seconds. */
-private val TIMEOUT_OPTIONS: List<Int> = listOf(5, 10, 15, 30, 60)
+/** Apple's Request Timeout slider stops: 5 to 60 seconds in 5 s steps. */
+private val TIMEOUT_STOPS: List<Int> = (5..60 step 5).toList()
+
+/** Apple's timeLabel: "8:00 AM" style (the Apple app formats en_US). */
+private fun timeLabel(hour: Int, minute: Int): String {
+    val h12 = if (hour % 12 == 0) 12 else hour % 12
+    return "$h12:${minute.toString().padStart(2, '0')} ${if (hour < 12) "AM" else "PM"}"
+}
 
 private data class BgRefreshIntervalOption(val mins: Int, val label: String)
 

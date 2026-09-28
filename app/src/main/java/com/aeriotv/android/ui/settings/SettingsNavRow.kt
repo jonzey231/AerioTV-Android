@@ -81,6 +81,12 @@ fun SettingsNavRow(
      * insetGrouped rows and are correct there.
      */
     flat: Boolean = false,
+    /**
+     * Glyph color override. Apple draws a few rail icons in a fixed color
+     * (DVR's red record.circle on tvOS) rather than the accent; null keeps
+     * the accent.
+     */
+    iconTint: Color? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val isTv = rememberIsTvDevice()
@@ -168,7 +174,7 @@ fun SettingsNavRow(
                         // solid bright chip (Logan's restraint rule).
                         Modifier
                             .clip(RoundedCornerShape(SettingsCardMetrics.iconTileCorner))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+                            .background((iconTint ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.2f))
                     },
                 ),
             contentAlignment = Alignment.Center,
@@ -176,7 +182,7 @@ fun SettingsNavRow(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = iconTint ?: MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(iconGlyph),
             )
         }
@@ -198,7 +204,9 @@ fun SettingsNavRow(
                     } else it
                 },
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                // Apple's SettingsRow title is bodyMedium, a REGULAR weight;
+                // the tvOS rail keeps its medium title.
+                fontWeight = if (isTv) FontWeight.Medium else FontWeight.Normal,
                 maxLines = if (isTv) 1 else Int.MAX_VALUE,
                 overflow = TextOverflow.Ellipsis,
             )

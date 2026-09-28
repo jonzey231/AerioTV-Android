@@ -97,12 +97,44 @@ object SettingsCardMetrics {
     val sectionSpacing = 24.dp
     /** Divider inset for a plain row (text starts at the row inset). */
     val dividerInset = 16.dp
-    /** Divider inset for a row with a 40dp leading icon tile. */
-    val iconRowDividerInset = 68.dp
-    /** Leading icon tile on root navigation rows. */
-    val iconTile = 40.dp
-    val iconTileCorner = 10.dp
-    val iconGlyph = 20.dp
+    /** Divider inset for a row with a leading icon tile (16 + tile + 12). */
+    val iconRowDividerInset = 60.dp
+    /**
+     * Leading icon tile. Apple's SettingsIconTile is 32pt with a 14pt
+     * semibold glyph and a 7pt corner on iPhone and iPad; our 40dp tile read
+     * visibly larger beside it. Material glyphs carry ~2dp of built-in
+     * padding, so an 18dp icon draws at about the SF Symbol's 14pt.
+     */
+    val iconTile = 32.dp
+    val iconTileCorner = 7.dp
+    val iconGlyph = 18.dp
+}
+
+/**
+ * Apple's SettingsIconTile: a dim tinted rounded tile with the glyph centered
+ * in it. Every touch Settings row that has an icon uses this, so a page never
+ * mixes bare glyphs with tiles (Apple's Phase 3 item 5 rule).
+ */
+@Composable
+fun SettingsIconTile(
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.primary,
+) {
+    Box(
+        modifier = modifier
+            .size(SettingsCardMetrics.iconTile)
+            .clip(RoundedCornerShape(SettingsCardMetrics.iconTileCorner))
+            .background(tint.copy(alpha = 0.2f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(SettingsCardMetrics.iconGlyph),
+        )
+    }
 }
 
 /** The grouped card fill: the theme surface, a shade lighter than the page. */
@@ -335,13 +367,22 @@ fun SettingsToggleRow(
     subtitle: String? = null,
     leadingIcon: ImageVector? = null,
     enabled: Boolean = true,
+    /**
+     * Touch only: draw [leadingIcon] in Apple's filled SettingsIconTile
+     * (rows Apple builds on SettingsRow). TV keeps the bare tvOS glyph.
+     */
+    tiledIcon: Boolean = false,
 ) {
+    val tiled = tiledIcon && !rememberIsTvDevice()
     SettingsRowContainer(
         onClick = { if (enabled) onCheckedChange(!checked) },
         modifier = modifier,
         enabled = enabled,
     ) {
-        if (leadingIcon != null) {
+        if (leadingIcon != null && tiled) {
+            SettingsIconTile(icon = leadingIcon)
+            Spacer(Modifier.width(12.dp))
+        } else if (leadingIcon != null) {
             Icon(
                 imageVector = leadingIcon,
                 contentDescription = null,

@@ -137,7 +137,8 @@ fun PlayerSettingsScreen(
                 // the master row below is what says "Info Card".
                 SettingsSection(
                     header = "On-Screen Display",
-                    footer = PLAYER_INFO_CARD_FOOTER,
+                    // tvOS prints this footer inside the Info Card sheet only.
+                    footer = if (isTv) null else PLAYER_INFO_CARD_FOOTER,
                 ) {
                     // Phase 3, item 4: six toggles behind one master row whose
                     // subtitle names what is on ("Logo, name, time" / "All 6").
@@ -173,6 +174,9 @@ fun PlayerSettingsScreen(
                         // Apple: rectangle.on.rectangle.
                         leadingIcon = Icons.Filled.FilterNone,
                         footer = PLAYER_INFO_CARD_FOOTER,
+                        // tvOS PlayerSettingsView: the six switches sit behind
+                        // an "Info Card" master row that opens an option sheet.
+                        tvOptionsSheet = true,
                     ) {
                         cardParts.forEach { (part, setter) ->
                             SettingsToggleRow(

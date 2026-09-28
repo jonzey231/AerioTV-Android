@@ -146,7 +146,22 @@ class PlaylistRefreshWorker @AssistedInject constructor(
          * existing schedule to expire -- the iOS `bgRefreshIntervalMins`
          * setting takes effect within seconds of toggling.
          */
-        fun enqueuePeriodic(context: Context, intervalMins: Int = 360) {
+        fun enqueuePeriodic(
+            context: Context,
+            intervalMins: Int = 360,
+            /**
+             * Apple's "Time of Day" schedule, as minutes after local
+             * midnight; null = interval mode. WorkManager has no wall-clock
+             * trigger, so this is a 24-hour period whose first run is delayed
+             * to the next occurrence of that time. Constraints and Doze can
+             * still push a run later, never earlier.
+             */
+            dailyAtMinuteOfDay: Int? = null,
+        ) {
+            if (dailyAtMinuteOfDay != null) {
+                enqueueDaily(context, dailyAtMinuteOfDay)
+                return
+            }
             val safeMins = intervalMins.coerceAtLeast(15)
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.UNMETERED)
@@ -164,6 +179,33 @@ class PlaylistRefreshWorker @AssistedInject constructor(
                 // schedule immediately. The OLD KEEP policy left a 6h job
                 // running until its next firing, ignoring the user's pick.
                 ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+
+        private fun enqueueDaily(context: Context, minuteOfDay: Int) {
+            val now = java.time.ZonedDateTime.now()
+            var next = now.toLocalDate()
+                .atStartOfDay(now.zone)
+                .plusMinutes(minuteOfDay.toLong())
+            if (!next.isAfter(now)) next = next.plusDays(1)
+            val delayMs = java.time.Duration.between(now, next).toMillis()
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.UNMETERED)
+                .setRequiresBatteryNotLow(true)
+                .build()
+            val request = PeriodicWorkRequestBuilder<PlaylistRefreshWorker>(24, TimeUnit.HOURS)
+                .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+                .setConstraints(constraints)
+                .addTag(TAG)
+                .build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                UNIQUE_NAME,
+                // CANCEL_AND_REENQUEUE, not UPDATE: UPDATE keeps the old
+                // enqueue time, so a new initial delay would not re-aim the
+                // run at the picked time. Recomputed on every launch, so the
+                // anchor also follows DST and time zone changes.
+                ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
                 request,
             )
         }

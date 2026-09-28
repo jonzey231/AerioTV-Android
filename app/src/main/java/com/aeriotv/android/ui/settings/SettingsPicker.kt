@@ -25,7 +25,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.focusGroup
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -160,8 +168,25 @@ fun ColumnScope.SettingsSubGroup(
      * footer already carries the explanation, so it is not repeated there.
      */
     footer: String? = null,
+    /**
+     * TV only: the children are a plain option list, so the TV shows the
+     * master row and opens the options in a sheet over the page, as tvOS
+     * SettingsSubgroup(optionsOnly: true) does. Off keeps them inline.
+     */
+    tvOptionsSheet: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    if (tvOptionsSheet && rememberIsTvDevice()) {
+        SettingsTvOptionsSheetRow(
+            title = title,
+            summary = summary,
+            leadingIcon = leadingIcon,
+            footer = footer,
+            modifier = modifier,
+            content = content,
+        )
+        return
+    }
     val push = settingsPushesSubPages()
     val host = rememberSubPageRegistration(pageKey) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -179,6 +204,106 @@ fun ColumnScope.SettingsSubGroup(
         )
     } else {
         content()
+    }
+}
+
+/**
+ * tvOS master row + option sheet: the row carries the summary and a chevron;
+ * OK opens a sheet with the options, which stays open while they are flipped
+ * (it is a multi-select list) and closes on Back.
+ */
+@Composable
+private fun SettingsTvOptionsSheetRow(
+    title: String,
+    summary: String,
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector?,
+    footer: String?,
+    modifier: Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    val rowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    SettingsRowContainer(
+        onClick = { open = true },
+        modifier = modifier.focusRequester(rowFocus),
+    ) {
+        if (leadingIcon != null) {
+            androidx.compose.material3.Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+        }
+        Text(
+            text = title,
+            style = settingsRowTitleStyle(),
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = summary,
+            style = settingsRowValueStyle(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(4.dp))
+        androidx.compose.material3.Icon(
+            imageVector = androidx.compose.material.icons.Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (open) {
+        val close = {
+            open = false
+            // Hand focus back to the row that opened the sheet, or Compose
+            // falls back to the first focusable (the tab bar).
+            runCatching { rowFocus.requestFocus() }
+            Unit
+        }
+        com.aeriotv.android.ui.scale.Dialog(
+            onDismissRequest = close,
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            val firstFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+            androidx.compose.material3.Surface(
+                modifier = Modifier.fillMaxWidth(0.55f),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = title,
+                        style = settingsTitleStyle(),
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
+                    )
+                    // The first option takes focus so the D-pad lands inside
+                    // the sheet rather than on nothing.
+                    Column(
+                        modifier = Modifier
+                            .focusRequester(firstFocus)
+                            .focusGroup(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        content = content,
+                    )
+                    if (footer != null) SettingsSectionFooter(footer)
+                }
+            }
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                runCatching { firstFocus.requestFocus() }
+            }
+        }
     }
 }
 

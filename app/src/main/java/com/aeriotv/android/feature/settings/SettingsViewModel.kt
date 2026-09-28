@@ -578,6 +578,15 @@ class SettingsViewModel @Inject constructor(
     fun setBackgroundRefreshIntervalMins(value: Int) {
         viewModelScope.launch { prefs.setBackgroundRefreshIntervalMins(value) }
     }
+    val backgroundRefreshType: Flow<String> = prefs.backgroundRefreshType
+    fun setBackgroundRefreshType(value: String) {
+        viewModelScope.launch { prefs.setBackgroundRefreshType(value) }
+    }
+    val backgroundRefreshHour: Flow<Int> = prefs.backgroundRefreshHour
+    val backgroundRefreshMinute: Flow<Int> = prefs.backgroundRefreshMinute
+    fun setBackgroundRefreshTime(hour: Int, minute: Int) {
+        viewModelScope.launch { prefs.setBackgroundRefreshTime(hour, minute) }
+    }
 
     // Multiview (Phase 11c)
     val multiviewAudioFocusStyle: Flow<String> = prefs.multiviewAudioFocusStyle

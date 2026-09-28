@@ -637,7 +637,9 @@ private fun PlaylistRow(
                     text = playlist.name,
                     style = settingsRowTitleStyle(),
                     color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                    // Apple ServerListRow sets the name in bodyMedium (regular)
+                    // on every row; the checkmark alone marks the active one.
+                    fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )

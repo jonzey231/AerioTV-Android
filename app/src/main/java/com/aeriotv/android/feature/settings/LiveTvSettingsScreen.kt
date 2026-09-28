@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ViewAgenda
+import androidx.compose.material.icons.automirrored.outlined.ViewSidebar
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.automirrored.filled.ViewSidebar
@@ -210,7 +212,8 @@ fun LiveTvSettingsScreen(
                             },
                             selected = defaultLiveTVView.lowercase(),
                             onSelect = viewModel::setDefaultLiveTVView,
-                            leadingIcon = Icons.Filled.ViewAgenda,
+                            // Apple rectangle.grid.1x2: two outlined stacked rows.
+                            leadingIcon = Icons.Outlined.ViewAgenda,
                             footer = if (isTv) {
                                 null
                             } else {
@@ -225,7 +228,8 @@ fun LiveTvSettingsScreen(
                     SettingsSection(header = "Guide Layout") {
                         SettingsSelectionRow(
                             label = "Basic",
-                            leadingIcon = Icons.Filled.ViewAgenda,
+                            // Apple rectangle.grid.1x2: two outlined stacked rows.
+                            leadingIcon = Icons.Outlined.ViewAgenda,
                             subtitle = "Full program details in every guide cell",
                             selected = liveTvLayout != "preview",
                             onClick = { viewModel.setLiveTvLayout("basic") },
@@ -283,7 +287,10 @@ fun LiveTvSettingsScreen(
                                 ),
                                 // iOS: icon "sidebar.leading" on the row and
                                 // on each choice (tvOS lists them bare).
-                                leadingIcon = Icons.AutoMirrored.Filled.ViewSidebar,
+                                // Apple sidebar.leading is an outlined frame with
+                                // a side panel; the outlined glyph reads closer
+                                // than the solid one.
+                                leadingIcon = Icons.AutoMirrored.Outlined.ViewSidebar,
                                 selected = if (phoneGroupSelector == "pills") "pills" else "sidebar",
                                 onSelect = viewModel::setPhoneGroupSelector,
                             )

@@ -42,6 +42,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.RadioButtonChecked
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.MaterialTheme
@@ -409,7 +410,16 @@ fun SettingsTvRailHost(
     androidx.compose.runtime.LaunchedEffect(pendingSeq) {
         val next = pending ?: return@LaunchedEffect
         kotlinx.coroutines.delay(RailSelectDebounceMs)
-        if (next != currentSelection) currentOnSelect(next)
+        // `pending` is cleared when the selection moves from outside the rail
+        // (deep link); a commit launched before that must not undo it.
+        if (pending == next && next != currentSelection) currentOnSelect(next)
+    }
+    // A selection that changed without the rail (deep link, posture remap)
+    // makes any pending rail focus stale. Left in place, a later flush or
+    // debounce re-applied it and the pane landed one page behind the link
+    // (aeriotv://settings/livetv showed Playlists).
+    androidx.compose.runtime.LaunchedEffect(selection) {
+        if (pending != null && pending != selection) pending = null
     }
     val flushPending = {
         pending?.let { if (it != selection) onSelect(it) }
@@ -589,16 +599,30 @@ private fun SettingsTvRail(
     ) {
         itemsIndexed(rows, key = { _, row -> encodeSettingsRoute(row.first) }) { index, row ->
             val (route, title, subtitle) = row
+            // onFocusChanged re-reports the CURRENT state whenever the row's
+            // modifier chain changes (the railFocus requester moves to the
+            // newly selected row on a deep link). Counting only real focus
+            // GAINS keeps that echo from queuing the old row as a selection.
+            var wasFocused by remember { mutableStateOf(false) }
             SettingsNavRow(
                 title = title,
                 subtitle = subtitle,
                 icon = settingsRouteIcon(route),
+                // tvOS draws DVR as a red record.circle, not an accent glyph.
+                iconTint = if (route == SettingsRoute.Section(SettingsSection.DvrSettings)) {
+                    TvDvrRecordRed
+                } else {
+                    null
+                },
                 onClick = { onClickRoute(route) },
                 selected = route == selection,
                 trailingChevron = false,
                 flat = true,
                 modifier = Modifier
-                    .onFocusChanged { if (it.isFocused) onFocusRoute(route) }
+                    .onFocusChanged {
+                        if (it.isFocused && !wasFocused) onFocusRoute(route)
+                        wasFocused = it.isFocused
+                    }
                     .then(
                         if (index == selectedIndex) Modifier.focusRequester(railFocus)
                         else Modifier,
@@ -608,8 +632,14 @@ private fun SettingsTvRail(
     }
 }
 
+/** The system red Apple uses for the tvOS DVR rail glyph (UIColor.systemRed, dark). */
+private val TvDvrRecordRed = androidx.compose.ui.graphics.Color(0xFFFF453A)
+
 /** Rail/sidebar glyph for a route. Sections carry their own. */
 private fun settingsRouteIcon(route: SettingsRoute) = when (route) {
+    // tvOS record.circle: a ring around a dot. FiberManualRecord (the phone
+    // glyph) is only the dot.
+    SettingsRoute.Section(SettingsSection.DvrSettings) -> Icons.Outlined.RadioButtonChecked
     is SettingsRoute.Section -> route.section.icon
     is SettingsRoute.About -> Icons.Outlined.Info
     else -> Icons.AutoMirrored.Filled.List

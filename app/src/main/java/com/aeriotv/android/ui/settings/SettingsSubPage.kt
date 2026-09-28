@@ -242,13 +242,10 @@ fun SettingsSubPageRow(
 ) {
     SettingsRowContainer(onClick = onOpen, modifier = modifier) {
         if (leadingIcon != null) {
-            Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(Modifier.width(14.dp))
+            // Apple's SettingsSubgroup / SettingsChoicePicker master rows use
+            // the tiled SettingsRow icon, not a bare glyph.
+            SettingsIconTile(icon = leadingIcon)
+            Spacer(Modifier.width(12.dp))
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(

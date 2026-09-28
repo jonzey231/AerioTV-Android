@@ -1359,6 +1359,29 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_BG_REFRESH_INTERVAL_MINS] = clamped }
     }
 
+    /**
+     * Apple `bgRefreshType` parity: "interval" repeats on a timer, "time"
+     * refreshes once a day at [backgroundRefreshHour]:[backgroundRefreshMinute].
+     * Same stored strings as Apple so the two apps read one vocabulary.
+     */
+    val backgroundRefreshType: Flow<String> =
+        store.data.map { it[KEY_BG_REFRESH_TYPE] ?: "interval" }
+    suspend fun setBackgroundRefreshType(value: String) {
+        store.edit { it[KEY_BG_REFRESH_TYPE] = if (value == "time") "time" else "interval" }
+    }
+
+    /** Apple `bgRefreshHour` / `bgRefreshMinute`; default 08:00 as Apple. */
+    val backgroundRefreshHour: Flow<Int> =
+        store.data.map { it[KEY_BG_REFRESH_HOUR] ?: 8 }
+    val backgroundRefreshMinute: Flow<Int> =
+        store.data.map { it[KEY_BG_REFRESH_MINUTE] ?: 0 }
+    suspend fun setBackgroundRefreshTime(hour: Int, minute: Int) {
+        store.edit {
+            it[KEY_BG_REFRESH_HOUR] = hour.coerceIn(0, 23)
+            it[KEY_BG_REFRESH_MINUTE] = minute.coerceIn(0, 59)
+        }
+    }
+
     fun syncCategoryEnabled(category: SyncCategory): Flow<Boolean> = store.data.map { prefs ->
         prefs[booleanPreferencesKey(category.enabledStorageKey())] ?: true
     }
@@ -2163,6 +2186,9 @@ class AppPreferences @Inject constructor(
         val KEY_CREDENTIALS_SYNC_DISCLOSED = booleanPreferencesKey("credentials_sync_disclosed")
         val KEY_BG_REFRESH_ENABLED = booleanPreferencesKey("background_refresh_enabled")
         val KEY_BG_REFRESH_INTERVAL_MINS = intPreferencesKey("background_refresh_interval_mins")
+        val KEY_BG_REFRESH_TYPE = stringPreferencesKey("background_refresh_type")
+        val KEY_BG_REFRESH_HOUR = intPreferencesKey("background_refresh_hour")
+        val KEY_BG_REFRESH_MINUTE = intPreferencesKey("background_refresh_minute")
     }
 }
 

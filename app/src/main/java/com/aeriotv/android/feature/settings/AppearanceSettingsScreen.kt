@@ -504,6 +504,20 @@ private fun CustomAccentRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Apple's leading swatch: a 22pt rounded square in the custom hex
+        // with a hairline border, standing in for an icon.
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(if (hex.length == 6) parseHex(hex) else MaterialTheme.colorScheme.primary)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(4.dp),
+                ),
+        )
+        Spacer(Modifier.size(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "Custom Accent Color",
@@ -511,12 +525,15 @@ private fun CustomAccentRow(
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
             )
-            Text(
-                text = if (enabled && hex.isNotBlank()) "Override active: #${hex.uppercase()}"
-                else "Override the preset accent with your own hex.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // iOS has no subtitle (the section footer explains the row);
+            // tvOS carries this one.
+            if (rememberIsTvDevice()) {
+                Text(
+                    text = "Override the theme accent with a custom hex color",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (enabled) {
             Box(
