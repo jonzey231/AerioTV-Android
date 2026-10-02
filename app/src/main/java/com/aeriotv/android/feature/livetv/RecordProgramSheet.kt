@@ -275,6 +275,8 @@ fun RecordProgramSheet(
             canOfferSeriesRule = canOfferSeriesRule, isDispatcharr = isDispatcharr, canRecordToServer = canRecordToServer,
             ruleMode = ruleMode, onRuleMode = { ruleMode = it },
             ruleTitleMode = ruleTitleMode, onRuleTitleMode = { ruleTitleMode = it },
+            ruleDescription = ruleDescription, onRuleDescription = { ruleDescription = it },
+            ruleDescriptionMode = ruleDescriptionMode, onRuleDescriptionMode = { ruleDescriptionMode = it },
             ruleUntaggedIsNew = ruleUntaggedIsNew, onRuleUntaggedIsNew = { ruleUntaggedIsNew = it },
             ruleAllChannels = ruleAllChannels, onRuleAllChannels = { ruleAllChannels = it },
             preRoll = preRoll, onPreRoll = { preRoll = it },
@@ -670,6 +672,8 @@ private fun TvRecordForm(
     canRecordToServer: Boolean,
     ruleMode: RuleMode, onRuleMode: (RuleMode) -> Unit,
     ruleTitleMode: String, onRuleTitleMode: (String) -> Unit,
+    ruleDescription: String, onRuleDescription: (String) -> Unit,
+    ruleDescriptionMode: String, onRuleDescriptionMode: (String) -> Unit,
     ruleUntaggedIsNew: Boolean, onRuleUntaggedIsNew: (Boolean) -> Unit,
     ruleAllChannels: Boolean, onRuleAllChannels: (Boolean) -> Unit,
     preRoll: Int, onPreRoll: (Int) -> Unit,
@@ -687,7 +691,6 @@ private fun TvRecordForm(
         com.aeriotv.android.feature.livetv.grid.cachedPreviewArt(target.dispatcharrProgramId, target.title)
             ?: target.iconUrl?.takeIf { it.isNotBlank() }
     }
-    var showCustomRule by remember { mutableStateOf(false) }
     val hasNoRecordingPath = isDispatcharr && !isLive && !canRecordToServer
     com.aeriotv.android.ui.scale.Dialog(
         onDismissRequest = onDismiss,
@@ -720,25 +723,39 @@ private fun TvRecordForm(
                 if (canOfferSeriesRule) {
                     TvSectionTitle("Record")
                     TvPillRow {
-                        listOf(RuleMode.Once, RuleMode.All, RuleMode.NewOnly).forEach { m ->
-                            SheetPill(m.label, selected = ruleMode == m, onClick = { onRuleMode(m) })
-                        }
-                        if (ruleMode != RuleMode.Once) {
-                            SheetPill(if (showCustomRule) "Hide Options" else "Customize", selected = showCustomRule, onClick = { showCustomRule = !showCustomRule })
+                        RuleMode.entries.forEach { m ->
+                            SheetPill((m.label), selected = ruleMode == m, onClick = { onRuleMode(m) })
                         }
                     }
-                    if (ruleMode != RuleMode.Once && showCustomRule) {
+                    if (ruleMode == RuleMode.Custom) {
                         Text("Title Match", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp))
                         TvPillRow {
                             listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex").forEach { (wire, label) ->
                                 SheetPill(label, selected = ruleTitleMode == wire, onClick = { onRuleTitleMode(wire) })
                             }
                         }
+                        androidx.compose.material3.OutlinedTextField(
+                            value = ruleDescription,
+                            onValueChange = onRuleDescription,
+                            label = { Text("Description Contains (Optional)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (ruleDescription.isNotBlank()) {
+                            Text("Description Match", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp))
+                            TvPillRow {
+                                listOf("contains" to "Contains", "search" to "Search", "regex" to "Regex").forEach { (wire, label) ->
+                                    SheetPill(label, selected = ruleDescriptionMode == wire, onClick = { onRuleDescriptionMode(wire) })
+                                }
+                            }
+                        }
+                    }
+                    if (ruleMode != RuleMode.Once) {
                         TvPillRow {
-                            if (ruleMode == RuleMode.NewOnly) {
+                            if (ruleMode == RuleMode.NewOnly || ruleMode == RuleMode.Custom) {
                                 SheetPill("Untagged Counts as New", selected = ruleUntaggedIsNew, onClick = { onRuleUntaggedIsNew(!ruleUntaggedIsNew) })
                             }
-                            SheetPill("Every Channel", selected = ruleAllChannels, onClick = { onRuleAllChannels(!ruleAllChannels) })
+                            SheetPill("Match on Every Channel", selected = ruleAllChannels, onClick = { onRuleAllChannels(!ruleAllChannels) })
                         }
                     }
                 }
