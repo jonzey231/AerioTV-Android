@@ -153,7 +153,7 @@ fun RecordProgramSheet(
     val submit: () -> Unit = submit@{
                 val dispatcharrId = target.channelDispatcharrId
                 if (!destinationServer) {
-                    // Local recording — check the storage cap before
+                    // Local recording: check the storage cap before
                     // committing. usedBytes comes from the existing
                     // local rows in DvrViewModel state.
                     val usedBytes = dvrState.recordings
@@ -283,11 +283,10 @@ fun RecordProgramSheet(
         tvWidthFraction = 0.7f,
         tvMaxHeight = 620.dp,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        ) {
+        // The header stays pinned above the scrolling body, as on the iPhone
+        // sheet: with it inside the scroll it slid away under the handle and
+        // left a blank band (Logan 2026-10-02).
+        Column(modifier = Modifier.fillMaxWidth()) {
             // Header row: Cancel / title / Record. Record is the destructive-accent
             // colour iOS uses (LIVE_RED) to signal it commits a scheduled action.
             Row(
@@ -324,6 +323,12 @@ fun RecordProgramSheet(
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+            ) {
             Spacer(Modifier.height(12.dp))
 
             Column(modifier = Modifier.padding(horizontal = 20.dp)) {
@@ -334,20 +339,22 @@ fun RecordProgramSheet(
                 if (canOfferSeriesRule) {
                     Spacer(Modifier.height(18.dp))
                     SectionLabel("Record")
-                    Spacer(Modifier.height(6.dp))
-                    Column {
-                        RuleMode.entries.forEach { mode ->
+                    Spacer(Modifier.height(8.dp))
+                    RecordCard {
+                        RuleMode.entries.forEachIndexed { i, mode ->
+                            if (i > 0) com.aeriotv.android.ui.settings.SettingsRowDivider(startInset = 52.dp)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .selectable(selected = ruleMode == mode, onClick = { ruleMode = mode })
-                                    .padding(vertical = 4.dp),
+                                    .padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 RadioButton(
                                     selected = ruleMode == mode,
                                     onClick = null,
                                     colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.size(48.dp),
                                 )
                                 Column {
                                     Text(mode.label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
@@ -359,7 +366,7 @@ fun RecordProgramSheet(
                     if (ruleMode == RuleMode.Custom) {
                         Spacer(Modifier.height(10.dp))
                         SectionLabel("Rule Options")
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(8.dp))
                         Text("Title match", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                             val modes = listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex")
@@ -418,7 +425,7 @@ fun RecordProgramSheet(
                 if (!usingRule) {
                 Spacer(Modifier.height(18.dp))
                 SectionLabel("Start Early")
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 if (isLive) {
                     Text(
                         text = "Pre-roll unavailable (program already started).",
@@ -439,7 +446,7 @@ fun RecordProgramSheet(
 
                 Spacer(Modifier.height(18.dp))
                 SectionLabel("End Late")
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 MinuteRadioFlow(
                     options = ROLL_OPTIONS,
                     selected = postRoll,
@@ -457,7 +464,7 @@ fun RecordProgramSheet(
                 if (canRecordToServer) {
                     Spacer(Modifier.height(18.dp))
                     SectionLabel("Destination")
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(8.dp))
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         SegmentedButton(
                             selected = destinationServer,
@@ -509,8 +516,9 @@ fun RecordProgramSheet(
                 // can't record to the server (iOS parity).
                 if (canRecordToServer) {
                     Spacer(Modifier.height(18.dp))
+                    RecordCard {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -536,12 +544,14 @@ fun RecordProgramSheet(
                             ),
                         )
                     }
+                    }
                 }
 
                 } // !usingRule
 
                 Spacer(Modifier.height(20.dp))
             }
+            } // scrolling body
         }
     }
 
@@ -866,7 +876,7 @@ private fun LabeledValue(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .heightIn(min = 34.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -907,65 +917,63 @@ private fun MinuteRadioFlow(
     // trailing chip owns it and echoes the minutes.
     val isCustomSelected = selected !in options
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         options.forEach { mins ->
-            val label = if (mins == 0) "None" else "$mins min"
-            Row(
-                modifier = Modifier
-                    .selectable(
-                        selected = mins == selected,
-                        onClick = { onSelect(mins) },
-                    )
-                    .padding(end = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(
-                    selected = mins == selected,
-                    onClick = null,
-                    colors = RadioButtonDefaults.colors(
-                        selectedColor = MaterialTheme.colorScheme.primary,
-                    ),
-                )
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-        }
-        Row(
-            modifier = Modifier
-                .selectable(
-                    selected = isCustomSelected,
-                    onClick = onCustom,
-                )
-                .padding(end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(
-                selected = isCustomSelected,
-                onClick = null,
-                colors = RadioButtonDefaults.colors(
-                    selectedColor = MaterialTheme.colorScheme.primary,
-                ),
-            )
-            Text(
-                // GH #67: a NEGATIVE pre-roll means "start recording after the
-                // listed start" (a 9:00 listing whose kickoff is 9:50); echo it
-                // in plain words instead of a minus sign.
-                text = when {
-                    isCustomSelected && selected < 0 -> "Custom (${-selected} min after start)"
-                    isCustomSelected -> "Custom ($selected min)"
-                    else -> "Custom"
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
+            MinuteChip(
+                label = if (mins == 0) "None" else "$mins min",
+                selected = mins == selected,
+                onClick = { onSelect(mins) },
             )
         }
+        MinuteChip(
+            // GH #67: a NEGATIVE pre-roll means "start recording after the
+            // listed start"; echo it in plain words instead of a minus sign.
+            label = when {
+                isCustomSelected && selected < 0 -> "Custom ${-selected} min after start"
+                isCustomSelected -> "Custom $selected min"
+                else -> "Custom"
+            },
+            selected = isCustomSelected,
+            onClick = onCustom,
+        )
     }
+}
+
+/** Capsule chip for the Start Early / End Late rows (iPhone parity). */
+@Composable
+private fun MinuteChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(if (selected) colors.primary else com.aeriotv.android.ui.settings.settingsCardFill())
+            .selectable(selected = selected, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) colors.onPrimary else colors.onBackground,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+/** Grouped card matching the Settings card fill, 14 dp corners. */
+@Composable
+private fun RecordCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+            .background(com.aeriotv.android.ui.settings.settingsCardFill()),
+        content = content,
+    )
 }
 
 private fun formatTimeRange(target: ProgramInfoTarget): String {

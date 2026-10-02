@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.aeriotv.android.ui.scale.ModalBottomSheet
@@ -115,10 +114,13 @@ fun FormFactorModal(
             onDismissRequest = onDismiss,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = !sheetExpandable),
             containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = {
-                if (sheetExpandable) WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)
-                else BottomSheetDefaults.windowInsets
-            },
+            // Bottom inset only for BOTH paths. With the default insets the
+            // non-expandable sheet got the same offset-dependent top padding:
+            // once its content was tall enough to sit near the status bar
+            // (the compact Record from Now sheet, Nothing Phone recording
+            // 2026-10-02 15:23) every scroll re-measured the content and the
+            // sheet jumped between two heights.
+            contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
         ) {
             // Bound the content column to the window height.
             //
