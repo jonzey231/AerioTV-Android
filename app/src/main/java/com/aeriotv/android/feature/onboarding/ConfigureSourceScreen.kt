@@ -509,7 +509,7 @@ private fun M3uFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewM
             m3uPicker.launch(arrayOf("*/*"))
         }
     }
-    LabeledField(label = "EPG URL (optional)") {
+    LabeledField(label = "EPG URL (Optional)") {
         IconTextField(
             value = state.epgUrl,
             onValueChange = viewModel::onEpgUrlChange,
@@ -596,7 +596,7 @@ private suspend fun importPickedFile(
  */
 @Composable
 private fun LanUrlField(state: PlaylistViewModel.UiState, viewModel: PlaylistViewModel) {
-    LabeledField(label = "LAN URL (optional)") {
+    LabeledField(label = "LAN URL (Optional)") {
         IconTextField(
             value = state.lanUrl,
             onValueChange = viewModel::onLanUrlChange,

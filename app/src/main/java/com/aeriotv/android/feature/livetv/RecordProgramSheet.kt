@@ -412,7 +412,7 @@ fun RecordProgramSheet(
                         androidx.compose.material3.OutlinedTextField(
                             value = ruleDescription,
                             onValueChange = { ruleDescription = it },
-                            label = { Text("Description contains (optional)") },
+                            label = { Text("Description Contains (Optional)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -553,7 +553,7 @@ fun RecordProgramSheet(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Remove commercials (Comskip)",
+                                text = "Remove Commercials (Comskip)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onBackground,
                                 fontWeight = FontWeight.Medium,
