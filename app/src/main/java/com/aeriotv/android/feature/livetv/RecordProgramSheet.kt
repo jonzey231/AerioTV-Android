@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.outlined.FiberManualRecord
@@ -146,16 +148,18 @@ fun RecordProgramSheet(
     var submitting by remember { mutableStateOf(false) }
 
     // Series recording rules (Dispatcharr; Apple parity, RecordProgramSheet
-    // RuleMode): Just this one schedules a single recording as before; the
+    // series + EpisodesMode): Just this one schedules a single recording as before; the
     // others create a series rule and let the server evaluate it at once.
     val canOfferSeriesRule = isDispatcharr && canRecordToServer && target.title.isNotBlank()
-    var ruleMode by remember { mutableStateOf(RuleMode.Once) }
+    var series by remember { mutableStateOf(false) }
+    var episodes by remember { mutableStateOf(EpisodesMode.All) }
+    var customizeMatching by remember { mutableStateOf(false) }
     var ruleTitleMode by remember { mutableStateOf("exact") }
     var ruleDescription by remember { mutableStateOf("") }
     var ruleDescriptionMode by remember { mutableStateOf("contains") }
     var ruleUntaggedIsNew by remember { mutableStateOf(false) }
     var ruleAllChannels by remember { mutableStateOf(false) }
-    val usingRule = canOfferSeriesRule && ruleMode != RuleMode.Once
+    val usingRule = canOfferSeriesRule && series
 
     val submit: () -> Unit = submit@{
                 val dispatcharrId = target.channelDispatcharrId
@@ -228,11 +232,11 @@ fun RecordProgramSheet(
                     scope.launch {
                         val result = dvrViewModel.createSeriesRule(
                             tvgId = tvgId,
-                            mode = if (ruleMode == RuleMode.NewOnly) "new" else "all",
-                            untaggedIsNew = ruleUntaggedIsNew,
+                            mode = if (episodes == EpisodesMode.NewOnly) "new" else "all",
+                            untaggedIsNew = episodes == EpisodesMode.NewOnly && ruleUntaggedIsNew,
                             title = target.title,
-                            titleMode = if (ruleMode == RuleMode.Custom) ruleTitleMode else "exact",
-                            description = if (ruleMode == RuleMode.Custom) ruleDescription else "",
+                            titleMode = ruleTitleMode,
+                            description = ruleDescription,
                             descriptionMode = ruleDescriptionMode,
                             channelDispatcharrId = if (ruleAllChannels) null else dispatcharrId,
                         )
@@ -273,7 +277,9 @@ fun RecordProgramSheet(
         TvRecordForm(
             target = target, isLive = isLive, onDismiss = onDismiss,
             canOfferSeriesRule = canOfferSeriesRule, isDispatcharr = isDispatcharr, canRecordToServer = canRecordToServer,
-            ruleMode = ruleMode, onRuleMode = { ruleMode = it },
+            series = series, onSeries = { series = it },
+            episodes = episodes, onEpisodes = { episodes = it },
+            customizeMatching = customizeMatching, onCustomizeMatching = { customizeMatching = it },
             ruleTitleMode = ruleTitleMode, onRuleTitleMode = { ruleTitleMode = it },
             ruleDescription = ruleDescription, onRuleDescription = { ruleDescription = it },
             ruleDescriptionMode = ruleDescriptionMode, onRuleDescriptionMode = { ruleDescriptionMode = it },
@@ -373,33 +379,39 @@ fun RecordProgramSheet(
                     SectionLabel("Record")
                     Spacer(Modifier.height(8.dp))
                     RecordCard {
-                        RuleMode.entries.forEachIndexed { i, mode ->
-                            if (i > 0) com.aeriotv.android.ui.settings.SettingsRowDivider(startInset = 52.dp)
+                        RecordRadioRow("Just this one", "Record this airing only.", selected = !series) { series = false }
+                        com.aeriotv.android.ui.settings.SettingsRowDivider(startInset = 52.dp)
+                        RecordRadioRow("Series", "A rule on the server records this title's airings.", selected = series) { series = true }
+                    }
+                    if (series) {
+                        Spacer(Modifier.height(18.dp))
+                        SectionLabel("Episodes")
+                        Spacer(Modifier.height(8.dp))
+                        RecordCard {
+                            EpisodesMode.entries.forEachIndexed { i, m ->
+                                if (i > 0) com.aeriotv.android.ui.settings.SettingsRowDivider(startInset = 52.dp)
+                                RecordRadioRow(m.label, m.detail, selected = episodes == m) { episodes = m }
+                            }
+                            com.aeriotv.android.ui.settings.SettingsRowDivider(startInset = 16.dp)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .selectable(selected = ruleMode == mode, onClick = { ruleMode = mode })
-                                    .padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                                    .clickable { customizeMatching = !customizeMatching }
+                                    .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                RadioButton(
-                                    selected = ruleMode == mode,
-                                    onClick = null,
-                                    colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
-                                    modifier = Modifier.size(48.dp),
+                                Text("Customize Matching", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+                                androidx.compose.material3.Icon(
+                                    if (customizeMatching) androidx.compose.material.icons.Icons.Filled.KeyboardArrowDown else androidx.compose.material.icons.Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                Column {
-                                    Text(mode.label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(mode.detail, style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
                             }
                         }
                     }
-                    if (ruleMode == RuleMode.Custom) {
+                    if (series && customizeMatching) {
                         Spacer(Modifier.height(10.dp))
-                        SectionLabel("Rule Options")
-                        Spacer(Modifier.height(8.dp))
-                        Text("Title match", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Title Match", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                             val modes = listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex")
                             modes.forEachIndexed { i, (wire, label) ->
@@ -432,21 +444,21 @@ fun RecordProgramSheet(
                             }
                         }
                     }
-                    if (ruleMode == RuleMode.NewOnly || ruleMode == RuleMode.Custom) {
+                    if (series && customizeMatching && episodes == EpisodesMode.NewOnly) {
                         Spacer(Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Untagged episodes count as new", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                                Text("Untagged Counts as New", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
                                 Text("For guides that only tag repeats.", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(checked = ruleUntaggedIsNew, onCheckedChange = { ruleUntaggedIsNew = it })
                         }
                     }
-                    if (usingRule) {
+                    if (usingRule && customizeMatching) {
                         Spacer(Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Match on every channel", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                                Text("Match on Every Channel", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
                                 Text("Off records only on ${target.channelName}.", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(checked = ruleAllChannels, onCheckedChange = { ruleAllChannels = it })
@@ -670,7 +682,9 @@ private fun TvRecordForm(
     canOfferSeriesRule: Boolean,
     isDispatcharr: Boolean,
     canRecordToServer: Boolean,
-    ruleMode: RuleMode, onRuleMode: (RuleMode) -> Unit,
+    series: Boolean, onSeries: (Boolean) -> Unit,
+    episodes: EpisodesMode, onEpisodes: (EpisodesMode) -> Unit,
+    customizeMatching: Boolean, onCustomizeMatching: (Boolean) -> Unit,
     ruleTitleMode: String, onRuleTitleMode: (String) -> Unit,
     ruleDescription: String, onRuleDescription: (String) -> Unit,
     ruleDescriptionMode: String, onRuleDescriptionMode: (String) -> Unit,
@@ -723,11 +737,24 @@ private fun TvRecordForm(
                 if (canOfferSeriesRule) {
                     TvSectionTitle("Record")
                     TvPillRow {
-                        RuleMode.entries.forEach { m ->
-                            SheetPill((m.label), selected = ruleMode == m, onClick = { onRuleMode(m) })
-                        }
+                        SheetPill("Just this one", selected = !series, onClick = { onSeries(false) })
+                        SheetPill("Series", selected = series, onClick = { onSeries(true) })
                     }
-                    if (ruleMode == RuleMode.Custom) {
+                    Text(
+                        if (series) "A rule on the server records this title's airings." else "Record this airing only.",
+                        fontSize = 11.sp.subtext(), color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp),
+                    )
+                    if (series) {
+                        TvSectionTitle("Episodes")
+                        TvPillRow {
+                            EpisodesMode.entries.forEach { m ->
+                                SheetPill(m.label, selected = episodes == m, onClick = { onEpisodes(m) })
+                            }
+                            SheetPill("Customize Matching", selected = customizeMatching, onClick = { onCustomizeMatching(!customizeMatching) })
+                        }
+                        Text(episodes.detail, fontSize = 11.sp.subtext(), color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp))
+                    }
+                    if (series && customizeMatching) {
                         Text("Title Match", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp))
                         TvPillRow {
                             listOf("exact" to "Exact", "contains" to "Contains", "search" to "Search", "regex" to "Regex").forEach { (wire, label) ->
@@ -750,9 +777,9 @@ private fun TvRecordForm(
                             }
                         }
                     }
-                    if (ruleMode != RuleMode.Once) {
+                    if (series && customizeMatching) {
                         TvPillRow {
-                            if (ruleMode == RuleMode.NewOnly || ruleMode == RuleMode.Custom) {
+                            if (episodes == EpisodesMode.NewOnly) {
                                 SheetPill("Untagged Counts as New", selected = ruleUntaggedIsNew, onClick = { onRuleUntaggedIsNew(!ruleUntaggedIsNew) })
                             }
                             SheetPill("Match on Every Channel", selected = ruleAllChannels, onClick = { onRuleAllChannels(!ruleAllChannels) })
@@ -801,7 +828,7 @@ private fun TvRecordForm(
                 if (!hasNoRecordingPath) {
                     Column(modifier = Modifier.fillMaxWidth().padding(top = 3.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            if (usingRule) tvSeriesRuleSummary(target, ruleMode, ruleAllChannels) else tvRecordingWindowSummary(target, isLive, preRoll, postRoll),
+                            if (usingRule) tvSeriesRuleSummary(target, episodes, ruleAllChannels) else tvRecordingWindowSummary(target, isLive, preRoll, postRoll),
                             fontSize = 11.sp.subtext(), color = colors.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         )
                         TvRecordPill(
@@ -910,8 +937,8 @@ private fun tvRecordingWindowSummary(target: ProgramInfoTarget, isLive: Boolean,
     return "Records ${f.format(Date(start))} to ${f.format(Date(end))} · $length"
 }
 
-private fun tvSeriesRuleSummary(target: ProgramInfoTarget, mode: RuleMode, allChannels: Boolean): String {
-    val what = if (mode == RuleMode.NewOnly) "New episodes of" else "Every episode of"
+private fun tvSeriesRuleSummary(target: ProgramInfoTarget, mode: EpisodesMode, allChannels: Boolean): String {
+    val what = if (mode == EpisodesMode.NewOnly) "New episodes of" else "Every episode of"
     val scope = if (allChannels) "on any channel" else "on ${target.channelName}"
     return "$what \"${target.title}\" $scope, scheduled by the Dispatcharr server"
 }
@@ -1034,10 +1061,30 @@ private fun formatTimeRange(target: ProgramInfoTarget): String {
 private val ROLL_OPTIONS = listOf(0, 5, 10, 15, 30, 60)
 private val LIVE_RED = Color(0xFFFF4757)
 
-/** Series recording rule choices (Apple parity: RecordProgramSheet.RuleMode). */
-private enum class RuleMode(val label: String, val detail: String) {
-    Once("Just this one", "Record this airing only."),
-    All("Every episode", "A series rule on the server records every airing of this title."),
+/** Series rule episode choices (Apple parity: RecordProgramSheet). */
+private enum class EpisodesMode(val label: String, val detail: String) {
+    All("Every episode", "Records every airing of this title."),
     NewOnly("New episodes only", "Skips airings the guide marks as repeats."),
-    Custom("Customize rule", "Choose how the title and description are matched."),
+}
+
+@Composable
+private fun RecordRadioRow(label: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, onClick = onClick)
+            .padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier.size(48.dp),
+        )
+        Column {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text(detail, style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
