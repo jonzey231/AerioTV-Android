@@ -68,6 +68,14 @@ fun FormFactorModal(
      */
     sheetMaxWidth: Dp? = null,
     /**
+     * Touch sheets only: false removes the sheet's own drag and nested
+     * scroll handling, so a scrolling body that reaches its end stretches
+     * (Compose overscroll) instead of handing the leftover drag to the
+     * sheet, which moved the sheet and snapped it back (Record from Now,
+     * Logan 2026-10-02). Cancel and the scrim still dismiss.
+     */
+    sheetGesturesEnabled: Boolean = true,
+    /**
      * Touch sheets only (Logan 2026-09-14): open at the partial height and let
      * the user drag the sheet to full screen. The content column is then given
      * a FIXED height rather than a max, so a list inside it scrolls and the
@@ -113,6 +121,7 @@ fun FormFactorModal(
         ModalBottomSheet(
             onDismissRequest = onDismiss,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = !sheetExpandable),
+            sheetGesturesEnabled = sheetGesturesEnabled,
             containerColor = MaterialTheme.colorScheme.background,
             // Bottom inset only for BOTH paths. With the default insets the
             // non-expandable sheet got the same offset-dependent top padding:

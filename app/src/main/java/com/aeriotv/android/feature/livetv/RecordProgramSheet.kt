@@ -29,6 +29,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.rememberOverscrollEffect
+import androidx.compose.foundation.overscroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Storage
 import com.aeriotv.android.ui.scale.AlertDialog
@@ -323,11 +330,34 @@ fun RecordProgramSheet(
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            // End-of-list drag stretches the body (Compose overscroll) like
+            // the iPhone's rubber band instead of being handed to the sheet,
+            // which moved the sheet and snapped it back (Logan 2026-10-02).
+            // Only the downward leftover is kept: a pull past the TOP still
+            // reaches the sheet so dragging the content down dismisses it,
+            // as on iOS, and the handle drag is untouched.
+            val overscroll = rememberOverscrollEffect()
+            val keepBottomOverscroll = remember(overscroll) {
+                object : NestedScrollConnection {
+                    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                        if (available.y >= 0f) return Offset.Zero
+                        overscroll?.applyToScroll(available, source) { Offset.Zero }
+                        return available
+                    }
+                    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                        if (available.y >= 0f) return Velocity.Zero
+                        overscroll?.applyToFling(available) { Velocity.Zero }
+                        return available
+                    }
+                }
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState()),
+                    .nestedScroll(keepBottomOverscroll)
+                    .overscroll(overscroll)
+                    .verticalScroll(rememberScrollState(), overscrollEffect = null),
             ) {
             Spacer(Modifier.height(12.dp))
 
