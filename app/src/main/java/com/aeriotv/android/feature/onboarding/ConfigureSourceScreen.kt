@@ -876,7 +876,7 @@ private fun DvrDestinationRow(
         )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(true to "Server (Dispatcharr)", false to "This device").forEach { (isServer, label) ->
+            listOf(true to "Server (Dispatcharr)", false to "This Device").forEach { (isServer, label) ->
                 val selected = isServer == server
                 Text(
                     text = label,

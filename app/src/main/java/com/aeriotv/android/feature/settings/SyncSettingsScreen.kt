@@ -368,14 +368,12 @@ fun SyncSettingsScreen(
             title = { Text("Push to Drive?") },
             text = {
                 Text(
-                    "This replaces the entire Drive backup with this device's " +
-                        "current configuration. Other devices that pull later " +
-                        "receive this copy.",
+                    "This replaces the snapshot in Google Drive with this device's playlists and settings.",
                 )
             },
             confirmButton = {
                 SettingsDialogTextButton(
-                    label = "Push to Drive",
+                    label = "Push",
                     onClick = {
                         pushConfirmOpen = false
                         viewModel.runPushOnly()
@@ -389,17 +387,16 @@ fun SyncSettingsScreen(
     }
 
     if (pullConfirmOpen) {
-        // Apple's "Pull from iCloud?" alert with Drive substituted. Apple's
-        // "Playlists or progress on this device that are not in iCloud are
-        // removed" sentence is left out: Android's pull merges onto local
-        // rows and removes nothing, so that line would be false here.
+        // Apple's "Pull from iCloud?" alert with Drive substituted. The pull
+        // REPLACES this device's playlists and settings (Settings phase 3).
         com.aeriotv.android.ui.scale.AlertDialog(
             onDismissRequest = { pullConfirmOpen = false },
             title = { Text("Pull from Drive?") },
             text = {
                 Text(
-                    "This replaces this device's playlists and watch progress with the copy in Drive. " +
-                        "Preferences merge normally. If this device has the newest changes, push them up first.",
+                    "This replaces this device's playlists and settings with the copy in Drive. " +
+                        "Playlists on this device that are not in Drive are removed. " +
+                        "If this device has the newest changes, push them up first.",
                 )
             },
             confirmButton = {

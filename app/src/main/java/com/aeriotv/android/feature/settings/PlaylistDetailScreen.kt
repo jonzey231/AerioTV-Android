@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -94,7 +95,14 @@ fun PlaylistDetailScreen(
     val allPlaylists by viewModel.allPlaylists.collectAsStateWithLifecycle(
         initialValue = emptyList(),
     )
-    val playlist = allPlaylists.firstOrNull { it.id == playlistId } ?: state.playlist
+    // A requested row shows only itself: before the DAO flow's first
+    // emission the old fallback to the active snapshot drew the ACTIVE
+    // playlist's page for a frame, then swapped (Logan, Nothing Phone
+    // 2026-10-02). Null = active, as before.
+    val playlist = when (playlistId) {
+        null, state.playlist?.id -> state.playlist
+        else -> allPlaylists.firstOrNull { it.id == playlistId }
+    }
     // Whether the playlist ON SCREEN is the active one. The refresh/test
     // actions below are deliberately gated on this: every one of them resolves
     // `repository.activePlaylist()` and loads its result into the single
@@ -153,11 +161,9 @@ fun PlaylistDetailScreen(
                 if (!rememberIsTvDevice()) {
                     SettingsHeaderTextButton(
                         label = "Edit",
-                        // Active-only, same rule as the refresh actions below:
-                        // saveEdits writes through repository.activePlaylist(),
-                        // so editing a NON-active playlist would silently
-                        // overwrite the active one's URL and credentials.
-                        enabled = playlist != null && isActivePlaylist,
+                        // Any playlist, active or not: Edit Playlist saves to
+                        // the row whose id it was opened with.
+                        enabled = playlist != null,
                         onClick = onEdit,
                     )
                 }
@@ -168,8 +174,12 @@ fun PlaylistDetailScreen(
             ),
         )
 
+        // The requested row has not arrived from the DAO yet: draw nothing
+        // for that frame rather than the empty-state text.
+        val awaitingRow = playlist == null && playlistId != null && allPlaylists.isEmpty()
         if (playlist == null) {
-            Column(
+            if (awaitingRow) Box(modifier = Modifier.fillMaxSize())
+            else Column(
                 modifier = Modifier.fillMaxSize().padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -453,13 +463,16 @@ fun PlaylistDetailScreen(
                         enabled = !isActivePlaylist,
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                    if (isTv && isActivePlaylist) {
+                    // Any playlist is editable, active or not (Settings phase 3).
+                    if (isTv) {
                         ActionRow(
                             icon = Icons.Outlined.Edit,
                             label = "Edit Playlist",
                             onClick = onEdit,
                         )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        if (isActivePlaylist) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        }
                     }
                     if (isActivePlaylist) {
                     ActionRow(
@@ -509,13 +522,16 @@ fun PlaylistDetailScreen(
                         enabled = !isActivePlaylist,
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                    if (isTv && isActivePlaylist) {
+                    // Any playlist is editable, active or not (Settings phase 3).
+                    if (isTv) {
                         ActionRow(
                             icon = Icons.Outlined.Edit,
                             label = "Edit Playlist",
                             onClick = onEdit,
                         )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        if (isActivePlaylist) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        }
                     }
                     if (isActivePlaylist) {
                     ActionRow(

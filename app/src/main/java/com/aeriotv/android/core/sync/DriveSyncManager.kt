@@ -47,6 +47,9 @@ class DriveSyncManager @Inject constructor(
     private val appPreferences: AppPreferences,
     private val watchlistStore: com.aeriotv.android.core.preferences.WatchlistStore,
     private val hiddenTitlesStore: com.aeriotv.android.core.preferences.HiddenTitlesStore,
+    /** Provider: a replacing pull deletes local playlists through the
+     * repository's full cleanup path (guide, channel cache, VOD, tokens). */
+    private val playlistRepository: javax.inject.Provider<com.aeriotv.android.core.data.repository.PlaylistRepository>,
 ) {
 
     private val okHttp: OkHttpClient = OkHttpClient.Builder()
@@ -217,10 +220,20 @@ class DriveSyncManager @Inject constructor(
         return result
     }
 
-    suspend fun pullAll(token: String, enabled: Set<SyncCategory>): Map<SyncCategory, Boolean> {
+    /**
+     * [replace] true is the explicit Settings "Pull from Drive": Playlists and
+     * Preferences REPLACE this device's copy (owner decision, Settings phase 3,
+     * iPhone parity) instead of merging onto it. Background and onboarding
+     * pulls keep merging.
+     */
+    suspend fun pullAll(
+        token: String,
+        enabled: Set<SyncCategory>,
+        replace: Boolean = false,
+    ): Map<SyncCategory, Boolean> {
         val result = mutableMapOf<SyncCategory, Boolean>()
         enabled.forEach { category ->
-            val ok = runCatching { pullCategory(token, category) }
+            val ok = runCatching { pullCategory(token, category, replace) }
                 .onFailure { Log.w(TAG, "pull ${category.name} failed", it) }
                 .getOrDefault(false)
             result[category] = ok
@@ -275,23 +288,27 @@ class DriveSyncManager @Inject constructor(
         return driveClient.upload(token, category.fileName, payload).isSuccess
     }
 
-    private suspend fun pullCategory(token: String, category: SyncCategory): Boolean =
-        pullCategoryDetailed(token, category) == PullOutcome.Applied
+    private suspend fun pullCategory(token: String, category: SyncCategory, replace: Boolean = false): Boolean =
+        pullCategoryDetailed(token, category, replace) == PullOutcome.Applied
 
     /** Tri-state pull so [pullAllTracked] can tell "no remote snapshot yet"
      * (fresh account, not an error) apart from a genuine failure. The Boolean
      * [pullCategory] wrapper preserves the original semantics for [pullAll]. */
-    private suspend fun pullCategoryDetailed(token: String, category: SyncCategory): PullOutcome {
+    private suspend fun pullCategoryDetailed(
+        token: String,
+        category: SyncCategory,
+        replace: Boolean = false,
+    ): PullOutcome {
         val fileId = driveClient.findFileId(token, category.fileName) ?: return PullOutcome.NoRemote
         val body = driveClient.download(token, fileId) ?: return PullOutcome.Failed
         return runCatching {
             when (category) {
-                SyncCategory.Playlists -> applyPlaylistsSnapshot(json.decodeFromString(body))
+                SyncCategory.Playlists -> applyPlaylistsSnapshot(json.decodeFromString(body), replace)
                 SyncCategory.WatchProgress -> applyWatchProgressSnapshot(json.decodeFromString(body))
                 SyncCategory.Reminders -> applyRemindersSnapshot(json.decodeFromString(body))
                 SyncCategory.Favorites -> applyFavoritesSnapshot(json.decodeFromString(body))
                 SyncCategory.Watchlist -> applyWatchlistSnapshot(json.decodeFromString(body))
-                SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body))
+                SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body), replace)
                 SyncCategory.Credentials -> applyCredentialsSnapshot(json.decodeFromString(body))
             }
             PullOutcome.Applied
@@ -482,7 +499,22 @@ class DriveSyncManager @Inject constructor(
 
     // ── Snapshot appliers ─────────────────────────────────────────────────
 
-    private suspend fun applyPlaylistsSnapshot(snapshot: PlaylistsSnapshot) = database.withTransaction {
+    private suspend fun applyPlaylistsSnapshot(snapshot: PlaylistsSnapshot, replace: Boolean = false) {
+        if (replace && snapshot.playlists.isNotEmpty()) {
+            // Replace: a local playlist the snapshot does not carry is removed,
+            // through the same cleanup a manual delete runs. An EMPTY snapshot
+            // never wipes the device (a blank sender is not a real backup).
+            val keep = snapshot.playlists.map { it.id }.toSet()
+            playlistDao.allOnce().filter { it.id !in keep }.forEach { row ->
+                Log.i(TAG, "pull replace: removing local playlist ${row.id}")
+                playlistRepository.get().deletePlaylist(row.id)
+                    .onFailure { Log.w(TAG, "pull replace: delete ${row.id} failed", it) }
+            }
+        }
+        mergePlaylistsSnapshot(snapshot)
+    }
+
+    private suspend fun mergePlaylistsSnapshot(snapshot: PlaylistsSnapshot) = database.withTransaction {
         val existing = playlistDao.allOnce().associateBy { it.id }
         snapshot.playlists.forEach { entry ->
             val current = existing[entry.id]
@@ -634,8 +666,8 @@ class DriveSyncManager @Inject constructor(
         }
     }
 
-    private suspend fun applyPreferencesSnapshot(snapshot: PreferencesSnapshot) {
-        appPreferences.applySyncedPreferences(snapshot.keys)
+    private suspend fun applyPreferencesSnapshot(snapshot: PreferencesSnapshot, replace: Boolean = false) {
+        appPreferences.applySyncedPreferences(snapshot.keys, replace)
     }
 
     private suspend fun applyCredentialsSnapshot(snapshot: CredentialsSnapshot) {

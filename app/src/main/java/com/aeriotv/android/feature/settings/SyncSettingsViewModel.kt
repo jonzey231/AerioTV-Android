@@ -194,7 +194,7 @@ class SyncSettingsViewModel @Inject constructor(
                 _pullStatus.value = ActionStatus.Failure("No sync categories enabled")
                 return@launch
             }
-            val pulled = sync.pullAll(token, enabled)
+            val pulled = sync.pullAll(token, enabled, replace = true)
             val failed = pulled.count { !it.value }
             _pullStatus.value = if (failed == 0) {
                 ActionStatus.Success("Pulled ${pulled.size} ${if (pulled.size == 1) "category" else "categories"} from Drive")

@@ -2562,6 +2562,7 @@ private fun SettingsTabContent(
             }
         is SettingsRoute.EditPlaylist -> com.aeriotv.android.feature.settings.EditPlaylistScreen(
             onBack = { nav.pop() },
+            playlistId = r.playlistId,
             viewModel = playlistVm,
         )
         is SettingsRoute.PlaylistDetail ->

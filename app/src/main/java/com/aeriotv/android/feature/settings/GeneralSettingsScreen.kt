@@ -153,12 +153,10 @@ fun GeneralSettingsScreen(
                             .collectAsStateWithLifecycle(initialValue = true)
                         SettingsToggleRow(
                             title = "Auto-Rotate",
-                            // Apple's per-idiom wording, word for word.
-                            subtitle = if (isTablet) {
-                                "Follow the device orientation. When off, AerioTV stays in its current orientation"
-                            } else {
-                                "Follow the device orientation. When off, AerioTV stays portrait"
-                            },
+                            // Apple wording, word for word. Off freezes whatever
+                            // orientation the screen is in (owner decision
+                            // 2026-10-02, every idiom on both platforms).
+                            subtitle = "Follow the device orientation. When off, AerioTV stays in its current orientation",
                             checked = autoRotate,
                             onCheckedChange = viewModel::setAutoRotate,
                         )

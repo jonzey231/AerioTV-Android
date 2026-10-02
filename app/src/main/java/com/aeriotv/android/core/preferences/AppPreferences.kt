@@ -1552,8 +1552,51 @@ class AppPreferences @Inject constructor(
     }
 
     /** Reverse of [snapshotSyncablePreferences]. Best-effort decode. */
-    suspend fun applySyncedPreferences(keys: Map<String, String>) {
+    suspend fun applySyncedPreferences(keys: Map<String, String>, replace: Boolean = false) {
         store.edit { prefs ->
+            // Explicit Pull from Drive REPLACES (owner decision, Settings
+            // phase 3, iPhone parity): a synced preference this device has
+            // set but the snapshot does not carry goes back to its default.
+            if (replace) {
+                val syncedKeys: Map<String, Preferences.Key<*>> = buildMap {
+                    put("selectedTheme", KEY_SELECTED_THEME)
+                    put("textScale", KEY_TEXT_SCALE)
+                    put("subtextScale", KEY_SUBTEXT_SCALE)
+                    put("textContrast", KEY_TEXT_CONTRAST)
+                    put("appearanceMode", KEY_APPEARANCE_MODE)
+                    put("defaultTab", KEY_DEFAULT_TAB)
+                    put("timeFormat", KEY_TIME_FORMAT)
+                    put("skipLoadingScreen", KEY_SKIP_LOADING_SCREEN)
+                    put("appleTVChannelFlip", KEY_APPLE_TV_CHANNEL_FLIP)
+                    if (prefs[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
+                        put("remoteControlMap", KEY_REMOTE_CONTROL_MAP)
+                    }
+                    put("guideGroupSelector", KEY_GUIDE_GROUP_SELECTOR)
+                    put("guideSidebarLayout", KEY_GUIDE_SIDEBAR_LAYOUT)
+                    put("phoneGroupSelector", KEY_PHONE_GROUP_SELECTOR)
+                    put("guideTuneInMini", KEY_GUIDE_TUNE_IN_MINI)
+                    put("showRemoteHints", KEY_SHOW_REMOTE_HINTS)
+                    put("showEpgBadgesTv", KEY_SHOW_EPG_BADGES_TV)
+                    put("showEpgBadgesMobile", KEY_SHOW_EPG_BADGES_MOBILE)
+                    put("autoResumeLastChannel", KEY_AUTO_RESUME_LAST_CHANNEL)
+                    put("programPostersTmdbEnabled", KEY_PROGRAM_POSTERS_TMDB_ENABLED)
+                    put("tmdbApiKey", KEY_TMDB_API_KEY)
+                    put("enableCategoryColors", KEY_CATEGORY_MASTER_ENABLE)
+                    put("customCategoryColors.v1", KEY_CATEGORY_CUSTOM_JSON)
+                    put("hiddenGroups.v1", KEY_HIDDEN_GROUPS)
+                    put("groupOrder.v1", KEY_GROUP_ORDER)
+                    put("groupSortMode.v1", KEY_GROUP_SORT_MODE)
+                    put("useCustomAccent", KEY_USE_CUSTOM_ACCENT)
+                    put("customAccentHex", KEY_CUSTOM_ACCENT_HEX)
+                    put("skipBackSeconds", KEY_SKIP_BACK_SECONDS)
+                    put("skipForwardSeconds", KEY_SKIP_FORWARD_SECONDS)
+                    ProgramCategory.entries.forEach { bucket ->
+                        put(bucket.hexStorageKey, stringPreferencesKey(bucket.hexStorageKey))
+                        put(bucket.enabledStorageKey, booleanPreferencesKey(bucket.enabledStorageKey))
+                    }
+                }
+                syncedKeys.forEach { (name, key) -> if (name !in keys) prefs.remove(key) }
+            }
             keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME] = it }
             keys["textScale"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_SCALE] = snapTextScale(it).toDouble() }
             keys["subtextScale"]?.toFloatOrNull()?.let { prefs[KEY_SUBTEXT_SCALE] = snapTextScale(it).toDouble() }

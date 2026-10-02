@@ -698,6 +698,26 @@ class DvrViewModel @Inject constructor(
      * short-circuiting, so a single server 401 doesn't strand a dozen
      * local rows.
      */
+    /**
+     * Settings > DVR > Delete All Recordings (Apple DVRSettingsView parity).
+     * Deletes this device's FINISHED recordings; with [includeInProgress] the
+     * in-flight on-device capture is stopped first, and the partial file it
+     * finalizes is deleted along with the rest.
+     */
+    suspend fun deleteAllLocalRecordings(includeInProgress: Boolean): Result<Int> {
+        if (includeInProgress && LocalRecordingService.isActive) {
+            LocalRecordingService.stop(appContext)
+            // The service writes the partial's row BEFORE it clears its active
+            // flag, so once the flag falls the row is in the database.
+            kotlinx.coroutines.withTimeoutOrNull(15_000L) {
+                LocalRecordingService.activeFlow.first { !it }
+            }
+            refresh()
+            refreshJob?.join()
+        }
+        return deleteAllCompleted(includeServer = false)
+    }
+
     suspend fun deleteAllCompleted(includeServer: Boolean = true): Result<Int> = runCatching {
         // Snapshot the list -- as we delete, the state list flips out from
         // under us; we want to preserve the original work order.

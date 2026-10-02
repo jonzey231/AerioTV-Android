@@ -463,12 +463,12 @@ fun RecordProgramSheet(
                             selected = destinationServer,
                             onClick = { destinationServer = true },
                             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                        ) { Text("Dispatcharr server") }
+                        ) { Text("Dispatcharr Server") }
                         SegmentedButton(
                             selected = !destinationServer,
                             onClick = { destinationServer = false },
                             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                        ) { Text("This device") }
+                        ) { Text("This Device") }
                     }
                 }
 
@@ -714,8 +714,8 @@ private fun TvRecordForm(
                 if (isDispatcharr && isLive && canRecordToServer && !usingRule) {
                     TvSectionTitle("Destination")
                     TvPillRow {
-                        SheetPill("Dispatcharr server", selected = destinationServer, onClick = { onDestinationServer(true) })
-                        SheetPill("This device", selected = !destinationServer, onClick = { onDestinationServer(false) })
+                        SheetPill("Dispatcharr Server", selected = destinationServer, onClick = { onDestinationServer(true) })
+                        SheetPill("This Device", selected = !destinationServer, onClick = { onDestinationServer(false) })
                     }
                 }
                 if (isDispatcharr && !usingRule) {

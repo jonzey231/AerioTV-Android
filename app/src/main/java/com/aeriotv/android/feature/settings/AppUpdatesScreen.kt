@@ -142,7 +142,7 @@ fun AppUpdatesScreen(
                         footer = s.message,
                     ) {
                         SettingsActionRow(
-                            label = if (s.info != null) "Try again" else "Check again",
+                            label = if (s.info != null) "Try Again" else "Check Again",
                             leadingIcon = Icons.Filled.Refresh,
                             onClick = {
                                 if (s.info != null) viewModel.download() else viewModel.manualCheck()

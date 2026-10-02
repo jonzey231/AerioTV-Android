@@ -385,6 +385,9 @@ class PlaylistRepository @Inject constructor(
         return Result.success(fresh.trim() != previousKey)
     }
 
+    /** Any saved playlist by id, active or not (Edit Playlist on a non-active row). */
+    suspend fun playlistById(id: String): PlaylistEntity? = dao.byId(id)
+
     suspend fun activePlaylist(): PlaylistEntity? {
         val pl = dao.firstActive()
         // Keep the sync credential cache in lockstep with the DB; covers the
@@ -900,7 +903,9 @@ class PlaylistRepository @Inject constructor(
             password = suppliedPass ?: priorRow?.password,
             channelCount = channels.size,
             lastRefreshedAt = System.currentTimeMillis(),
-            isActive = true,
+            // Editing a NON-active playlist keeps it non-active: an edit
+            // never switches playlists (owner decision, Settings phase 3).
+            isActive = priorRow?.isActive ?: true,
             dispatcharrProfileId = request.dispatcharrProfileId,
             dispatcharrUserLevel = dispatcharrUserLevel,
             dispatcharrAccountProfileIds = accountProfileIds.joinToString(","),
@@ -921,7 +926,10 @@ class PlaylistRepository @Inject constructor(
         // method so two concurrent server-add calls can't interleave between
         // the deactivate pass and the upsert, leaving zero or two active rows.
         // Editing the already-active row skips the deactivate step.
-        if (existingId == null || dao.byId(existingId)?.isActive != true) {
+        val editingInactive = priorRow != null && !priorRow.isActive
+        if (editingInactive) {
+            dao.upsert(entity)
+        } else if (existingId == null || dao.byId(existingId)?.isActive != true) {
             dao.upsertAsActive(entity)
         } else {
             dao.upsert(entity)
@@ -933,7 +941,7 @@ class PlaylistRepository @Inject constructor(
         } catch (t: Throwable) {
             android.util.Log.w("PlaylistRepository", "saveChannelsToCache failed (loadAndPersist)", t)
         }
-        publishActiveCredentials(entity)
+        if (!editingInactive) publishActiveCredentials(entity)
         // Playlist creation / edit: take the per-user capability snapshot now,
         // so the very first frame of Live TV, DVR and On Demand reflects what
         // THIS account can actually do. Best-effort; a failure just leaves the
@@ -944,7 +952,9 @@ class PlaylistRepository @Inject constructor(
         // The user just edited connection details: probe the LAN URL now so
         // the very next request routes correctly instead of waiting for a
         // network change.
-        entity.lanUrlString?.takeIf { it.isNotBlank() }?.let { lanReachability.refresh(it) }
+        if (!editingInactive) {
+            entity.lanUrlString?.takeIf { it.isNotBlank() }?.let { lanReachability.refresh(it) }
+        }
         entity to channels
         }.also { result ->
             closeStages(if (result.isSuccess) "ok" else "failed")

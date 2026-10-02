@@ -11,6 +11,7 @@ import com.aeriotv.android.ui.theme.AppTheme
 import com.aeriotv.android.ui.theme.AppearanceMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import com.aeriotv.android.core.data.db.entity.canRecordToServer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -188,6 +189,16 @@ class SettingsViewModel @Inject constructor(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val activePlaylistId: StateFlow<String?> = playlistRepository.observeActiveId()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * True when the active playlist can record on its server (Dispatcharr
+     * Direct Connect with DVR manage access). Settings > DVR shows Recording
+     * Destination only then; M3U and Xtream have no server DVR.
+     */
+    val activeCanRecordToServer: Flow<Boolean> = playlistRepository.observeAll()
+        .map { rows ->
+            rows.firstOrNull { it.isActive }?.canRecordToServer() == true
+        }
 
     // The Default Group PICKER (options and setter) moved to Live TV's Manage
     // Groups sheet (Logan 2026-09-17); PlaylistViewModel owns the write. The

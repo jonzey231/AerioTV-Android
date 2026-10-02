@@ -339,7 +339,7 @@ fun DvrMediaTabContent(
                 recordedOnMillis = rec.startMillis, windowStartMillis = rec.startMillis, windowEndMillis = rec.endMillis,
                 fileSizeBytes = rec.fileSizeBytes,
                 format = if (ext.equals("m3u8", true)) "HLS" else ext,
-                location = if (rec.source == DvrViewModel.Source.Local) "This device" else (playlistState.playlist?.name?.takeIf { it.isNotBlank() } ?: "Dispatcharr"),
+                location = if (rec.source == DvrViewModel.Source.Local) "This Device" else (playlistState.playlist?.name?.takeIf { it.isNotBlank() } ?: "Dispatcharr"),
                 status = statusLabel,
                 videoCodec = rec.videoCodec, resolution = rec.resolution, frameRate = rec.frameRate,
                 videoBitrateKbps = rec.videoBitrateKbps, audioCodec = rec.audioCodec, audioChannels = rec.audioChannels,

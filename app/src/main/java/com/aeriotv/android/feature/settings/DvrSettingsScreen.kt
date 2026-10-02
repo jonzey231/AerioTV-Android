@@ -112,6 +112,8 @@ fun DvrSettingsScreen(
         settingsVm.setDvrCustomFolderUri(uri.toString())
     }
     val dvrState by dvrVm.state.collectAsStateWithLifecycle()
+    val canRecordToServer by settingsVm.activeCanRecordToServer
+        .collectAsStateWithLifecycle(initialValue = false)
     val usedBytes = dvrState.recordings
         .filter { it.source == DvrViewModel.Source.Local }
         .sumOf { it.fileSizeBytes }
@@ -134,23 +136,43 @@ fun DvrSettingsScreen(
         )
     }
     if (showClearConfirmation) {
+        // Apple DVRSettingsView parity: finished recordings by default; the
+        // in-flight on-device capture only when the user picks the second
+        // button. Local only: server rows are Dispatcharr's to manage.
+        val inProgressCount = if (dvrState.isLocalRecordingActive) 1 else 0
         AlertDialog(
             onDismissRequest = { showClearConfirmation = false },
-            title = { Text("Delete All Local Recordings?") },
-            text = { Text("This will permanently remove all locally stored recordings from this device. Server-side recordings are not affected.") },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Delete",
-                    destructive = true,
-                    onClick = {
-                        showClearConfirmation = false
-                        // Local only: server rows are Dispatcharr's to manage.
-                        scope.launch { dvrVm.deleteAllCompleted(includeServer = false) }
-                    },
+            title = { Text("Delete All Recordings?") },
+            text = {
+                Text(
+                    "Finished recordings will be deleted." +
+                        if (inProgressCount > 0) {
+                            " $inProgressCount in-progress recordings can also be stopped and deleted."
+                        } else "",
                 )
             },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { showClearConfirmation = false })
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    SettingsDialogTextButton(
+                        label = "Delete Finished",
+                        destructive = true,
+                        onClick = {
+                            showClearConfirmation = false
+                            scope.launch { dvrVm.deleteAllLocalRecordings(includeInProgress = false) }
+                        },
+                    )
+                    if (inProgressCount > 0) {
+                        SettingsDialogTextButton(
+                            label = "Delete All Including In-Progress",
+                            destructive = true,
+                            onClick = {
+                                showClearConfirmation = false
+                                scope.launch { dvrVm.deleteAllLocalRecordings(includeInProgress = true) }
+                            },
+                        )
+                    }
+                    SettingsDialogTextButton(label = "Cancel", onClick = { showClearConfirmation = false })
+                }
             },
         )
     }
@@ -229,7 +251,9 @@ fun DvrSettingsScreen(
                 }
             }
 
-            item {
+            // Only for a playlist with server-side DVR (Dispatcharr with DVR
+            // manage access); M3U and Xtream record on this device only.
+            if (canRecordToServer) item {
                 // Task #50 (iOS parity): where new recordings go by default.
                 // The record sheet still shows its Destination toggle for
                 // server-capable accounts; this only pre-selects it.
@@ -242,8 +266,8 @@ fun DvrSettingsScreen(
                     SettingsPickerRow(
                         title = "Default Destination",
                         options = listOf(
-                            SettingsPickerOption("server", "Dispatcharr server", "Keeps recording even when AerioTV is closed"),
-                            SettingsPickerOption("local", "This device", "Requires AerioTV to remain open"),
+                            SettingsPickerOption("server", "Dispatcharr Server", "Keeps recording even when AerioTV is closed"),
+                            SettingsPickerOption("local", "This Device", "Requires AerioTV to remain open"),
                         ),
                         selected = if (defaultDestination == "local") "local" else "server",
                         onSelect = settingsVm::setDvrDefaultDestination,

@@ -1664,9 +1664,9 @@ class PlaylistViewModel @Inject constructor(
      * clears any stale list) for non-Dispatcharr sources. Failures leave the
      * list empty so the picker just shows "All Channels".
      */
-    fun loadDispatcharrProfiles() {
+    fun loadDispatcharrProfiles(playlistId: String? = null) {
         viewModelScope.launch {
-            val active = repository.activePlaylist() ?: return@launch
+            val active = editTarget(playlistId) ?: return@launch
             val sourceType = SourceType.entries.firstOrNull { it.name == active.sourceType }
                 ?: SourceType.M3uUrl
             val isDispatcharr = sourceType == SourceType.DispatcharrApiKey ||
@@ -1682,6 +1682,10 @@ class PlaylistViewModel @Inject constructor(
             _state.update { it.copy(availableProfiles = profiles, profilesLoading = false) }
         }
     }
+
+    /** The playlist Edit Playlist is editing: [playlistId] when given, else the active one. */
+    private suspend fun editTarget(playlistId: String?): PlaylistEntity? =
+        playlistId?.let { repository.playlistById(it) } ?: repository.activePlaylist()
 
     fun saveEdits(
         name: String,
@@ -1719,6 +1723,12 @@ class PlaylistViewModel @Inject constructor(
          * screen now waits for this and only leaves on success.
          */
         onResult: ((String?) -> Unit)? = null,
+        /**
+         * The playlist being edited. Null = the active one. Any saved playlist
+         * can be edited (owner decision, Settings phase 3); a non-active one
+         * stays non-active and never touches the active session state.
+         */
+        playlistId: String? = null,
     ) {
         viewModelScope.launch {
             // Fresh save, fresh plan: the previous save's rows must not decide
@@ -1729,7 +1739,7 @@ class PlaylistViewModel @Inject constructor(
                     PlaylistRepository.SaveStage.Finishing,
                 ),
             )
-            val active = repository.activePlaylist() ?: run {
+            val active = editTarget(playlistId) ?: run {
                 _saveStage.value = null
                 _saveHasProgress.value = false
                 onResult?.invoke("No playlist loaded.")
@@ -1767,6 +1777,10 @@ class PlaylistViewModel @Inject constructor(
                 _saveStage.value = null
                 repository.applyInstantEdit(request, active.id, editPlan).fold(
                     onSuccess = { entity ->
+                        if (!entity.isActive) {
+                            onResult?.invoke(null)
+                            return@fold
+                        }
                         _state.update { it.copy(playlist = entity, isLoading = false, error = null) }
                         // Guide Days / EPG URL: reload in the BACKGROUND. The
                         // screen has already popped, so nothing waits on it.
@@ -1780,7 +1794,9 @@ class PlaylistViewModel @Inject constructor(
                     onFailure = { t ->
                         Log.w(TAG, "saveEdits (instant) failed", t)
                         val message = loadFailureMessage("Save failed", t)
-                        _state.update { it.copy(playlist = active, isLoading = false, error = message) }
+                        if (active.isActive) {
+                            _state.update { it.copy(playlist = active, isLoading = false, error = message) }
+                        }
                         onResult?.invoke(message)
                     },
                 )
@@ -1788,6 +1804,30 @@ class PlaylistViewModel @Inject constructor(
             }
             // A real network stage from here: the staged screen is honest now.
             _saveHasProgress.value = true
+            if (!active.isActive) {
+                // Non-active playlist: the network save runs, but the active
+                // session's UiState (playlist, channels, guide, VOD) is left
+                // alone because none of it belongs to this row.
+                repository.loadAndPersist(
+                    request,
+                    existingId = active.id,
+                    onStage = { stage -> _saveStage.value = stage },
+                    onPlan = { plan -> _savePlan.value = plan },
+                ).fold(
+                    onSuccess = {
+                        _saveStage.value = null
+                        _saveHasProgress.value = false
+                        onResult?.invoke(null)
+                    },
+                    onFailure = { t ->
+                        _saveStage.value = null
+                        _saveHasProgress.value = false
+                        Log.w(TAG, "saveEdits (non-active) failed", t)
+                        onResult?.invoke(loadFailureMessage("Save failed", t))
+                    },
+                )
+                return@launch
+            }
             _state.update { it.copy(isLoading = true, error = null) }
             // GH #83: Edit Playlist reads state.playlist, so reflect the
             // edited fields there NOW (the repository writes the DB row early
@@ -1908,8 +1948,8 @@ class PlaylistViewModel @Inject constructor(
      * account's api_key. Returns the user-facing result line so the caller can
      * show it under the row; true in the pair means "succeeded".
      */
-    suspend fun refreshDispatcharrSession(): Pair<Boolean, String> {
-        val id = repository.activePlaylist()?.id
+    suspend fun refreshDispatcharrSession(playlistId: String? = null): Pair<Boolean, String> {
+        val id = editTarget(playlistId)?.id
             ?: return false to "No playlist loaded."
         return repository.refreshDispatcharrSession(id).fold(
             onSuccess = { rotated ->

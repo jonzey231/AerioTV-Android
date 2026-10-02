@@ -91,10 +91,21 @@ import kotlinx.coroutines.launch
 @Composable
 fun EditPlaylistScreen(
     onBack: () -> Unit,
+    /** The playlist to edit, active or not. Null = the active playlist. */
+    playlistId: String? = null,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val playlist = state.playlist
+    // Any saved playlist is editable (owner decision, Settings phase 3). The
+    // active one reads the live UiState row as before; a non-active one reads
+    // its stored row.
+    val allPlaylists by viewModel.allPlaylists
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val playlist = if (playlistId == null || playlistId == state.playlist?.id) {
+        state.playlist
+    } else {
+        allPlaylists.firstOrNull { it.id == playlistId }
+    }
     val sourceType = remember(playlist?.sourceType) {
         SourceType.entries.firstOrNull { it.name == playlist?.sourceType } ?: SourceType.M3uUrl
     }
@@ -146,7 +157,7 @@ fun EditPlaylistScreen(
     // the picker can list them. Re-runs if the user navigates to a different
     // playlist while this screen is alive.
     LaunchedEffect(playlist?.id, isDispatcharr) {
-        if (isDispatcharr) viewModel.loadDispatcharrProfiles()
+        if (isDispatcharr) viewModel.loadDispatcharrProfiles(playlist?.id)
     }
 
     // Save is now AWAITED (Logan 2026-09-18: changed credentials, saved, the
@@ -243,6 +254,7 @@ fun EditPlaylistScreen(
                 saveError = failure
                 if (failure == null) onBack()
             },
+            playlistId = playlist?.id,
         )
     }
 
@@ -467,7 +479,7 @@ fun EditPlaylistScreen(
                                     refreshingSession = true
                                     sessionMessage = null
                                     scope.launch {
-                                        val (ok, message) = viewModel.refreshDispatcharrSession()
+                                        val (ok, message) = viewModel.refreshDispatcharrSession(playlist?.id)
                                         sessionFailed = !ok
                                         sessionMessage = message
                                         refreshingSession = false
@@ -544,7 +556,7 @@ fun EditPlaylistScreen(
                 ) {
                     FieldGroup {
                         SettingsTextField(
-                            label = "Local URL (optional)",
+                            label = "Local URL (Optional)",
                             value = lanUrl,
                             onValueChange = { lanUrl = it; clearSaveError() },
                             placeholder = "http://192.168.1.10:9191",

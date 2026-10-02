@@ -458,7 +458,7 @@ fun PlayerSettingsScreen(
                             onCheckedChange = viewModel::setMatchContentResolution,
                         )
                         val rates = listOf(
-                            SettingsPickerOption("off", "Off (system default)"),
+                            SettingsPickerOption("off", "Off (System Default)"),
                             SettingsPickerOption("50", "50 Hz"),
                             SettingsPickerOption("59.94", "59.94 Hz"),
                             SettingsPickerOption("60", "60 Hz"),
