@@ -201,9 +201,8 @@ fun PlayerSettingsScreen(
                 // Rewind Up To footer, where Apple prints it.
                 SettingsSection(
                     header = "Live Rewind",
-                    footer = "Buffers the channel you are watching so you can pause and " +
-                        "rewind live TV. Uses device storage while you watch; " +
-                        "buffered video is removed automatically.",
+                    // Apple TV prints this directly under the toggle instead.
+                    footer = if (isTv) null else LIVE_REWIND_FOOTER,
                 ) {
                     SettingsToggleRow(
                         title = "Pause & Rewind Live TV",
@@ -212,6 +211,7 @@ fun PlayerSettingsScreen(
                         checked = liveRewindEnabled,
                         onCheckedChange = viewModel::setLiveRewindEnabled,
                     )
+                    if (isTv) SettingsSectionFooter(LIVE_REWIND_FOOTER)
                     if (liveRewindEnabled) {
                         val snappedDepth = REWIND_DEPTH_MINUTES.minByOrNull {
                             abs(it - liveRewindDepth)
@@ -244,7 +244,8 @@ fun PlayerSettingsScreen(
                             }
                             SettingsToggleRow(
                                 title = "Keep Recent Channels Live",
-                                subtitle = "Flipped-away channels keep buffering so their rewind timeline survives",
+                                subtitle = if (isTv) "Buffer flipped-away channels in the background"
+                                else "Flipped-away channels keep buffering so their rewind timeline survives",
                                 leadingIcon = if (isTv) Icons.AutoMirrored.Filled.PlaylistPlay else null,
                                 checked = keepRecent,
                                 onCheckedChange = viewModel::setLiveRewindKeepRecent,
@@ -371,7 +372,7 @@ fun PlayerSettingsScreen(
                     // swipe, so the "accidental swipes" caution is meaningless on
                     // a remote (user request: drop the note on TV). Phones keep it.
                     footer = if (isTv) {
-                        null
+                        "Turn off if accidental D-pad presses are flipping channels during playback. Phones and tablets use the matching swipe-up / swipe-down gesture on the same toggle."
                     } else {
                         "Turn off if accidental swipes during playback flip channels by mistake. " +
                             "Brightness and volume slides are recognized only inside a narrow band at the very edge of the screen, " +
@@ -607,3 +608,8 @@ internal fun SteppedSliderRow(
         onIndexChange = { newIdx -> if (values[newIdx] != selected) onSelect(values[newIdx]) },
     )
 }
+
+private const val LIVE_REWIND_FOOTER =
+    "Buffers the channel you are watching so you can pause and " +
+        "rewind live TV. Uses device storage while you watch; " +
+        "buffered video is removed automatically."

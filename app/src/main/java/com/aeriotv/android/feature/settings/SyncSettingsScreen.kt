@@ -69,6 +69,7 @@ import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsSection
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.settingsRowCard
+import com.aeriotv.android.ui.settings.settingsTvFocusableRow
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bookmark
@@ -247,7 +248,8 @@ fun SyncSettingsScreen(
                 // needs an in-app sign-in.
                 SettingsSection(
                     header = "",
-                    footer = "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read.",
+                    // Apple TV shows no footer under this card.
+                    footer = if (tvRows) null else "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read.",
                 ) {
                     AccountRow(
                         signedIn = signedIn,
@@ -317,7 +319,7 @@ fun SyncSettingsScreen(
                         SyncTileActionRow(
                             icon = Icons.Filled.Delete,
                             title = "Clear Drive Data",
-                            subtitle = "Wipe synced playlists, preferences, watch progress, and credentials from Drive",
+                            subtitle = if (tvRows) null else "Wipe synced playlists, preferences, watch progress, and credentials from Drive",
                             destructive = true,
                             running = clearStatus is SyncSettingsViewModel.ActionStatus.Running,
                             status = clearStatus,
@@ -577,6 +579,7 @@ private fun AccountRow(signedIn: Boolean, email: String) {
         modifier = Modifier
             .fillMaxWidth()
             .settingsRowCard(focused = false)
+            .settingsTvFocusableRow()
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

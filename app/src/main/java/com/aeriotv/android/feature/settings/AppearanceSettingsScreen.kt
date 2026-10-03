@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.material.icons.filled.Palette
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.background
@@ -446,6 +447,7 @@ internal val ThemeRowDividerInset = 52.dp
 
 @Composable
 internal fun DividerRow(startInset: Dp = 16.dp) {
+    if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) return
     HorizontalDivider(
         thickness = 0.5.dp,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.20f),
@@ -562,6 +564,16 @@ private fun CustomAccentRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val isTv = rememberIsTvDevice()
+        if (isTv) {
+            // Apple TV leads this row with a palette glyph, like its other rows.
+            androidx.compose.material3.Icon(
+                imageVector = androidx.compose.material.icons.Icons.Filled.Palette,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+        } else
         // Apple's leading swatch: a 22pt rounded square in the custom hex
         // with a hairline border, standing in for an icon.
         Box(
@@ -579,7 +591,7 @@ private fun CustomAccentRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "Custom Accent Color",
-                style = MaterialTheme.typography.bodyLarge,
+                style = if (isTv) com.aeriotv.android.ui.settings.settingsRowTitleStyle() else MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Medium,
             )
@@ -588,7 +600,7 @@ private fun CustomAccentRow(
             if (rememberIsTvDevice()) {
                 Text(
                     text = "Override the theme accent with a custom hex color",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = com.aeriotv.android.ui.settings.settingsFootnoteStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -623,6 +635,10 @@ private fun CustomAccentRow(
 private fun PreviewCard(theme: AppTheme, customAccentHex: String?) {
     val accent = if (customAccentHex != null && customAccentHex.length == 6) parseHex(customAccentHex)
     else theme.accentPrimary
+    if (rememberIsTvDevice()) {
+        TvPreviewRow(theme = theme, accent = accent)
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             text = "PREVIEW",
@@ -690,6 +706,59 @@ private fun PreviewCard(theme: AppTheme, customAccentHex: String?) {
                         .height(3.dp)
                         .clip(RoundedCornerShape(50))
                         .background(accent),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Apple TV's Preview: a bare row (no card) under a standard section header:
+ * accent swatch, "<Theme> · Solid" over "Applied across the entire app", and
+ * "Sample" over "Secondary text" on the trailing edge. Android has no glass
+ * effect, so the surface reads Solid, as Apple's default does.
+ */
+@Composable
+private fun TvPreviewRow(theme: AppTheme, accent: Color) {
+    Column {
+        com.aeriotv.android.ui.settings.SettingsSectionHeader("Preview")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(accent),
+            )
+            Spacer(Modifier.size(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "${theme.displayName} · Solid",
+                    style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Applied across the entire app",
+                    style = com.aeriotv.android.ui.settings.settingsFootnoteStyle(),
+                    color = accent,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "Sample",
+                    style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Secondary text",
+                    style = com.aeriotv.android.ui.settings.settingsFootnoteStyle(),
+                    color = accent,
                 )
             }
         }

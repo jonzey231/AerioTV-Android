@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -251,6 +253,8 @@ fun RemoteControlSettingsScreen(
                 SettingsSection(header = "On-Screen Hints") {
                     SettingsToggleRow(
                         title = "Show Remote Hints",
+                        // Apple TV: questionmark.circle.
+                        leadingIcon = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) Icons.AutoMirrored.Filled.HelpOutline else null,
                         subtitle = "Key reminders on Live TV and in the player",
                         checked = showRemoteHints,
                         onCheckedChange = { viewModel.setShowRemoteHints(it) },
@@ -290,7 +294,7 @@ fun RemoteControlSettingsScreen(
 
                 SettingsSection(
                     header = "In the TV Guide",
-                    footer = "What each button does while browsing the guide. A Left or Right set to anything other than Move focus still moves between programs, and runs its action once focus reaches the edge of the timeline (Play, Record, Program info and Program menu run on every press). Up, Down and Back always navigate.\n\nGroups can open as a sidebar instead of pills. Change it in Settings, Live TV, Group Selection.",
+                    footer = "What each button does while browsing the guide. Up and Down always navigate. Left or Right set to Play channel, Record, Program info or Program menu acts on every press. Any other Left action acts only from the program airing now, and any other Right action only from the last program in the row; elsewhere the arrow moves between programs. In Sidebar Menu mode, if no button is set to Open sidebar, holding Left opens it.",
                 ) {
                     GUIDE_SLOTS.forEach { slot ->
                         SlotRow(
@@ -303,18 +307,20 @@ fun RemoteControlSettingsScreen(
 
                 SettingsSection(
                     header = "Additional Buttons",
-                    footer = "Applies when your remote has these buttons (many Bluetooth and Shield remotes do; the stock Google TV remote does not).",
+                    footer = "For remotes with dedicated playback and channel buttons. These retarget what the button does while a channel is playing.",
                 ) {
+                    AdditionalSubheader("While Watching")
                     PLAYER_EXTENDED_SLOTS.forEach { slot ->
                         SlotRow(
-                            slotName = "${slot.displayName} (watching)",
+                            slotName = slot.displayName,
                             valueName = map.playerAction(slot).displayName,
                             onClick = { editingPlayerSlot = slot },
                         )
                     }
+                    AdditionalSubheader("In the Guide")
                     GUIDE_EXTENDED_SLOTS.forEach { slot ->
                         SlotRow(
-                            slotName = "${slot.displayName} (guide)",
+                            slotName = slot.displayName,
                             valueName = map.guideAction(slot).displayName(groupSelector == "sidebar"),
                             onClick = { editingGuideSlot = slot },
                         )
@@ -337,7 +343,7 @@ fun RemoteControlSettingsScreen(
                         Spacer(Modifier.width(14.dp))
                         Text(
                             text = "Reset to Defaults",
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
                             color = MaterialTheme.colorScheme.error,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier.weight(1f),
@@ -408,17 +414,19 @@ private fun SlotRow(
     onClick: () -> Unit,
 ) {
     SettingsRowContainer(onClick = onClick) {
+        // Same title size and weight as every other Settings row.
         Text(
             text = slotName,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+            style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
         if (valueName.isNotEmpty()) {
             Spacer(Modifier.width(12.dp))
             Text(
                 text = valueName,
-                style = MaterialTheme.typography.bodyMedium,
+                style = com.aeriotv.android.ui.settings.settingsRowValueStyle(),
                 color = MaterialTheme.colorScheme.textAccent,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -438,4 +446,21 @@ private fun SlotRow(
             )
         }
     }
+}
+
+/**
+ * A labeled sub-section inside Additional Buttons ("While Watching", "In the
+ * Guide"): bare text between the row cards, no card of its own.
+ */
+@Composable
+private fun AdditionalSubheader(text: String) {
+    Text(
+        text = text,
+        style = com.aeriotv.android.ui.settings.settingsRowValueStyle(),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .layoutId(com.aeriotv.android.ui.settings.SettingsFooterLayoutId)
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 2.dp),
+    )
 }

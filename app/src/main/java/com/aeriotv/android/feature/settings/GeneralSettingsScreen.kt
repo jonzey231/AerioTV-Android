@@ -1,5 +1,7 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -137,12 +139,18 @@ fun GeneralSettingsScreen(
                     )
                     SettingsToggleRow(
                         title = "Skip Loading Screen",
+                        // Apple TV leads this row with a tiled glyph.
+                        leadingIcon = if (isTv) androidx.compose.material.icons.Icons.Filled.Bolt else null,
+                        tiledIcon = isTv,
                         subtitle = "Land on Live TV instantly; data hydrates in the background",
                         checked = skipLoadingScreen,
                         onCheckedChange = viewModel::setSkipLoadingScreen,
                     )
                     SettingsToggleRow(
                         title = "Resume Last Channel",
+                        // Apple TV leads this row with a tiled glyph.
+                        leadingIcon = if (isTv) androidx.compose.material.icons.Icons.Filled.LiveTv else null,
+                        tiledIcon = isTv,
                         subtitle = "Auto-start the last-played channel in the corner mini-player on launch",
                         checked = autoResumeLastChannel,
                         onCheckedChange = viewModel::setAutoResumeLastChannel,
@@ -290,39 +298,50 @@ fun GeneralSettingsScreen(
                     header = "",
                     footer = "Per-request retry budget (0-10).",
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .settingsRowCard(focused = false)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Max Retries",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f),
+                    if (isTv) {
+                        // Same minus / value / plus stepper as Text Size on
+                        // Appearance (D-pad Left / Right on one row).
+                        com.aeriotv.android.ui.settings.SettingsIntStepperRow(
+                            title = "Max Retries",
+                            options = (0..10).toList(),
+                            value = maxRetries,
+                            onValueChange = { viewModel.setMaxRetries(it) },
                         )
-                        IconButton(
-                            onClick = { if (maxRetries > 0) viewModel.setMaxRetries(maxRetries - 1) },
-                            enabled = maxRetries > 0,
-                            modifier = Modifier.dpadFocusRing(CircleShape),
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .settingsRowCard(focused = false)
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Filled.Remove, contentDescription = "Decrease")
-                        }
-                        Text(
-                            text = maxRetries.toString(),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.textAccent,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        IconButton(
-                            onClick = { if (maxRetries < 10) viewModel.setMaxRetries(maxRetries + 1) },
-                            enabled = maxRetries < 10,
-                            modifier = Modifier.dpadFocusRing(CircleShape),
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Increase")
+                            Text(
+                                text = "Max Retries",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = { if (maxRetries > 0) viewModel.setMaxRetries(maxRetries - 1) },
+                                enabled = maxRetries > 0,
+                                modifier = Modifier.dpadFocusRing(CircleShape),
+                            ) {
+                                Icon(Icons.Filled.Remove, contentDescription = "Decrease")
+                            }
+                            Text(
+                                text = maxRetries.toString(),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.textAccent,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            IconButton(
+                                onClick = { if (maxRetries < 10) viewModel.setMaxRetries(maxRetries + 1) },
+                                enabled = maxRetries < 10,
+                                modifier = Modifier.dpadFocusRing(CircleShape),
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = "Increase")
+                            }
                         }
                     }
                 }

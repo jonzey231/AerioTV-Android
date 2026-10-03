@@ -305,7 +305,7 @@ fun LiveTvSettingsScreen(
                     SettingsSection(
                         header = "Badges",
                         footer = if (isTv) {
-                            "Show the LIVE, NEW, and season/episode pills on the guide, channel list, and program info. Remembered separately for TVs and phones/tablets, and synced across your TVs."
+                            "Show the LIVE, NEW, and season/episode pills on the guide, channel list, and program info. Remembered separately for Android TV and phone or tablet, and synced across your TVs."
                         } else "Program badges are the LIVE, NEW, PREMIERE, FINALE, " +
                             "REPEAT, and season/episode pills on the guide and channel " +
                             "list. Remembered separately for " +

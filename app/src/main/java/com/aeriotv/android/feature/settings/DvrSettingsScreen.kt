@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.material.icons.filled.Bolt
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import android.content.Intent
@@ -261,7 +262,8 @@ fun DvrSettingsScreen(
                     .collectAsStateWithLifecycle(initialValue = "server")
                 SettingsSection(
                     header = "Recording Destination",
-                    footer = "Server-side recordings are recommended: they continue even when AerioTV is closed.",
+                    // Apple TV prints no footer under Default Destination.
+                    footer = if (isTv) null else "Server-side recordings are recommended: they continue even when AerioTV is closed.",
                 ) {
                     SettingsPickerRow(
                         title = "Default Destination",
@@ -278,7 +280,11 @@ fun DvrSettingsScreen(
 
             item {
                 // No footer: Apple's iOS Local Storage section has none.
-                Card(header = "Local Storage", footer = null) {
+                // Apple TV adds a storage disclosure under the card.
+                Card(
+                    header = "Local Storage",
+                    footer = if (isTv) "Recordings are stored on this Android TV. If the system runs critically low on space, Android may remove stored app data, including recordings. For must-keep recordings, use a Dispatcharr server destination." else null,
+                ) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -423,6 +429,8 @@ fun DvrSettingsScreen(
                     SettingsToggleRow(
                         title = if (isTv) "Keep Device Awake" else "Keep Device Awake During Recording",
                         subtitle = if (isTv) "Prevents sleep during local recording" else null,
+                        // Apple TV: bolt.fill.
+                        leadingIcon = if (isTv) androidx.compose.material.icons.Icons.Filled.Bolt else null,
                         checked = keepAwake,
                         onCheckedChange = settingsVm::setDvrKeepAwakeDuringRecording,
                     )

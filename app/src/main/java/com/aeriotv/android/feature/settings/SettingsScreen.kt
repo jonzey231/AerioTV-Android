@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
@@ -197,6 +198,10 @@ fun SettingsScreen(
     var showWhatsNew by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Apple TV draws no page title above the first section.
+        if (isTv && com.aeriotv.android.ui.settings.LocalSettingsInPane.current) {
+            Spacer(Modifier.height(12.dp))
+        } else
         CenterAlignedTopAppBar(
             title = {
                 Text(
@@ -405,12 +410,7 @@ private fun PlaylistsSection(
         if (showHeader) {
             SectionHeader("Playlists")
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(com.aeriotv.android.ui.settings.SettingsCardMetrics.cardCorner))
-                .background(com.aeriotv.android.ui.settings.settingsCardFill()),
-        ) {
+        com.aeriotv.android.ui.settings.SettingsCard {
             if (playlists.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -715,12 +715,7 @@ private fun SettingsSectionGroup(
         if (header.isNotBlank()) {
             SectionHeader(header)
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(com.aeriotv.android.ui.settings.SettingsCardMetrics.cardCorner))
-                .background(com.aeriotv.android.ui.settings.settingsCardFill()),
-        ) {
+        com.aeriotv.android.ui.settings.SettingsCard {
             rows.forEach { section ->
                 // No RowDivider here: SettingsNavRow draws the hairline itself,
                 // inset to the TITLE start (past the icon tile). Drawing both
@@ -775,12 +770,7 @@ private fun AboutSection(
         if (showHeader) {
             SectionHeader("About")
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(com.aeriotv.android.ui.settings.SettingsCardMetrics.cardCorner))
-                .background(com.aeriotv.android.ui.settings.settingsCardFill()),
-        ) {
+        com.aeriotv.android.ui.settings.SettingsCard {
             AboutInfoRow("Device", deviceDisplayName())
             RowDivider()
             AboutInfoRow("System", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
@@ -936,18 +926,24 @@ private fun AboutActionRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Apple draws these link rows in textSecondary, not the accent.
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.size(10.dp))
+        val isTv = rememberIsTvDevice()
+        // Apple TV: no leading glyph on these rows.
+        if (!isTv) {
+            // Apple draws these link rows in textSecondary, not the accent.
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.size(10.dp))
+        }
         Text(
             text = label,
             style = settingsRowValueStyle().subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // Apple TV: Open Source Licenses reads in the primary text color.
+            color = if (isTv && chevron) MaterialTheme.colorScheme.onBackground
+            else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
         if (chevron) {
@@ -958,7 +954,16 @@ private fun AboutActionRow(
                 modifier = Modifier.size(16.dp),
             )
         }
-        if (external) {
+        if (external && isTv) {
+            // Apple TV: a QR glyph on the trailing edge (the row opens a QR
+            // code to scan with a phone).
+            Icon(
+                imageVector = Icons.Filled.QrCode,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        } else if (external) {
             Icon(
                 imageVector = Icons.Outlined.OpenInNew,
                 contentDescription = null,

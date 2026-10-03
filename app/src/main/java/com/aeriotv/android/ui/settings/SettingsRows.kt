@@ -5,6 +5,7 @@ import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,6 +49,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -153,6 +156,8 @@ fun settingsDividerColor(): Color =
  */
 @Composable
 fun SettingsRowDivider(startInset: androidx.compose.ui.unit.Dp = SettingsCardMetrics.dividerInset) {
+    // TV: every row is its own card, so there is no hairline between rows.
+    if (rememberIsTvDevice()) return
     androidx.compose.material3.HorizontalDivider(
         thickness = 1.dp,
         color = settingsDividerColor(),
@@ -191,7 +196,11 @@ fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier) {
         text = text,
         style = settingsFootnoteStyle().subtext(),
         color = settingsDimTint(),
-        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
+        // Tagged so a TV row-card stack leaves it bare (no card behind it)
+        // when a footer sits between rows.
+        modifier = modifier
+            .layoutId(SettingsFooterLayoutId)
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp),
     )
 }
 
@@ -202,6 +211,10 @@ fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier) {
  */
 @Composable
 fun SettingsCard(modifier: Modifier = Modifier, content: ColumnScopeContent) {
+    if (rememberIsTvDevice()) {
+        TvSettingsRowCards(modifier = modifier) { TvRowCardsScope.content() }
+        return
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -232,7 +245,8 @@ fun Modifier.settingsRowCard(
     // The focus fill and ring of the FIRST and LAST rows have to follow the
     // card's own radius, or the card's clip shaves their square corners off
     // (Logan on the Streamer). Interior rows keep the tighter row radius.
-    val shape = RoundedCornerShape(
+    val isTv = rememberIsTvDevice()
+    val shape = if (isTv) RoundedCornerShape(TvSettingsRowCardCorner) else RoundedCornerShape(
         topStart = if (isFirst) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
         topEnd = if (isFirst) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
         bottomStart = if (isLast) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
@@ -249,7 +263,7 @@ fun Modifier.settingsRowCard(
             if (last != isLast) isLast = last
         }
         .drawBehind {
-            if (!isFirst && !focused) {
+            if (!isTv && !isFirst && !focused) {
                 drawLine(
                     color = divider,
                     start = Offset(insetPx, 0f),
@@ -630,6 +644,12 @@ fun rememberIsTvDevice(): Boolean {
 @Composable
 fun SettingsDetailTopBar(title: String, onBack: () -> Unit) {
     val showBack = settingsShowsBackArrow()
+    // Apple TV draws no page title above the first section; the rail already
+    // names the page. Keep a small top inset so the first header breathes.
+    if (rememberIsTvDevice() && LocalSettingsInPane.current) {
+        Spacer(Modifier.height(12.dp))
+        return
+    }
     CenterAlignedTopAppBar(
         title = {
             Text(
@@ -835,3 +855,92 @@ val LocalSettingsInPane = staticCompositionLocalOf { false }
 /** Whether a Settings top bar should draw a back arrow at this position. */
 @Composable
 fun settingsShowsBackArrow(): Boolean = !rememberIsTvDevice() && !LocalSettingsInPane.current
+
+
+/** layoutId marking a footer inside a card: TV draws no row card behind it. */
+const val SettingsFooterLayoutId = "settings-footer"
+
+/** TV row card corner (each row is its own card on Apple TV). */
+val TvSettingsRowCardCorner = 12.dp
+/** Gap between two row cards on TV. */
+val TvSettingsRowCardGap = 6.dp
+
+/**
+ * TV form of [SettingsCard]: Apple TV gives every row its OWN rounded card,
+ * not one grouped card with hairlines. The content is a single Column whose
+ * direct children are the rows; this lays each non-empty child out with a
+ * gap and paints a rounded card fill behind it, so every existing call site
+ * (pages and sheets alike) gets per-row cards without changes.
+ */
+@Composable
+private fun TvSettingsRowCards(modifier: Modifier, content: @Composable () -> Unit) {
+    val fill = settingsCardFill()
+    val gapPx = with(LocalDensity.current) { TvSettingsRowCardGap.roundToPx() }
+    val cornerPx = with(LocalDensity.current) { TvSettingsRowCardCorner.toPx() }
+    var rects by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
+    androidx.compose.ui.layout.Layout(
+        content = content,
+        modifier = modifier
+            .fillMaxWidth()
+            .drawBehind {
+                rects.forEach { (top, h) ->
+                    drawRoundRect(
+                        color = fill,
+                        topLeft = Offset(0f, top.toFloat()),
+                        size = androidx.compose.ui.geometry.Size(size.width, h.toFloat()),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerPx, cornerPx),
+                    )
+                }
+            },
+    ) { measurables, constraints ->
+        val inner = constraints.copy(minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity)
+        val placeables = measurables.map { it.measure(inner) }
+        val width = constraints.maxWidth
+        val tops = ArrayList<Pair<Int, Int>>()
+        var y = 0
+        val cards = ArrayList<Pair<Int, Int>>()
+        var any = false
+        placeables.forEachIndexed { i, p ->
+            if (p.height > 0) {
+                if (any) y += gapPx
+                any = true
+                tops += y to p.height
+                if (measurables[i].layoutId != SettingsFooterLayoutId) cards += y to p.height
+                y += p.height
+            } else {
+                tops += y to 0
+            }
+        }
+        if (cards != rects) rects = cards
+        layout(width, y) {
+            placeables.forEachIndexed { i, p -> p.placeRelative(0, tops[i].first) }
+        }
+    }
+}
+
+/**
+ * A ColumnScope for [TvSettingsRowCards] children. The custom layout reads no
+ * parent data, so the scope modifiers are inert (no Settings row uses them
+ * inside a card).
+ */
+private object TvRowCardsScope : androidx.compose.foundation.layout.ColumnScope {
+    override fun Modifier.weight(weight: Float, fill: Boolean): Modifier = this
+    override fun Modifier.align(alignment: Alignment.Horizontal): Modifier = this
+    override fun Modifier.alignBy(alignmentLine: androidx.compose.ui.layout.VerticalAlignmentLine): Modifier = this
+    override fun Modifier.alignBy(alignmentLineBlock: (androidx.compose.ui.layout.Measured) -> Int): Modifier = this
+}
+
+/**
+ * Makes a read-only row reachable with the D-pad on TV (focus ring, no
+ * action), so a page made of info rows still scrolls with focus. Touch: a
+ * no-op.
+ */
+@Composable
+fun Modifier.settingsTvFocusableRow(): Modifier {
+    if (!rememberIsTvDevice()) return this
+    var focused by remember { mutableStateOf(false) }
+    return this
+        .onFocusChanged { focused = it.isFocused }
+        .settingsRowCard(focused)
+        .focusable()
+}

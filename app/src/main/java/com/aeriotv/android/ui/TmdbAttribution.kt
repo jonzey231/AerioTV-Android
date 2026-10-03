@@ -18,7 +18,13 @@ import com.aeriotv.android.R
  * images are shown (https://www.themoviedb.org/about/logos-attribution).
  */
 @Composable
-fun TmdbAttribution(modifier: Modifier = Modifier, long: Boolean = true, isTv: Boolean = false) {
+fun TmdbAttribution(
+    modifier: Modifier = Modifier,
+    long: Boolean = true,
+    isTv: Boolean = false,
+    /** Settings: caption-size lines (the Settings footnote style). */
+    caption: Boolean = false,
+) {
     val logoHeight = when {
         long && isTv -> 20.dp
         long -> 12.dp
@@ -31,7 +37,11 @@ fun TmdbAttribution(modifier: Modifier = Modifier, long: Boolean = true, isTv: B
             contentDescription = "The Movie Database",
             modifier = Modifier.height(logoHeight),
         )
-        val style = if (isTv) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall
+        val style = when {
+            caption -> com.aeriotv.android.ui.settings.settingsFootnoteStyle()
+            isTv -> MaterialTheme.typography.bodyMedium
+            else -> MaterialTheme.typography.bodySmall
+        }
         // Their required line first, ours second.
         Text(
             text = "This product uses the TMDB API but is not endorsed or certified by TMDB.",

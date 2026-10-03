@@ -70,6 +70,7 @@ import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.SettingsSubPageHost
 import com.aeriotv.android.ui.settings.SettingsSection
 import com.aeriotv.android.ui.settings.settingsRowCard
+import com.aeriotv.android.ui.settings.settingsTvFocusableRow
 import com.aeriotv.android.ui.settings.SettingsRowContainer
 import com.aeriotv.android.ui.settings.SettingsToggleAffordance
 import com.aeriotv.android.ui.settings.settingsFootnoteStyle
@@ -482,6 +483,7 @@ private fun DevSectionGroup(
 
 @Composable
 private fun DevRowDivider() {
+    if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) return
     HorizontalDivider(
         thickness = 0.5.dp,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.20f),
@@ -494,6 +496,7 @@ private fun InfoRow(icon: ImageVector?, label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsTvFocusableRow()
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -526,6 +529,7 @@ private fun CategoryRow(icon: ImageVector, title: String, detail: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsTvFocusableRow()
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -657,6 +661,7 @@ private fun DevLogSizeRow(sizeText: String) {
             .fillMaxWidth()
             .heightIn(min = 52.dp)
             .settingsRowCard(focused = false)
+            .settingsTvFocusableRow()
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

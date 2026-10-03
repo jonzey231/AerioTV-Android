@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.material.icons.filled.Refresh
 import com.aeriotv.android.ui.settings.SettingsRowDivider
 import kotlin.math.roundToInt
@@ -123,6 +125,8 @@ fun MoviesAndTvShowsSettingsScreen(
                             ) {
                                 SettingsToggleRow(
                                     title = "Fetch Posters from TMDB",
+                                    // Apple TV: photo.on.rectangle.angled.
+                                    leadingIcon = if (isTv) Icons.Filled.PhotoLibrary else null,
                                     subtitle = "Fill in program artwork your provider doesn't supply, using The Movie Database.",
                                     checked = programPostersTmdb,
                                     onCheckedChange = viewModel::setProgramPostersTmdbEnabled,
@@ -133,7 +137,12 @@ fun MoviesAndTvShowsSettingsScreen(
                                     // row inset here; without it they ran to the
                                     // card edge (Apple insets them like any row).
                                     SettingsRowDivider()
-                                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                    // TV: the field and buttons sit under the toggle
+                                    // card with no card of their own, as Apple TV.
+                                    Column(
+                                        modifier = (if (isTv) Modifier.layoutId(com.aeriotv.android.ui.settings.SettingsFooterLayoutId) else Modifier)
+                                            .padding(horizontal = if (isTv) 0.dp else 16.dp, vertical = if (isTv) 4.dp else 12.dp),
+                                    ) {
                                     var keyDraft by remember(savedTmdbKey) { mutableStateOf(savedTmdbKey) }
                                     val testing = tmdbKeyState == SettingsViewModel.TmdbKeyTestState.Testing
                                     SettingsTextField(
@@ -178,7 +187,8 @@ fun MoviesAndTvShowsSettingsScreen(
                                         if (!isTv && statusText.isNotEmpty()) {
                                             Text(statusText, style = MaterialTheme.typography.labelMedium, color = statusColor)
                                         }
-                                        Spacer(Modifier.weight(1f))
+                                        // TV: Save sits beside Test, not pinned right.
+                                        if (!isTv) Spacer(Modifier.weight(1f))
                                         Button(
                                             onClick = { viewModel.saveTmdbKey(keyDraft) },
                                             enabled = !testing,
@@ -200,6 +210,7 @@ fun MoviesAndTvShowsSettingsScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                                 long = isTv,
                                 isTv = isTv,
+                                caption = isTv,
                             )
                         }
                     }
