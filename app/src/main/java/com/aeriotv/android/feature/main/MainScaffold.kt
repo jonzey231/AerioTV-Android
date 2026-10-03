@@ -2028,7 +2028,16 @@ private fun TvTopTabBar(
     // focus, which lands after composition - a plain one-frame LaunchedEffect
     // lost that race (Streamer 2026-08-06) - so key the one-shot pull on the
     // window-focus edge and run it a frame later.
-    var initialPillFocusPulled by remember { mutableStateOf(false) }
+    //
+    // rememberSaveable, not remember: the full-screen player is its own nav
+    // route, so the MAIN destination (and this bar) leaves composition while
+    // it plays. With plain remember the flag came back false on return, the
+    // pull fired a second time ~300 ms after the guide had refocused the
+    // playing channel's cell, and Back from playback landed on the Live TV
+    // pill (Streamer 2026-10-03, stack traced to this requestFocus). The
+    // saveable state lives with the nav entry, so the pull stays one-shot
+    // per Activity, which is what the cold-start case needs.
+    var initialPillFocusPulled by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
     LaunchedEffect(windowFocused) {
         if (windowFocused && !initialPillFocusPulled) {
