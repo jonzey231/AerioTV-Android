@@ -11,7 +11,9 @@ import com.aeriotv.android.core.sync.SyncCategory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -104,6 +106,71 @@ class SyncSettingsViewModel @Inject constructor(
 
     suspend fun signInWithGoogle(activity: Activity): String? =
         sync.signInWithGoogle(activity)
+
+    /** One-shot events for the Settings > Sync sign-in flow. */
+    sealed interface SignInEvent {
+        /** Show a short toast with [text]. */
+        data class Message(val text: String) : SignInEvent
+        /** The screen must launch this consent IntentSender and hand the
+         *  result back through [onConsentResult]. */
+        data class LaunchConsent(val intentSender: android.content.IntentSender) : SignInEvent
+    }
+
+    private val _signInInFlight = MutableStateFlow(false)
+    /** True from the Sign In tap until the flow finishes (success, failure,
+     *  or the consent result returns). */
+    val signInInFlight: StateFlow<Boolean> = _signInInFlight
+
+    private val _signInEvents = Channel<SignInEvent>(Channel.BUFFERED)
+    /** Buffered so an event emitted while the screen is out of composition
+     *  (the GMS activity covering it) is delivered when it comes back. */
+    val signInEvents: Flow<SignInEvent> = _signInEvents.receiveAsFlow()
+
+
+    /**
+     * Whole Settings > Sync sign-in chain on viewModelScope, so it survives the
+     * screen leaving composition while the GMS account picker (a translucent
+     * activity) covers it. Previously it ran on the composable's
+     * rememberCoroutineScope and was cancelled whenever the pane swapped.
+     */
+    fun startSignIn(activity: Activity) {
+        if (_signInInFlight.value) return
+        _signInInFlight.value = true
+        viewModelScope.launch {
+            val email = sync.signInWithGoogle(activity)
+            if (email == null) {
+                _signInInFlight.value = false
+                _signInEvents.send(SignInEvent.Message("Sign-in cancelled or failed."))
+                return@launch
+            }
+            when (val driveResult = sync.requestDriveScope()) {
+                is DriveSyncManager.RequestResult.Authorized -> {
+                    _signInInFlight.value = false
+                    _signInEvents.send(SignInEvent.Message("Signed in as $email"))
+                }
+                is DriveSyncManager.RequestResult.NeedsConsent -> {
+                    // inFlight cleared by onConsentResult.
+                    _signInEvents.send(SignInEvent.LaunchConsent(driveResult.intentSender))
+                }
+                DriveSyncManager.RequestResult.Failed,
+                null -> {
+                    _signInInFlight.value = false
+                    _signInEvents.send(SignInEvent.Message("Drive authorization failed."))
+                }
+            }
+        }
+    }
+
+    /** Result of the consent IntentSender the screen launched. */
+    fun onConsentResult(data: android.content.Intent?) {
+        viewModelScope.launch {
+            try {
+                sync.acceptConsentResult(data)
+            } finally {
+                _signInInFlight.value = false
+            }
+        }
+    }
 
     suspend fun requestDriveScope(): DriveSyncManager.RequestResult? =
         sync.requestDriveScope()

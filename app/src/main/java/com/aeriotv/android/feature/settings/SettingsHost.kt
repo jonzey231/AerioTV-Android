@@ -577,6 +577,12 @@ private fun SettingsTvRail(
         tabEntry.value = railFocus
         onDispose { if (tabEntry.value === railFocus) tabEntry.value = null }
     }
+    // Read through rememberUpdatedState so the focus callback sees the live
+    // value: a GMS or other overlay activity takes the window, Compose parks
+    // focus on the first rail row, and that gain must not become a selection.
+    val windowFocused = androidx.compose.runtime.rememberUpdatedState(
+        androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused,
+    )
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxHeight(),
@@ -620,7 +626,21 @@ private fun SettingsTvRail(
                 flat = true,
                 modifier = Modifier
                     .onFocusChanged {
-                        if (it.isFocused && !wasFocused) onFocusRoute(route)
+                        if (it.isFocused && !wasFocused) {
+                            val key = encodeSettingsRoute(route)
+                            if (!windowFocused.value) {
+                                // An overlay activity (GMS account picker,
+                                // consent) took the window and Compose's
+                                // fallback parked focus here. Never commit
+                                // that as a rail selection.
+                                com.aeriotv.android.ui.tv.TvFocusTrace.settings(
+                                    "rail focus ignored (window unfocused) row=$key",
+                                )
+                            } else {
+                                com.aeriotv.android.ui.tv.TvFocusTrace.settings("rail focus row=$key")
+                                onFocusRoute(route)
+                            }
+                        }
                         wasFocused = it.isFocused
                     }
                     .then(

@@ -95,6 +95,12 @@ object TvFocusTrace {
         Log.i(TAG, "[GUIDE] $detail")
     }
 
+    /** Settings rail decisions, e.g. a rail focus gain ignored because the
+     *  window had lost focus to an overlay activity (GMS sign-in). */
+    fun settings(detail: String) {
+        Log.i(TAG, "[SETTINGS] $detail")
+    }
+
     /** Up/Down/Left/Right/Back only; null for every other key so the trace
      *  stays readable and no string is built for the rest of the remote. */
     fun nameOf(event: KeyEvent): String? = when (event.key) {

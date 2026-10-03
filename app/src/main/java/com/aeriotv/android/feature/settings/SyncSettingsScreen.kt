@@ -121,7 +121,6 @@ fun SyncSettingsScreen(
     viewModel: SyncSettingsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val masterEnabled by viewModel.masterEnabled.collectAsStateWithLifecycle(initialValue = false)
     val accountEmail by viewModel.accountEmail.collectAsStateWithLifecycle(initialValue = "")
     val lastPush by viewModel.lastPushAt.collectAsStateWithLifecycle(initialValue = 0L)
@@ -152,7 +151,7 @@ fun SyncSettingsScreen(
         onDispose { viewModel.clearActionStatuses() }
     }
 
-    var inFlight by remember { mutableStateOf(false) }
+    val inFlight by viewModel.signInInFlight.collectAsState()
     // When Sign-in with Google is tapped on a build without an OAuth client
     // ID baked in, surface an explanatory dialog instead of silently doing
     // nothing - the prior "disabled button + no feedback" UX had testers
@@ -165,8 +164,21 @@ fun SyncSettingsScreen(
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
-        viewModel.acceptConsentResult(result.data)
-        inFlight = false
+        viewModel.onConsentResult(result.data)
+    }
+
+    // The sign-in chain runs on the ViewModel so it survives this screen
+    // leaving composition; this collector turns its one-shot events into
+    // toasts and the consent launch.
+    LaunchedEffect(viewModel) {
+        viewModel.signInEvents.collect { event ->
+            when (event) {
+                is SyncSettingsViewModel.SignInEvent.Message ->
+                    Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+                is SyncSettingsViewModel.SignInEvent.LaunchConsent ->
+                    consentLauncher.launch(IntentSenderRequest.Builder(event.intentSender).build())
+            }
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -182,34 +194,7 @@ fun SyncSettingsScreen(
         // to kick off the flow.
         val triggerSignIn = {
             val activity = context.findActivity()
-            if (activity != null) {
-                inFlight = true
-                scope.launch {
-                    val email = viewModel.signInWithGoogle(activity)
-                    if (email == null) {
-                        inFlight = false
-                        Toast.makeText(context, "Sign-in cancelled or failed.", Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    when (val driveResult = viewModel.requestDriveScope()) {
-                        is DriveSyncManager.RequestResult.Authorized -> {
-                            inFlight = false
-                            Toast.makeText(context, "Signed in as $email", Toast.LENGTH_SHORT).show()
-                        }
-                        is DriveSyncManager.RequestResult.NeedsConsent -> {
-                            consentLauncher.launch(
-                                IntentSenderRequest.Builder(driveResult.intentSender).build(),
-                            )
-                            // inFlight cleared by the launcher callback.
-                        }
-                        DriveSyncManager.RequestResult.Failed,
-                        null -> {
-                            inFlight = false
-                            Toast.makeText(context, "Drive authorization failed.", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            }
+            if (activity != null) viewModel.startSignIn(activity)
         }
 
         // Apple locks both directions (and Clear) while any one runs so a
@@ -337,8 +322,12 @@ fun SyncSettingsScreen(
             item {
                 if (signedIn) {
                     SignOutButton(
-                        enabled = !inFlight,
+                        // Stays focusable while in flight (a disabled button
+                        // drops focus, and Compose's fallback then lands on
+                        // the Settings rail); the tap is guarded instead.
+                        busy = inFlight,
                         onClick = {
+                            if (inFlight) return@SignOutButton
                             viewModel.signOut()
                             Toast.makeText(context, "Signed out of Drive.", Toast.LENGTH_SHORT).show()
                         },
@@ -347,10 +336,11 @@ fun SyncSettingsScreen(
                     SignInWithGoogleButton(
                         // Stay enabled even without OAuth config so the
                         // tap surfaces the explanation dialog. inFlight
-                        // is the only true disabled state - prevents
-                        // double-launching the credential picker.
-                        enabled = !inFlight,
+                        // only dims the pill; the tap is guarded so the
+                        // button keeps focus while the picker is up.
+                        busy = inFlight,
                         onClick = {
+                            if (inFlight) return@SignInWithGoogleButton
                             if (!configured) {
                                 notConfiguredDialogOpen = true
                             } else {
@@ -631,7 +621,8 @@ private fun AccountRow(signedIn: Boolean, email: String) {
  * when signed in so the destructive action has space to breathe.
  */
 @Composable
-private fun SignOutButton(enabled: Boolean, onClick: () -> Unit) {
+private fun SignOutButton(busy: Boolean, onClick: () -> Unit) {
+    val enabled = !busy
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -640,7 +631,7 @@ private fun SignOutButton(enabled: Boolean, onClick: () -> Unit) {
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
             .border(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f), RoundedCornerShape(50))
             .dpadFocusRing(RoundedCornerShape(50), washTint = MaterialTheme.colorScheme.error)
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+            .clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
@@ -662,7 +653,8 @@ private fun SignOutButton(enabled: Boolean, onClick: () -> Unit) {
  * stays consistent across light/dark themes.
  */
 @Composable
-private fun SignInWithGoogleButton(enabled: Boolean, onClick: () -> Unit) {
+private fun SignInWithGoogleButton(busy: Boolean, onClick: () -> Unit) {
+    val enabled = !busy
     // Google ships two officially-permitted button styles: light (white BG /
     // dark text) and dark (#131314 BG / white text). Both must use the
     // full four-color G mark - the only freedom callers have is which
@@ -685,7 +677,7 @@ private fun SignInWithGoogleButton(enabled: Boolean, onClick: () -> Unit) {
             .border(1.dp, stroke, RoundedCornerShape(50))
             // Brand pill stays untouched at rest; the white ring only draws under D-pad focus.
             .dpadFocusRing(RoundedCornerShape(50))
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
