@@ -157,7 +157,7 @@ fun settingsDividerColor(): Color =
 @Composable
 fun SettingsRowDivider(startInset: androidx.compose.ui.unit.Dp = SettingsCardMetrics.dividerInset) {
     // TV: every row is its own card, so there is no hairline between rows.
-    if (rememberIsTvDevice()) return
+    if (rememberIsTvDevice() && !LocalTvGroupedCard.current) return
     androidx.compose.material3.HorizontalDivider(
         thickness = 1.dp,
         color = settingsDividerColor(),
@@ -210,8 +210,28 @@ fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier) {
  * top divider (all but the first) and its own focus ring.
  */
 @Composable
-fun SettingsCard(modifier: Modifier = Modifier, content: ColumnScopeContent) {
-    if (rememberIsTvDevice()) {
+fun SettingsCard(
+    modifier: Modifier = Modifier,
+    grouped: Boolean = false,
+    content: ColumnScopeContent,
+) {
+    val isTv = rememberIsTvDevice()
+    if (isTv && grouped) {
+        // TV grouped form: ONE card with hairlines, as Apple TV draws About
+        // and Developer's What's Captured. Rows read LocalTvGroupedCard and
+        // switch back to the divider + card-aware corner chrome.
+        androidx.compose.runtime.CompositionLocalProvider(LocalTvGroupedCard provides true) {
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(TvSettingsRowCardCorner))
+                    .background(settingsCardFill()),
+                content = { content() },
+            )
+        }
+        return
+    }
+    if (isTv) {
         TvSettingsRowCards(modifier = modifier) { TvRowCardsScope.content() }
         return
     }
@@ -245,12 +265,15 @@ fun Modifier.settingsRowCard(
     // The focus fill and ring of the FIRST and LAST rows have to follow the
     // card's own radius, or the card's clip shaves their square corners off
     // (Logan on the Streamer). Interior rows keep the tighter row radius.
-    val isTv = rememberIsTvDevice()
+    val isTv = rememberIsTvDevice() && !LocalTvGroupedCard.current
+    if (LocalSuppressRowChrome.current) return this
+    val realTv = rememberIsTvDevice()
+    val outer = if (realTv) TvSettingsRowCardCorner else SettingsCardMetrics.cardCorner
     val shape = if (isTv) RoundedCornerShape(TvSettingsRowCardCorner) else RoundedCornerShape(
-        topStart = if (isFirst) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
-        topEnd = if (isFirst) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
-        bottomStart = if (isLast) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
-        bottomEnd = if (isLast) SettingsCardMetrics.cardCorner else SettingsCardMetrics.rowCorner,
+        topStart = if (isFirst) outer else SettingsCardMetrics.rowCorner,
+        topEnd = if (isFirst) outer else SettingsCardMetrics.rowCorner,
+        bottomStart = if (isLast) outer else SettingsCardMetrics.rowCorner,
+        bottomEnd = if (isLast) outer else SettingsCardMetrics.rowCorner,
     )
     return this
         .onPlaced { coords ->
@@ -263,7 +286,7 @@ fun Modifier.settingsRowCard(
             if (last != isLast) isLast = last
         }
         .drawBehind {
-            if (!isTv && !isFirst && !focused) {
+            if (!realTv && !isFirst && !focused) {
                 drawLine(
                     color = divider,
                     start = Offset(insetPx, 0f),
@@ -856,6 +879,15 @@ val LocalSettingsInPane = staticCompositionLocalOf { false }
 @Composable
 fun settingsShowsBackArrow(): Boolean = !rememberIsTvDevice() && !LocalSettingsInPane.current
 
+
+/** True inside a TV `SettingsCard(grouped = true)`: rows draw hairlines, not per-row cards. */
+val LocalTvGroupedCard = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+/**
+ * True when an outer container already paints the row card and focus ring
+ * (Appearance's stepper + Reset row on TV), so the inner row draws none.
+ */
+val LocalSuppressRowChrome = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 /** layoutId marking a footer inside a card: TV draws no row card behind it. */
 const val SettingsFooterLayoutId = "settings-footer"

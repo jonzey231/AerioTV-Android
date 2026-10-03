@@ -295,7 +295,7 @@ fun SyncSettingsScreen(
                         icon = Icons.Filled.Tune,
                         title = "Sync Categories",
                         subtitle = "Choose what syncs across your devices",
-                        chevron = true,
+                        chevron = !tvRows,
                         onClick = onOpenSyncCategories,
                     )
                     // Always offered on Apple, even with sync off. Drive needs

@@ -310,7 +310,7 @@ private fun LoggingSection(
             "and app lifecycle events. No personally identifiable information is collected.",
     ) {
         DevToggleRow(
-            icon = if (enabled) Icons.Filled.BugReport else Icons.Outlined.BugReport,
+            icon = if (enabled || rememberIsTvDevice()) Icons.Filled.BugReport else Icons.Outlined.BugReport,
             title = "Debug Logging",
             subtitle = if (enabled) "Active: writing to aerio_debug_logs.txt"
             else "Off: no data is collected",
@@ -366,7 +366,7 @@ private fun LogFileSection(
 ) {
     SettingsSection(
         header = "Log File",
-        footer = "Logs rotate automatically when the file exceeds 10 MB. The previous log is " +
+        footer = if (isTv) null else "Logs rotate automatically when the file exceeds 10 MB. The previous log is " +
             "preserved as aerio_debug_logs_archive.txt.",
     ) {
         DevLogSizeRow(sizeText = formatBytes(sizeBytes))
@@ -394,10 +394,18 @@ private fun LogFileSection(
 
 @Composable
 private fun WhatsCapturedSection() {
+    // Apple TV groups these rows in ONE card and closes the page with the
+    // rotation note; the phone keeps its own footer.
+    val isTv = rememberIsTvDevice()
     DevSectionGroup(
         header = "What's Captured",
-        footer = "Logs include only diagnostic context. AerioTV never logs your Dispatcharr " +
-            "credentials, watch progress identifiers, or any payload that would identify you.",
+        footer = if (isTv) {
+            "Logs rotate automatically when the file exceeds 10 MB. The previous log is preserved as aerio_debug_logs_archive.txt."
+        } else {
+            "Logs include only diagnostic context. AerioTV never logs your Dispatcharr " +
+                "credentials, watch progress identifiers, or any payload that would identify you."
+        },
+        grouped = true,
     ) {
         CategoryRow(
             icon = Icons.Outlined.NetworkCheck,
@@ -472,18 +480,23 @@ private fun BuildInfoSection() {
 private fun DevSectionGroup(
     header: String,
     footer: String? = null,
+    grouped: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     Column {
         com.aeriotv.android.ui.settings.SettingsSectionHeader(header)
-        com.aeriotv.android.ui.settings.SettingsCard { content() }
+        com.aeriotv.android.ui.settings.SettingsCard(grouped = grouped) { content() }
         if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer)
     }
 }
 
 @Composable
 private fun DevRowDivider() {
-    if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) return
+    if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+        // Draws only inside a grouped TV card (What's Captured).
+        com.aeriotv.android.ui.settings.SettingsRowDivider(startInset = 52.dp)
+        return
+    }
     HorizontalDivider(
         thickness = 0.5.dp,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.20f),
@@ -569,7 +582,7 @@ private fun DevIconTile(
 ) {
     val isTv = rememberIsTvDevice()
     val box = if (isTv) 24.dp else 36.dp
-    val glyph = if (isTv) 11.dp else 16.dp
+    val glyph = if (isTv) 14.dp else 16.dp
     val corner = if (isTv) 5.dp else 8.dp
     Box(
         modifier = Modifier
@@ -600,7 +613,9 @@ private fun DevToggleRow(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     SettingsRowContainer(onClick = { onCheckedChange(!checked) }) {
-        DevIconTile(icon = icon, isActive = checked)
+        // Apple TV keeps the Debug Logging tile in the accent at full size
+        // in both states; the phone dims it while off.
+        DevIconTile(icon = icon, isActive = checked || rememberIsTvDevice())
         Spacer(Modifier.size(14.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(

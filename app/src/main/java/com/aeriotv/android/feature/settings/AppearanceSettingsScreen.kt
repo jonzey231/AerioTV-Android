@@ -49,6 +49,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.onFocusChanged
+import com.aeriotv.android.ui.settings.settingsRowCard
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -845,16 +847,29 @@ private fun TvPercentStepperRow(
     val percents = remember(stops) { stops.map { (it * 100).roundToInt() } }
     val current = (value * 100).roundToInt()
     val atDefault = current == (default * 100).roundToInt()
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        com.aeriotv.android.ui.settings.SettingsIntStepperRow(
-            title = title,
-            options = percents,
-            value = current,
-            onValueChange = { onValueChange(it / 100f) },
-            format = { "$it%" },
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
+    // One row card holds the stepper AND the Reset pill (Apple draws Reset
+    // inside the row, trailing the plus). The card's ring lights while
+    // either part has focus; the stepper draws no chrome of its own.
+    var anyFocused by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .onFocusChanged { anyFocused = it.hasFocus }
+            .settingsRowCard(anyFocused),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            com.aeriotv.android.ui.settings.LocalSuppressRowChrome provides true,
+        ) {
+            com.aeriotv.android.ui.settings.SettingsIntStepperRow(
+                title = title,
+                options = percents,
+                value = current,
+                onValueChange = { onValueChange(it / 100f) },
+                format = { "$it%" },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.width(4.dp))
         Box(
             modifier = Modifier
                 .padding(end = 12.dp)

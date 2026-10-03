@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -454,12 +455,30 @@ private fun PlaylistsSection(
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
-                )
+                if (isTv) {
+                    // Apple TV: a tinted tile holding a filled circle-plus.
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AddCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
                 Spacer(Modifier.size(10.dp))
                 Text(
                     text = "Add Playlist",
@@ -770,7 +789,8 @@ private fun AboutSection(
         if (showHeader) {
             SectionHeader("About")
         }
-        com.aeriotv.android.ui.settings.SettingsCard {
+        // Apple TV draws About as ONE grouped card with hairlines.
+        com.aeriotv.android.ui.settings.SettingsCard(grouped = true) {
             AboutInfoRow("Device", deviceDisplayName())
             RowDivider()
             AboutInfoRow("System", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
