@@ -240,7 +240,7 @@ fun SettingsSubPageRow(
     // (SettingsChoicePicker / SettingsSubgroup) carry an accent glyph.
     leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
 ) {
-    SettingsRowContainer(onClick = onOpen, modifier = modifier) {
+    SettingsRowContainer(onClick = onOpen, modifier = modifier, traceTitle = title) {
         if (leadingIcon != null) {
             // Apple's SettingsSubgroup / SettingsChoicePicker master rows use
             // the tiled SettingsRow icon, not a bare glyph.

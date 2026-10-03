@@ -314,14 +314,24 @@ fun SettingsRowContainer(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** Row title for the TV focus trace ([SETTINGS] row focus). */
+    traceTitle: String? = null,
     content: RowScopeContent,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val tracePage = if (rememberIsTvDevice()) LocalSettingsTracePage.current else null
     Row(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                if (tracePage != null && it.isFocused != focused) {
+                    val t = traceTitle ?: "untitled"
+                    if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.settingsRowFocused(tracePage, t)
+                    else com.aeriotv.android.ui.tv.TvFocusTrace.settingsRowBlurred(tracePage, t)
+                }
+                focused = it.isFocused
+            }
             .settingsRowCard(focused)
             .clickable(
                 enabled = enabled,
@@ -352,7 +362,7 @@ fun SettingsSelectionRow(
     subtitle: String? = null,
     leadingIcon: ImageVector? = null,
 ) {
-    SettingsRowContainer(onClick = onClick, modifier = modifier) {
+    SettingsRowContainer(onClick = onClick, modifier = modifier, traceTitle = label) {
         if (leadingIcon != null) {
             Icon(
                 imageVector = leadingIcon,
@@ -415,6 +425,7 @@ fun SettingsToggleRow(
         onClick = { if (enabled) onCheckedChange(!checked) },
         modifier = modifier,
         enabled = enabled,
+        traceTitle = title,
     ) {
         if (leadingIcon != null && tiled) {
             SettingsIconTile(icon = leadingIcon)
@@ -543,6 +554,7 @@ fun SettingsActionRow(
         onClick = { if (!running && enabled) onClick() },
         modifier = modifier.semantics { if (!enabled) disabled() },
         enabled = true,
+        traceTitle = label,
     ) {
         Icon(
             imageVector = leadingIcon,
@@ -875,6 +887,12 @@ fun SettingsDialogTextButton(
  */
 val LocalSettingsInPane = staticCompositionLocalOf { false }
 
+/**
+ * TV focus trace: the Settings page (or "sheet:<name>") the rows below belong
+ * to. Null outside the TV rail host, which keeps phones untraced.
+ */
+val LocalSettingsTracePage = staticCompositionLocalOf<String?> { null }
+
 /** Whether a Settings top bar should draw a back arrow at this position. */
 @Composable
 fun settingsShowsBackArrow(): Boolean = !rememberIsTvDevice() && !LocalSettingsInPane.current
@@ -968,11 +986,18 @@ private object TvRowCardsScope : androidx.compose.foundation.layout.ColumnScope 
  * no-op.
  */
 @Composable
-fun Modifier.settingsTvFocusableRow(): Modifier {
+fun Modifier.settingsTvFocusableRow(traceTitle: String = "info"): Modifier {
     if (!rememberIsTvDevice()) return this
     var focused by remember { mutableStateOf(false) }
+    val tracePage = LocalSettingsTracePage.current
     return this
-        .onFocusChanged { focused = it.isFocused }
+        .onFocusChanged {
+            if (tracePage != null && it.isFocused != focused) {
+                if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.settingsRowFocused(tracePage, traceTitle)
+                else com.aeriotv.android.ui.tv.TvFocusTrace.settingsRowBlurred(tracePage, traceTitle)
+            }
+            focused = it.isFocused
+        }
         .settingsRowCard(focused)
         .focusable()
 }

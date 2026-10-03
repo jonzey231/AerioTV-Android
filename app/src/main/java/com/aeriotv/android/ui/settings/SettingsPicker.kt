@@ -255,8 +255,12 @@ private fun SettingsTvOptionsSheetRow(
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     val rowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     SettingsRowContainer(
-        onClick = { open = true },
+        onClick = {
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsLifecycle("sheet open", title)
+            open = true
+        },
         modifier = modifier.focusRequester(rowFocus),
+        traceTitle = title,
     ) {
         if (leadingIcon != null) {
             androidx.compose.material3.Icon(
@@ -291,9 +295,10 @@ private fun SettingsTvOptionsSheetRow(
     if (open) {
         val close = {
             open = false
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsLifecycle("sheet close", title)
             // Hand focus back to the row that opened the sheet, or Compose
             // falls back to the first focusable (the tab bar).
-            runCatching { rowFocus.requestFocus() }
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("sheetRow:$title", "sheet close", rowFocus)
             Unit
         }
         com.aeriotv.android.ui.scale.Dialog(
@@ -326,12 +331,16 @@ private fun SettingsTvOptionsSheetRow(
                             .focusRequester(firstFocus)
                             .focusGroup(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) { content(close) }
+                    ) {
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            LocalSettingsTracePage provides "sheet:$title",
+                        ) { content(close) }
+                    }
                     if (footer != null) SettingsSectionFooter(footer)
                 }
             }
             androidx.compose.runtime.LaunchedEffect(Unit) {
-                runCatching { firstFocus.requestFocus() }
+                com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("sheetFirst:$title", "sheet open", firstFocus)
             }
         }
     }
@@ -404,6 +413,7 @@ fun SettingsIntStepperRow(
                 else -> false
             }
         },
+        traceTitle = title,
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(

@@ -101,6 +101,80 @@ object TvFocusTrace {
         Log.i(TAG, "[SETTINGS] $detail")
     }
 
+    // MARK: Settings (TV only; every call site is gated on the TV form factor)
+
+    /** The last Settings node reported focused ("rail:<key>" or
+     *  "row <page>/<title>"), read by [settingsLanding]. "none" after a blur
+     *  that nothing replaced. */
+    @Volatile
+    private var lastSettingsNode: String = "none"
+
+    @Volatile
+    private var underSheet: String = "none"
+
+    private val mainHandler by lazy {
+        android.os.Handler(android.os.Looper.getMainLooper())
+    }
+
+    /** Rail row focus: records the node, the caller still logs its own line. */
+    fun settingsRailFocused(key: String) {
+        lastSettingsNode = "rail:$key"
+    }
+
+    /** A detail-pane (or sheet) row gained focus. */
+    fun settingsRowFocused(page: String, title: String) {
+        val node = "row $page/$title"
+        if (node == lastSettingsNode) return
+        lastSettingsNode = node
+        Log.i(TAG, "[SETTINGS] row focus page=$page row=$title")
+    }
+
+    /** A detail-pane row lost focus; clears the register only if it was this row. */
+    fun settingsRowBlurred(page: String, title: String) {
+        if (lastSettingsNode == "row $page/$title") lastSettingsNode = "none"
+    }
+
+    /** Sheet / sub-page lifecycle: "sheet open X", "sheet close X", "push R", "pop R". */
+    fun settingsLifecycle(event: String, name: String) {
+        Log.i(TAG, "[SETTINGS] $event $name")
+        // A sheet is its own window: the row under it never loses Compose
+        // focus, so no regain event fires on close. Keep the node it held and
+        // put it back unless something in the main window moved since.
+        if (event == "sheet open") {
+            underSheet = lastSettingsNode
+        } else if (event == "sheet close") {
+            val last = lastSettingsNode
+            if (last == "none" || last.startsWith("row sheet:")) lastSettingsNode = underSheet
+        }
+        if (event == "sheet close" || event == "pop") settingsLanding("$event $name")
+    }
+
+    /** 300 ms after [after], log which traced node holds focus. */
+    fun settingsLanding(after: String) {
+        mainHandler.postDelayed({
+            Log.i(TAG, "[SETTINGS] landing after=$after on=$lastSettingsNode")
+        }, 300L)
+    }
+
+    /** A host focus request, its reason and its result (true, false or threw). */
+    fun settingsRequest(
+        target: String,
+        reason: String,
+        requester: androidx.compose.ui.focus.FocusRequester,
+    ) {
+        val result = try {
+            requester.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter).toString()
+        } catch (t: Throwable) {
+            "threw ${t.javaClass.simpleName}"
+        }
+        Log.i(TAG, "[SETTINGS] request $target reason=$reason result=$result")
+    }
+
+    /** A Settings BackHandler fired. */
+    fun settingsBack(handler: String) {
+        Log.i(TAG, "[SETTINGS] back handled by=$handler")
+    }
+
     /** Up/Down/Left/Right/Back only; null for every other key so the trace
      *  stays readable and no string is built for the rest of the remote. */
     fun nameOf(event: KeyEvent): String? = when (event.key) {

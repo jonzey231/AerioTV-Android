@@ -2420,8 +2420,12 @@ private fun SettingsTabContent(
             nav.pop()
         }
     }
+    val traceBackTv = rememberLiveTvFormFactor().isTv
     androidx.activity.compose.BackHandler(enabled = nav.canPop) {
         val cur = nav.current
+        if (traceBackTv) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsBack("settings-nav pop ${cur?.let { com.aeriotv.android.feature.settings.encodeSettingsRoute(it) }}")
+        }
         // The wizard's stages advance IN PLACE rather than nesting, so Back
         // from Configure returns to ChooseType instead of leaving the flow.
         if (cur is SettingsRoute.AddPlaylist && cur.step is AddPlaylistWizardStep.Configure) {

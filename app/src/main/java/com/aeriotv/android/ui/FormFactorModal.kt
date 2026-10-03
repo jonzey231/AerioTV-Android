@@ -83,10 +83,18 @@ fun FormFactorModal(
      * New sheet bounced at the end of its list for exactly that reason).
      */
     sheetExpandable: Boolean = false,
+    /** Name for the TV focus trace ([SETTINGS] sheet open / close). */
+    traceName: String = "modal",
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val isTv = rememberIsTvDevice()
     if (isTv) {
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsLifecycle("sheet open", traceName)
+            onDispose {
+                com.aeriotv.android.ui.tv.TvFocusTrace.settingsLifecycle("sheet close", traceName)
+            }
+        }
         Dialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -98,10 +106,14 @@ fun FormFactorModal(
                 shape = RoundedCornerShape(16.dp),
                 color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
             ) {
-                Column(
-                    modifier = Modifier.padding(vertical = 12.dp),
-                    content = content,
-                )
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.aeriotv.android.ui.settings.LocalSettingsTracePage provides "sheet:$traceName",
+                ) {
+                    Column(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        content = content,
+                    )
+                }
             }
         }
     } else {

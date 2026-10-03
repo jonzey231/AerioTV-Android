@@ -445,10 +445,16 @@ fun SettingsTvRailHost(
     var prevPushed by remember { mutableStateOf<SettingsRoute?>(null) }
     androidx.compose.runtime.LaunchedEffect(pushed) {
         val previous = prevPushed
+        if (pushed != null && pushed != previous) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsLifecycle("push", encodeSettingsRoute(pushed))
+        }
+        if (pushed == null && previous != null) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsLifecycle("pop", encodeSettingsRoute(previous))
+        }
         if (pushed != null && !takeover(pushed)) {
-            runCatching { detailFocus.requestFocus() }
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("detailFocus", "push", detailFocus)
         } else if (pushed == null && previous != null && !takeover(previous)) {
-            runCatching { railFocus.requestFocus() }
+            com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("railFocus", "pop", railFocus)
         }
         prevPushed = pushed
     }
@@ -457,14 +463,15 @@ fun SettingsTvRailHost(
         if (focusPaneSignal == 0) return@LaunchedEffect
         // One frame for the new pane content to compose before aiming at it.
         kotlinx.coroutines.delay(RailSelectDebounceMs)
-        runCatching { detailFocus.requestFocus() }
+        com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("detailFocus", "deeplink", detailFocus)
     }
 
     // Back in the pane returns focus to the rail instead of leaving Settings.
     // Disabled while something is pushed so the nav stack's own handler pops
     // first, and while the rail already holds focus so Back reaches the tabs.
     androidx.activity.compose.BackHandler(enabled = com.aeriotv.android.feature.main.LocalTabIsActive.current && pushed == null && !railHasFocus) {
-        runCatching { railFocus.requestFocus() }
+        com.aeriotv.android.ui.tv.TvFocusTrace.settingsBack("rail-host pane->rail")
+        com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("railFocus", "back", railFocus)
     }
 
     Row(modifier = Modifier.fillMaxSize()) {
@@ -477,7 +484,7 @@ fun SettingsTvRailHost(
             onClickRoute = { route ->
                 pending = route
                 if (route != selection) onSelect(route)
-                runCatching { detailFocus.requestFocus() }
+                com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("detailFocus", "rail click", detailFocus)
             },
             railFocus = railFocus,
             modifier = Modifier
@@ -491,7 +498,7 @@ fun SettingsTvRailHost(
                         // boundary, or the pane the user just entered would
                         // still be showing the previously committed route.
                         flushPending()
-                        runCatching { detailFocus.requestFocus() }
+                        com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("detailFocus", "rail right", detailFocus)
                         true
                     } else {
                         false
@@ -506,7 +513,9 @@ fun SettingsTvRailHost(
                 .focusGroup(),
         ) {
             if (pushed != null) {
-                detail(pushed)
+                CompositionLocalProvider(
+                    com.aeriotv.android.ui.settings.LocalSettingsTracePage provides encodeSettingsRoute(pushed),
+                ) { detail(pushed) }
             } else if (selection is SettingsRoute.Root) {
                 // Nothing picked yet (fresh TV host): a quiet placeholder until
                 // the user moves into the rail. Focusing a row selects it.
@@ -523,7 +532,10 @@ fun SettingsTvRailHost(
                     // Keyed per pane so each section keeps its OWN scroll
                     // offset; switching rail rows still starts at the top.
                     paneStateHolder.SaveableStateProvider(encodeSettingsRoute(paneRoute)) {
-                        CompositionLocalProvider(LocalSettingsInPane provides true) {
+                        CompositionLocalProvider(
+                            LocalSettingsInPane provides true,
+                            com.aeriotv.android.ui.settings.LocalSettingsTracePage provides encodeSettingsRoute(paneRoute),
+                        ) {
                             detail(paneRoute)
                         }
                     }
@@ -638,6 +650,7 @@ private fun SettingsTvRail(
                                 )
                             } else {
                                 com.aeriotv.android.ui.tv.TvFocusTrace.settings("rail focus row=$key")
+                                com.aeriotv.android.ui.tv.TvFocusTrace.settingsRailFocused(key)
                                 onFocusRoute(route)
                             }
                         }
