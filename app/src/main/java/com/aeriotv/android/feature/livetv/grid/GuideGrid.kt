@@ -725,6 +725,13 @@ private fun GridRow(
     val shortFmt = remember(clockMode) { ClockFormat.guideShort(clockMode) }
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
     val starPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Filled.Star)
+    // A VectorPainter caches ONE raster at the size of its latest draw. The
+    // program strip draws its replay badge at about 0.7 of the title height
+    // and the rail band draws the clock at the 8 dp glyph size; sharing one
+    // painter left the rail clock drawing the strip-sized raster clipped to
+    // its 8 dp box, so only the top-right of the clock showed (Logan
+    // 2026-10-02, Streamer). Each size gets its own painter.
+    val stripCatchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
     val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     // tvOS: a 1 pt hairline gap between cells and rows, nothing wider.
     val seam = 1f
@@ -1148,7 +1155,7 @@ private fun GridRow(
                         if (replayable) {
                             val iconPx = (text.title.size.height * 0.7f)
                             translate(left = x, top = y + (text.title.size.height - iconPx) / 2f) {
-                                with(catchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(colors.primary)) }
+                                with(stripCatchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(colors.primary)) }
                             }
                             titleX += iconPx + 4.dp.toPx()
                         }
