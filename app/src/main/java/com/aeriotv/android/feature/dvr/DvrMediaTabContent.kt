@@ -900,7 +900,7 @@ private fun TvDvrPage(
             }
         },
         emptyContent = {
-            if (isLoading) CircularProgressIndicator()
+            if (isLoading) com.aeriotv.android.ui.tv.TvGatedSpinner()
             else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
         },
         isLoading = isLoading,

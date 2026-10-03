@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -148,6 +149,7 @@ fun TvActionCircle(
     /** Accent tint for the resting glyph (e.g. Filter while groups are hidden). */
     accentGlyph: Boolean = false,
     size: Dp = TvChrome.circleSize,
+    spinAnimates: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     badge: (@Composable androidx.compose.foundation.layout.BoxScope.() -> Unit)? = null,
 ) {
@@ -185,7 +187,7 @@ fun TvActionCircle(
         contentAlignment = Alignment.Center,
     ) {
         if (spinning) {
-            CircularProgressIndicator(color = glyph, strokeWidth = 2.dp, modifier = Modifier.size(size * 0.5f))
+            TvGatedSpinner(color = glyph, strokeWidth = 2.dp, modifier = Modifier.size(size * 0.5f), animate = spinAnimates && rememberSpinnerMayAnimate())
         } else {
             Icon(
                 imageVector = icon,
@@ -266,4 +268,39 @@ fun TvSearchCapsule(
             }
         },
     )
+}
+
+/**
+ * True while an indeterminate spinner here may run: its tab is the active one
+ * (MainScaffold keeps hidden tabs composed, so their spinners otherwise tick a
+ * frame clock forever) and the host is at least STARTED. Perf 2026-10-03: the
+ * Refresh circle and the media tabs' "Updating" line animated for a whole
+ * 6.5 minute Streamer run, 1307 ms of VectorizedInfiniteRepeatableSpec per
+ * 94 s of trace.
+ */
+@Composable
+fun rememberSpinnerMayAnimate(): Boolean {
+    val tabActive = com.aeriotv.android.feature.main.LocalTabIsActive.current
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val state by lifecycle.currentStateAsState()
+    return tabActive && state.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+}
+
+/**
+ * [CircularProgressIndicator] that only spins while [animate] holds; otherwise
+ * it draws the same arc frozen (determinate, no infinite transition), so a
+ * hidden or stopped host costs no frames and still shows a busy glyph.
+ */
+@Composable
+fun TvGatedSpinner(
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary,
+    strokeWidth: androidx.compose.ui.unit.Dp = androidx.compose.material3.ProgressIndicatorDefaults.CircularStrokeWidth,
+    animate: Boolean = rememberSpinnerMayAnimate(),
+) {
+    if (animate) {
+        CircularProgressIndicator(modifier = modifier, color = color, strokeWidth = strokeWidth)
+    } else {
+        CircularProgressIndicator(progress = { 0.75f }, modifier = modifier, color = color, strokeWidth = strokeWidth)
+    }
 }

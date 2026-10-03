@@ -17,7 +17,7 @@ import com.aeriotv.android.core.guide.GuideIndex
  */
 class GuideGridRows(
     val channels: List<M3UChannel>,
-    private val catalog: GuideCatalog?,
+    internal val catalog: GuideCatalog?,
     val windowStartMs: Long,
     val windowEndMs: Long,
     private val minGapMs: Long = 5 * 60_000L,

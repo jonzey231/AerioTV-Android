@@ -1417,7 +1417,7 @@ fun <T> TvMediaPage(
                         modifier = Modifier.padding(top = 4.dp).height(with(androidx.compose.ui.platform.LocalDensity.current) { 16.sp.toDp() }),
                     ) {
                         if (isLoading && gridItems.isNotEmpty()) {
-                            CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.tertiary)
+                            com.aeriotv.android.ui.tv.TvGatedSpinner(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.tertiary)
                             Spacer(Modifier.width(6.dp))
                             Text("Updating", fontSize = 9.sp.subtext(), lineHeight = 11.sp.subtext(), maxLines = 1, color = MaterialTheme.colorScheme.tertiary)
                         }
