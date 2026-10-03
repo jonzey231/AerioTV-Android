@@ -345,7 +345,7 @@ class DvrViewModel @Inject constructor(
                         url = runCatching {
                             dispatcharrAuth.withApiKeyRetry(playlist.id) { k ->
                                 val d = dispatcharrClient.getProgramDetail(base, k, pid)
-                                (d.posterUrl ?: d.icon)?.let { resolveRecordingUrl(it, base) ?: it }
+                                (d.posterUrl ?: d.icon)?.let { resolveArtUrl(it, base) }
                             }
                         }.getOrNull()
                     }
@@ -391,6 +391,15 @@ class DvrViewModel @Inject constructor(
      *  list already said "empty". */
     @Volatile
     private var authoritativeLoaded = false
+
+    /** Last raw recordings payload and the rows built from it (refresh early-out). */
+    private class ServerFetch(
+        val playlistId: String,
+        val base: String,
+        val remote: List<DispatcharrRecording>,
+        val rows: List<Recording>,
+    )
+    private var lastServerFetch: ServerFetch? = null
 
     init {
         // Cached list first, network second (Logan 2026-09-12): the tab paints
@@ -616,7 +625,26 @@ class DvrViewModel @Inject constructor(
                 }
             }.fold(
                 onSuccess = { remote ->
-                    val server = remote.map { it.toRecording(base, dispatcharrClient) }
+                    // Early-out: the 30 s tick usually gets back the exact same
+                    // payload. Re-running EPG hydration, the disk cache write,
+                    // the art pass and category resolution for it is wasted
+                    // work, so reapply the last result and stop.
+                    val last = lastServerFetch
+                    if (last != null && last.base == base && last.playlistId == playlist.id && last.remote == remote) {
+                        _state.update { st ->
+                            val local = st.recordings.filter { it.source == Source.Local }
+                            val serverById = last.rows.map(::applyResolved).associateBy { it.id }
+                            st.copy(
+                                isLoading = false,
+                                recordings = (serverById.values + local).sortedBy { it.startMillis },
+                                error = null,
+                                hasRecordingsHint = false,
+                            )
+                        }
+                        return@fold
+                    }
+                    val hosts = trustedServerHosts(playlist)
+                    val server = remote.map { it.toRecording(base, dispatcharrClient, hosts) }
                     // Fill in programme title/description (and any cached category)
                     // from the on-disk guide for rows the server left sparse. This
                     // is a fast LOCAL pass (Room reads only, no network), plus it
@@ -657,6 +685,7 @@ class DvrViewModel @Inject constructor(
                         )
                     }
                     persistRecordingsCache(fromCache)
+                    lastServerFetch = ServerFetch(playlist.id, base, remote, fromCache)
                     resolveArtAsync(playlist, fromCache)
                     // Persist this session's verdict so the next launch (or a
                     // switch back to this source) shows the DVR tab from the
@@ -924,7 +953,7 @@ class DvrViewModel @Inject constructor(
             // Recording on its own, so no status guessing. The row uses the
             // same "server-$id" key the refresh-produced row will, so the
             // dedup-by-id guard in refresh() reconciles it in place.
-            val optimistic = result.toRecording(base, dispatcharrClient)
+            val optimistic = result.toRecording(base, dispatcharrClient, trustedServerHosts(playlist))
             _state.update { st ->
                 val without = st.recordings.filterNot { it.id == optimistic.id }
                 st.copy(recordings = (without + optimistic).sortedBy { it.startMillis })
@@ -1263,6 +1292,7 @@ class DvrViewModel @Inject constructor(
 private fun DispatcharrRecording.toRecording(
     baseUrl: String,
     client: DispatcharrClient,
+    trustedHosts: Set<String>,
 ): DvrViewModel.Recording {
     val start = parseIsoMillis(startTime) ?: 0L
     val end = parseIsoMillis(endTime) ?: start
@@ -1288,7 +1318,7 @@ private fun DispatcharrRecording.toRecording(
     val playback: String? = when (status) {
         DvrViewModel.Recording.Status.Completed,
         DvrViewModel.Recording.Status.Stopped ->
-            resolveRecordingUrl(fileUrl, baseUrl) ?: client.recordingPlaybackUrl(baseUrl, id)
+            resolveRecordingUrl(fileUrl, baseUrl, trustedHosts) ?: client.recordingPlaybackUrl(baseUrl, id)
         else -> null
     }
     // In-progress catch-up / watch-live (audit #50, iOS v1.6.22 + #29).
@@ -1297,7 +1327,7 @@ private fun DispatcharrRecording.toRecording(
     // /file/ partial. Only the .m3u8 case is a true growing DVR window;
     // the raw partial plays as fixed VOD.
     val inProgress: String? = if (status == DvrViewModel.Recording.Status.Recording) {
-        resolveRecordingUrl(fileUrl, baseUrl) ?: client.recordingPlaybackUrl(baseUrl, id)
+        resolveRecordingUrl(fileUrl, baseUrl, trustedHosts) ?: client.recordingPlaybackUrl(baseUrl, id)
     } else null
     val dvr = inProgress?.contains(".m3u8", ignoreCase = true) == true
     val cp = customProperties
@@ -1307,7 +1337,7 @@ private fun DispatcharrRecording.toRecording(
     fun num(o: kotlinx.serialization.json.JsonObject?, k: String): Double? =
         (o?.get(k) as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull()
     val info = cp?.get("stream_info") as? kotlinx.serialization.json.JsonObject
-    val poster = str(cp, "poster_url")?.let { resolveRecordingUrl(it, baseUrl) ?: it }
+    val poster = str(cp, "poster_url")?.let { resolveArtUrl(it, baseUrl) }
     val bytesWritten = num(cp, "bytes_written")?.toLong()?.takeIf { it > 0 }
     return DvrViewModel.Recording(
         id = "server-$id",
@@ -1342,23 +1372,40 @@ private fun DispatcharrRecording.toRecording(
 }
 
 /**
+ * Hosts a recording FILE url may point at: the playlist's remote URL host and
+ * its LAN URL host. Dispatcharr builds absolute URLs from whichever address it
+ * was configured with, which need not be the base this device is using now.
+ */
+private fun trustedServerHosts(playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity): Set<String> =
+    listOfNotNull(playlist.urlString, playlist.lanUrlString)
+        .mapNotNull { u -> runCatching { java.net.URI(u.trim()).host }.getOrNull()?.lowercase() }
+        .toSet()
+
+/** Hosts already reported as rejected this process, so the 30 s refresh logs each once. */
+private val rejectedFileHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+/**
  * Resolve a Dispatcharr-reported recording file_url against the active
  * server's effective base URL. Mirrors iOS resolveRecordingURL
- * (MyRecordingsView.swift line 614): an already-absolute value is used as-is;
- * a relative path is anchored to the base. Returns null for a blank input.
+ * (MyRecordingsView.swift line 614): an already-absolute value is used if its
+ * host is one of [trustedHosts]; a relative path is anchored to the base.
+ * Returns null for a blank input or an untrusted host.
  */
-private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String): String? {
+private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String, trustedHosts: Set<String>): String? {
     val trimmed = fileUrl?.trim().orEmpty()
     if (trimmed.isEmpty()) return null
     if (trimmed.startsWith("http://", ignoreCase = true) ||
         trimmed.startsWith("https://", ignoreCase = true)
     ) {
-        // Reject cross-origin absolute URLs: a server-supplied file_url pointing
-        // at a different host would send the API key to an attacker on redirect.
-        val resolvedHost = runCatching { java.net.URI(trimmed).host }.getOrNull()
-        val baseHost = runCatching { java.net.URI(baseUrl).host }.getOrNull()
-        if (resolvedHost == null || baseHost == null || !resolvedHost.equals(baseHost, ignoreCase = true)) {
-            android.util.Log.w("DvrViewModel", "resolveRecordingUrl: rejected cross-origin file_url (host mismatch)")
+        // The recording player sends X-API-Key with this request, so an
+        // absolute file_url on any host other than the playlist's own remote
+        // or LAN host is rejected: it would hand the API key to that host.
+        val host = runCatching { java.net.URI(trimmed).host }.getOrNull()?.lowercase()
+        if (host == null || host !in trustedHosts) {
+            val key = host ?: "<unparseable>"
+            if (rejectedFileHosts.add(key)) {
+                android.util.Log.w("DvrViewModel", "resolveRecordingUrl: rejected file_url on untrusted host $key (logged once per host)")
+            }
             return null
         }
         return trimmed
@@ -1367,6 +1414,19 @@ private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String): String? {
     if (base.isEmpty()) return null
     val path = if (trimmed.startsWith("/")) trimmed else "/$trimmed"
     return "$base$path"
+}
+
+/**
+ * Resolve poster/art URLs. Art is a plain image fetch with no API key, so an
+ * absolute URL is accepted from any host (TMDB, provider logo hosts); a
+ * relative path is anchored to the effective base.
+ */
+private fun resolveArtUrl(url: String, baseUrl: String): String {
+    val trimmed = url.trim()
+    if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) return trimmed
+    val base = baseUrl.trimEnd('/')
+    if (base.isEmpty()) return trimmed
+    return base + (if (trimmed.startsWith("/")) trimmed else "/$trimmed")
 }
 
 private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
