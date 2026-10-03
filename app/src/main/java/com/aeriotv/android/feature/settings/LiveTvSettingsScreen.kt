@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.Sell
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SmartButton
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Tv
@@ -256,10 +257,8 @@ fun LiveTvSettingsScreen(
                     // two choices inline; the shared picker renders inline on
                     // TV and pushes a choice page on touch. Same keys.
                     if (isTv) {
-                        SettingsSection(
-                            header = "Group Selection",
-                            footer = "How channel groups are picked in the guide. Top Group Pills keep the group row above the grid; Sidebar Menu hides that row and opens by holding Left in the grid (unless Left (Hold) is reassigned in Remote Control). Only one is active at a time.",
-                        ) {
+                        // tvOS: one choice row; its sheet carries the footer.
+                        SettingsSection(header = "Group Selection") {
                             SettingsPickerRow(
                                 title = "Group Selection",
                                 options = listOf(
@@ -268,6 +267,9 @@ fun LiveTvSettingsScreen(
                                 ),
                                 selected = if (guideGroupSelector == "sidebar") "sidebar" else "pills",
                                 onSelect = viewModel::setGuideGroupSelector,
+                                leadingIcon = Icons.AutoMirrored.Outlined.ViewSidebar,
+                                footer = "How channel groups are picked in the guide. Top Group Pills keep the group row above the grid; Sidebar Menu hides that row and opens by holding Left in the grid (unless Left (Hold) is reassigned in Remote Control). Only one is active at a time.",
+                                tvChoiceSheet = true,
                             )
                         }
                     } else {
@@ -302,7 +304,9 @@ fun LiveTvSettingsScreen(
                 item("badges") {
                     SettingsSection(
                         header = "Badges",
-                        footer = "Program badges are the LIVE, NEW, PREMIERE, FINALE, " +
+                        footer = if (isTv) {
+                            "Show the LIVE, NEW, and season/episode pills on the guide, channel list, and program info. Remembered separately for TVs and phones/tablets, and synced across your TVs."
+                        } else "Program badges are the LIVE, NEW, PREMIERE, FINALE, " +
                             "REPEAT, and season/episode pills on the guide and channel " +
                             "list. Remembered separately for " +
                             (if (isTv) "TVs" else "phones and tablets") +
@@ -328,6 +332,7 @@ fun LiveTvSettingsScreen(
                                 summary = settingsCountSummary(shown, badges.size),
                                 leadingIcon = Icons.Filled.Sell,
                                 footer = "Which badges appear. Turning one off hides it everywhere badges are shown.",
+                                tvOptionsSheet = true,
                             ) {
                                 badges.forEach { badge ->
                                     SettingsToggleRow(
@@ -346,21 +351,33 @@ fun LiveTvSettingsScreen(
                 // MARK: Display Scale
                 settingsCard(
                     header = "Display Scale",
-                    footer = if (listViewShown) {
+                    // tvOS prints no footer under the Guide scale row.
+                    footer = if (isTv && !listViewShown) null else if (listViewShown) {
                         "Independent scale for the Live TV List. 100% matches the default; 85-150% lets you trade density for readability (larger steps show fewer, bigger items - handy on a TV across the room). Changes apply live."
                     } else {
                         "Independent scale for Live TV. 100% matches the default; 85-150% lets you trade density for readability (larger steps show fewer, bigger items - handy on a TV across the room). Changes apply live."
                     },
                 ) {
                     ScaleSliderRow(
-                        label = if (listViewShown) "Live TV List" else "Live TV",
+                        label = if (listViewShown) "Live TV List" else "Guide",
                         value = scaleLiveTV,
                         onValueChange = viewModel::setDisplayScaleLiveTV,
                     )
                 }
 
                 // MARK: Colors
-                settingsCard(
+                //
+                // tvOS: the master toggle only; the palette is edited on the
+                // phone or tablet, as Apple's tvOS page points to iPhone/iPad.
+                if (isTv) settingsCard(header = "Colors", footer = null) {
+                    SettingsToggleRow(
+                        title = "Color Programs by Category",
+                        subtitle = "Tint guide cells by program type. Customize the palette on phone or tablet in Settings > Live TV.",
+                        leadingIcon = Icons.Filled.Palette,
+                        checked = palette.masterEnabled,
+                        onCheckedChange = viewModel::setCategoryColorsEnabled,
+                    )
+                } else settingsCard(
                     header = "Colors",
                     footer = "Tint EPG cells and channel cards by program category. Select a category below to override its hex.",
                 ) {

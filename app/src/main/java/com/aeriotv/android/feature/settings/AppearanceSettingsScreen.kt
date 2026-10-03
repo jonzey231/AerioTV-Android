@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +30,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -133,6 +137,7 @@ fun AppearanceSettingsScreen(
 ) {
     val currentTheme by viewModel.selectedTheme.collectAsStateWithLifecycle(initialValue = AppTheme.Aerio)
     val appearanceMode by viewModel.appearanceMode.collectAsStateWithLifecycle(initialValue = AppearanceMode.Dark)
+    val isTv = rememberIsTvDevice()
     val textScale by viewModel.textScale.collectAsStateWithLifecycle(initialValue = 1.0f)
     val subtextScale by viewModel.subtextScale.collectAsStateWithLifecycle(initialValue = 1.0f)
     val textContrast by viewModel.textContrast.collectAsStateWithLifecycle(initialValue = 0f)
@@ -170,7 +175,26 @@ fun AppearanceSettingsScreen(
                 // COLOR THEME card - the brand presets. Apple splits the old
                 // combined "Theme" card into Color Theme / Light and Dark Mode
                 // / Accent; Android matches that structure here.
-                settingsCard(
+                // tvOS: Color Theme is ONE choice row with the Custom Accent
+                // toggle under it in the same section, and no footers.
+                if (isTv) item("tv-color-theme") {
+                    SettingsSection(header = "Color Theme") {
+                        SettingsPickerRow(
+                            title = "Color Theme",
+                            options = AppTheme.entries.map { SettingsPickerOption(it, it.displayName) },
+                            selected = currentTheme,
+                            onSelect = viewModel::setSelectedTheme,
+                            leadingIcon = Icons.Filled.Brush,
+                            tvChoiceSheet = true,
+                        )
+                        CustomAccentRow(
+                            enabled = useCustomAccent,
+                            hex = customAccentHex,
+                            onToggle = viewModel::setUseCustomAccent,
+                            onPick = { accentPickerOpen = true },
+                        )
+                    }
+                } else settingsCard(
                     header = "Color Theme",
                     footer = "Colors used throughout the app.",
                 ) {
@@ -225,7 +249,7 @@ fun AppearanceSettingsScreen(
                 item("light-dark-mode") {
                     SettingsSection(
                         header = "Light and Dark Mode",
-                        footer = "Light or dark surfaces, independent of the color theme.",
+                        footer = if (isTv) null else "Light or dark surfaces, independent of the color theme.",
                     ) {
                         SettingsPickerRow(
                             title = "Mode",
@@ -238,13 +262,15 @@ fun AppearanceSettingsScreen(
                             },
                             selected = appearanceMode,
                             onSelect = viewModel::setAppearanceMode,
+                            leadingIcon = Icons.Filled.Contrast,
+                            tvChoiceSheet = true,
                         )
                     }
                 }
 
                 // ACCENT card - the custom accent override for the theme's
                 // preset accent color.
-                item("accent") {
+                if (!isTv) item("accent") {
                     SettingsSection(
                         header = "Accent",
                         footer = "Override the theme's accent color with one of your own.",
@@ -270,7 +296,17 @@ fun AppearanceSettingsScreen(
                 // TEXT SIZE card: one app-wide multiplier on every sp (applied
                 // at the composition root). The Display Scale sliders below
                 // still multiply on top for their own surfaces.
-                settingsCard(
+                if (isTv) item("tv-Text Size") {
+                    SettingsSection(header = "Text Size") {
+                        TvPercentStepperRow(
+                            title = "Text Size",
+                            stops = TEXT_SCALE_STOPS,
+                            value = textScale,
+                            default = 1f,
+                            onValueChange = viewModel::setTextScale,
+                        )
+                    }
+                } else settingsCard(
                     header = "Text Size",
                     footer = "Scales all text in AerioTV, on top of your device's font size. Changes apply live.",
                 ) {
@@ -284,7 +320,17 @@ fun AppearanceSettingsScreen(
 
                 // SUBTEXT SIZE card: extra multiplier for secondary copy only
                 // (descriptions, subtitles, metadata), stacking on Text Size.
-                settingsCard(
+                if (isTv) item("tv-Subtext Size") {
+                    SettingsSection(header = "Subtext Size") {
+                        TvPercentStepperRow(
+                            title = "Subtext Size",
+                            stops = TEXT_SCALE_STOPS,
+                            value = subtextScale,
+                            default = 1f,
+                            onValueChange = viewModel::setSubtextScale,
+                        )
+                    }
+                } else settingsCard(
                     header = "Subtext Size",
                     footer = "Scales only secondary text such as descriptions, program details, and captions, on top of Text Size. Titles and buttons stay the same. Changes apply live.",
                 ) {
@@ -298,7 +344,17 @@ fun AppearanceSettingsScreen(
 
                 // TEXT CONTRAST card: blends dimmed and accent-tinted text
                 // toward plain white (dark) / black (light).
-                settingsCard(
+                if (isTv) item("tv-Text Contrast") {
+                    SettingsSection(header = "Text Contrast") {
+                        TvPercentStepperRow(
+                            title = "Text Contrast",
+                            stops = TEXT_CONTRAST_STOPS,
+                            value = textContrast,
+                            default = 0f,
+                            onValueChange = viewModel::setTextContrast,
+                        )
+                    }
+                } else settingsCard(
                     header = "Text Contrast",
                     footer = "Makes dimmed and accent-colored text brighter in dark mode and darker in light mode. 0% keeps the theme's look, 100% uses plain white or black text. Changes apply live.",
                 ) {
@@ -315,7 +371,7 @@ fun AppearanceSettingsScreen(
                 item("time-format") {
                     SettingsSection(
                         header = "Time Format",
-                        footer = "System follows your device's clock setting. Applies to the Guide, program info, and recordings.",
+                        footer = if (isTv) null else "System follows your device's clock setting. Applies to the Guide, program info, and recordings.",
                     ) {
                         SettingsPickerRow(
                             title = "Time Format",
@@ -325,6 +381,8 @@ fun AppearanceSettingsScreen(
                             selected = TIME_FORMAT_OPTIONS.firstOrNull { it.first == timeFormat }
                                 ?.first ?: "system",
                             onSelect = viewModel::setTimeFormat,
+                            leadingIcon = Icons.Filled.Schedule,
+                            tvChoiceSheet = true,
                         )
                     }
                 }
@@ -702,6 +760,53 @@ private val SCALE_SEGMENTS: List<Pair<Float, String>> = listOf(
 )
 
 /** Text Contrast stops: 0% .. 100% in 10% steps. */
+/**
+ * tvOS Text Size / Subtext Size / Text Contrast row: minus, percent, plus on
+ * one focusable row (D-pad Left/Right), then a Reset pill to its right that
+ * D-pad Right reaches from the top stop. Values are percent of [stops].
+ */
+@Composable
+private fun TvPercentStepperRow(
+    title: String,
+    stops: List<Float>,
+    value: Float,
+    default: Float,
+    onValueChange: (Float) -> Unit,
+) {
+    val percents = remember(stops) { stops.map { (it * 100).roundToInt() } }
+    val current = (value * 100).roundToInt()
+    val atDefault = current == (default * 100).roundToInt()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        com.aeriotv.android.ui.settings.SettingsIntStepperRow(
+            title = title,
+            options = percents,
+            value = current,
+            onValueChange = { onValueChange(it / 100f) },
+            format = { "$it%" },
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .padding(end = 12.dp)
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(50))
+                .dpadFocusRing(
+                    shape = RoundedCornerShape(50),
+                    washTint = MaterialTheme.colorScheme.primary,
+                )
+                .clickable(enabled = !atDefault) { onValueChange(default) }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = "Reset",
+                style = com.aeriotv.android.ui.settings.settingsRowValueStyle(),
+                color = MaterialTheme.colorScheme.textAccent.copy(alpha = if (atDefault) 0.4f else 1f),
+            )
+        }
+    }
+}
+
 private val TEXT_CONTRAST_STOPS: List<Float> = (0..10).map { it / 10f }
 
 /** Text Size / Subtext Size stops: 85% .. 150% in 5% steps. */

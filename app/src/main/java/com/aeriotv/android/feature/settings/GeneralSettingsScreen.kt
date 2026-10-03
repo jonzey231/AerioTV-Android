@@ -107,7 +107,8 @@ fun GeneralSettingsScreen(
                     // lands here. iOS moved that line onto the pushed picker
                     // page and keeps two short paragraphs in the section.
                     footer = when {
-                        isTv -> "The tab shown when the app first launches."
+                        // tvOS: the explanation lives in the picker sheet.
+                        isTv -> null
                         isTablet ->
                             "Skipping the loading screen may cause brief UI stutter while data loads. " +
                                 "Resume picks up the last channel you watched in the corner mini-player; " +
@@ -132,6 +133,7 @@ fun GeneralSettingsScreen(
                         selected = if (defaultTab.isEmpty()) AppTab.LiveTV.name else defaultTab,
                         onSelect = { viewModel.setDefaultTab(it) },
                         footer = "The tab shown when the app first launches.",
+                        tvChoiceSheet = true,
                     )
                     SettingsToggleRow(
                         title = "Skip Loading Screen",
@@ -197,6 +199,7 @@ fun GeneralSettingsScreen(
                         // timer, Time of Day runs once a day at a set time.
                         SettingsPickerRow(
                             title = "Schedule",
+                            tvChoiceSheet = true,
                             options = listOf(
                                 SettingsPickerOption("interval", "Interval", "Repeat on a timer"),
                                 SettingsPickerOption("time", "Time of Day", "Once a day at a set time"),
@@ -233,6 +236,7 @@ fun GeneralSettingsScreen(
                         } else {
                             SettingsPickerRow(
                                 title = "Interval",
+                                tvChoiceSheet = true,
                                 options = BG_REFRESH_INTERVAL_OPTIONS.map {
                                     SettingsPickerOption(it.mins, it.label)
                                 },
@@ -251,19 +255,34 @@ fun GeneralSettingsScreen(
                 // (5/10/15/30/60 seconds), not a slider: cleaner with a remote.
                 SettingsSection(
                     header = "Network",
-                    footer = "Adjust timeouts if you have a slow or unstable connection.",
+                    footer = if (isTv) null else "Adjust timeouts if you have a slow or unstable connection.",
                 ) {
-                    // Apple iOS: a 5-60 s slider in 5 s steps reading "15s".
-                    val timeoutIdx = TIMEOUT_STOPS.indices
-                        .minByOrNull { kotlin.math.abs(TIMEOUT_STOPS[it] - timeoutSecs.toInt()) } ?: 0
-                    SettingsSliderRow(
-                        label = "Request Timeout",
-                        valueText = "${TIMEOUT_STOPS[timeoutIdx]}s",
-                        index = timeoutIdx,
-                        lastIndex = TIMEOUT_STOPS.lastIndex,
-                        onIndexChange = { viewModel.setNetworkTimeoutSecs(TIMEOUT_STOPS[it].toDouble()) },
-                        dimValue = true,
-                    )
+                    if (isTv) {
+                        // tvOS: one choice row (Apple's timeoutOptions); an
+                        // off-list stored value reads as the nearest choice.
+                        val choice = TV_TIMEOUT_CHOICES
+                            .minByOrNull { kotlin.math.abs(it - timeoutSecs.toInt()) } ?: 15
+                        SettingsPickerRow(
+                            title = "Request Timeout",
+                            options = TV_TIMEOUT_CHOICES.map { SettingsPickerOption(it, "$it Seconds") },
+                            selected = choice,
+                            onSelect = { viewModel.setNetworkTimeoutSecs(it.toDouble()) },
+                            footer = "Raise the timeout if you have a slow connection.",
+                            tvChoiceSheet = true,
+                        )
+                    } else {
+                        // Apple iOS: a 5-60 s slider in 5 s steps reading "15s".
+                        val timeoutIdx = TIMEOUT_STOPS.indices
+                            .minByOrNull { kotlin.math.abs(TIMEOUT_STOPS[it] - timeoutSecs.toInt()) } ?: 0
+                        SettingsSliderRow(
+                            label = "Request Timeout",
+                            valueText = "${TIMEOUT_STOPS[timeoutIdx]}s",
+                            index = timeoutIdx,
+                            lastIndex = TIMEOUT_STOPS.lastIndex,
+                            onIndexChange = { viewModel.setNetworkTimeoutSecs(TIMEOUT_STOPS[it].toDouble()) },
+                            dimValue = true,
+                        )
+                    }
                 }
 
                 // Max Retries stays a stepper (no tvOS equivalent), on a resting card.
@@ -312,6 +331,9 @@ fun GeneralSettingsScreen(
     }
     }
 }
+
+/** Apple's tvOS Request Timeout choices (GeneralSettingsView.timeoutOptions). */
+private val TV_TIMEOUT_CHOICES: List<Int> = listOf(5, 10, 15, 30, 60)
 
 /** Apple's Request Timeout slider stops: 5 to 60 seconds in 5 s steps. */
 private val TIMEOUT_STOPS: List<Int> = (5..60 step 5).toList()

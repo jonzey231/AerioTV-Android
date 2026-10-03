@@ -231,6 +231,7 @@ fun PlayerSettingsScreen(
                             CompositionLocalProvider(LocalSettingsSubPageHost provides null) {
                                 SettingsPickerRow(
                                     title = "Rewind Up To",
+                                    tvChoiceSheet = true,
                                     inlineTitle = true,
                                     options = REWIND_DEPTH_MINUTES.map {
                                         SettingsPickerOption(it, formatDepthMinutes(it))
@@ -285,25 +286,46 @@ fun PlayerSettingsScreen(
                             "If a live stream stops sending video, the player reloads it to recover. Turn Auto-Recover off if live channels restart or stutter during commercial breaks (a brief freeze may show instead). Applies to the next channel you tune."
                     },
                 ) {
-                    SteppedSliderRow(
-                        label = "Skip Back",
-                        values = SkipIntervals.CHOICES,
-                        selected = skipBackSeconds,
-                        format = ::formatSkipSeconds,
-                        onSelect = viewModel::setSkipBackSeconds,
-                    )
-                    SteppedSliderRow(
-                        label = "Skip Forward",
-                        values = SkipIntervals.CHOICES,
-                        selected = skipForwardSeconds,
-                        format = ::formatSkipSeconds,
-                        onSelect = viewModel::setSkipForwardSeconds,
-                    )
+                    if (isTv) {
+                        // tvOS: pill row 5s 10s 15s 30s 60s, as Display Scale.
+                        ScaleSliderRow(
+                            label = "Skip Back",
+                            value = skipBackSeconds.toFloat(),
+                            onValueChange = { viewModel.setSkipBackSeconds(it.toInt()) },
+                            segments = SkipIntervals.CHOICES.map { it.toFloat() to "${it}s" },
+                        )
+                    } else {
+                        SteppedSliderRow(
+                            label = "Skip Back",
+                            values = SkipIntervals.CHOICES,
+                            selected = skipBackSeconds,
+                            format = ::formatSkipSeconds,
+                            onSelect = viewModel::setSkipBackSeconds,
+                        )
+                    }
+                    if (isTv) {
+                        // tvOS: pill row 5s 10s 15s 30s 60s, as Display Scale.
+                        ScaleSliderRow(
+                            label = "Skip Forward",
+                            value = skipForwardSeconds.toFloat(),
+                            onValueChange = { viewModel.setSkipForwardSeconds(it.toInt()) },
+                            segments = SkipIntervals.CHOICES.map { it.toFloat() to "${it}s" },
+                        )
+                    } else {
+                        SteppedSliderRow(
+                            label = "Skip Forward",
+                            values = SkipIntervals.CHOICES,
+                            selected = skipForwardSeconds,
+                            format = ::formatSkipSeconds,
+                            onSelect = viewModel::setSkipForwardSeconds,
+                        )
+                    }
                     if (isTv) {
                         SettingsSectionFooter("How far the skip buttons and a single left or right press move in live rewind, catch-up, recordings, movies, and TV shows. Holding left or right still scrubs faster the longer you hold.")
                     }
                     SettingsPickerRow(
                         title = "Buffer Size",
+                        tvChoiceSheet = true,
                         inlineTitle = true,
                         options = BUFFER_OPTIONS.map {
                             SettingsPickerOption(it.id, it.label, it.detail)
@@ -406,6 +428,7 @@ fun PlayerSettingsScreen(
                 SettingsSection(header = "Multiview") {
                     SettingsPickerRow(
                         title = "Audio Focus Indicator",
+                        tvChoiceSheet = true,
                         inlineTitle = true,
                         options = AUDIO_FOCUS_OPTIONS.map {
                             SettingsPickerOption(it.id, it.label, it.detail)
@@ -430,6 +453,7 @@ fun PlayerSettingsScreen(
                     )
                     SettingsPickerRow(
                         title = "Tile Corners",
+                        tvChoiceSheet = true,
                         inlineTitle = true,
                         // Apple icons: square / square.dashed, on both platforms.
                         options = listOf(
@@ -465,6 +489,7 @@ fun PlayerSettingsScreen(
                         )
                         SettingsPickerRow(
                             title = "Startup Refresh Rate",
+                            tvChoiceSheet = true,
                             inlineTitle = true,
                             options = rates,
                             selected = rates.firstOrNull { it.value == startupRefreshRate }?.value

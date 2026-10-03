@@ -6,6 +6,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.text.font.FontWeight
+import com.aeriotv.android.ui.settings.SettingsRowContainer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -317,11 +325,24 @@ fun RemoteControlSettingsScreen(
                     header = "Reset",
                     footer = "Restore every button to the standard AerioTV scheme.",
                 ) {
-                    SlotRow(
-                        slotName = "Reset to Defaults",
-                        valueName = "",
-                        onClick = { showResetConfirm = true },
-                    )
+                    // tvOS TVSettingsActionRow(isDestructive:): red label
+                    // behind the arrow.counterclockwise glyph.
+                    SettingsRowContainer(onClick = { showResetConfirm = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Restore,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            text = "Reset to Defaults",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -405,7 +426,15 @@ private fun SlotRow(
                 // fill = false so a long action name ("Browse earlier
                 // programs") shrinks to fit instead of running past the row,
                 // while the slot name keeps first claim on the width.
-                modifier = Modifier.weight(1f, fill = false),
+                // Capped rather than weighted so the value and chevron sit
+                // at the trailing edge, as tvOS; a long name still ellipsizes.
+                modifier = Modifier.widthIn(max = 300.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

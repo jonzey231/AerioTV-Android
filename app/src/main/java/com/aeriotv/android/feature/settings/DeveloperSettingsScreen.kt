@@ -303,7 +303,8 @@ private fun LoggingSection(
 ) {
     SettingsSection(
         header = "Logging",
-        footer = "When enabled, detailed logs are written to a file in the app's private " +
+        // tvOS has no footer under Debug Logging.
+        footer = if (rememberIsTvDevice()) null else "When enabled, detailed logs are written to a file in the app's private " +
             "storage. Logs include network requests, playback events, EPG activity, errors, " +
             "and app lifecycle events. No personally identifiable information is collected.",
     ) {

@@ -220,6 +220,7 @@ fun SyncSettingsScreen(
         // Apple shows one "Last synced" stamp; Android records the two
         // directions separately, so the newer of the two is the last sync.
         val lastSynced = maxOf(lastPush, lastPull)
+        val tvRows = rememberIsTvDevice()
 
         LazyColumn(
             // fillMaxHeight bounds the LazyColumn so its inner viewport can
@@ -271,8 +272,13 @@ fun SyncSettingsScreen(
                     if (masterEnabled && signedIn) {
                         SyncTileActionRow(
                             icon = Icons.Filled.CloudSync,
-                            title = "Push to Drive",
-                            subtitle = if (lastSynced > 0L) {
+                            // tvOS: single-line rows, the stamp rides the title.
+                            title = if (tvRows && lastSynced > 0L) {
+                                "Push to Drive  ·  Last synced ${lastSyncedAgo(lastSynced)}"
+                            } else {
+                                "Push to Drive"
+                            },
+                            subtitle = if (tvRows) null else if (lastSynced > 0L) {
                                 "Send this device's data up  ·  Last synced ${lastSyncedAgo(lastSynced)}"
                             } else {
                                 "Send this device's playlists, preferences and progress up"
@@ -287,7 +293,7 @@ fun SyncSettingsScreen(
                         SyncTileActionRow(
                             icon = Icons.Filled.CloudDownload,
                             title = "Pull from Drive",
-                            subtitle = "Replace this device's data with the Drive copy",
+                            subtitle = if (tvRows) null else "Replace this device's data with the Drive copy",
                             running = pullStatus is SyncSettingsViewModel.ActionStatus.Running,
                             status = pullStatus,
                             onClick = {

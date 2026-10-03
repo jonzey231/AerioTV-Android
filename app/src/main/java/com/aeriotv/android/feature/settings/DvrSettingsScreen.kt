@@ -271,6 +271,7 @@ fun DvrSettingsScreen(
                         ),
                         selected = if (defaultDestination == "local") "local" else "server",
                         onSelect = settingsVm::setDvrDefaultDestination,
+                        tvChoiceSheet = true,
                     )
                 }
             }

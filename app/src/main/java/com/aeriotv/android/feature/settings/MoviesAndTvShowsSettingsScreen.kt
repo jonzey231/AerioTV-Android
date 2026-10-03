@@ -106,6 +106,7 @@ fun MoviesAndTvShowsSettingsScreen(
                                 footer = VOD_REFRESH_FOOTNOTE,
                                 // Apple: arrow.clockwise.
                                 leadingIcon = Icons.Filled.Refresh,
+                                tvChoiceSheet = true,
                             )
                         }
                     }

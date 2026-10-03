@@ -23,6 +23,9 @@ package com.aeriotv.android.ui.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.focusGroup
@@ -94,7 +97,36 @@ fun <T> ColumnScope.SettingsPickerRow(
     footer: String? = null,
     /** Glyph on the collapsed (touch) row, as Apple's SettingsChoicePicker(icon:). */
     leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    /**
+     * TV only: render ONE choice row (title, current value, chevron) that
+     * opens the options in a sheet, as tvOS SettingsChoicePicker does. The
+     * sheet closes on pick. Off keeps the inline option list (Guide Layout).
+     */
+    tvChoiceSheet: Boolean = false,
 ) {
+    if (tvChoiceSheet && rememberIsTvDevice()) {
+        SettingsTvOptionsSheetRow(
+            title = title,
+            summary = options.firstOrNull { it.value == selected }?.label.orEmpty(),
+            leadingIcon = leadingIcon,
+            footer = footer,
+            modifier = modifier,
+        ) { close ->
+            options.forEach { option ->
+                SettingsSelectionRow(
+                    label = option.label,
+                    subtitle = option.subtitle,
+                    leadingIcon = option.icon,
+                    selected = option.value == selected,
+                    onClick = {
+                        onSelect(option.value)
+                        close()
+                    },
+                )
+            }
+        }
+        return
+    }
     val push = settingsPushesSubPages()
     val host = rememberSubPageRegistration(pageKey) {
         val controller = LocalSettingsSubPageHost.current
@@ -183,8 +215,7 @@ fun ColumnScope.SettingsSubGroup(
             leadingIcon = leadingIcon,
             footer = footer,
             modifier = modifier,
-            content = content,
-        )
+        ) { content() }
         return
     }
     val push = settingsPushesSubPages()
@@ -219,7 +250,7 @@ private fun SettingsTvOptionsSheetRow(
     leadingIcon: androidx.compose.ui.graphics.vector.ImageVector?,
     footer: String?,
     modifier: Modifier,
-    content: @Composable ColumnScope.() -> Unit,
+    content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
 ) {
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     val rowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -295,8 +326,7 @@ private fun SettingsTvOptionsSheetRow(
                             .focusRequester(firstFocus)
                             .focusGroup(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
-                        content = content,
-                    )
+                    ) { content(close) }
                     if (footer != null) SettingsSectionFooter(footer)
                 }
             }
@@ -368,7 +398,9 @@ fun SettingsIntStepperRow(
             if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
             when (event.key) {
                 Key.DirectionLeft -> { step(-1); true }
-                Key.DirectionRight -> { step(1); true }
+                // At the top stop RIGHT is left unconsumed so focus can move
+                // on to a sibling (Appearance's Reset button).
+                Key.DirectionRight -> if (sorted.isNotEmpty() && value >= sorted.last()) false else { step(1); true }
                 else -> false
             }
         },
@@ -389,11 +421,28 @@ fun SettingsIntStepperRow(
             }
         }
         Spacer(Modifier.width(12.dp))
+        // tvOS stepper: minus, value, plus; a glyph dims at its end stop.
+        val atMin = sorted.isEmpty() || value <= sorted.first()
+        val atMax = sorted.isEmpty() || value >= sorted.last()
+        androidx.compose.material3.Icon(
+            imageVector = androidx.compose.material.icons.Icons.Filled.Remove,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.textAccent.copy(alpha = if (atMin) 0.3f else 1f),
+            modifier = Modifier.size(16.dp),
+        )
         Text(
             text = format(value),
             style = settingsRowValueStyle(),
             color = MaterialTheme.colorScheme.textAccent,
             fontWeight = FontWeight.SemiBold,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.widthIn(min = 64.dp),
+        )
+        androidx.compose.material3.Icon(
+            imageVector = androidx.compose.material.icons.Icons.Filled.Add,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.textAccent.copy(alpha = if (atMax) 0.3f else 1f),
+            modifier = Modifier.size(16.dp),
         )
     }
 }
