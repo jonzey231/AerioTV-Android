@@ -442,7 +442,8 @@ fun EditPlaylistScreen(
                                     label = "Password",
                                     value = password,
                                     onValueChange = { password = it; clearSaveError() },
-                                    helper = "Use your Dispatcharr Dashboard password (System > Users > Account tab), not your Dispatcharr XC password.",
+                                    helper = "Use your Dispatcharr Dashboard password (System > Users > Account tab), not your Dispatcharr XC password.\n" +
+                                        com.aeriotv.android.feature.onboarding.DISPATCHARR_API_KEY_REQUIRED_NOTE,
                                     secure = true,
                                     secureLabel = "password",
                                     keyboardOptions = aerioTextFieldKeyboardOptions(

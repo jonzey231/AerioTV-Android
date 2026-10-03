@@ -323,6 +323,11 @@ fun ConfigureSourceScreen(
     }
 }
 
+/** Shown under the Username & Password fields on onboarding and Edit Playlist. */
+internal const val DISPATCHARR_API_KEY_REQUIRED_NOTE =
+    "Your Dispatcharr account must already have an API key. In Dispatcharr, open System, " +
+        "then Users, edit the user, and generate an API key before signing in here."
+
 enum class DispatcharrAuthMode { UsernamePassword, ApiKey }
 
 @Composable
@@ -408,6 +413,11 @@ private fun DispatcharrFields(
             Text(
                 text = "Use your Dispatcharr Dashboard password (System -> Users -> Account tab), " +
                         "not your Dispatcharr XC password.",
+                style = MaterialTheme.typography.bodySmall.subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = DISPATCHARR_API_KEY_REQUIRED_NOTE,
                 style = MaterialTheme.typography.bodySmall.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

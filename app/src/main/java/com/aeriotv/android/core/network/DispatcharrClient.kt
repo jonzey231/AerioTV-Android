@@ -202,9 +202,16 @@ class DispatcharrClient @Inject constructor() {
         }
         return try {
             response.body()
-        } catch (e: SerializationException) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Ktor 3 wraps decode failures in JsonConvertException, and a
+            // non-Dispatcharr URL answering 200 HTML throws
+            // NoTransformationFoundException; neither is a
+            // SerializationException, so catch broadly and name the step.
             throw DispatcharrError.UnexpectedResponse(
-                "Server returned an unexpected response shape during login. " +
+                "Server returned an unexpected response shape during login" +
+                    "${missingFieldSuffix(e)}. " +
                     "Verify the URL points at a Dispatcharr 0.23.0 or newer instance.",
             )
         }
@@ -245,9 +252,11 @@ class DispatcharrClient @Inject constructor() {
         }
         val body: RefreshResponse = try {
             response.body()
-        } catch (e: SerializationException) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
             throw DispatcharrError.UnexpectedResponse(
-                "Refresh returned an unexpected response shape.",
+                "Token refresh returned an unexpected response shape${missingFieldSuffix(e)}.",
             )
         }
         return body.access
@@ -276,10 +285,13 @@ class DispatcharrClient @Inject constructor() {
         }
         val me: MeResponse = try {
             response.body()
-        } catch (e: SerializationException) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
             throw DispatcharrError.UnexpectedResponse(
-                "Server returned an unexpected user profile shape. Verify the URL " +
-                    "points at a Dispatcharr 0.23.0 or newer instance.",
+                "Sign-in succeeded but the user profile response was " +
+                    (missingFieldName(e)?.let { "missing '$it'" } ?: "not in the expected shape") +
+                    ". Verify the server is Dispatcharr 0.23.0 or newer.",
             )
         }
         // An account without an api_key is a fixable server-side state, not
@@ -3388,3 +3400,23 @@ data class DispatcharrProgramImage(
 val dispatcharrDefaultUserAgent: String by lazy {
     "AerioTV/${BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
 }
+
+/** Field name from a kotlinx.serialization "missing field" failure, searched
+ *  through the cause chain (Ktor wraps it), or null. */
+internal fun missingFieldName(t: Throwable): String? {
+    var cur: Throwable? = t
+    var depth = 0
+    while (cur != null && depth < 6) {
+        cur.message?.let { msg ->
+            Regex("""[Ff]ields? \[?'?"?([A-Za-z0-9_]+)""").find(msg)
+                ?.takeIf { msg.contains("missing", ignoreCase = true) }
+                ?.let { return it.groupValues[1] }
+        }
+        cur = cur.cause
+        depth++
+    }
+    return null
+}
+
+internal fun missingFieldSuffix(t: Throwable): String =
+    missingFieldName(t)?.let { " (missing '$it')" } ?: ""
