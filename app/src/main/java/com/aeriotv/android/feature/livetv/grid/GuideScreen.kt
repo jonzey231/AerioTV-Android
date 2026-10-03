@@ -446,7 +446,13 @@ fun GuideScreen(
             viewModel.ensureGuideRange(jumpWindowStart ?: 0L, jumpWindowEnd ?: 0L)
         }
     }
-    val grid = remember { GuideGridState(initialViewportStartMs = System.currentTimeMillis() - 15 * 60_000L) }
+    // Retained across the player round trip (the player route disposes the
+    // guide): a fresh state composed the grid empty and then installed the
+    // whole window, the 800 to 1360 ms frames on return. The retained state
+    // is reset to exactly what a new one holds, so focus and viewport land
+    // as before; only the rows survive.
+    val grid = remember { RetainedGuideGrid.take(favoritesOnly, System.currentTimeMillis() - 15 * 60_000L) }
+    androidx.compose.runtime.DisposableEffect(grid) { onDispose { RetainedGuideGrid.give(favoritesOnly, grid) } }
     // LOAD ON DEMAND WHILE SCROLLING FORWARD (Logan 2026-09-19). The window
     // now reaches as far as Guide Days allows, but only the launch span is in
     // memory, so scrolling toward the loaded edge has to pull the next window
@@ -474,11 +480,14 @@ fun GuideScreen(
         ) { GuideGridRows(displayChannels, state.epgByChannel as? GuideCatalog, windowStartMs, windowEndMs) }
     }
     LaunchedEffect(rows) {
+        // Same rows object as the retained state already holds: the install
+        // only lands focus (cheap, no row invalidation); log which it was.
+        val reused = grid.rows === rows
         grid.installRows(rows)
         // Empty program lanes (Logan 2026-09-19): the window the rows were
         // built for, next to both viewports after the install clamped them.
         com.aeriotv.android.ui.tv.TvFocusTrace.guide(
-            "rows-install windowStartMs=${rows.windowStartMs} windowEndMs=${rows.windowEndMs}" +
+            "rows-install reused=$reused windowStartMs=${rows.windowStartMs} windowEndMs=${rows.windowEndMs}" +
                 " forwardHours=$forwardHours viewportStart=${grid.viewportStartMs} drawStart=${grid.drawViewportStartMs}",
         )
         // Land the jump once the rows reach far enough to hold it.
@@ -1415,3 +1424,23 @@ internal const val GUIDE_PHONE_SUBTEXT_SHARE = 0.6f
 
 /** Share of a tablet / TV guide row taken by secondary lines. */
 internal const val GUIDE_SUBTEXT_SHARE = 0.45f
+
+/**
+ * Holds the guide's [GuideGridState] while the guide is out of composition
+ * (player route), one per guide flavour (Live TV, Favorites). [take] hands it
+ * to exactly one live composition and resets it for entry; [give] returns it
+ * on dispose.
+ */
+internal object RetainedGuideGrid {
+    private val held = HashMap<Boolean, GuideGridState>()
+
+    fun take(favoritesOnly: Boolean, initialViewportStartMs: Long): GuideGridState {
+        val kept = synchronized(held) { held.remove(favoritesOnly) }
+        return kept?.also { it.resetForEntry(initialViewportStartMs) }
+            ?: GuideGridState(initialViewportStartMs = initialViewportStartMs)
+    }
+
+    fun give(favoritesOnly: Boolean, state: GuideGridState) {
+        synchronized(held) { held[favoritesOnly] = state }
+    }
+}

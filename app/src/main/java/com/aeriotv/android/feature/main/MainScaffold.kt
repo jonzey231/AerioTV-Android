@@ -2809,14 +2809,41 @@ val LocalTabIsActive = androidx.compose.runtime.compositionLocalOf { true }
  *  so it draws nothing, and canFocus/invisibleToUser below still keep it out
  *  of focus search and accessibility. */
 private fun Modifier.keepAliveHidden(): Modifier = this
-    .layout { measurable, constraints ->
+    .then(KeepAliveHiddenElement)
+    .focusProperties { canFocus = false }
+    .semantics { invisibleToUser() }
+
+/* HOLD THE SLOT (perf 2026-10-03). Measuring the hidden tab at full size on
+ * EVERY pass meant any change inside it (the TMDB art pass bumps every ~2 s)
+ * re-measured its whole poster grid while nobody could see it, 115 to 160 ms
+ * a time. The node now measures at the full constraints once (and again only
+ * if those constraints change, e.g. rotation), which is all the 2026-09-11
+ * fix needs: the content's last layout is the real size, so showing it never
+ * starts from a 0-width frame. Later invalidations stay pending and are
+ * measured in the frame the tab is shown, before it is placed. */
+private object KeepAliveHiddenElement : androidx.compose.ui.node.ModifierNodeElement<KeepAliveHiddenNode>() {
+    override fun create() = KeepAliveHiddenNode()
+    override fun update(node: KeepAliveHiddenNode) = Unit
+    override fun hashCode(): Int = 0x6b41
+    override fun equals(other: Any?): Boolean = other === this
+}
+
+private class KeepAliveHiddenNode : Modifier.Node(), androidx.compose.ui.node.LayoutModifierNode {
+    private var measuredFor: androidx.compose.ui.unit.Constraints? = null
+
+    override fun androidx.compose.ui.layout.MeasureScope.measure(
+        measurable: androidx.compose.ui.layout.Measurable,
+        constraints: androidx.compose.ui.unit.Constraints,
+    ): androidx.compose.ui.layout.MeasureResult {
         // Same constraints the ACTIVE slot's fillMaxSize() resolves to.
         val full = constraints.copy(
             minWidth = constraints.maxWidth.takeIf { it != androidx.compose.ui.unit.Constraints.Infinity } ?: constraints.minWidth,
             minHeight = constraints.maxHeight.takeIf { it != androidx.compose.ui.unit.Constraints.Infinity } ?: constraints.minHeight,
         )
-        measurable.measure(full)
-        layout(0, 0) { /* deliberately not placed */ }
+        if (measuredFor != full) {
+            measurable.measure(full)
+            measuredFor = full
+        }
+        return layout(0, 0) { /* deliberately not placed */ }
     }
-    .focusProperties { canFocus = false }
-    .semantics { invisibleToUser() }
+}

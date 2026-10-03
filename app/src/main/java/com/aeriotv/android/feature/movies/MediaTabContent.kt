@@ -127,7 +127,10 @@ fun MediaTabContent(
     // Continue Watching (Apple parity, heroPages): unfinished progress rows,
     // newest first, movies for the Movies tab and one page per series for
     // TV Shows (the newest episode row wins), at most 12.
-    val recentProgress by watchVm.observeRecent(40).collectAsStateWithLifecycle(initialValue = emptyList())
+    // Remembered: a call per recomposition built a new Room flow (and a new
+    // collector) on every rebuild of the tab (perf 2026-10-03).
+    val recentFlow = remember(watchVm) { watchVm.observeRecent(40) }
+    val recentProgress by recentFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val heroPages: List<MediaHeroPage> = remember(recentProgress, state.catalogMovies, state.catalogSeries, state.resolvedMovies, state.resolvedSeries, kind, hiddenTitles) {
         val rows = recentProgress.filter { r ->
             r.positionMs > 0L && !r.isFinished && (r.durationMs <= 0L || r.positionMs < r.durationMs - 5 * 60_000L)
@@ -336,7 +339,16 @@ fun MediaTabContent(
     // the provider's poster as the fallback). ONE observer per tab: the
     // version bump hands out a fresh resolver, which re-reads the cache for
     // the cards that recompose, instead of an observer on every card.
-    val artVersion by viewModel.artVersion.collectAsStateWithLifecycle(initialValue = 0)
+    // Only the ACTIVE tab follows the bumps (perf 2026-10-03): the art pass
+    // bumps every ~2 s for minutes, and MainScaffold keeps hidden tabs
+    // composed, so collecting here rebuilt both hidden poster grids on every
+    // bump. A hidden tab keeps its last value and catches up to the latest
+    // the moment it becomes active, so what the user sees is unchanged.
+    var artVersion by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(tabIsActive, viewModel) {
+        if (!tabIsActive) return@LaunchedEffect
+        viewModel.artVersion.collect { artVersion = it }
+    }
     val posterUrlFor: (MediaItem) -> String? = remember(artVersion, viewModel) {
         { item -> viewModel.artPosterUrl(item.artKey) ?: item.posterUrl }
     }

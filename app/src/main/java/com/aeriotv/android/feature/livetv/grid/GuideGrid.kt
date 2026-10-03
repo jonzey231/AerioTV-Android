@@ -1043,6 +1043,15 @@ private fun GridRow(
             val ve = vs + (stripW / pxPerMs).toLong()
             val focusStart = focusedCellStart
             val focusedHere = gridFocused && focusStart != Long.MIN_VALUE
+            // Settled = the eased draw start has reached the logical viewport.
+            val viewportSettled = state.drawViewportStartMs == state.viewportStartMs
+            // Drop cached layouts for programs well outside the drawn window
+            // so the per-row map stays bounded while the user pans.
+            if (textCache.size > CELL_TEXT_CACHE_SOFT_CAP) {
+                val keepFrom = vs - CELL_TEXT_EVICT_MARGIN_MS
+                val keepTo = ve + CELL_TEXT_EVICT_MARGIN_MS
+                textCache.values.removeAll { it.startMs != Long.MIN_VALUE && (it.startMs < keepFrom || it.startMs >= keepTo) }
+            }
             val cells = state.rows.cells(row)
             var i = state.rows.cellIndexAt(row, vs).let { if (it < 0) 0 else it }
             while (i < cells.size) {
@@ -1087,14 +1096,22 @@ private fun GridRow(
                     val descLines = if (size.height >= 90.dp.toPx() * appTextScale * subRowGrowth) 2 else 1
                     // The key identifies every input the measured layouts
                     // depend on that the cache's own remember() key does not
-                    // already cover: the program, the width it was measured
-                    // for, the line count and the cell shape. The badge line
-                    // (flags plus the restored S/E pill) is part of the shape,
-                    // so showBadges rides in here too rather than relying on
-                    // the map being rebuilt.
-                    val key = (((cell.startMillis * 31 + textW) * 4 + descLines) * 2 + (if (compact) 1 else 0)) * 2 +
+                    // already cover: the program, the line count and the cell
+                    // shape. The badge line (flags plus the restored S/E pill)
+                    // is part of the shape, so showBadges rides in here too
+                    // rather than relying on the map being rebuilt.
+                    // The width is NOT in the key (perf 2026-10-03): a cell
+                    // clipped at the strip edge changes width on every frame
+                    // of the 0.3 s pan ease, which re-measured it per frame
+                    // and grew the map without bound. One entry per cell holds
+                    // the width it was measured at; while the pan eases the
+                    // existing layout is drawn (clipped by the cell rect), and
+                    // once the viewport settles a width change re-measures, so
+                    // the resting guide looks exactly as before.
+                    val key = ((cell.startMillis * 4 + descLines) * 2 + (if (compact) 1 else 0)) * 2 +
                         (if (showBadges) 1 else 0)
-                    val text = textCache.getOrPut(key) {
+                    val cachedText = textCache[key]
+                    val text = if (cachedText != null && (cachedText.measuredW == textW || !viewportSettled)) cachedText else run {
                         fun measure(t: String, st: TextStyle, maxH: Float, ellipsis: Boolean = true, lines: Int = 1, maxW: Int = textW) = textMeasurer.measure(
                             text = t, style = st, maxLines = lines,
                             overflow = if (ellipsis) TextOverflow.Ellipsis else TextOverflow.Clip,
@@ -1138,7 +1155,7 @@ private fun GridRow(
                                 .map { measure(it.label, badgeStyle, 12.sp.toPx(), ellipsis = false) to it.color } else emptyList()
                             CellText(title, time, desc, sub, badges, pill(cell))
                         }
-                    }
+                    }.also { if (it !== cachedText) { it.measuredW = textW; it.startMs = cell.startMillis; textCache[key] = it } }
                     val recording = !cell.isPlaceholder && recordingWindows.any { win ->
                         cell.startMillis < win.last && cell.endMillis > win.first
                     }
@@ -1294,6 +1311,8 @@ internal fun guideTraceCell(state: GuideGridState): String {
 
 private fun GuideRemoteAction.orDefault(default: GuideRemoteAction) = if (this == GuideRemoteAction.NONE) default else this
 private const val MIN_CELL_PX = 6f
+private const val CELL_TEXT_CACHE_SOFT_CAP = 48
+private const val CELL_TEXT_EVICT_MARGIN_MS = 12 * 3_600_000L
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
 private const val RAIL_UNDER_NUMBER_KEY = Long.MIN_VALUE + 3
 
@@ -1364,4 +1383,9 @@ private class CellText(
      * Channel Preview cell, where the banner carries it instead.
      */
     val pill: TextLayoutResult? = null,
-)
+) {
+    /** Text column width (px) the program layouts were measured for. */
+    var measuredW: Int = -1
+    /** Program start, for window eviction; MIN_VALUE for rail entries. */
+    var startMs: Long = Long.MIN_VALUE
+}

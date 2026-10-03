@@ -85,6 +85,24 @@ class GuideGridState(
     }
 
     /**
+     * Put the state back to what a freshly constructed one holds (focus
+     * unset, viewport at [viewportStartMs]) while KEEPING [rows]. Used when
+     * the guide re-enters composition (returning from the player) with a
+     * retained state: the next [installRows] then lands exactly as a first
+     * install would, but the grid's first frame already has its rows instead
+     * of composing empty and then installing the whole window (perf
+     * 2026-10-03: 800 to 1360 ms frames on return).
+     */
+    fun resetForEntry(viewportStartMs: Long) {
+        this.viewportStartMs = viewportStartMs
+        drawViewportStartMs = viewportStartMs
+        viewportChangeAnimated = true
+        focusRow = -1
+        focusCellStartMs = Long.MIN_VALUE
+        focusChannelId = null
+    }
+
+    /**
      * Install a new row list. The previously focused channel keeps focus if
      * it is still listed; otherwise focus clamps to the nearest row index.
      * A first install lands on row 0 at the anchor.

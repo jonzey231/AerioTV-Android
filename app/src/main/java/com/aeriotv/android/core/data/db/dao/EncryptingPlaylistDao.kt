@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 /**
  * Transparent encrypt-at-rest decorator over the Room-generated [PlaylistDao]
@@ -38,10 +39,27 @@ class EncryptingPlaylistDao(
     )
 
     private fun PlaylistEntity.decrypted(): PlaylistEntity = copy(
-        apiKey = cipher.decrypt(apiKey),
-        username = cipher.decrypt(username),
-        password = cipher.decrypt(password),
+        apiKey = decryptCached(apiKey),
+        username = decryptCached(username),
+        password = decryptCached(password),
     )
+
+    // Decrypt memo keyed on the stored ciphertext (perf 2026-10-03). There is
+    // no updated-at column, but every write re-encrypts with a fresh GCM IV,
+    // so an unchanged ciphertext is exactly an unchanged credential and a
+    // changed one misses the memo. Saves a Keystore round trip per column on
+    // every repeat read of the same row. Plaintext already lives in every
+    // consumer's entity, so the memo holds nothing new; bounded anyway.
+    private val plainByCipher = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun decryptCached(value: String?): String? {
+        if (value.isNullOrEmpty()) return cipher.decrypt(value)
+        plainByCipher[value]?.let { return it }
+        val plain = cipher.decrypt(value) ?: return null
+        if (plainByCipher.size >= DECRYPT_MEMO_CAP) plainByCipher.clear()
+        plainByCipher[value] = plain
+        return plain
+    }
 
     // --- reads: decrypt on the way out ---
 
@@ -55,11 +73,18 @@ class EncryptingPlaylistDao(
         delegate.observeActive().map { list -> list.map { it.decrypted() } }
             .flowOn(Dispatchers.Default)
 
-    override suspend fun firstActive(): PlaylistEntity? = delegate.firstActive()?.decrypted()
+    // The one-shot reads are called from main-thread coroutines
+    // (OnDemandViewModel, DvrViewModel, LiveStreamFailover, PlaylistRepository,
+    // DispatcharrAuthBroker); Room moves the query off main by itself but the
+    // decrypt ran on the caller's thread. Same Default hop as the flows above.
+    override suspend fun firstActive(): PlaylistEntity? =
+        delegate.firstActive()?.let { withContext(Dispatchers.Default) { it.decrypted() } }
 
-    override suspend fun byId(id: String): PlaylistEntity? = delegate.byId(id)?.decrypted()
+    override suspend fun byId(id: String): PlaylistEntity? =
+        delegate.byId(id)?.let { withContext(Dispatchers.Default) { it.decrypted() } }
 
-    override suspend fun allOnce(): List<PlaylistEntity> = delegate.allOnce().map { it.decrypted() }
+    override suspend fun allOnce(): List<PlaylistEntity> =
+        delegate.allOnce().let { rows -> withContext(Dispatchers.Default) { rows.map { it.decrypted() } } }
 
     override fun observeAll(): Flow<List<PlaylistEntity>> =
         delegate.observeAll().map { list -> list.map { it.decrypted() } }
@@ -121,3 +146,5 @@ class EncryptingPlaylistDao(
 
     override suspend fun clear() = delegate.clear()
 }
+
+private const val DECRYPT_MEMO_CAP = 64
