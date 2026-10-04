@@ -717,6 +717,11 @@ private fun GridRow(
     val hiddenBadges = com.aeriotv.android.core.ui.LocalHiddenEpgBadges.current
     val clockMode = rememberClockMode()
     val rail = com.aeriotv.android.core.ui.LocalGuideRailPrefs.current
+    // Keep Recent Channels Live: KEPT chip in the rail band.
+    val isKept = channel.id in com.aeriotv.android.feature.livetv.LocalRetainedChannelIds.current
+    val keptLabel = remember(textMeasurer, isTv) {
+        textMeasurer.measure("KEPT", style = TextStyle(color = Color.White, fontSize = if (isTv) 7.sp else 7.5.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+    }
     // Appearance > "Rounded corners in Guide view" (default OFF). The rail is
     // the ONLY surface this flag covers; every card surface reads the List
     // flag instead. Read here in composition and handed to the shared rounding
@@ -975,6 +980,17 @@ private fun GridRow(
             } else {
                 drawLogo()
             }
+        }
+        if (isKept) {
+            // KEPT chip in the band, right after the number (accent, same
+            // chip construction as the program flag badges).
+            val chipH = (bandH - 2.dp.toPx()).coerceAtLeast(6.dp.toPx())
+            val chipW = keptLabel.size.width + 5.dp.toPx()
+            val numberW = underNumber?.title?.size?.width?.toFloat() ?: 0f
+            val chipX = bandInset + (if (numberW > 0f) numberW + 4.dp.toPx() else 0f)
+            val chipY = ((bandH - chipH) / 2f).coerceAtLeast(0f)
+            drawRoundRect(accent, topLeft = Offset(chipX, chipY), size = Size(chipW, chipH), cornerRadius = CornerRadius(3.dp.toPx()))
+            drawText(keptLabel, topLeft = Offset(chipX + 2.5.dp.toPx(), chipY + (chipH - keptLabel.size.height) / 2f))
         }
         geometry.number?.let { rect ->
             underNumber?.let {

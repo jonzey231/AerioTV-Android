@@ -87,6 +87,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.FiberSmartRecord
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
@@ -216,6 +218,12 @@ fun PlayerChromeOverlay(
     onScrubCommit: () -> Unit = {},
     /** App Behaviors > Player Info Card element toggles (live, no restart). */
     infoCardPrefs: PlayerInfoCardPrefs = PlayerInfoCardPrefs(),
+    /** Keep Recent Channels Live: channels kept live, for the Options menu's
+     *  Kept Live section (the fullscreen stand-in for the nav-bar card). */
+    keptLive: List<com.aeriotv.android.core.timeshift.TimeshiftController.RetainedChannel> = emptyList(),
+    onKeptTune: (String) -> Unit = {},
+    onKeptStop: (String) -> Unit = {},
+    onKeptStopAll: () -> Unit = {},
 ) {
     var moreOpen by remember { mutableStateOf(false) }
     var sleepOpen by remember { mutableStateOf(false) }
@@ -536,6 +544,21 @@ fun PlayerChromeOverlay(
                             moreOpen = false
                             onToggleAudioOnly()
                         },
+                        keptLive = keptLive,
+                        onKeptTune = { id ->
+                            moreOpen = false
+                            onKeptTune(id)
+                        },
+                        onKeptStop = { id ->
+                            // Close with the last row so the menu never sits
+                            // on an empty section.
+                            if (keptLive.size <= 1) moreOpen = false
+                            onKeptStop(id)
+                        },
+                        onKeptStopAll = {
+                            moreOpen = false
+                            onKeptStopAll()
+                        },
                     )
                 }
             }
@@ -679,6 +702,21 @@ fun PlayerChromeOverlay(
                         onAudioOnly = {
                             moreOpen = false
                             onToggleAudioOnly()
+                        },
+                        keptLive = keptLive,
+                        onKeptTune = { id ->
+                            moreOpen = false
+                            onKeptTune(id)
+                        },
+                        onKeptStop = { id ->
+                            // Close with the last row so the menu never sits
+                            // on an empty section.
+                            if (keptLive.size <= 1) moreOpen = false
+                            onKeptStop(id)
+                        },
+                        onKeptStopAll = {
+                            moreOpen = false
+                            onKeptStopAll()
                         },
                     )
                 }
@@ -1077,6 +1115,10 @@ private fun PlayerMoreMenu(
     canSwitchStream: Boolean,
     onSwitchStream: () -> Unit,
     onAudioOnly: () -> Unit,
+    keptLive: List<com.aeriotv.android.core.timeshift.TimeshiftController.RetainedChannel> = emptyList(),
+    onKeptTune: (String) -> Unit = {},
+    onKeptStop: (String) -> Unit = {},
+    onKeptStopAll: () -> Unit = {},
 ) {
     // Each row uses a leading icon for scannability, mirroring iOS's
     // SwiftUI `Label(text, systemImage:)` pattern in PlayerView.swift
@@ -1238,6 +1280,67 @@ private fun PlayerMoreMenu(
             },
             onClick = onAudioOnly,
         )
+        // Keep Recent Channels Live: the same rows as the nav-bar card, which
+        // is not shown over the fullscreen player. Name tunes (adopting the
+        // kept stream), Stop releases it.
+        if (keptLive.isNotEmpty()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            Text(
+                text = "Kept Live",
+                fontSize = 12.sp.subtext(),
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f).forText(),
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+            )
+            keptLive.asReversed().forEach { ch ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            if (!ch.logoUrl.isNullOrBlank()) {
+                                coil3.compose.AsyncImage(
+                                    model = ch.logoUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.FiberSmartRecord,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        },
+                        text = {
+                            Text(
+                                "Keeping ${ch.channelName} live",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        onClick = { onKeptTune(ch.channelId) },
+                        modifier = Modifier.weight(1f, fill = false).widthIn(max = 280.dp),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Stop", color = MaterialTheme.colorScheme.primary) },
+                        onClick = { onKeptStop(ch.channelId) },
+                        modifier = Modifier.width(88.dp),
+                    )
+                }
+            }
+            if (keptLive.size > 1) {
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Stop,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    text = { Text("Stop All", color = MaterialTheme.colorScheme.primary) },
+                    onClick = onKeptStopAll,
+                )
+            }
+        }
     }
     }
 }

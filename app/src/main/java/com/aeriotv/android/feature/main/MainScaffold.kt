@@ -251,6 +251,11 @@ fun MainScaffold(
     // focus row and works from every content tab.
     val retainedVm: com.aeriotv.android.feature.livetv.RetainedChannelsViewModel = hiltViewModel()
     val retainedList by retainedVm.retained.collectAsStateWithLifecycle()
+    // KEPT badges (guide rail, channel list) read this set.
+    val retainedIds = remember(retainedList) { retainedList.mapTo(HashSet()) { it.channelId } }
+    val tuneRetained: (String) -> Unit = { id ->
+        state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+    }
     var showRetainedDialog by remember { mutableStateOf(false) }
     if (showRetainedDialog) {
         com.aeriotv.android.feature.livetv.RetainedChannelsDialog(
@@ -998,6 +1003,9 @@ fun MainScaffold(
                         onDrawnBottomChanged = { barDrawnBottomPx = it },
                     )
                 }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.aeriotv.android.feature.livetv.LocalRetainedChannelIds provides retainedIds,
+                ) {
                 MainTabContent(
                     selectedTab = selectedTab,
                     tabs = tabs,
@@ -1041,6 +1049,7 @@ fun MainScaffold(
                             }
                         },
                 )
+                }
             }
             // No "Syncing" pill on TV: the top bar's Refresh circle already
             // spins while background work runs (refreshing = anyBackgroundWork).
@@ -1251,6 +1260,9 @@ fun MainScaffold(
                 // GH #20: observe every tab's scroll for the bottom-bar hide.
                 .nestedScroll(bottomBarScrollConnection),
         ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.aeriotv.android.feature.livetv.LocalRetainedChannelIds provides retainedIds,
+            ) {
             MainTabContent(
                 selectedTab = selectedTab,
                 tabs = tabs,
@@ -1273,6 +1285,7 @@ fun MainScaffold(
                 visited = visitedTabs,
                 modifier = Modifier.fillMaxSize(),
             )
+            }
             // No "Syncing" pill on phone: it sat on top of the Live TV
             // header's sidebar button, and the tab already shows a spinner.
             // Bottom overlay: floating mini-player card above the floating tab
@@ -1357,6 +1370,19 @@ fun MainScaffold(
                         switchChannelStream = { uuid, streamId ->
                             viewModel.switchChannelStream(uuid, streamId).getOrThrow()
                         },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                // Keep Recent Channels Live card (Apple parity): same slot and
+                // shell as the cast card, shown while any channel is kept live.
+                // This scaffold is not composed under the fullscreen player;
+                // there the Options menu carries the Kept Live rows instead.
+                if (retainedList.isNotEmpty() && !isTv) {
+                    com.aeriotv.android.feature.livetv.RetainedChannelsCard(
+                        retained = retainedList,
+                        onTune = tuneRetained,
+                        onStop = retainedVm::stop,
+                        onStopAll = retainedVm::stopAll,
                     )
                     Spacer(Modifier.height(8.dp))
                 }

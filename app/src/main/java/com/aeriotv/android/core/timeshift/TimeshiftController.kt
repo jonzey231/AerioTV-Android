@@ -45,6 +45,9 @@ class TimeshiftController @Inject constructor(
          *  video is removed this long after its session goes quiet. The
          *  liveRewindRetentionHours pref is dormant. */
         const val FIXED_RETENTION_MS = 60L * 60 * 1000
+
+        /** App log tag for Keep Recent Channels Live user actions. */
+        private const val APP_TAG = "AerioTV"
     }
 
     // Single-threaded: session start/stop/enter/exit all mutate the same
@@ -98,6 +101,7 @@ class TimeshiftController @Inject constructor(
      *  demote the outgoing session into [retained] instead of deleting it. */
     @Volatile private var currentChannelId: String? = null
     @Volatile private var currentChannelName: String? = null
+    @Volatile private var currentChannelLogo: String? = null
 
     /**
      * Keep Recent Channels Live (iOS parity): a flipped-away channel's
@@ -109,6 +113,9 @@ class TimeshiftController @Inject constructor(
     private class RetainedSession(
         val channelId: String,
         val channelName: String,
+        val logoUrl: String?,
+        /** Wall time the channel started being kept live (demotion). */
+        val sinceMs: Long,
         /** FROZEN at demotion. Never consults [currentPlayUrlProvider]:
          *  by demotion time the holder is already tuning the NEW channel,
          *  so chasing the provider would record the wrong channel. */
@@ -122,16 +129,24 @@ class TimeshiftController @Inject constructor(
 
     private val retained = LinkedHashMap<String, RetainedSession>()
 
-    data class RetainedChannel(val channelId: String, val channelName: String)
+    data class RetainedChannel(
+        val channelId: String,
+        val channelName: String,
+        val logoUrl: String? = null,
+        /** Wall time (ms) the channel started being kept live. */
+        val sinceMs: Long = 0L,
+    )
 
     /** UI-facing list of channels being kept live (recency order, oldest
-     *  first). LocalRecordingService.activeFlow shape: collect to drive
-     *  the Live TV indicator. */
+     *  first). Collected by the retained-channels card above the nav bar,
+     *  the player's Kept Live options section, and the KEPT badges. */
     private val _retainedChannels = MutableStateFlow<List<RetainedChannel>>(emptyList())
     val retainedChannels: StateFlow<List<RetainedChannel>> = _retainedChannels
 
     private fun publishRetained() {
-        _retainedChannels.value = retained.values.map { RetainedChannel(it.channelId, it.channelName) }
+        _retainedChannels.value = retained.values.map {
+            RetainedChannel(it.channelId, it.channelName, it.logoUrl, it.sinceMs)
+        }
     }
 
     /** The outgoing channel's ACTUAL play URL (post LAN/WAN failover),
@@ -190,6 +205,7 @@ class TimeshiftController @Inject constructor(
         channelName: String,
         streamUrl: String,
         headers: Map<String, String> = emptyMap(),
+        logoUrl: String? = null,
     ) {
         liveUrl = streamUrl
         liveHeaders = headers
@@ -222,6 +238,7 @@ class TimeshiftController @Inject constructor(
                         adopted.writer.markDiscontinuity()
                         currentChannelId = channelId
                         currentChannelName = channelName
+                        currentChannelLogo = logoUrl
                         activeWriter = adopted.writer
                         _state.value = State(
                             buffering = true,
@@ -245,6 +262,7 @@ class TimeshiftController @Inject constructor(
                 )
                 currentChannelId = channelId
                 currentChannelName = channelName
+                currentChannelLogo = logoUrl
                 activeWriter = writer
                 _state.value = State(
                     buffering = true,
@@ -272,9 +290,11 @@ class TimeshiftController @Inject constructor(
         val writer = activeWriter
         val chId = currentChannelId
         val chName = currentChannelName
+        val chLogo = currentChannelLogo
         activeWriter = null
         currentChannelId = null
         currentChannelName = null
+        currentChannelLogo = null
         if (writer == null) return
         // Freeze the URL now: the snapshot PlayerScreen took while the old
         // channel was still up beats the tune-time row URL (VPS-migration
@@ -288,7 +308,15 @@ class TimeshiftController @Inject constructor(
             runCatching { writer.sessionDir.deleteRecursively() }
             return
         }
-        val session = RetainedSession(chId, chName ?: chId, url, liveHeaders, writer)
+        val session = RetainedSession(
+            channelId = chId,
+            channelName = chName ?: chId,
+            logoUrl = chLogo?.takeIf { it.isNotBlank() },
+            sinceMs = System.currentTimeMillis(),
+            url = url,
+            headers = liveHeaders,
+            writer = writer,
+        )
         retained.remove(chId)
         retained[chId] = session
         while (retained.size > maxCount.coerceIn(1, 5)) {
@@ -402,10 +430,28 @@ class TimeshiftController @Inject constructor(
         }.onFailure { Log.w(TAG, "retained cleanup failed: $it") }
     }
 
-    /** Indicator dialog: stop keeping one channel live. */
+    /** Card / options-sheet Stop: stop keeping one channel live. Releases
+     *  the kept connection and its buffer immediately. */
     fun stopRetainedChannel(channelId: String) {
         scope.launch {
-            retained.remove(channelId)?.let { releaseRetained(it) }
+            retained.remove(channelId)?.let {
+                releaseRetained(it)
+                Log.i(APP_TAG, "[RETAIN] released by user ${it.channelName}")
+            }
+            publishRetained()
+        }
+    }
+
+    /** Card / options-sheet Stop All: same as [stopAllRetained], logged as a
+     *  user release per channel. */
+    fun stopAllRetainedByUser() {
+        scope.launch {
+            if (retained.isEmpty()) return@launch
+            retained.values.forEach {
+                releaseRetained(it)
+                Log.i(APP_TAG, "[RETAIN] released by user ${it.channelName}")
+            }
+            retained.clear()
             publishRetained()
         }
     }

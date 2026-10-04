@@ -250,6 +250,9 @@ fun PlayerSettingsScreen(
                                 checked = keepRecent,
                                 onCheckedChange = viewModel::setLiveRewindKeepRecent,
                             )
+                            // One footer sentence under the toggle, every form
+                            // factor (Apple parity).
+                            SettingsSectionFooter("Kept channels keep one connection to your server open until you stop them.")
                             if (keepRecent) {
                                 SteppedSliderRow(
                                     label = "Channels to Keep",
@@ -258,12 +261,6 @@ fun PlayerSettingsScreen(
                                     format = { it.toString() },
                                     onSelect = viewModel::setLiveRewindKeepCount,
                                 )
-                            }
-                            // tvOS prints this under the rows (its subgroup has
-                            // no page); the phone reads it on the pushed page's
-                            // footer above.
-                            if (isTv) {
-                                SettingsSectionFooter("Each kept channel holds an extra stream connection and uses bandwidth while it runs. Opening a channel beyond the limit drops the oldest.")
                             }
                         }
                     }

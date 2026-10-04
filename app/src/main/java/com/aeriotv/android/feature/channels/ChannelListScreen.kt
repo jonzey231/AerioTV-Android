@@ -1259,6 +1259,14 @@ internal fun ChannelRow(
                                 modifier = Modifier.size(13.dp),
                             )
                         }
+                        // Keep Recent Channels Live: KEPT badge while this
+                        // channel's stream is kept open in the background.
+                        if (channel.id in com.aeriotv.android.feature.livetv.LocalRetainedChannelIds.current) {
+                            Spacer(Modifier.width(6.dp))
+                            com.aeriotv.android.core.ui.EpgFlagBadge(
+                                com.aeriotv.android.core.ui.EpgFlag("KEPT", MaterialTheme.colorScheme.primary),
+                            )
+                        }
                     }
                     val subtitle = nowProgramme?.subTitle?.takeIf {
                         LocalShowProgramSubtitles.current &&

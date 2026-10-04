@@ -604,7 +604,7 @@ fun PlayerScreen(
             // GH #65 follow-on (VPS migration): the filler must chase the
             // holder's post-failover URL, not the stored channel row's.
             timeshiftController.currentPlayUrlProvider = { exoHolder.currentPlayUrl }
-            timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders)
+            timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders, logoUrl = ch.tvgLogo)
         } else {
             timeshiftController.onFullscreenLiveStopped()
         }
@@ -1745,6 +1745,10 @@ fun PlayerScreen(
             onLoadCurrentStreamId = onLoadCurrentStreamId,
             reportInteraction = reportInteraction,
             onClose = onClose,
+            onTuneChannelId = { id ->
+                val idx = channels.indexOfFirst { it.id == id }
+                if (idx >= 0 && idx != currentIndex) currentIndex = idx
+            },
         )
 
         // Remote Control: Left-press Channels overlay (GH #54), drawn above
@@ -2429,8 +2433,11 @@ private fun LiveRewindChromeSection(
     onLoadCurrentStreamId: suspend (String) -> Int?,
     reportInteraction: () -> Unit,
     onClose: () -> Unit,
+    /** Keep Recent Channels Live: tune a kept channel from the Options menu. */
+    onTuneChannelId: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val keptLive by timeshiftController.retainedChannels.collectAsStateWithLifecycle()
     // Own collector: this section is where the ticking window state is READ
     // at composition, so its emissions invalidate only this scope.
     val tsState by timeshiftController.state.collectAsStateWithLifecycle()
@@ -2529,6 +2536,10 @@ private fun LiveRewindChromeSection(
         channel = currentChannel,
         nowProgramme = nowProgramme,
         infoCardPrefs = infoCardPrefs,
+        keptLive = keptLive,
+        onKeptTune = onTuneChannelId,
+        onKeptStop = timeshiftController::stopRetainedChannel,
+        onKeptStopAll = timeshiftController::stopAllRetainedByUser,
         timeshiftState = if (tsState.buffering) tsState else null,
         timeshiftPositionWallMs = tsPositionWallMs,
         // Live TV with pause/rewind OFF: the transport comes from Live Rewind,
