@@ -1151,6 +1151,21 @@ fun MainScaffold(
     val staticTabletBar = androidx.compose.ui.platform.LocalConfiguration.current
         .smallestScreenWidthDp >= 600
     LaunchedEffect(staticTabletBar) { if (staticTabletBar) bottomBarVisible = true }
+    // Tablets: stash the corner mini at the trailing edge while Settings is
+    // selected (iPad parity, HomeView.swift MiniPlayerSettingsStash). Every
+    // tab change drops a sliver peek, as the iPad resets settingsMiniPeek.
+    // Cleared on dispose so a player / search route never inherits it.
+    LaunchedEffect(selectedTab, staticTabletBar) {
+        com.aeriotv.android.feature.player.PhoneMiniChrome.settingsPeek.value = false
+        com.aeriotv.android.feature.player.MiniPlayerChrome
+            .settingsStashed.value = staticTabletBar && selectedTab == AppTab.Settings
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            com.aeriotv.android.feature.player.MiniPlayerChrome.settingsStashed.value = false
+            com.aeriotv.android.feature.player.PhoneMiniChrome.settingsPeek.value = false
+        }
+    }
     val bottomBarScrollConnection = remember(density, staticTabletBar) {
         val hidePx = with(density) { 48.dp.toPx() }
         val showPx = with(density) { 12.dp.toPx() }

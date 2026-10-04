@@ -76,7 +76,9 @@ object MiniPlayerChrome {
     /** True while the TV shell's Settings tab is selected. The corner mini
      *  slides mostly off the trailing edge (a [stashSliver] of video stays on
      *  screen) so it never covers Settings, and slides back out the moment
-     *  another tab is selected. Published by MainScaffold's TV branch. */
+     *  another tab is selected. Published by MainScaffold's TV branch, and by
+     *  its touch branch on tablets (sw >= 600 dp), where PhoneMiniPlayer.kt
+     *  applies it (iPad parity). Phones never set it. */
     val settingsStashed = MutableStateFlow(false)
 
     /** Width of the video left on screen while the mini is stashed. */

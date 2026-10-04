@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.player
 
+import com.aeriotv.android.core.pip.findActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -131,10 +132,11 @@ private object VideoScalePinchSignal {
 fun Modifier.videoScalePinch(
     settingsVm: SettingsViewModel,
     enabled: Boolean = true,
+    onPinchIn: (() -> Unit)? = null,
 ): Modifier = if (!enabled) {
     this
 } else {
-    this.pointerInput(settingsVm) {
+    this.pointerInput(settingsVm, onPinchIn) {
         awaitPointerEventScope {
             while (true) {
                 var event = awaitPointerEvent()
@@ -163,6 +165,10 @@ fun Modifier.videoScalePinch(
                     VideoScalePinchSignal.label = videoScaleLabel(next)
                     VideoScalePinchSignal.serial++
                 }
+                // iPad parity: the player's minimize pinch is a simultaneous
+                // gesture with the same 0.85 threshold, so a pinch in sets Fit
+                // AND minimizes (HomeView.swift MagnificationGesture).
+                if (ratio < PINCH_IN_RATIO) onPinchIn?.invoke()
             }
         }
     }
@@ -244,4 +250,24 @@ fun VideoScaleOptionRow(settingsVm: SettingsViewModel) {
             color = MaterialTheme.colorScheme.onBackground,
         )
     }
+}
+
+/**
+ * Tablet pinch-to-minimize callback for [videoScalePinch], or null on phones
+ * (sw < 600 dp) and when [enabled] is false. Dispatches a system Back, the
+ * same path as the top-strip minimize swipe. Kept out of PlayerScreen so its
+ * top-level composable gains no locals (JVM register limit).
+ */
+@androidx.compose.runtime.Composable
+fun tabletPinchMinimize(enabled: Boolean): (() -> Unit)? {
+    val tablet = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp >= 600
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val action = androidx.compose.runtime.remember(context) {
+        {
+            (context.findActivity() as? androidx.activity.ComponentActivity)
+                ?.onBackPressedDispatcher?.onBackPressed()
+            Unit
+        }
+    }
+    return if (enabled && tablet) action else null
 }

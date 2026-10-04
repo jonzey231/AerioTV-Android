@@ -1646,7 +1646,15 @@ fun PlayerScreen(
                 // Pinch to switch Fit <-> Fill on touch devices (no-op on TV).
                 // Lives in the SAME chain as the tap / drag handlers: a sibling
                 // overlay Box would win hit testing and swallow every tap.
-                .videoScalePinch(settingsVm, enabled = !isTvForm)
+                // Tablets (iPad parity): a pinch in below 0.85 also minimizes
+                // to the corner mini, through the same Back path as the
+                // top-strip swipe. This screen is a single stream (multiview
+                // has its own screen) and is never shown while minimized.
+                .videoScalePinch(
+                    settingsVm,
+                    enabled = !isTvForm,
+                    onPinchIn = tabletPinchMinimize(enabled = !isTvForm && !isCatchupMode),
+                )
                 // Swipe down from the top strip = Back = minimize (live only;
                 // catch-up cannot minimize yet, so it gets no gesture); cancels
                 // the channel-flip swipe above when it starts there. Must stay

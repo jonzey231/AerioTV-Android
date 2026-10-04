@@ -67,8 +67,10 @@ import kotlinx.coroutines.launch
  * window's own touch controls (drag to a corner, tap to expand, X to stop) and
  * the top-strip swipe-down that minimizes the fullscreen player.
  *
- * TV never reaches any of this (PersistentExoWindow keeps its tvOS geometry,
- * including the Settings stash, which stays TV-only).
+ * TV never reaches any of this (PersistentExoWindow keeps its tvOS geometry).
+ * Tablets (sw >= 600 dp) share these controls but dock like the iPad corner
+ * mini: fixed top-trailing, 400x225 dp, 24 dp in, no drag, and stashed at the
+ * trailing edge while Settings is selected.
  */
 object PhoneMiniChrome {
     /** Live finger travel (px, downward) of a top-strip minimize drag on the
@@ -92,6 +94,29 @@ object PhoneMiniChrome {
     val topChromeBottomPx = mutableFloatStateOf(0f)
 
     enum class Corner { TopStart, TopEnd, BottomStart, BottomEnd }
+
+    /** Tablet only: the user tapped the stashed sliver on Settings to bring
+     *  the mini back out (iPad settingsMiniPeek, HomeView.swift). Reset by
+     *  MainScaffold on every tab change. */
+    val settingsPeek = mutableStateOf(false)
+}
+
+/** iPad corner mini geometry (HomeView.swift: 400x225 pt, 24 pt from the top
+ *  and trailing edges), in dp for tablets. */
+private val TABLET_MINI_WIDTH = 400.dp
+private val TABLET_MINI_INSET = 24.dp
+
+@Composable
+private fun isTabletMini(): Boolean =
+    androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp >= 600
+
+/** True while the tablet mini should sit stashed at the trailing edge. */
+@Composable
+private fun tabletMiniStashed(tablet: Boolean): Boolean {
+    if (!tablet) return false
+    val stashed by MiniPlayerChrome.settingsStashed.collectAsStateWithLifecycle()
+    val peek by PhoneMiniChrome.settingsPeek
+    return stashed && !peek
 }
 
 /** Fraction of the player's height, from the top, where a minimize swipe may
@@ -200,9 +225,16 @@ fun BoxScope.phoneMiniFrameModifier(
     val edge = with(density) { MINI_EDGE.toPx() }
     val gap = with(density) { MINI_GAP.toPx() }
 
-    // iPhone PiP proportions: a bit under half the short side, 16:9.
+    // Tablets dock like the iPad corner mini; phones use iPhone PiP
+    // proportions (a bit under half the short side). Both 16:9.
+    val tablet = isTabletMini()
+    val stashed = tabletMiniStashed(tablet)
     val shortSide = with(density) { minOf(fullW, fullH).toDp() }
-    val miniWdp = (shortSide * 0.46f).coerceIn(160.dp, 320.dp)
+    val miniWdp = if (tablet) {
+        TABLET_MINI_WIDTH.coerceAtMost(shortSide * 0.6f)
+    } else {
+        (shortSide * 0.46f).coerceIn(160.dp, 320.dp)
+    }
     val miniW = with(density) { miniWdp.toPx() }
     val miniH = miniW * 9f / 16f
 
@@ -213,14 +245,30 @@ fun BoxScope.phoneMiniFrameModifier(
     val minX = insetLeft + edge
     val maxX = fullW - insetRight - edge - miniW
 
-    val corner by PhoneMiniChrome.corner
+    val storedCorner by PhoneMiniChrome.corner
+    val corner = if (tablet) PhoneMiniChrome.Corner.TopEnd else storedCorner
     val dragging by PhoneMiniChrome.dragging
     val dragPx by PhoneMiniChrome.dragPx
     val startSide = corner == PhoneMiniChrome.Corner.TopStart || corner == PhoneMiniChrome.Corner.BottomStart
     val leftSide = startSide != rtl
     val topSide = corner == PhoneMiniChrome.Corner.TopStart || corner == PhoneMiniChrome.Corner.TopEnd
-    val cornerX = if (leftSide) minX else maxX
-    val cornerY = if (topSide) minY else maxY.coerceAtLeast(minY)
+    val tabletInset = with(density) { TABLET_MINI_INSET.toPx() }
+    val sliver = with(density) { MiniPlayerChrome.stashSliver.toPx() }
+    val cornerX = when {
+        // Settings stash (iPad MiniPlayerSettingsStash): slide toward the
+        // trailing edge until only the sliver of video stays on screen.
+        tablet && stashed -> if (rtl) sliver - miniW else fullW - sliver
+        tablet -> if (rtl) insetLeft + tabletInset else fullW - insetRight - tabletInset - miniW
+        leftSide -> minX
+        else -> maxX
+    }
+    val cornerY = when {
+        // 24 dp below the status bar rather than the physical top, so the
+        // window never covers the system status icons.
+        tablet -> insetTop + tabletInset
+        topSide -> minY
+        else -> maxY.coerceAtLeast(minY)
+    }
 
     val miniTarget = mode == ExoWindowState.Mode.Mini && !inPip
     val liveDrag = mode == ExoWindowState.Mode.Fullscreen && dragging
@@ -309,7 +357,8 @@ fun BoxScope.phoneMiniFrameModifier(
         .clip(RoundedCornerShape(radius))
         .background(Color.Black)
         .then(
-            if (miniUp) {
+            // Tablets stay docked top-trailing like the iPad: no drag.
+            if (miniUp && !tablet) {
                 Modifier.phoneMiniDrag(
                     ax = ax,
                     ay = ay,
@@ -406,12 +455,19 @@ fun BoxScope.PhoneMiniControls(
     session: MiniPlayerSession,
 ) {
     val context = LocalContext.current
+    val stashed = tabletMiniStashed(isTabletMini())
+    val currentStashed by androidx.compose.runtime.rememberUpdatedState(stashed)
     Box(
         Modifier
             .matchParentSize()
             .pointerInput(Unit) {
                 detectTapGestures(onTap = {
-                    if (PhoneVodMini.isActive) {
+                    if (currentStashed) {
+                        // iPad parity: a tap on the stashed sliver slides the
+                        // mini back out and stays on Settings; the next tap
+                        // expands it.
+                        PhoneMiniChrome.settingsPeek.value = true
+                    } else if (PhoneVodMini.isActive) {
                         // On-demand: Navigation's expandRequests collector
                         // re-pushes the player route, which adopts the instance.
                         PhoneVodMini.expand()
@@ -424,6 +480,8 @@ fun BoxScope.PhoneMiniControls(
                 })
             },
     )
+    // The X stays off while stashed so a tap on the sliver can only peek.
+    if (stashed) return
     Box(
         Modifier
             .align(Alignment.TopEnd)
