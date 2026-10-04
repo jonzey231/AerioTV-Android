@@ -384,8 +384,6 @@ fun ChannelListScreen(
         // group name, Search, Sort and the List / Guide toggle. It takes the
         // status-bar inset itself so nothing sits under the clock. Android TV
         // has no bar either: its controls live on the group-pill row below.
-        // Keep Recent Channels Live: header indicator (shared with the Guide).
-        val retainedVm: com.aeriotv.android.feature.livetv.RetainedChannelsViewModel = hiltViewModel()
         if (!isTv) com.aeriotv.android.feature.livetv.LiveTvPhoneHeaderRow(
             sidebarMode = phoneSidebarMode,
             activeGroupLabel = groupLabelFor(state.selectedGroup),
@@ -410,16 +408,6 @@ fun ChannelListScreen(
                 if (!searchActive) viewModel.onSearchQueryChange("")
             },
             modifier = Modifier.statusBarsPadding(),
-            extraActions = {
-                com.aeriotv.android.feature.livetv.RetainedChannelsAction(
-                    viewModel = retainedVm,
-                    buttonSize = 38.dp,
-                    iconSize = 18.dp,
-                    onJumpToChannel = { id ->
-                        state.channels.firstOrNull { it.id == id }?.let(onChannelClick)
-                    },
-                )
-            },
             sortMode = state.sortMode,
             onSortModeChange = viewModel::onSortModeChange,
             canToggleViewMode = canToggleViewMode,
@@ -469,7 +457,12 @@ fun ChannelListScreen(
         // never emits the event.
         com.aeriotv.android.feature.main.OnTabReselect(
             com.aeriotv.android.feature.main.AppTab.LiveTV,
-        ) { listState.animateScrollToItem(0) }
+        ) {
+            // Already at the top of the current group: nothing to animate.
+            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                listState.animateScrollToItem(0)
+            }
+        }
         val chipsVisible by remember {
             derivedStateOf { listState.firstVisibleItemIndex == 0 }
         }

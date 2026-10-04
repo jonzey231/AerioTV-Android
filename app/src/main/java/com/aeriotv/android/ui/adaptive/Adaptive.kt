@@ -82,9 +82,7 @@ data class Viewport(val widthDp: Int, val heightDp: Int, val diagonalInches: Flo
      * landscape phone (roughly 997x450dp, "expanded" by width) stacked.
      *
      * Deliberately a SEPARATE flag from [isTwoPaneEligible] rather than a
-     * relaxation of it: [prefersTopTabBar] is built on that one, and moving
-     * the main tab bar to the top of a 600dp window is not part of this phase
-     * (Logan 2026-09-08: phones and foldables keep the bottom bar).
+     * relaxation of it, so the other expanded-width layouts keep their gate.
      */
     val settingsTwoPane: Boolean get() = widthDp >= 600 && heightDp >= 480
 
@@ -178,37 +176,8 @@ fun Modifier.adaptiveFormWidth(): Modifier {
  * Bottom padding a scrolling tab surface must reserve so its last row clears
  * the floating tab pill.
  *
- * The pill OVERLAYS content (iOS 26 parity), so every tab screen has to hold
- * space for it itself. On tablets the pill moves to the TOP and sits in normal
- * flow, so that reserve becomes dead space at the end of every list -- hence a
- * provided value rather than the 104.dp that used to be typed into each screen.
+ * The pill OVERLAYS content (iOS 26 parity) on every non-TV form factor, so
+ * every tab screen has to hold space for it itself. Provided by the scaffold
+ * so the reserve tracks the system navigation inset.
  */
 val LocalTabBarBottomInset = androidx.compose.runtime.compositionLocalOf { 104.dp }
-
-/**
- * Whether the main tab bar belongs at the TOP of the window.
- *
- * Tablets: yes. Material's adaptive guidance specifies bottom navigation for
- * COMPACT widths only and moves it off the bottom edge at expanded ones, the
- * bottom pill collides with the expanded-width Settings sidebar, and iPad
- * already puts its tab bar on top -- so tablets match across both platforms.
- * Phones keep the bottom pill; TV has its own 10-foot top bar already.
- */
-/** Top tab bar only on real tablets; phones and foldables keep the bottom bar (Logan 2026-09-08).
- *  Stays on [Viewport.isTwoPaneEligible] (expanded width) on purpose: Settings
- *  phase 2 widened only its OWN two-pane gate, [Viewport.settingsTwoPane]. */
-val Viewport.prefersTopTabBar: Boolean get() = isTwoPaneEligible && isTabletSize
-
-/**
- * Size multiplier for the tablet top tab bar, 1.0 at the iPad 12.9-inch
- * reference width (1024pt).
- *
- * Matching iPad's ABSOLUTE point sizes would render visibly small here: an
- * Android tablet reports more dp across a similar physical width (the Pixel
- * Tablet is 1280dp over roughly the same span the iPad covers in 1024pt), so
- * a 38dp bar would be a smaller fraction of the screen than iPad's 38pt one.
- * Scaling by width keeps the bar the same PROPORTION of the display it is on
- * iPad, which is what makes an 8-inch and a 13-inch tablet both look right.
- * Clamped so the extremes stay sane.
- */
-val Viewport.topTabBarScale: Float get() = (widthDp / 1024f).coerceIn(0.9f, 1.35f)

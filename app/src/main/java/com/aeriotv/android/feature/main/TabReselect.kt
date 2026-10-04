@@ -6,7 +6,7 @@
 // container to the top.
 //
 // One event, emitted by the ONE place that knows a press landed on the already
-// selected tab (MainScaffold's bottom bar / tablet top bar). Each tab screen
+// selected tab (MainScaffold's bottom bar). Each tab screen
 // observes it where its own nav stack and scroll state already live, which is
 // the only place that can answer "am I at my root?" -- hoisting either of those
 // up to the scaffold would mean threading a LazyListState through five screens

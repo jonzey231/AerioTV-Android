@@ -167,7 +167,12 @@ fun GuideGrid(
     // would throw away a deliberate jump to another hour.
     com.aeriotv.android.feature.main.OnTabReselect(
         com.aeriotv.android.feature.main.AppTab.LiveTV,
-    ) { listState.animateScrollToItem(0) }
+    ) {
+        // Already at the top of the current group: nothing to animate.
+        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
 
     // Lane: keep the focused row two rows below the top edge once past it.
     // snapshotFlow, not effect keys: reading focusRow in composition would

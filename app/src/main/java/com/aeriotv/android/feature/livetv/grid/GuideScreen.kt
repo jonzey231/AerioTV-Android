@@ -51,8 +51,6 @@ import com.aeriotv.android.feature.livetv.LiveTvPhoneCircle
 import com.aeriotv.android.feature.livetv.LiveTvPhoneHeaderRow
 import com.aeriotv.android.feature.livetv.PhoneGroupDrawerHost
 import com.aeriotv.android.feature.livetv.ManageGroupsSheet
-import com.aeriotv.android.feature.livetv.RetainedChannelsAction
-import com.aeriotv.android.feature.livetv.RetainedChannelsViewModel
 import com.aeriotv.android.feature.livetv.TvGroupPicker
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -996,7 +994,6 @@ fun GuideScreen(
             // The header row carries the groups control, the pills or the
             // active group name + count, Search, Sort and the List / Guide
             // toggle; the Column above already applies the status-bar inset.
-            val retainedVm: RetainedChannelsViewModel = hiltViewModel()
             LiveTvPhoneHeaderRow(
                 sidebarMode = phoneSidebarMode,
                 activeGroupLabel = groupLabelFor(state.selectedGroup),
@@ -1014,12 +1011,6 @@ fun GuideScreen(
                 collectionPillItem = collectionPillItem,
                 searchActive = searchActive,
                 onToggleSearch = { searchActive = !searchActive; if (!searchActive) viewModel.onSearchQueryChange("") },
-                extraActions = {
-                    RetainedChannelsAction(
-                        viewModel = retainedVm, buttonSize = 38.dp, iconSize = 18.dp,
-                        onJumpToChannel = { id -> state.channels.firstOrNull { it.id == id }?.let(onChannelClick) },
-                    )
-                },
                 sortMode = state.sortMode,
                 onSortModeChange = viewModel::onSortModeChange,
                 onJumpToDay = { showJumpSheet = true },

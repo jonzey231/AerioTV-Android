@@ -427,9 +427,6 @@ fun LiveTvPhoneHeaderRow(
     sortMode: SortMode,
     onSortModeChange: (SortMode) -> Unit,
     modifier: Modifier = Modifier,
-    /** Extra circles between the group area and the overflow button (the
-     *  kept-live indicator); these are status indicators, not menu actions. */
-    extraActions: @Composable () -> Unit = {},
     /** Guide only: opens the jump-to-day sheet. Null hides the menu item. */
     onJumpToDay: (() -> Unit)? = null,
     canToggleViewMode: Boolean,
@@ -499,7 +496,6 @@ fun LiveTvPhoneHeaderRow(
                 Spacer(Modifier.weight(1f).widthIn(min = 4.dp))
             }
         }
-        extraActions()
         if (collapsible) {
             // Pills are showing, so the row cannot afford four circles. The
             // three-dot EXPANDS IN PLACE into them (no dropdown), and any tap
