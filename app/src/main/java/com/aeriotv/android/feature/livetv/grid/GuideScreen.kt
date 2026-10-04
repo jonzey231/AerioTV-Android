@@ -592,6 +592,8 @@ fun GuideScreen(
     // only because the old guide composed first), so keep asking for about a
     // second until the grid actually holds focus.
     var gridHasFocus by remember { mutableStateOf(false) }
+    // Wall time of the last key pressed inside the guide (boundary refocus idle gate).
+    val lastGuideKeyAt = remember { longArrayOf(0L) }
     // True while ANYTHING inside the guide holds focus (grid, pills, banner,
     // sidebar pane). The stranded-focus watchdog below keys off this, not off
     // gridHasFocus, so it can never steal focus from the guide's own chrome
@@ -626,6 +628,16 @@ fun GuideScreen(
     LaunchedEffect(isTv, rows.isEmpty, tabActive) {
         if (!tabActive) return@LaunchedEffect
         if (isTv && !rows.isEmpty) {
+            // Cold launch: the top bar's one-shot pull owns first focus (the
+            // landing tab's pill). Wait for it instead of focusing row 0 first
+            // and being pulled off a frame later (the visible flash). Bounded
+            // so a pull that never runs cannot strand the guide.
+            if (com.aeriotv.android.ui.tv.TvColdStartFocus.pending) {
+                var waited = 0
+                while (com.aeriotv.android.ui.tv.TvColdStartFocus.pending && waited < 3_000) { delay(50L); waited += 50 }
+                com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=launch-loop waited-for-cold-start-pull ms=$waited")
+                delay(100L)
+            }
             repeat(12) { attempt ->
                 if (gridHasFocus) {
                     if (attempt > 0) com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=launch-loop result=success attempts=$attempt")
@@ -682,9 +694,29 @@ fun GuideScreen(
             // Let a legitimate hand-off (dialog opening, route change, the
             // bar claiming focus a frame later) settle before assuming a trap.
             delay(350L)
+            while (com.aeriotv.android.ui.tv.TvColdStartFocus.pending) delay(50L)
             if (guideHasFocus || topNavHasFocus.value) return@LaunchedEffect
             val ok = runCatching { gridFocus.requestFocus() }.isSuccess
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=stranded result=$ok ${traceGates()}")
+        }
+    }
+
+    // Idle boundary refocus (Logan 2026-10-03): when the focused program ends
+    // while the guide sits idle, focus moves to the program now airing on the
+    // same row, so Select tunes instead of opening Program Info for a show
+    // that is over. Runs on the 30 s clock tick; only the cell on the row
+    // changes (the locked Left/Right/clock model and the viewport are
+    // untouched). Skipped after a recent key, with any sheet or menu up, and
+    // whenever the grid does not hold focus.
+    if (isTv) {
+        LaunchedEffect(nowMs) {
+            if (!tabActive || !gridHasFocus || rows.isEmpty) return@LaunchedEffect
+            if (System.currentTimeMillis() - lastGuideKeyAt[0] < 5_000L) return@LaunchedEffect
+            if (groupSidebarOpen || showManageGroups || showJumpSheet || searchActive || menuFor != null ||
+                programInfoTarget != null || recordTarget != null || collectionPickerFor != null) return@LaunchedEffect
+            val row = grid.focusRow
+            val moved = grid.boundaryRetarget(nowMs) ?: return@LaunchedEffect
+            com.aeriotv.android.ui.tv.TvFocusTrace.guide("boundary refocus row=$row from=${moved.first.title} to=${moved.second.title}")
         }
     }
 
@@ -874,6 +906,7 @@ fun GuideScreen(
     Box(modifier = modifier.fillMaxSize().onGloballyPositioned { guideTopPx = it.positionInRoot().y }
         .onFocusChanged { guideHasFocus = it.hasFocus }
         .onPreviewKeyEvent { e ->
+            if (e.type == KeyEventType.KeyDown) lastGuideKeyAt[0] = System.currentTimeMillis()
             // Trace only, never consumes: a D-pad key inside the guide that the
             // grid node will not see (focus is on the banner, pills, sidebar...).
             if (isTv && !gridHasFocus && e.type == KeyEventType.KeyDown) {

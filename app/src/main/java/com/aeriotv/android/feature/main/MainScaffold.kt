@@ -2044,6 +2044,10 @@ private fun TvTopTabBar(
             initialPillFocusPulled = true
             androidx.compose.runtime.withFrameNanos { }
             runCatching { pillRequesters[selected]?.requestFocus() }
+            com.aeriotv.android.ui.tv.TvFocusTrace.guide("cold-start pull tab=$selected")
+            com.aeriotv.android.ui.tv.TvColdStartFocus.pending = false
+        } else if (initialPillFocusPulled) {
+            com.aeriotv.android.ui.tv.TvColdStartFocus.pending = false
         }
     }
     // Custom layout so the PILL CAPSULE is centered on the SCREEN (Logan

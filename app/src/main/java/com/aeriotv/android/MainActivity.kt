@@ -841,6 +841,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Fresh launch only: hold tab content off focus until the top bar's
+        // cold-start pull lands on the landing tab's pill.
+        com.aeriotv.android.ui.tv.TvColdStartFocus.pending = savedInstanceState == null
         // GH#40 rate match: the seamless matcher reports the content rate
         // class; pick a same-size display mode at that rate when needed.
         com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onRateRequested = { rate ->
