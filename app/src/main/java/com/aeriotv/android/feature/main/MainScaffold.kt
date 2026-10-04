@@ -1346,49 +1346,56 @@ fun MainScaffold(
                     )
                     Spacer(Modifier.height(8.dp))
                 }
-                // Keep Recent Channels Live card (Apple parity): same slot and
-                // shell as the cast card, shown while any channel is kept live.
-                // This scaffold is not composed under the fullscreen player;
-                // there the Options menu carries the Kept Live rows instead.
-                if (retainedList.isNotEmpty() && !isTv) {
-                    com.aeriotv.android.feature.livetv.RetainedChannelsCard(
-                        retained = retainedList,
-                        onTune = tuneRetained,
-                        onStop = retainedVm::stop,
-                        onStopAll = retainedVm::stopAll,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
                 // is discovered on the LAN OR a Google Cast route exists, so the
                 // phone can be a remote / start a cast without opening a channel
-                // first (task #255: this used to be companion-only while the
-                // player's picker also listed cast devices). Hidden while
-                // already controlling / casting (their cards take over).
+                // first (task #255). Hidden while already controlling / casting
+                // (their cards take over).
                 val showControlFab = (companionDevices.isNotEmpty() ||
                         castState !is com.aeriotv.android.core.cast.AerioCastSender.State.Unavailable) &&
                     companionConn !is com.aeriotv.android.core.cast.companion
                         .CompanionRemoteController.Conn.Connected &&
                     !casting && !isTv
-                // While the bar is minimized the button drops level with the
-                // pill in the bottom-left corner instead (below).
                 // Tablets (sw >= 600 dp): the button sits static at the
-                // trailing edge, vertically centred on the pill row, and never
-                // moves with the collapse (Logan 2026-10-04). Phones keep the
-                // above-the-bar spot that drops level when minimized.
+                // trailing edge on the pill row (below) and never moves with
+                // the collapse (Logan 2026-10-04). Phones keep the above-the-bar
+                // spot that drops level with the minimized pill.
                 val tabletNav = androidx.compose.ui.platform.LocalConfiguration.current
                     .smallestScreenWidthDp >= 600
-                if (showControlFab && bottomBarVisible && !tabletNav) {
-                    Box(
-                        Modifier.fillMaxWidth().padding(end = 16.dp),
-                        contentAlignment = Alignment.CenterEnd,
+                val phoneFab = showControlFab && bottomBarVisible && !tabletNav
+                // Keep Recent Channels Live pill (Apple parity, Logan
+                // 2026-10-04): one compact line sharing the Control a TV
+                // button's row, pill leading and filling the width, button
+                // trailing. Two or more kept: tapping the text opens the Kept
+                // Live list (the same dialog the TV circle uses). This scaffold
+                // is not composed under the fullscreen player; there the
+                // Options menu carries the Kept Live rows instead.
+                val showKept = retainedList.isNotEmpty() && !isTv
+                if (showKept || phoneFab) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End,
                     ) {
-                        CompanionControlFab(
-                            onClick = { showCompanionPicker = true },
-                        )
+                        if (showKept) {
+                            com.aeriotv.android.feature.livetv.RetainedChannelsPill(
+                                retained = retainedList,
+                                onTune = tuneRetained,
+                                onOpenList = { showRetainedDialog = true },
+                                onStop = retainedVm::stop,
+                                onStopAll = retainedVm::stopAll,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (phoneFab) {
+                            if (showKept) Spacer(Modifier.width(10.dp))
+                            CompanionControlFab(
+                                onClick = { showCompanionPicker = true },
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(if (phoneFab) 10.dp else 8.dp))
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right

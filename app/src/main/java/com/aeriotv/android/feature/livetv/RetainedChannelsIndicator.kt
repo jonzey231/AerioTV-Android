@@ -3,7 +3,7 @@ package com.aeriotv.android.feature.livetv
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,7 +45,8 @@ class RetainedChannelsViewModel @Inject constructor(
 
 /**
  * TV kept-live menu, opened from the floating circle in TvTopTabBar. Phones
- * and tablets use [RetainedChannelsCard] above the bottom nav bar instead.
+ * and tablets use [RetainedChannelsPill] above the bottom nav bar, whose
+ * multi-channel text opens this same dialog.
  */
 @Composable
 fun RetainedChannelsDialog(
@@ -100,104 +101,71 @@ fun RetainedChannelsDialog(
 val LocalRetainedChannelIds = androidx.compose.runtime.compositionLocalOf { emptySet<String>() }
 
 /**
- * Keep Recent Channels Live card (Apple parity), phone and tablet only. Sits
- * where the cast card sits, above the bottom nav bar. TV uses the top-bar
- * kept-live circle and its dialog instead (Apple TV parity). Same shell as the cast card (20 dp corners, accent hairline, surface
- * row, 40 dp logo tile). One line per kept channel, "Keeping <name> live", with
- * its own Stop; "Stop All" when more than one is kept. Tapping a name tunes it,
- * which adopts the kept stream exactly as a re-tune does.
+ * Keep Recent Channels Live pill (Apple parity, Logan 2026-10-04), phone and
+ * tablet only. One compact line in the card slot above the bottom nav bar,
+ * sharing its row with the Control a TV button (pill leading, button
+ * trailing). TV uses the top-bar kept-live circle and its dialog instead.
+ * One kept: channel logo, "Keeping <name> live" (tap tunes it, adopting the
+ * kept stream exactly as a re-tune does) and Stop. Two or more: "Keeping N
+ * channels live" (tap opens the Kept Live list) and Stop All.
  */
 @Composable
-fun RetainedChannelsCard(
+fun RetainedChannelsPill(
     retained: List<com.aeriotv.android.core.timeshift.TimeshiftController.RetainedChannel>,
     onTune: (String) -> Unit,
+    onOpenList: () -> Unit,
     onStop: (String) -> Unit,
     onStopAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (retained.isEmpty()) return
-    val shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
-    // Most recently kept first, like the dialog.
-    val rows = retained.asReversed()
-    androidx.compose.foundation.layout.Column(
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(26.dp)
+    val single = retained.size == 1
+    val latest = retained.last()
+    androidx.compose.foundation.layout.Row(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
+            .height(52.dp)
             .clip(shape)
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape)
-            .background(MaterialTheme.colorScheme.surface),
-    ) {
-        rows.forEachIndexed { index, ch ->
-            if (index > 0) {
-                androidx.compose.material3.HorizontalDivider(
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                )
-            }
-            RetainedChannelRow(
-                channel = ch,
-                onTune = { onTune(ch.channelId) },
-                onStop = { onStop(ch.channelId) },
-            )
-        }
-        if (rows.size > 1) {
-            androidx.compose.foundation.layout.Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
-            ) {
-                RetainedCardButton(label = "Stop All", onClick = onStopAll)
-            }
-        }
-    }
-}
-
-@Composable
-private fun RetainedChannelRow(
-    channel: com.aeriotv.android.core.timeshift.TimeshiftController.RetainedChannel,
-    onTune: () -> Unit,
-    onStop: () -> Unit,
-) {
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(start = 6.dp, end = 4.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         androidx.compose.foundation.layout.Row(
             modifier = Modifier
                 .weight(1f)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
-                .clickable(onClick = onTune)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
+                .clickable(onClick = { if (single) onTune(latest.channelId) else onOpenList() })
                 .padding(4.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            val logo = channel.logoUrl
+            val logo = latest.logoUrl
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(36.dp)
                     .clip(com.aeriotv.android.core.ui.artworkTileShape(6.dp, model = logo))
                     .background(MaterialTheme.colorScheme.background),
                 contentAlignment = androidx.compose.ui.Alignment.Center,
             ) {
-                if (!logo.isNullOrBlank()) {
+                if (single && !logo.isNullOrBlank()) {
                     coil3.compose.AsyncImage(
                         model = logo,
                         contentDescription = null,
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(32.dp),
                     )
                 } else {
                     Icon(
                         imageVector = Icons.Filled.FiberSmartRecord,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
-            androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
+            androidx.compose.foundation.layout.Spacer(Modifier.width(10.dp))
             androidx.compose.material3.Text(
-                text = "Keeping ${channel.channelName} live",
+                text = if (single) "Keeping ${latest.channelName} live"
+                else "Keeping ${retained.size} channels live",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
@@ -205,8 +173,11 @@ private fun RetainedChannelRow(
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
         }
-        androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
-        RetainedCardButton(label = "Stop", onClick = onStop)
+        if (single) {
+            RetainedCardButton(label = "Stop", onClick = { onStop(latest.channelId) })
+        } else {
+            RetainedCardButton(label = "Stop All", onClick = onStopAll)
+        }
     }
 }
 
