@@ -2038,17 +2038,34 @@ private fun TvTopTabBar(
     // saveable state lives with the nav entry, so the pull stays one-shot
     // per Activity, which is what the cold-start case needs.
     var initialPillFocusPulled by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    // The cold-start pull's tab and time, until the landing tab is applied.
+    var coldPull by remember { mutableStateOf<Pair<AppTab, Long>?>(null) }
     val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
     LaunchedEffect(windowFocused) {
         if (windowFocused && !initialPillFocusPulled) {
             initialPillFocusPulled = true
             androidx.compose.runtime.withFrameNanos { }
             runCatching { pillRequesters[selected]?.requestFocus() }
+            coldPull = selected to android.os.SystemClock.uptimeMillis()
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("cold-start pull tab=$selected")
             com.aeriotv.android.ui.tv.TvColdStartFocus.pending = false
         } else if (initialPillFocusPulled) {
             com.aeriotv.android.ui.tv.TvColdStartFocus.pending = false
         }
+    }
+    // The saved Default Landing Tab is applied a beat AFTER the pull (the
+    // preference loads async), so on a DVR / Movies / TV Shows landing the
+    // pull focused the Live TV pill while the landing tab was shown
+    // (Streamer 2026-10-04). Follow the landing tab once, only while focus
+    // still sits on the pulled pill untouched and within a few seconds.
+    LaunchedEffect(selected) {
+        val (pulledTab, pulledAt) = coldPull ?: return@LaunchedEffect
+        if (selected == pulledTab) return@LaunchedEffect
+        coldPull = null
+        if (!navHasFocus || focusedTab != pulledTab) return@LaunchedEffect
+        if (android.os.SystemClock.uptimeMillis() - pulledAt > 5_000L) return@LaunchedEffect
+        runCatching { pillRequesters[selected]?.requestFocus() }
+        com.aeriotv.android.ui.tv.TvFocusTrace.guide("cold-start pull follows landing tab=$selected")
     }
     // Custom layout so the PILL CAPSULE is centered on the SCREEN (Logan
     // 2026-08-06: adding the circles to a shared centered row shoved the
@@ -2086,7 +2103,9 @@ private fun TvTopTabBar(
                         onExit = {
                             if (requestedFocusDirection == androidx.compose.ui.focus.FocusDirection.Down) {
                                 val target = tabEntryFocus?.value
-                                if (target != null && runCatching { target.requestFocus() }.isSuccess) {
+                                val took = target != null && runCatching { target.requestFocus() }.getOrDefault(false)
+                                com.aeriotv.android.ui.tv.TvFocusTrace.guide("tab-exit down target=${target != null} took=$took")
+                                if (took) {
                                     // The default geometric move would run
                                     // after this and land elsewhere.
                                     cancelFocusChange()

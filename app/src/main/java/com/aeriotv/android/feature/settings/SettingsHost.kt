@@ -585,8 +585,13 @@ private fun SettingsTvRail(
         runCatching { listState.scrollToItem(selectedIndex) }
     }
     val tabEntry = com.aeriotv.android.feature.main.LocalTvTabEntryFocus.current
-    androidx.compose.runtime.DisposableEffect(railFocus) {
-        tabEntry.value = railFocus
+    // Published only while Settings is the ACTIVE tab: Settings composes warm
+    // after a cold launch, and an unconditional publish replaced the landing
+    // tab's entry, so Down from that tab's pill requested the hidden rail
+    // (Streamer 2026-10-04, DVR landing: [SETTINGS] rail focus on Down).
+    val railTabActive = com.aeriotv.android.feature.main.LocalTabIsActive.current
+    androidx.compose.runtime.DisposableEffect(railFocus, railTabActive) {
+        if (railTabActive) tabEntry.value = railFocus
         onDispose { if (tabEntry.value === railFocus) tabEntry.value = null }
     }
     // Read through rememberUpdatedState so the focus callback sees the live

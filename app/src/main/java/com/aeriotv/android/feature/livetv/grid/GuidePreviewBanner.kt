@@ -348,7 +348,11 @@ fun GuidePreviewBanner(
                                     e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
                                     e.key == androidx.compose.ui.input.key.Key.DirectionDown && onDown()
                             }
-                            .onFocusChanged { focused = it.isFocused; onDescriptionFocusChanged(it.isFocused) }
+                            .onFocusChanged {
+                                if (it.isFocused && !focused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("banner:description")
+                                else if (!it.isFocused && focused) com.aeriotv.android.ui.tv.TvFocusTrace.blurred("banner:description")
+                                focused = it.isFocused; onDescriptionFocusChanged(it.isFocused)
+                            }
                             .clip(RoundedCornerShape(5.dp))
                             // tvOS BannerTextButtonStyle: a faint platter on focus, no scale.
                             .background(if (focused) Color.White.copy(alpha = 0.08f) else Color.Transparent)
