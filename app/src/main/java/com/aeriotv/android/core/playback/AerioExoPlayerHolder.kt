@@ -135,11 +135,21 @@ class AerioExoPlayerHolder @Inject constructor(
     /** Buffer floor (ms) the current player was built with; a pref flip forces
      *  a rebuild because the LoadControl is fixed at build time. */
     private var builtWithBufferFloorMs: Int? = null
-    /** Start gate (bufferForPlaybackMs) the current player was built with. Same
-     *  reason as [builtWithBufferFloorMs]: DefaultLoadControl is fixed at build
-     *  time, so a changed learned hold-back needs a player rebuild, which
-     *  [playUrl] does BEFORE priming so it never lands mid-playback. */
+    /** Start gate (bufferForPlaybackMs) the current player's load control is
+     *  set to. A changed learned hold-back switches [gateLoadControl] in place
+     *  (no rebuild), which [playUrl] does BEFORE priming so it never lands
+     *  mid-playback. */
     private var builtWithStartGateMs: Int? = null
+    /** Load control of the current player; switches the start gate in place. */
+    private var gateLoadControl: GateSwitchingLoadControl? = null
+
+    /** min = gate + 4 s keeps 4 s of real cushion above a raised start gate. */
+    private fun minBufferFor(bufferFloorMs: Int, gateMs: Int): Int =
+        maxOf(4_000, bufferFloorMs, gateMs + 4_000)
+
+    /** At least LIVE_MAX_BUFFER_FLOOR_MS so the post-stall resume gate is reachable. */
+    private fun liveMaxBufferFor(bufferFloorMs: Int, gateMs: Int): Int =
+        maxOf(minBufferFor(bufferFloorMs, gateMs) * 2, LIVE_MAX_BUFFER_FLOOR_MS)
     /** Start gate the next [acquireOrCreate] must build with, stamped by
      *  [playUrl] from the learned per-channel hold-back. */
     @Volatile private var desiredStartGateMs: Int = LIVE_START_GATE_DEFAULT_MS
@@ -1662,13 +1672,20 @@ class AerioExoPlayerHolder @Inject constructor(
         // collector launched in init{}; no blocking read needed here.
         player?.let { existing ->
             if (builtWithPassthrough == audioPassthrough &&
-                builtWithBufferFloorMs == bufferFloorMs &&
-                builtWithStartGateMs == startGateMs
+                builtWithBufferFloorMs == bufferFloorMs
             ) {
+                // A changed learned start gate no longer rebuilds: the
+                // release + build ran on the main thread before the new
+                // stream was requested (Streamer guide tune with the mini
+                // running: playUrl=3738). The running player's load control
+                // switches gates instead, before the new source is primed.
+                if (builtWithStartGateMs != startGateMs) {
+                    Log.i(TAG, "[HOLDBACK] start gate $builtWithStartGateMs -> $startGateMs ms on the running player")
+                    gateLoadControl?.requestGate(startGateMs)
+                    builtWithStartGateMs = startGateMs
+                    builtMaxBufferMs = liveMaxBufferFor(bufferFloorMs, startGateMs)
+                }
                 return existing
-            }
-            if (builtWithStartGateMs != startGateMs) {
-                Log.i(TAG, "[HOLDBACK] rebuilding player for start gate $startGateMs ms")
             }
             Log.i(TAG, "Player build pref changed (passthrough/buffer); rebuilding player")
             destroy()
@@ -1731,27 +1748,31 @@ class AerioExoPlayerHolder @Inject constructor(
         // to stay above it: a bufferForPlaybackMs at or past minBufferMs leaves
         // the load control nothing to work with. min = gate + 4s keeps the same
         // 4 s of real cushion the tuning above describes.
-        val minBufferMs = maxOf(4_000, bufferFloorMs, startGateMs + 4_000)
+        // (Bounds computed per gate by minBufferFor / liveMaxBufferFor.)
+        val liveMaxBufferMs = liveMaxBufferFor(bufferFloorMs, startGateMs)
         // The post-stall resume gate can only hold for what the LoadControl will
         // actually keep buffered ahead (target is clamped to maxBufferMs - 1 s),
         // and minBufferMs * 2 is only ~10.4 s at the base start gate. A live
         // player therefore gets at least 14 s of max buffer so a 12 s gate is
         // reachable; the MIN bound is untouched, so steady-state behaviour and
         // the Buffer Size ladder are unchanged.
-        val liveMaxBufferMs = maxOf(minBufferMs * 2, LIVE_MAX_BUFFER_FLOOR_MS)
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs = */ minBufferMs,
-                // Real headroom between the bounds at EVERY rung. The old
-                // maxOf(8_000, minBufferMs) degenerated to min == max once the
-                // floor reached 8s, leaving the load control nothing to work
-                // with on precisely the setting chosen for poor networks.
-                /* maxBufferMs = */ liveMaxBufferMs,
-                /* bufferForPlaybackMs = */ startGateMs,
-                /* bufferForPlaybackAfterRebufferMs = */ 2_000,
-            )
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
+        val loadControl = GateSwitchingLoadControl(startGateMs) { gateMs, allocator ->
+            DefaultLoadControl.Builder()
+                .setAllocator(allocator)
+                .setBufferDurationsMs(
+                    /* minBufferMs = */ minBufferFor(bufferFloorMs, gateMs),
+                    // Real headroom between the bounds at EVERY rung. The old
+                    // maxOf(8_000, minBufferMs) degenerated to min == max once the
+                    // floor reached 8s, leaving the load control nothing to work
+                    // with on precisely the setting chosen for poor networks.
+                    /* maxBufferMs = */ liveMaxBufferFor(bufferFloorMs, gateMs),
+                    /* bufferForPlaybackMs = */ gateMs,
+                    /* bufferForPlaybackAfterRebufferMs = */ 2_000,
+                )
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build()
+        }
+        gateLoadControl = loadControl
 
         val fresh = ExoPlayer.Builder(context)
             .setRenderersFactory(renderersFactory)
