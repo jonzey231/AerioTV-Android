@@ -120,3 +120,11 @@ internal fun parseHex(raw: String): Color {
     val b = (asLong and 0xFF).toInt()
     return Color(red = r, green = g, blue = b)
 }
+
+/**
+ * The user's category palette for the Live TV guide grid, provided by
+ * GuideScreen from SettingsViewModel.categoryPalette. Apple's EPGGuideView
+ * reads CategoryColor.backgroundColor for every program cell; the Android
+ * grid reads this local so the same programs tint the same way.
+ */
+val LocalCategoryPalette = androidx.compose.runtime.staticCompositionLocalOf<CategoryPaletteState?> { null }

@@ -2450,6 +2450,9 @@ private fun LiveRewindChromeSection(
     // Keyed on the channel so a flip clears the badge instead of showing the
     // previous channel's numbers until the new format arrives.
     val formatBadge = rememberVideoFormatBadge(boundPlayerForBadge, currentChannel?.id)
+    val badgeConfig = androidx.compose.ui.platform.LocalConfiguration.current
+    val showTouchFormatBadge = badgeConfig.smallestScreenWidthDp >= 600 ||
+        badgeConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     var catchupPositionMs by catchupPositionMsState
     var tsPositionWallMs by tsPositionWallMsState
     var tsPaused by tsPausedState
@@ -2641,7 +2644,10 @@ private fun LiveRewindChromeSection(
         // player's live mode, so a remapped button is named as the user set
         // it and a slot that does nothing here drops out. Off when the
         // "Show remote hints" toggle is off.
-        formatBadge = if (isTvForm) formatBadge else null,
+        // TV: always. Tablets (sw >= 600 dp) in both orientations and phones
+        // in landscape (fullscreen) show the same readout, as the iPad and
+        // iPhone landscape chrome do; portrait phones stay as they were.
+        formatBadge = if (isTvForm || showTouchFormatBadge) formatBadge else null,
         hintPairs = if (isTvForm && showRemoteHints) {
             com.aeriotv.android.core.remote.RemoteControlHints.livePlayerStripHints(
                 map = remoteMap,

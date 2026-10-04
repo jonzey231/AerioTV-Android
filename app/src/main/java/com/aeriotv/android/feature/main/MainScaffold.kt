@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -39,6 +40,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberSmartRecord
@@ -1144,7 +1146,12 @@ fun MainScaffold(
     // since hiding an actively playing stream's controls would orphan it.
     var bottomBarVisible by remember { mutableStateOf(true) }
     val density = LocalDensity.current
-    val bottomBarScrollConnection = remember(density) {
+    // Tablets (sw >= 600 dp) keep a static bottom pill like the iPad: no
+    // collapse into the mini pill on scroll. Phones keep collapsing.
+    val staticTabletBar = androidx.compose.ui.platform.LocalConfiguration.current
+        .smallestScreenWidthDp >= 600
+    LaunchedEffect(staticTabletBar) { if (staticTabletBar) bottomBarVisible = true }
+    val bottomBarScrollConnection = remember(density, staticTabletBar) {
         val hidePx = with(density) { 48.dp.toPx() }
         val showPx = with(density) { 12.dp.toPx() }
         object : NestedScrollConnection {
@@ -1155,6 +1162,7 @@ fun MainScaffold(
             private var upDistance = 0f
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 val dy = available.y
+                if (staticTabletBar) return Offset.Zero
                 if (dy < -0.5f) {
                     downDistance += -dy
                     upDistance = 0f
@@ -1350,7 +1358,13 @@ fun MainScaffold(
                     !casting && !isTv
                 // While the bar is minimized the button drops level with the
                 // pill in the bottom-left corner instead (below).
-                if (showControlFab && bottomBarVisible) {
+                // Tablets (sw >= 600 dp): the button sits static at the
+                // trailing edge, vertically centred on the pill row, and never
+                // moves with the collapse (Logan 2026-10-04). Phones keep the
+                // above-the-bar spot that drops level when minimized.
+                val tabletNav = androidx.compose.ui.platform.LocalConfiguration.current
+                    .smallestScreenWidthDp >= 600
+                if (showControlFab && bottomBarVisible && !tabletNav) {
                     Box(
                         Modifier.fillMaxWidth().padding(end = 16.dp),
                         contentAlignment = Alignment.CenterEnd,
@@ -1451,6 +1465,7 @@ fun MainScaffold(
                                         initialTabApplied = true
                                     }
                                 },
+                                tablet = tabletNav,
                                 modifier = Modifier
                                     .onSizeChanged { barSize = it }
                                     .graphicsLayer {
@@ -1472,13 +1487,18 @@ fun MainScaffold(
                                     .padding(start = 20.dp)
                                     .graphicsLayer { alpha = reveal; scaleX = 0.6f + 0.4f * reveal; scaleY = 0.6f + 0.4f * reveal },
                             )
-                            if (showControlFab) {
+                            if (showControlFab && !tabletNav) {
                                 Box(
                                     Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
                                         .graphicsLayer { alpha = reveal },
                                 ) {
                                     CompanionControlFab(onClick = { showCompanionPicker = true })
                                 }
+                            }
+                        }
+                        if (showControlFab && tabletNav) {
+                            Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)) {
+                                CompanionControlFab(onClick = { showCompanionPicker = true }, tablet = true)
                             }
                         }
                     }
@@ -1526,25 +1546,42 @@ fun MainScaffold(
     }
 }
 
+/** Floating bottom-nav chrome shared by the tab bar pill, the minimized pill
+ *  and the Control a TV button so they read as one layer over busy content
+ *  (guide grid, posters): solid card surface at 92 percent, a 1 dp on-surface
+ *  hairline at 12 percent and a soft black drop shadow. Material styling, no
+ *  translucent glass (Logan 2026-10-04, same recipe as the iPad). */
+@Composable
+private fun Modifier.floatingNavChrome(shape: androidx.compose.ui.graphics.Shape): Modifier {
+    val cs = MaterialTheme.colorScheme
+    return this
+        .dropShadow(
+            shape,
+            androidx.compose.ui.graphics.shadow.Shadow(
+                radius = 18.dp,
+                color = Color.Black.copy(alpha = 0.35f),
+                offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
+            ),
+        )
+        .clip(shape)
+        .background(cs.surface.copy(alpha = 0.92f))
+        .border(1.dp, cs.onSurface.copy(alpha = 0.12f), shape)
+}
+
 /**
  * GH #33: round floating button above the right end of the tab bar -- entry
  * to control a discovered TV. Matches the card chrome (surface + faint
  * primary border) rather than a filled pill, mirroring the iOS glass FAB.
  */
 @Composable
-private fun CompanionControlFab(onClick: () -> Unit) {
+private fun CompanionControlFab(onClick: () -> Unit, tablet: Boolean = false) {
     // Same shape and chrome as MinimizedTabPill, which it sits opposite
     // once the bar minimizes (Logan 2026-09-09).
     Box(
         modifier = Modifier
-            .size(width = 64.dp, height = 52.dp)
-            .clip(RoundedCornerShape(26.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                RoundedCornerShape(26.dp),
-            )
+            // Tablets: a 56 dp circle level with the 56 dp tab capsule.
+            .size(width = if (tablet) 56.dp else 64.dp, height = if (tablet) 56.dp else 52.dp)
+            .floatingNavChrome(if (tablet) CircleShape else RoundedCornerShape(26.dp))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -1572,7 +1609,12 @@ private fun FloatingTabBar(
     selected: AppTab,
     onSelect: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
+    tablet: Boolean = false,
 ) {
+    if (tablet) {
+        TabletTabBar(tabs, selected, onSelect, modifier)
+        return
+    }
     // 2026-07-12 (user report: mistapping channels behind the pill when
     // changing tabs): sized up to the iPhone bar's proportions - the pill
     // now spans the width minus side margins with evenly distributed,
@@ -1586,13 +1628,7 @@ private fun FloatingTabBar(
             .widthIn(max = 600.dp)
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
-            .clip(RoundedCornerShape(36.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                RoundedCornerShape(36.dp),
-            )
+            .floatingNavChrome(RoundedCornerShape(36.dp))
             // iPhone bar height (~53 pt): the Android pill measured ~69 dp
             // (Logan 2026-09-09). Outer 6 + item 5 + icon 22 + label 12 + 5 + 6.
             .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -1638,6 +1674,61 @@ private fun FloatingTabBar(
     }
 }
 
+/** Tablet tab bar, iPad parity (Logan 2026-10-04): a centered wrap-content
+ *  capsule 56 dp tall, each tab laid out icon then title, 28 dp between tab
+ *  contents and 24 dp from the capsule edges. The selected tab gets its own
+ *  accent capsule (22 percent) with accent icon and title; the rest use the
+ *  primary text color. Same floating chrome as the phone bar. */
+@Composable
+private fun TabletTabBar(
+    tabs: List<AppTab>,
+    selected: AppTab,
+    onSelect: (AppTab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Row(
+            modifier = modifier
+                .height(56.dp)
+                .floatingNavChrome(RoundedCornerShape(28.dp))
+                // 10 dp outer + 14 dp item padding = 24 dp to the edge;
+                // 14 + 14 between neighbours = 28 dp between tab contents.
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            tabs.forEach { tab ->
+                val isSel = tab == selected
+                val tint = if (isSel) cs.primary else cs.onSurface
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(if (isSel) cs.primary.copy(alpha = 0.22f) else Color.Transparent)
+                        .clickable { onSelect(tab) }
+                        .padding(horizontal = 14.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isSel) tab.iconSelected else tab.iconUnselected,
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = tab.label,
+                        fontSize = 17.sp,
+                        maxLines = 1,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isSel) cs.textAccent else cs.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** The minimized tab bar: one capsule in the bottom-left corner carrying the
  *  active tab's icon, the way the iOS 26 bar collapses when the content
  *  scrolls down. Same height as the full pill so nothing shifts. */
@@ -1652,13 +1743,7 @@ private fun MinimizedTabPill(
             contentAlignment = Alignment.Center,
             modifier = modifier
                 .size(width = 64.dp, height = 52.dp)
-                .clip(RoundedCornerShape(26.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
-                .border(
-                    1.dp,
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                    RoundedCornerShape(26.dp),
-                )
+                .floatingNavChrome(RoundedCornerShape(26.dp))
                 .clickable(onClick = onClick),
         ) {
             Icon(

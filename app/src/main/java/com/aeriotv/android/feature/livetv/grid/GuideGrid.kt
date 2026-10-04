@@ -581,12 +581,15 @@ private fun TimeHeader(
     isTv: Boolean = false,
 ) {
     // Apple TV: time labels in the accent colour.
+    // Apple iOS: time labels textSecondary on an appBackground strip.
     val labelStyle = TextStyle(
-        color = MaterialTheme.colorScheme.textAccent,
+        color = if (isTv) MaterialTheme.colorScheme.textAccent else MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
     )
-    val rule = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
+    // Apple iOS: header rule accentPrimary 0.15, no half-hour ticks.
+    val rule = if (isTv) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+    val cornerFill = if (isTv) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.surface
     val clockMode = rememberClockMode()
     val fmt = remember(clockMode) { ClockFormat.guideLabel(clockMode) }
     Row(modifier = Modifier.fillMaxWidth().height(headerHeight)) {
@@ -600,6 +603,8 @@ private fun TimeHeader(
             modifier = Modifier
                 .width(railWidth)
                 .fillMaxSize()
+                // Apple iOS corner clock cell: cardBackground.
+                .background(cornerFill)
                 .padding(4.dp)
                 // tvOS: the clock draws its own accent ring when focused.
                 .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
@@ -652,7 +657,7 @@ private fun TimeHeader(
             clipRect {
                 while (t < ve) {
                     val x = (t - vs) * pxPerMs
-                    drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+                    if (isTv) drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
                     val label = fmt.format(Date(t)).lowercase(Locale.getDefault())
                     // A label whose slot started before the edge hugs the edge (clipped
                     // text aligns to the clipped edge) unless the next label would collide.
@@ -694,8 +699,12 @@ private fun GridRow(
     val focusedCellStart by remember(state, row) {
         derivedStateOf { if (state.focusRow == row) state.focusCellStartMs else Long.MIN_VALUE }
     }
-    val titleStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    val titleDimStyle = titleStyle.copy(color = Color.White.copy(alpha = 0.55f), fontWeight = FontWeight.Normal)
+    // Phone / tablet cells follow Apple iOS EPGGuideView (cardBackground
+    // surfaces, textPrimary / textSecondary / textTertiary inks); the TV cell
+    // keeps the Apple TV white-on-dark styling.
+    val titleInk = if (isTv) Color.White else colors.onSurface
+    val titleStyle = TextStyle(color = titleInk, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    val titleDimStyle = titleStyle.copy(color = titleInk.copy(alpha = 0.55f), fontWeight = FontWeight.Normal)
     // Apple TV cell: bold title, italic accent subtitle, accent-tinted
     // description, then a dim time line with the S/E pill and flag badges.
     val accent = MaterialTheme.colorScheme.primary
@@ -704,9 +713,11 @@ private fun GridRow(
     val subScale = com.aeriotv.android.ui.scale.LocalSubtextScale.current
     val textContrast = com.aeriotv.android.ui.theme.LocalTextContrast.current
     fun cellText(c: Color) = com.aeriotv.android.ui.theme.contrastBlend(c, textContrast, isDark = true)
-    val timeStyle = TextStyle(color = cellText(Color.White.copy(alpha = 0.55f)), fontSize = 10.5.sp * subScale)
-    val descStyle = TextStyle(color = cellText(accent.copy(alpha = 0.85f)), fontSize = 10.5.sp * subScale)
-    val subStyle = TextStyle(color = cellText(accent), fontSize = 10.5.sp * subScale, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+    // Apple iOS: description and sub-title textSecondary, time textTertiary.
+    // colors.onSurfaceVariant / colors.tertiary already carry Text Contrast.
+    val timeStyle = TextStyle(color = if (isTv) cellText(Color.White.copy(alpha = 0.55f)) else colors.tertiary, fontSize = 10.5.sp * subScale)
+    val descStyle = TextStyle(color = if (isTv) cellText(accent.copy(alpha = 0.85f)) else colors.onSurfaceVariant, fontSize = 10.5.sp * subScale)
+    val subStyle = TextStyle(color = if (isTv) cellText(accent) else colors.onSurfaceVariant, fontSize = 10.5.sp * subScale, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
     // SEASON / EPISODE PILL (restored 2026-09-19). 0.5.9 moved S/E into the
     // Channel Preview banner, which only the TV preview layout draws: on the
     // phone, the tablet and the TV's standard layout the label vanished
@@ -714,8 +725,11 @@ private fun GridRow(
     // preview layout's compact cell, where the banner still owns it. Outlined
     // pill, never a solid colour chip, so it reads as metadata and not as a
     // flag badge (Apple's SeasonEpisodePill, compactBadgeRow).
-    val pillStyle = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f), fontSize = 7.5.sp, fontWeight = FontWeight.Medium)
-    val outline = MaterialTheme.colorScheme.decorSecondary.copy(alpha = 0.45f)
+    val pillStyle = TextStyle(color = if (isTv) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 7.5.sp, fontWeight = FontWeight.Medium)
+    // Apple SeasonEpisodePill: stroke borderMedium = accent 0.18.
+    val outline = if (isTv) MaterialTheme.colorScheme.decorSecondary.copy(alpha = 0.45f) else accent.copy(alpha = 0.18f)
+    // Color Programs by Category (Apple CategoryColor.backgroundColor).
+    val palette = com.aeriotv.android.core.category.LocalCategoryPalette.current
     val badgeStyle = TextStyle(color = Color.White, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
     val showBadges = com.aeriotv.android.core.ui.LocalShowEpgBadges.current
     val showSubtitles = com.aeriotv.android.core.ui.LocalShowProgramSubtitles.current
@@ -1052,7 +1066,8 @@ private fun GridRow(
         }
         // Neutral hairlines (tvOS: the app background shows through a 1 pt
         // gap; accent-tinted rules read as heavy borders, Logan 2026-09-10).
-        drawLine(Color.White.copy(alpha = 0.08f), Offset(railWidthPx - 0.5f, 0f), Offset(railWidthPx - 0.5f, size.height), strokeWidth = 1.dp.toPx())
+        // Phone / tablet: Apple iOS rail rule, accentPrimary 0.20.
+        drawLine(if (isTv) Color.White.copy(alpha = 0.08f) else accent.copy(alpha = 0.2f), Offset(railWidthPx - 0.5f, 0f), Offset(railWidthPx - 0.5f, size.height), strokeWidth = 1.dp.toPx())
 
         // Programme strip.
         clipRect(railWidthPx, 0f, size.width, size.height) {
@@ -1085,9 +1100,17 @@ private fun GridRow(
                 val w = (x1 - x0 - seam).coerceAtLeast(MIN_CELL_PX)
                 val focused = focusedHere && cell.startMillis == focusStart
                 val airing = nowMs in cell.startMillis until cell.endMillis
+                // Category tint first (Apple: tvOS 0.55 focused / 0.35 live /
+                // 0.22, iOS 0.45 live / 0.28), then the idiom's neutral fill:
+                // iOS = accentPrimary 0.25 airing, cardBackground otherwise.
+                val catBase = if (cell.isPlaceholder) null else palette?.resolveBaseColor(cell.category)
                 val fill = when {
+                    catBase != null && isTv -> catBase.copy(alpha = if (focused) 0.55f else if (airing) 0.35f else 0.22f)
                     focused -> Color.White.copy(alpha = 0.3f)
+                    catBase != null -> catBase.copy(alpha = if (airing) 0.45f else 0.28f)
                     cell.isPlaceholder -> Color.White.copy(alpha = 0.03f)
+                    !isTv && airing -> accent.copy(alpha = 0.25f)
+                    !isTv -> surface
                     airing -> Color.White.copy(alpha = 0.12f)
                     else -> Color.White.copy(alpha = 0.05f)
                 }
@@ -1255,7 +1278,8 @@ private fun GridRow(
             }
         }
         }
-        drawLine(Color.White.copy(alpha = 0.07f), Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), strokeWidth = 1f)
+        // Phone / tablet: Apple iOS row rule, accentPrimary 0.08.
+        drawLine(if (isTv) Color.White.copy(alpha = 0.07f) else accent.copy(alpha = 0.08f), Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), strokeWidth = 1f)
         Trace.endSection()
     }
 }

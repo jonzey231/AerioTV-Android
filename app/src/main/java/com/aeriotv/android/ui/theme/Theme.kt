@@ -119,7 +119,7 @@ fun AerioTVTheme(
             primary = effectivePrimary,
             // On a mid-tone/dark light-accent fill, near-white reads best.
             onPrimary = Color.White,
-            secondary = appTheme.accentSecondary,
+            secondary = appTheme.lightAccentSecondary,
             onSecondary = Color.White,
             tertiary = textTertiary,
             onTertiary = Color.White,

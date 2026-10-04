@@ -28,6 +28,8 @@ enum class AppTheme(
     val lightAppBackground: Color,
     val lightCardBackground: Color,
     val lightAccentPrimary: Color,
+    // Apple ThemeManager.lightAccentSecondary.
+    val lightAccentSecondary: Color,
 ) {
     Aerio(
         displayName = "AerioTV",
@@ -38,7 +40,8 @@ enum class AppTheme(
         lightAppBackground = Color(0xFFF2F7FA),
         lightCardBackground = Color(0xFFFFFFFF),
         // Bright pale cyan is invisible as text on white -> darkened teal.
-        lightAccentPrimary = Color(0xFF0E8A9C),
+        lightAccentPrimary = Color(0xFF0E8FA0),
+        lightAccentSecondary = Color(0xFF0B6E7C),
     ),
     Midnight(
         displayName = "Midnight",
@@ -49,6 +52,7 @@ enum class AppTheme(
         lightAppBackground = Color(0xFFF4F6FB),
         lightCardBackground = Color(0xFFFFFFFF),
         lightAccentPrimary = Color(0xFF2563EB),
+        lightAccentSecondary = Color(0xFF1D4ED8),
     ),
     Sunset(
         displayName = "Sunset",
@@ -58,7 +62,8 @@ enum class AppTheme(
         cardBackground = Color(0xFF1A1108),
         lightAppBackground = Color(0xFFFCF7F2),
         lightCardBackground = Color(0xFFFFFFFF),
-        lightAccentPrimary = Color(0xFFE0670C),
+        lightAccentPrimary = Color(0xFFE8590C),
+        lightAccentSecondary = Color(0xFFC2410C),
     ),
     Forest(
         displayName = "Forest",
@@ -68,7 +73,8 @@ enum class AppTheme(
         cardBackground = Color(0xFF0E1A10),
         lightAppBackground = Color(0xFFF3F8F4),
         lightCardBackground = Color(0xFFFFFFFF),
-        lightAccentPrimary = Color(0xFF1B9E4B),
+        lightAccentPrimary = Color(0xFF16A34A),
+        lightAccentSecondary = Color(0xFF15803D),
     ),
     Lavender(
         displayName = "Lavender",
@@ -79,6 +85,7 @@ enum class AppTheme(
         lightAppBackground = Color(0xFFF7F5FC),
         lightCardBackground = Color(0xFFFFFFFF),
         lightAccentPrimary = Color(0xFF7C3AED),
+        lightAccentSecondary = Color(0xFF6D28D9),
     ),
     Monochrome(
         displayName = "Monochrome",
@@ -89,7 +96,8 @@ enum class AppTheme(
         lightAppBackground = Color(0xFFF5F5F5),
         lightCardBackground = Color(0xFFFFFFFF),
         // Near-white pale grey is invisible on white -> dark slate ink.
-        lightAccentPrimary = Color(0xFF334155),
+        lightAccentPrimary = Color(0xFF475569),
+        lightAccentSecondary = Color(0xFF334155),
     ),
 
     /**
@@ -101,13 +109,14 @@ enum class AppTheme(
     Light(
         displayName = "Light",
         // Dark rendition: a lighter teal reads on the near-black ground.
-        accentPrimary = Color(0xFF4FB3C2),
-        accentSecondary = Color(0xFF3C8A96),
-        appBackground = Color(0xFF0E1416),
-        cardBackground = Color(0xFF161D20),
+        accentPrimary = Color(0xFF3E9EAC),
+        accentSecondary = Color(0xFF2B7A86),
+        appBackground = Color(0xFF0E1518),
+        cardBackground = Color(0xFF17211F),
         lightAppBackground = Color(0xFFF6F8FA),
         lightCardBackground = Color(0xFFFFFFFF),
         lightAccentPrimary = Color(0xFF2B7A86),
+        lightAccentSecondary = Color(0xFF1F5A64),
     ),
 }
 

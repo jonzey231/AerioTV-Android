@@ -748,6 +748,20 @@ fun PlayerChromeOverlay(
                     .navigationBarsPadding()
                     .padding(horizontal = 18.dp, vertical = 24.dp),
             ) {
+                // Resolution / frame rate readout (tablets, and phones in
+                // landscape): the TV band's badge, right-aligned above the
+                // progress row and scaled to the touch chrome.
+                if (formatBadge != null && !isTv) {
+                    val tabletBadge = androidx.compose.ui.platform.LocalConfiguration.current
+                        .smallestScreenWidthDp >= 600
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        PlayerFormatBadge(
+                            text = formatBadge,
+                            fontSize = if (tabletBadge) 12.sp else 10.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 // The transport must render whenever the buffer rolls,
                 // INCLUDING on channels with no EPG data (bare M3U
                 // playlists): it was nested under nowProgramme?.let, so
@@ -1002,13 +1016,19 @@ private fun CenterAnchoredPillRow(
  *  edge up with it. */
 private val TV_TIMELINE_INSET = 56.dp
 
-/** Frosted capsule carrying the video format readout ("1080p · 59.94 fps"). */
+/** Frosted capsule carrying the video format readout ("1080p · 59.94 fps").
+ *  [fontSize] defaults to the TV size; the touch chrome passes its own
+ *  (tablet larger than phone landscape, as Apple scales iPad and iPhone). */
 @Composable
-private fun PlayerFormatBadge(text: String, modifier: Modifier = Modifier) {
+private fun PlayerFormatBadge(
+    text: String,
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
+) {
     Text(
         text = text,
-        fontSize = 9.sp.subtext(),
-        lineHeight = 11.sp.subtext(),
+        fontSize = fontSize.subtext(),
+        lineHeight = (fontSize * 11f / 9f).subtext(),
         fontWeight = FontWeight.Medium,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
         maxLines = 1,

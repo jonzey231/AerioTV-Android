@@ -185,6 +185,7 @@ fun GuideScreen(
     val canRecordToServer = LocalCanRecordToServer.current
 
     val guideScale by settingsVm.guideScale.collectAsStateWithLifecycle()
+    val categoryPalette by settingsVm.categoryPalette.collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.category.CategoryPaletteState.Default)
     val displayScaleLiveTv by settingsVm.displayScaleLiveTV.collectAsStateWithLifecycle()
     val hiddenGroups by settingsVm.hiddenGroups.collectAsStateWithLifecycle()
     val groupSortModeRaw by settingsVm.groupSortMode.collectAsStateWithLifecycle()
@@ -1130,6 +1131,9 @@ fun GuideScreen(
             )
         } else {
             val gridContent: @Composable () -> Unit = {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.aeriotv.android.core.category.LocalCategoryPalette provides categoryPalette,
+            ) {
             GuideGrid(
                 state = grid,
                 listState = gridListState,
@@ -1185,6 +1189,7 @@ fun GuideScreen(
                 traceGates = traceGates,
                 modifier = Modifier.fillMaxSize(),
             )
+            }
             }
             if (isTv) gridContent() else PullToRefreshBox(
                 isRefreshing = state.isLoading,
