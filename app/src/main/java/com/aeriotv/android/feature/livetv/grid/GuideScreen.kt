@@ -124,6 +124,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
@@ -453,6 +454,9 @@ fun GuideScreen(
     // as before; only the rows survive.
     val grid = remember { RetainedGuideGrid.take(favoritesOnly, System.currentTimeMillis() - 15 * 60_000L) }
     androidx.compose.runtime.DisposableEffect(grid) { onDispose { RetainedGuideGrid.give(favoritesOnly, grid) } }
+    // Hoisted so a group change can read and set the rows viewport.
+    val gridListState = rememberLazyListState()
+    val groupViewport = remember { GuideGroupViewport() }
     // LOAD ON DEMAND WHILE SCROLLING FORWARD (Logan 2026-09-19). The window
     // now reaches as far as Guide Days allows, but only the launch span is in
     // memory, so scrolling toward the loaded edge has to pull the next window
@@ -517,13 +521,68 @@ fun GuideScreen(
         // Same rows object as the retained state already holds: the install
         // only lands focus (cheap, no row invalidation); log which it was.
         val reused = grid.rows === rows
-        grid.installRows(rows)
-        // Empty program lanes (Logan 2026-09-19): the window the rows were
-        // built for, next to both viewports after the install clamped them.
+        // GROUP SWITCH VIEWPORT (Logan 2026-10-04, Onn tablet): All, a group,
+        // back to All landed "in the thousands". installRows keeps focus on
+        // the focused CHANNEL across a row swap and the lazy list keeps its
+        // first visible item by KEY, so the group's first channel (focused by
+        // the clamp to row 0) was found again deep in All and the list
+        // scrolled to it. A group change is now its own install: entering a
+        // group starts at its top; returning to All restores the first
+        // visible channel (and the focus, when it was on screen) All had.
+        val toGroup = state.selectedGroup
+        val fromGroup = groupViewport.installedGroup
+        val groupChanged = fromGroup != null && fromGroup != toGroup
+        groupViewport.installedGroup = toGroup
+        var restore: GuideGroupViewport.Saved? = null
+        if (groupChanged) {
+            val old = grid.rows
+            val firstIdx = gridListState.firstVisibleItemIndex
+            if (!old.isEmpty && firstIdx in 0 until old.size) {
+                val firstId = old.channel(firstIdx).id
+                val focusIdx = grid.focusChannelId?.let { old.indexOfChannel(it) } ?: -1
+                // Focus is kept only inside the lane band, so the lane effect
+                // does not move the restored first row to reach it.
+                val focusId = if (focusIdx in firstIdx..(firstIdx + GROUP_RESTORE_LANE_ROWS)) old.channel(focusIdx).id else firstId
+                groupViewport.saved[fromGroup!!] = GuideGroupViewport.Saved(firstId, gridListState.firstVisibleItemScrollOffset, focusId)
+            }
+            if (toGroup == com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS) {
+                restore = groupViewport.saved[toGroup]?.takeIf { rows.indexOfChannel(it.firstChannelId) >= 0 }
+            }
+        }
+        if (groupChanged) grid.installRowsForGroup(rows, restore?.focusChannelId) else grid.installRows(rows)
+        val firstNow = gridListState.firstVisibleItemIndex
         com.aeriotv.android.ui.tv.TvFocusTrace.guide(
             "rows-install reused=$reused windowRollMs=${windowRoll[0]} windowStartMs=${rows.windowStartMs} windowEndMs=${rows.windowEndMs}" +
-                " forwardHours=$forwardHours viewportStart=${grid.viewportStartMs} drawStart=${grid.drawViewportStartMs}",
+                " forwardHours=$forwardHours viewportStart=${grid.viewportStartMs} drawStart=${grid.drawViewportStartMs}" +
+                " group=$toGroup count=${rows.size} firstRow=$firstNow firstChannel=${if (firstNow in 0 until rows.size) rows.channel(firstNow).name else "-"}" +
+                " focusRow=${grid.focusRow} focusChannel=${grid.focusRow.takeIf { it in 0 until rows.size }?.let { rows.channel(it).name } ?: "-"}",
         )
+        if (groupChanged) {
+            val anchorRow = restore?.let { rows.indexOfChannel(it.firstChannelId) } ?: 0
+            com.aeriotv.android.ui.tv.TvFocusTrace.guide(
+                "group change from=$fromGroup to=$toGroup anchorChannel=${restore?.firstChannelId ?: rows.channels.firstOrNull()?.id ?: "-"} " +
+                    "anchorRow=$anchorRow restored=${restore != null}",
+            )
+            if (!rows.isEmpty) {
+                // Wait for the list to measure the new rows; a scroll requested
+                // against the old item count is clamped to it.
+                kotlinx.coroutines.withTimeoutOrNull(1_000L) {
+                    androidx.compose.runtime.snapshotFlow { gridListState.layoutInfo.totalItemsCount }.first { it == rows.size }
+                }
+                gridListState.scrollToItem(anchorRow, if (restore != null) restore.offsetPx else 0)
+            }
+        }
+        if (!rows.isEmpty) {
+            kotlinx.coroutines.withTimeoutOrNull(1_500L) {
+                androidx.compose.runtime.snapshotFlow { gridListState.layoutInfo.totalItemsCount == rows.size && !gridListState.isScrollInProgress }.first { it }
+            }
+            androidx.compose.runtime.withFrameNanos { }
+            val landed = gridListState.firstVisibleItemIndex
+            com.aeriotv.android.ui.tv.TvFocusTrace.guide(
+                "viewport landed firstRow=$landed/${rows.size} channel=${if (landed in 0 until rows.size) rows.channel(landed).name else "-"}" +
+                    " focusRow=${grid.focusRow}",
+            )
+        }
         // Land the jump once the rows reach far enough to hold it.
         val target = jumpTargetMs
         // Both edges, now that a backward jump also widens the window.
@@ -1082,6 +1141,7 @@ fun GuideScreen(
             val gridContent: @Composable () -> Unit = {
             GuideGrid(
                 state = grid,
+                listState = gridListState,
                 nowMs = nowMs,
                 hourWidth = hourWidth,
                 rowHeight = rowHeight,
@@ -1514,3 +1574,13 @@ internal object RetainedGuideGrid {
         synchronized(held) { held[favoritesOnly] = state }
     }
 }
+
+/** Per-group rows viewport for the guide's group switch (Logan 2026-10-04). */
+internal class GuideGroupViewport {
+    data class Saved(val firstChannelId: String, val offsetPx: Int, val focusChannelId: String)
+    var installedGroup: String? = null
+    val saved = HashMap<String, Saved>()
+}
+
+/** Matches GuideGrid's LANE_ROWS: focus deeper than this would move the restored first row. */
+private const val GROUP_RESTORE_LANE_ROWS = 6

@@ -132,6 +132,23 @@ class GuideGridState(
         land(row)
     }
 
+    /**
+     * Install the rows of a different channel group (Logan 2026-10-04). Unlike
+     * [installRows], focus does NOT follow the previously focused channel:
+     * a group's channels also sit in All, so following it carried a row
+     * thousands deep into All. Focus lands on [focusChannelId] when given
+     * and listed, else on row 0.
+     */
+    fun installRowsForGroup(newRows: GuideGridRows, focusChannelId: String?) {
+        val windowMoved = newRows.windowStartMs != rows.windowStartMs || newRows.windowEndMs != rows.windowEndMs
+        rows = newRows
+        if (newRows.isEmpty) { focusRow = -1; focusCellStartMs = Long.MIN_VALUE; this.focusChannelId = null; return }
+        val row = focusChannelId?.let { newRows.indexOfChannel(it) }?.takeIf { it >= 0 } ?: 0
+        clampViewport()
+        if (windowMoved) drawViewportStartMs = viewportStartMs
+        land(row)
+    }
+
     /** UP/DOWN by [delta] rows. Returns false at the edge so the host can move focus out of the grid. */
     fun moveRows(delta: Int): Boolean {
         if (rows.isEmpty) return false
