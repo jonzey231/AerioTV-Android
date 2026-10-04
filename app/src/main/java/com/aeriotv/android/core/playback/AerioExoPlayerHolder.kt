@@ -125,6 +125,35 @@ class AerioExoPlayerHolder @Inject constructor(
     private val _playerInstance = MutableStateFlow<ExoPlayer?>(null)
     val playerInstance: StateFlow<ExoPlayer?> = _playerInstance.asStateFlow()
 
+    /**
+     * Short technical label for the pipeline the CURRENT source runs on, for
+     * the player chrome's bottom-left readout (Apple "AVPlayer · Remux TS"
+     * parity, Logan 2026-10-04): "ExoPlayer · TS" (raw MPEG-TS through the
+     * forced TsExtractor), "ExoPlayer · HLS", "ExoPlayer · DASH",
+     * "ExoPlayer · MP4" / "MKV" (progressive by container), "ExoPlayer ·
+     * Rewind TS" (Live Rewind buffer) and "ExoPlayer · Catch-up TS". Set
+     * where the media source is built, so it always names what is actually
+     * loaded; null after stop().
+     */
+    private val _pipelineLabel = MutableStateFlow<String?>(null)
+    val pipelineLabel: StateFlow<String?> = _pipelineLabel.asStateFlow()
+
+    private fun pipelineLabelFor(url: String, drm: Boolean): String {
+        val path = url.substringBefore('?').substringBefore('#')
+        val ext = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
+        val kind = when {
+            isRawTsUrl(url) -> "TS"
+            ext == "m3u8" -> "HLS"
+            ext == "mpd" -> "DASH"
+            ext in setOf("mp4", "m4v", "mov") -> "MP4"
+            ext == "mkv" -> "MKV"
+            ext == "webm" -> "WebM"
+            ext.isNotEmpty() && ext.length <= 4 -> ext.uppercase()
+            else -> "Auto"
+        }
+        return "ExoPlayer · $kind" + if (drm) " · DRM" else ""
+    }
+
     /** Application context captured at first acquire so playUrl can
      *  self-heal when called before/after the player exists. */
     private var appContext: android.content.Context? = null
@@ -1940,6 +1969,7 @@ class AerioExoPlayerHolder @Inject constructor(
             .setMediaMetadata(mediaMetadata)
         if (drmConfiguration != null) mediaItemBuilder.setDrmConfiguration(drmConfiguration)
         val mediaItem = mediaItemBuilder.build()
+        _pipelineLabel.value = pipelineLabelFor(url, drm = drmUuid != null && drmLicenseKey != null)
         return when {
             isRawTsUrl(url) -> {
                 // SINGLE_PMT is what HlsMediaSource uses internally and
@@ -2129,6 +2159,7 @@ class AerioExoPlayerHolder @Inject constructor(
             .build()
         val source = ProgressiveMediaSource.Factory(factory, tsOnlyExtractorsFactory())
             .createMediaSource(item)
+        _pipelineLabel.value = "ExoPlayer · Rewind TS"
         p.setMediaSource(source)
         p.prepare()
         p.playWhenReady = true
@@ -2161,6 +2192,7 @@ class AerioExoPlayerHolder @Inject constructor(
             .build()
         val source = ProgressiveMediaSource.Factory(factory, tsOnlyExtractorsFactory())
             .createMediaSource(item)
+        _pipelineLabel.value = "ExoPlayer · Rewind TS"
         p.setMediaSource(source)
         p.prepare()
         p.playWhenReady = true
@@ -2280,6 +2312,7 @@ class AerioExoPlayerHolder @Inject constructor(
             .setMediaMetadata(mediaMetadata)
             .build()
         tracer.markTuneStart(title, "catchup")
+        _pipelineLabel.value = "ExoPlayer · Catch-up TS"
         val staleCalls = takeLiveCallTrackers()
         val source = ProgressiveMediaSource.Factory(
             tracer.wrapDataSourceFactory(httpDataSourceFactory(isLive = true)),
@@ -2687,6 +2720,7 @@ class AerioExoPlayerHolder @Inject constructor(
      *  command("stop"). */
     fun stop() {
         val p = player ?: return
+        _pipelineLabel.value = null
         // A deliberate stop outranks any waiting clean-end reconnect.
         cleanEndJob?.cancel()
         cleanEndJob = null

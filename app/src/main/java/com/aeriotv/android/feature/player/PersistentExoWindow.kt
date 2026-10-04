@@ -524,6 +524,15 @@ fun BoxScope.PersistentExoWindow(
                                 maxOf(dm.widthPixels, dm.heightPixels),
                                 minOf(dm.widthPixels, dm.heightPixels),
                             )
+                            // Measure-only (no refresh-rate request): live
+                            // MPEG-TS carries no container frameRate, so the
+                            // format badge's "59.94 fps" half and Stream Info
+                            // need the measured rate here too (Logan
+                            // 2026-10-04: phone and tablet showed "720p" only).
+                            fpsMatch.handle = DisplayFrameRateMatcher.attach(player, sv, matchRate = false)
+                            fpsMatch.player = player
+                            fpsMatch.surfaceView = sv
+                            chainFramePacing(holder, player, fpsMatch.handle)
                         }
                     }
                 }
@@ -553,7 +562,9 @@ fun BoxScope.PersistentExoWindow(
                 val matchSv = fpsMatch.surfaceView
                 if (matchSv != null && current != null && current !== fpsMatch.player) {
                     DisplayFrameRateMatcher.detach(fpsMatch.player, fpsMatch.handle, matchSv)
-                    fpsMatch.handle = DisplayFrameRateMatcher.attach(current, matchSv)
+                    fpsMatch.handle = DisplayFrameRateMatcher.attach(
+                        current, matchSv, matchRate = isTvUiMode(view.context),
+                    )
                     fpsMatch.player = current
                     chainFramePacing(holder, current, fpsMatch.handle)
                 }
@@ -567,7 +578,13 @@ fun BoxScope.PersistentExoWindow(
                 // Detach the frame-rate matcher (clear the listener + reset the
                 // Surface's frame-rate preference to the panel default) before
                 // the SurfaceView is destroyed on this epoch swap.
-                fpsMatch.surfaceView?.let { sv ->
+                // Skip when a newer view (the next surfaceEpoch's factory, which
+                // runs BEFORE this release) has already attached: detaching
+                // here would zero contentFps and the re-chain below would
+                // overwrite the newer listener on the same player.
+                val superseded = fpsMatch.handle == null ||
+                    fpsMatch.handle !== DisplayFrameRateMatcher.latestHandle
+                fpsMatch.surfaceView?.takeIf { !superseded }?.let { sv ->
                     DisplayFrameRateMatcher.detach(fpsMatch.player, fpsMatch.handle, sv)
                     // detach() only clears the matcher's own listener, and our
                     // chain wraps it, so re-register the tracer alone: frame
@@ -633,6 +650,10 @@ private fun chainFramePacing(
 }
 
 private const val TAG = "PersistentExoWindow"
+
+private fun isTvUiMode(ctx: android.content.Context): Boolean =
+    (ctx.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_TYPE_MASK) ==
+        android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
 
 /** Whether the player has rendered a frame since the last surface recreate. */
 private class SurfaceRecreateGate {

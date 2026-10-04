@@ -2458,6 +2458,9 @@ private fun LiveRewindChromeSection(
     // Keyed on the channel so a flip clears the badge instead of showing the
     // previous channel's numbers until the new format arrives.
     val formatBadge = rememberVideoFormatBadge(boundPlayerForBadge, currentChannel?.id)
+    // Bottom-left pipeline readout ("ExoPlayer · TS"), from the holder's
+    // actual media source (Apple "AVPlayer · Remux TS" parity).
+    val pipelineLabel by exoHolder.pipelineLabel.collectAsStateWithLifecycle()
     val badgeConfig = androidx.compose.ui.platform.LocalConfiguration.current
     val showTouchFormatBadge = badgeConfig.smallestScreenWidthDp >= 600 ||
         badgeConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -2656,6 +2659,7 @@ private fun LiveRewindChromeSection(
         // in landscape (fullscreen) show the same readout, as the iPad and
         // iPhone landscape chrome do; portrait phones stay as they were.
         formatBadge = if (isTvForm || showTouchFormatBadge) formatBadge else null,
+        pipelineLabel = if (isTvForm || showTouchFormatBadge) pipelineLabel else null,
         hintPairs = if (isTvForm && showRemoteHints) {
             com.aeriotv.android.core.remote.RemoteControlHints.livePlayerStripHints(
                 map = remoteMap,

@@ -437,11 +437,20 @@ fun LiveTvPhoneHeaderRow(
     val collapsible = !sidebarMode && showPills
     var actionsExpanded by remember { mutableStateOf(false) }
     if (!collapsible && actionsExpanded) actionsExpanded = false
+    // Tablets: the docked corner mini sits over the header's trailing end;
+    // shift the action circles left of it with the mini's own spring (iPad
+    // parity). Always 0 on phones and TV.
+    val miniReserve by androidx.compose.animation.core.animateDpAsState(
+        targetValue = com.aeriotv.android.feature.player.PhoneMiniChrome
+            .tabletHeaderReserveDp.floatValue.dp,
+        animationSpec = com.aeriotv.android.feature.player.PhoneMiniChrome.frameSpring(),
+        label = "miniHeaderReserve",
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(start = 16.dp, end = 16.dp + miniReserve, top = 6.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

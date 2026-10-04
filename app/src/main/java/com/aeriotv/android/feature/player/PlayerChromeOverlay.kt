@@ -162,6 +162,9 @@ fun PlayerChromeOverlay(
     /** "1080p · 59.94 fps" for the right edge of the band; null hides it. TV
      *  only, resolved by the caller from the player's current video format. */
     formatBadge: String? = null,
+    /** "ExoPlayer · TS" for the LEFT edge of the band (Apple "AVPlayer ·
+     *  Remux TS" parity); null hides it. Same surfaces as [formatBadge]. */
+    pipelineLabel: String? = null,
     /** Cast Connect (GH #33): phone-only Cast button slot rendered in the top
      *  bar. Null on TV and on any Cast-disabled build. */
     castSlot: (@Composable () -> Unit)? = null,
@@ -574,6 +577,15 @@ fun PlayerChromeOverlay(
                 // band, vertically centered on the control row. Plain Text in
                 // a frosted capsule: not focusable, and it sits in the row's
                 // own empty right margin so nothing moves.
+                // Pipeline readout at the LEFT edge, mirroring the badge.
+                if (pipelineLabel != null) {
+                    PlayerFormatBadge(
+                        text = pipelineLabel,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = TV_TIMELINE_INSET),
+                    )
+                }
                 if (formatBadge != null) {
                     PlayerFormatBadge(
                         text = formatBadge,
@@ -751,14 +763,29 @@ fun PlayerChromeOverlay(
                 // Resolution / frame rate readout (tablets, and phones in
                 // landscape): the TV band's badge, right-aligned above the
                 // progress row and scaled to the touch chrome.
-                if (formatBadge != null && !isTv) {
+                if ((formatBadge != null || pipelineLabel != null) && !isTv) {
                     val tabletBadge = androidx.compose.ui.platform.LocalConfiguration.current
                         .smallestScreenWidthDp >= 600
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        PlayerFormatBadge(
-                            text = formatBadge,
-                            fontSize = if (tabletBadge) 12.sp else 10.sp,
-                        )
+                    // Pipeline label left, format badge right, as the TV band.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (pipelineLabel != null) {
+                            PlayerFormatBadge(
+                                text = pipelineLabel,
+                                fontSize = if (tabletBadge) 12.sp else 10.sp,
+                            )
+                        } else {
+                            Spacer(Modifier.width(1.dp))
+                        }
+                        if (formatBadge != null) {
+                            PlayerFormatBadge(
+                                text = formatBadge,
+                                fontSize = if (tabletBadge) 12.sp else 10.sp,
+                            )
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
                 }

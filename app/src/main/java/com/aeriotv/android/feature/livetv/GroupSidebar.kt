@@ -651,8 +651,9 @@ internal object PhoneDrawerMetrics {
     val safety = 4.dp
     /** Never narrower than this, however short the group names are. */
     val minWidth = 200.dp
-    /** Fraction of the screen the drawer may never exceed. */
-    const val MAX_SCREEN_FRACTION = 0.85f
+    /** Gutter the drawer always leaves on the trailing side of the screen,
+     *  so a very long group name can never cover the whole window. */
+    val screenGutter = 24.dp
 
     /** Everything a row reserves horizontally OUTSIDE the label text. */
     val rowChrome: Dp
@@ -661,8 +662,9 @@ internal object PhoneDrawerMetrics {
 
 /**
  * Fitted phone-drawer width: the wider of the longest group row and the
- * header row, floored at max(200dp, header row) and ceilinged at ~85 percent
- * of the screen. It grows AND shrinks with the token list; names past the
+ * header row, floored at max(200dp, header row) and capped only at the screen
+ * width minus [PhoneDrawerMetrics.screenGutter] (Logan 2026-10-04: phones and
+ * tablets alike follow the longest name; no fixed tablet cap). It grows AND shrinks with the token list; names past the
  * ceiling ellipsize.
  *
  * Measured with a [androidx.compose.ui.text.TextMeasurer] at the row's exact
@@ -681,10 +683,6 @@ internal fun rememberPhoneDrawerWidth(
     val fontScale = density.fontScale
     val config = androidx.compose.ui.platform.LocalConfiguration.current
     val screenWidth = config.screenWidthDp.dp
-    // Tablets share the phone drawer (Logan 2026-10-04) but 85 percent of a
-    // tablet window is far wider than any group name needs; cap it near a
-    // phone's width so the drawer reads the same on both.
-    val tabletCap = if (config.smallestScreenWidthDp >= 600) 360.dp else Dp.Infinity
     val M = PhoneDrawerMetrics
     val rowStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = M.rowFontSize,
@@ -695,7 +693,7 @@ internal fun rememberPhoneDrawerWidth(
         fontWeight = FontWeight.Bold,
         letterSpacing = M.headerTracking,
     )
-    return remember(tokens, fontScale, screenWidth, rowStyle, headerStyle, density, tabletCap) {
+    return remember(tokens, fontScale, screenWidth, rowStyle, headerStyle, density) {
         fun textWidth(text: String, style: androidx.compose.ui.text.TextStyle): Dp {
             val px = measurer.measure(text = text, style = style, maxLines = 1).size.width
             return with(density) { kotlin.math.ceil(px.toFloat()).toInt().toDp() }
@@ -708,7 +706,7 @@ internal fun rememberPhoneDrawerWidth(
             w + M.rowChrome + M.safety
         } ?: 0.dp
         val floor = maxOf(M.minWidth, header)
-        val ceiling = maxOf(floor, minOf(screenWidth * M.MAX_SCREEN_FRACTION, tabletCap))
+        val ceiling = maxOf(floor, screenWidth - M.screenGutter)
         minOf(maxOf(widestRow, floor), ceiling)
     }
 }

@@ -63,6 +63,14 @@ object DisplayFrameRateMatcher {
      */
     val contentFps = kotlinx.coroutines.flow.MutableStateFlow(0f)
 
+    /** The handle the most recent [attach] returned. A surface-epoch swap
+     *  builds the NEW view (and attaches) before the OLD view's onRelease
+     *  runs; the old release must not detach / re-register over the newer
+     *  attachment on the same player (Logan 2026-10-04: that left the phone
+     *  and tablet badge at "720p" with no fps for the whole session). */
+    @Volatile var latestHandle: Any? = null
+        private set
+
     /** Fired (on the metadata thread) whenever the requested rate class
      *  changes. MainActivity uses it to pick a display MODE at that rate when
      *  the seamless request cannot be honoured (2160p50 on a 60 Hz mode). */
@@ -74,7 +82,13 @@ object DisplayFrameRateMatcher {
      * content frame rate setting). Returns an opaque handle to pass back to
      * [detach]; null on API < S (the 3-arg setFrameRate strategy is API 31+).
      */
-    fun attach(player: ExoPlayer, surfaceView: SurfaceView): Any? {
+    fun attach(
+        player: ExoPlayer,
+        surfaceView: SurfaceView,
+        /** False on phones / tablets: measure [contentFps] only (the format
+         *  badge and Stream Info need it) and never request a display rate. */
+        matchRate: Boolean = true,
+    ): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
         val deltasUs = ArrayDeque<Long>()
         var lastPtsUs = -1L
@@ -117,7 +131,7 @@ object DisplayFrameRateMatcher {
                     fps in 24.5f..32.5f -> fps * 2f
                     else -> 0f
                 }
-                if (target > 0f && abs(target - lastAppliedFps) > 1.0f) {
+                if (matchRate && target > 0f && abs(target - lastAppliedFps) > 1.0f) {
                     lastAppliedFps = target
                     lastRequestedRate = target
                     onRateRequested?.invoke(target)
@@ -137,6 +151,7 @@ object DisplayFrameRateMatcher {
             }
         }
         player.setVideoFrameMetadataListener(listener)
+        latestHandle = listener
         return listener
     }
 

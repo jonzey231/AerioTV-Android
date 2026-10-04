@@ -469,17 +469,27 @@ fun GuideGrid(
 
     // Timeline easing (tvOS parity): the draw offset follows the target
     // viewport with a 300 ms ease-out after a pan or jump; a drag snaps.
-    val viewportAnim = remember { androidx.compose.animation.core.Animatable(state.viewportStartMs.toFloat()) }
+    //
+    // Eased as a 0..1 FRACTION between two exact Long instants (Logan
+    // 2026-10-04, Nothing Phone). The old Animatable held the epoch-ms
+    // viewport as a Float, whose step at ~1.8e12 is 131072 ms: a drag's snap
+    // stored the ROUNDED value, so drawViewportStartMs never equalled
+    // viewportStartMs again, the text cache below never saw a settled
+    // viewport, and cells measured while clipped at the strip edge kept
+    // their few-character layouts ("Spo...") for good.
     androidx.compose.runtime.LaunchedEffect(state.viewportStartMs) {
-        val target = state.viewportStartMs.toFloat()
+        val to = state.viewportStartMs
         if (!state.viewportChangeAnimated) {
-            viewportAnim.snapTo(target); state.drawViewportStartMs = target.toLong(); return@LaunchedEffect
+            state.drawViewportStartMs = to; return@LaunchedEffect
         }
-        viewportAnim.animateTo(
-            target,
-            animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-        ) { state.drawViewportStartMs = value.toLong() }
-        state.drawViewportStartMs = state.viewportStartMs
+        val from = state.drawViewportStartMs
+        if (from != to) {
+            androidx.compose.animation.core.Animatable(0f).animateTo(
+                1f,
+                animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            ) { state.drawViewportStartMs = from + ((to - from) * value.toDouble()).toLong() }
+        }
+        state.drawViewportStartMs = to
     }
     androidx.compose.runtime.CompositionLocalProvider(LocalLogoCache provides logoCache) {
     Box(modifier = modifier) {
@@ -1154,8 +1164,19 @@ private fun GridRow(
                     // the resting guide looks exactly as before.
                     val key = ((cell.startMillis * 4 + descLines) * 2 + (if (compact) 1 else 0)) * 2 +
                         (if (showBadges) 1 else 0)
+                    // Clipped = the cell runs past either strip edge, so textW
+                    // is only its visible slice. A layout measured clipped is
+                    // never final: it is reused mid-pan only while the cell is
+                    // still clipped, re-measured the moment the cell is fully
+                    // on screen, and in any case once the viewport settles at
+                    // a different width (Logan 2026-10-04: "Spo..." cells).
+                    val clippedNow = cell.startMillis < vs || cell.endMillis > ve
                     val cachedText = textCache[key]
-                    val text = if (cachedText != null && (cachedText.measuredW == textW || !viewportSettled)) cachedText else run {
+                    val reuse = cachedText != null && (
+                        cachedText.measuredW == textW ||
+                            (!viewportSettled && !(cachedText.measuredClipped && !clippedNow))
+                        )
+                    val text = if (reuse) cachedText!! else run {
                         fun measure(t: String, st: TextStyle, maxH: Float, ellipsis: Boolean = true, lines: Int = 1, maxW: Int = textW) = textMeasurer.measure(
                             text = t, style = st, maxLines = lines,
                             overflow = if (ellipsis) TextOverflow.Ellipsis else TextOverflow.Clip,
@@ -1199,7 +1220,7 @@ private fun GridRow(
                                 .map { measure(it.label, badgeStyle, 12.sp.toPx(), ellipsis = false) to it.color } else emptyList()
                             CellText(title, time, desc, sub, badges, pill(cell))
                         }
-                    }.also { if (it !== cachedText) { it.measuredW = textW; it.startMs = cell.startMillis; textCache[key] = it } }
+                    }.also { if (it !== cachedText) { it.measuredW = textW; it.measuredClipped = clippedNow; it.startMs = cell.startMillis; textCache[key] = it } }
                     val recording = !cell.isPlaceholder && recordingWindows.any { win ->
                         cell.startMillis < win.last && cell.endMillis > win.first
                     }
@@ -1431,6 +1452,8 @@ private class CellText(
 ) {
     /** Text column width (px) the program layouts were measured for. */
     var measuredW: Int = -1
+    /** True when [measuredW] was a clipped slice at a strip edge. */
+    var measuredClipped: Boolean = false
     /** Program start, for window eviction; MIN_VALUE for rail entries. */
     var startMs: Long = Long.MIN_VALUE
 }

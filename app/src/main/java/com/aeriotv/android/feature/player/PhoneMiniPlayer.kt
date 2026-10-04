@@ -99,6 +99,20 @@ object PhoneMiniChrome {
      *  the mini back out (iPad settingsMiniPeek, HomeView.swift). Reset by
      *  MainScaffold on every tab change. */
     val settingsPeek = mutableStateOf(false)
+
+    /** Tablet only: trailing width (dp) the docked corner mini covers at the
+     *  top of the window (inset + mini width), 0 when the mini is not docked
+     *  there (hidden, fullscreen, stashed on Settings, phones). The Live TV
+     *  header pads its trailing actions by this so search, sort and the
+     *  List / Guide toggle slide out from under the mini, as on the iPad. */
+    val tabletHeaderReserveDp = mutableFloatStateOf(0f)
+
+    /** The spring the mini frame animates with; the header shift reuses it
+     *  so both move together. */
+    fun <T> frameSpring() = spring<T>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
 }
 
 /** iPad corner mini geometry (HomeView.swift: 400x225 pt, 24 pt from the top
@@ -295,10 +309,7 @@ fun BoxScope.phoneMiniFrameModifier(
         if (windowDragging) return@LaunchedEffect
         val resized = container != lastContainer
         lastContainer = container
-        val spec = spring<Float>(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMediumLow,
-        )
+        val spec = PhoneMiniChrome.frameSpring<Float>()
         if (snapNow || resized) {
             ax.snapTo(tx); ay.snapTo(ty); aw.snapTo(tw); ah.snapTo(th)
         } else {
@@ -333,6 +344,20 @@ fun BoxScope.phoneMiniFrameModifier(
             }
         }
         lastMode = mode
+    }
+
+    // Tablet: tell the Live TV header how much trailing width the docked
+    // mini covers so its action circles shift left of it.
+    val headerReserve = if (tablet && miniTarget && !stashed) {
+        (TABLET_MINI_INSET + miniWdp).value
+    } else 0f
+    androidx.compose.runtime.SideEffect {
+        if (PhoneMiniChrome.tabletHeaderReserveDp.floatValue != headerReserve) {
+            PhoneMiniChrome.tabletHeaderReserveDp.floatValue = headerReserve
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { PhoneMiniChrome.tabletHeaderReserveDp.floatValue = 0f }
     }
 
     if (mode == ExoWindowState.Mode.Hidden) return null
