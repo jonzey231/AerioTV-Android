@@ -474,11 +474,32 @@ class TimeshiftController @Inject constructor(
      * multiview, PiP handoff). Buffered data stays on disk until the
      * retention reaper ages it out.
      */
-    fun onFullscreenLiveStopped() {
+    fun onFullscreenLiveStopped(keepIfEnabled: Boolean = false) {
+        // Snapshot the actual play URL now if the holder still has one
+        // (post LAN/WAN failover); after an X-close the holder is already
+        // stopped and demotion falls back to the tune-time URL.
+        if (keepIfEnabled) noteChannelLeaving()
         // Through the same serial scope as start so a fast tune-then-back
         // can never stop BEFORE the pending start runs.
         scope.launch {
-            stopSessionInternal()
+            // Keep Recent Channels Live on close (iOS parity, NowPlaying.stop
+            // hands the remuxer to the retained manager): closing the player
+            // demotes the session exactly like a flip, honoring the cap and
+            // eviction. The Kept Live card's Stop releases it.
+            val keep = keepIfEnabled && activeWriter != null && runCatching {
+                prefs.liveRewindEnabled.first() && prefs.liveRewindKeepRecent.first()
+            }.getOrDefault(false)
+            if (keep) {
+                val name = currentChannelName
+                val keepCount = runCatching { prefs.liveRewindKeepCount.first() }.getOrDefault(1)
+                demoteCurrentSession(keepCount)
+                if (name != null && retained.values.any { it.channelName == name }) {
+                    Log.i(APP_TAG, "[RETAIN] kept on close $name")
+                }
+            } else {
+                stopSessionInternal()
+            }
+            lastPlayUrlSnapshot = null
             _state.value = State()
         }
     }

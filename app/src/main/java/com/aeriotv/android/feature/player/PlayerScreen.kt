@@ -615,7 +615,13 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         onDispose {
             if (exoHolder.isTimeshifting) exoHolder.goLive()
-            timeshiftController.onFullscreenLiveStopped()
+            // Keep Recent Channels Live: a close (X, Back without a mini,
+            // hold-Back stop, PiP X) keeps the channel live like a flip.
+            // Minimize to the mini keeps PLAYING it, and multiview launch
+            // hands off to tiles, so neither is retained.
+            val keepOnClose = exoWindowState.mode.value != ExoWindowState.Mode.Mini &&
+                !PlayerCloseIntent.consumeMultiviewLaunch()
+            timeshiftController.onFullscreenLiveStopped(keepIfEnabled = keepOnClose)
         }
     }
 
@@ -2219,6 +2225,7 @@ private fun PlayerSheets(
             multiviewStore = multiviewStore,
             onLaunch = {
                 multiviewPickerOpen = false
+                PlayerCloseIntent.markMultiviewLaunch()
                 // Stop the single-stream player BEFORE navigating so only the
                 // multiview tiles produce audio (no double-audio). Same teardown
                 // as the proven X-close path; onLaunchMultiview() is LAST because
@@ -3024,4 +3031,12 @@ interface PlayerScreenEntryPoint {
     fun companionRemote(): com.aeriotv.android.core.cast.companion.CompanionRemoteController
     fun companionDiscovery(): com.aeriotv.android.core.cast.companion.CompanionDiscovery
     fun companionHost(): com.aeriotv.android.core.cast.companion.CompanionHostController
+}
+
+/** One-shot marker so the Live Rewind dispose can tell a multiview launch
+ *  (not retained) from a user close (retained with Keep Recent Channels Live). */
+internal object PlayerCloseIntent {
+    @Volatile private var multiview = false
+    fun markMultiviewLaunch() { multiview = true }
+    fun consumeMultiviewLaunch(): Boolean = multiview.also { multiview = false }
 }
