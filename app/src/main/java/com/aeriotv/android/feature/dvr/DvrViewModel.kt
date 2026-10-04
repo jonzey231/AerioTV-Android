@@ -1136,8 +1136,20 @@ class DvrViewModel @Inject constructor(
         val from = needy.minOf { it.startMillis }
         val to = needy.maxOf { it.endMillis }
         if (from <= 0L || to <= from) return recordings
-        val epgByChannel = playlistRepository.loadCachedEpg(playlistId, from, to)
-            .groupBy { it.channelId }
+        // Best-effort, like the doc says: a failed cache read leaves the rows
+        // unhydrated instead of failing refresh()'s viewModelScope coroutine,
+        // which is uncaught and took the whole app down (Streamer 2026-10-03,
+        // CursorWindow read at EpgProgrammeDao_Impl.forPlaylistInWindow).
+        // Cancellation is rethrown so a cancelled refresh still stops here.
+        val epgRows = try {
+            playlistRepository.loadCachedEpg(playlistId, from, to)
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.w("DvrViewModel", "hydrateRecordingsFromEpg: EPG cache read failed", e)
+            return recordings
+        }
+        val epgByChannel = epgRows.groupBy { it.channelId }
         if (epgByChannel.isEmpty()) return recordings
         return recordings.map { r ->
             if (!needsHydration(r)) return@map r

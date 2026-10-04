@@ -12,6 +12,19 @@ interface EpgProgrammeDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(rows: List<EpgProgrammeEntity>)
 
+    /**
+     * Snapshot rule for every multi-window read in this DAO (Streamer crash
+     * 2026-10-03, "Couldn't read row 1432/1440/1447, col 0 from CursorWindow"
+     * at EpgProgrammeDao_Impl.forPlaylistInWindow). A result larger than one
+     * 2 MB CursorWindow (about 1,440 guide rows) is read in several window
+     * fills, and outside a transaction each fill re-runs the statement against
+     * a NEW WAL snapshot. The cursor keeps the row count from the first fill,
+     * so when a concurrent prune or merge deletes rows between fills the next
+     * fill comes back short and the read of the first row past the boundary
+     * throws IllegalStateException. @Transaction makes Room wrap the read in
+     * one read transaction, so every fill sees the same snapshot.
+     */
+    @Transaction
     @Query("SELECT * FROM epg_programme WHERE playlistId = :playlistId")
     suspend fun forPlaylist(playlistId: String): List<EpgProgrammeEntity>
 
@@ -34,7 +47,11 @@ interface EpgProgrammeDao {
      * Streamer 2026-09-12 (gtvlogs/session7.txt 14:29:17.640): 7605 ms to
      * return a two-day window out of a 267K-row table. Do not remove the
      * composite index without re-measuring this read.
+     *
+     * @Transaction: see the snapshot rule on [forPlaylist]. This is the read
+     * that crashed (DVR EPG hydration, DvrViewModel.hydrateRecordingsFromEpg).
      */
+    @Transaction
     @Query(
         "SELECT * FROM epg_programme WHERE playlistId = :playlistId " +
             "AND endMillis > :fromMillis AND startMillis < :toMillis"
