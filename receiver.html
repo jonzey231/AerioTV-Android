@@ -118,11 +118,50 @@
     opacity: 0; transition: opacity .3s ease;
   }
   #loading .status.visible { opacity: 1; }
+  /* Audio-only card: covers the empty video element when the stream has no
+     video track. Opaque, no blur, no backdrop-filter, no transform, no
+     transition; shown and hidden with display only. */
+  #audioCard {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #1C2230 0%, #07080C 100%);
+    color: #ffffff;
+  }
+  #audioCard.gone { display: none; }
+  #audioCard .art {
+    width: 40vmin; height: 40vmin;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #audioCard .art img {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+  }
+  #audioCard .art .note {
+    width: 100%; height: 100%; border-radius: 50%;
+    background: #22c3e6; color: #07080C;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20vmin; line-height: 1;
+  }
+  #audioCard .title {
+    margin-top: 36px; font-size: 40px; font-weight: 600;
+    text-align: center; padding: 0 48px;
+  }
+  #audioCard .title:empty { display: none; }
+  #audioCard .label {
+    margin-top: 12px; font-size: 26px; font-weight: 400;
+    color: rgba(255,255,255,.6);
+  }
 </style>
 <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </head>
 <body>
   <video class="castMediaElement" playsinline autoplay></video>
+
+  <div id="audioCard" class="gone">
+    <div class="art" id="audioCardArt"></div>
+    <div class="title" id="audioCardTitle"></div>
+    <div class="label">Audio Only</div>
+  </div>
 
   <div id="idle">
     <div class="wordmark">Aerio<span>TV</span></div>
@@ -148,6 +187,73 @@
     const bannerSubtitle = document.getElementById('bannerSubtitle');
     const loading = document.getElementById('loading');
     const loadingStatus = document.getElementById('loadingStatus');
+    const audioCard = document.getElementById('audioCard');
+    const audioCardArt = document.getElementById('audioCardArt');
+    const audioCardTitle = document.getElementById('audioCardTitle');
+    // Set on PLAYER_LOAD_COMPLETE, cleared on LOAD / idle. The card is only
+    // considered once the current load completed and playback is rendering.
+    let audioCardLoaded = false;
+    let audioCardInfo = null;
+
+    // true: the loaded manifest has no video stream. false: it has one.
+    // null: Shaka is not readable, fall back to the element's dimensions.
+    function manifestIsAudioOnly() {
+      try {
+        const p = playerManager.getPlayer && playerManager.getPlayer();
+        if (!p || typeof p.getVariantTracks !== 'function') return null;
+        const tracks = p.getVariantTracks() || [];
+        if (!tracks.length) return null;
+        return tracks.every((t) => !t.videoCodec && !t.width && !t.height &&
+          !t.videoId);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function hideAudioCard() {
+      audioCard.classList.add('gone');
+    }
+
+    function showAudioCard(info) {
+      const md = info && info.metadata;
+      const img = md && md.images && md.images[0] && md.images[0].url;
+      audioCardArt.textContent = '';
+      if (img) {
+        const el = document.createElement('img');
+        el.src = img;
+        el.alt = '';
+        el.onerror = () => {
+          audioCardArt.textContent = '';
+          const n = document.createElement('div');
+          n.className = 'note';
+          n.textContent = '\u266A';
+          audioCardArt.appendChild(n);
+        };
+        audioCardArt.appendChild(el);
+      } else {
+        const n = document.createElement('div');
+        n.className = 'note';
+        n.textContent = '\u266A';
+        audioCardArt.appendChild(n);
+      }
+      audioCardTitle.textContent = (md && md.title) || '';
+      audioCard.classList.remove('gone');
+    }
+
+    // Called from the loading ticker while rendering.
+    function updateAudioCard(video) {
+      if (!video || (video.videoWidth || video.videoHeight)) {
+        hideAudioCard();
+        return;
+      }
+      if (!audioCardLoaded) return;
+      const audioOnly = manifestIsAudioOnly();
+      if (audioOnly === false) {
+        hideAudioCard();
+        return;
+      }
+      if (audioCard.classList.contains('gone')) showAudioCard(audioCardInfo);
+    }
     let bannerTimer = null;
 
     // ---- overlay visibility ----
@@ -341,6 +447,8 @@
         bufferingSince = 0;
         renderingSince = 0;
         loadingSince = 0;
+        audioCardLoaded = false;
+        hideAudioCard();
         hideLoading();
         overlayShow(idle);
         idle.classList.remove('hidden');
@@ -359,6 +467,7 @@
         if (!renderingSince) renderingSince = nowMs;
         bufferingSince = 0;
         hideLoading();
+        updateAudioCard(video);
         return;
       }
 
@@ -1537,6 +1646,9 @@
         loadGeneration++;
         userPaused = false;
         seekPending = false;
+        audioCardLoaded = false;
+        audioCardInfo = null;
+        hideAudioCard();
         // Fresh tune: spinner up, counters zeroed, no status text yet.
         loadingSince = Date.now();
         manifestSeenAt = 0;
@@ -1588,6 +1700,8 @@
             C.SEEK | C.QUEUE_NEXT | C.QUEUE_PREV, true);
         }
         const md = info && info.metadata;
+        audioCardInfo = info || null;
+        audioCardLoaded = true;
         flashBanner(md && md.title, md && md.subtitle);
         // Media exists by now, so a seek here is honoured where the one
         // Shaka issued before the first append was not. See resyncPlayhead.
@@ -1608,6 +1722,8 @@
         hideLoading();
         idle.classList.remove('hidden');
         hideBanner();
+        audioCardLoaded = false;
+        hideAudioCard();
         renderingSince = 0;
         bufferingSince = 0;
       });
@@ -1620,6 +1736,8 @@
         hideLoading();
         idle.classList.remove('hidden');
         hideBanner();
+        audioCardLoaded = false;
+        hideAudioCard();
         renderingSince = 0;
         bufferingSince = 0;
         lastReceiverError = describeError(event);
