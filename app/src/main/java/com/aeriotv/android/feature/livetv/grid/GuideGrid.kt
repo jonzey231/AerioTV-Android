@@ -756,6 +756,9 @@ private fun GridRow(
     // flag instead. Read here in composition and handed to the shared rounding
     // rule inside the Canvas.
     val roundedArtwork = com.aeriotv.android.core.ui.LocalRoundedArtwork.current.guide
+    // Live TV > "Rounded Program Cells" (default OFF): the program cell shape
+    // has its own flag so logos and cells round independently.
+    val roundedCells = com.aeriotv.android.core.ui.LocalRoundedArtwork.current.programCells
     val shortFmt = remember(clockMode) { ClockFormat.guideShort(clockMode) }
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
     val starPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Filled.Star)
@@ -1125,9 +1128,9 @@ private fun GridRow(
                     else -> Color.White.copy(alpha = 0.05f)
                 }
                 // Logan 2026-09-02: the ring follows the cell's own shape.
-                // GH #87: "Rounded corners in Guide view" also rounds the
-                // program cells, at the rail's radius (Apple does the same).
-                val radius = if (roundedArtwork) CornerRadius(GUIDE_RAIL_CORNER.toPx()) else CornerRadius.Zero
+                // GH #87: "Rounded Program Cells" rounds the program cells at
+                // the rail's radius, separate from the logo toggle.
+                val radius = if (roundedCells) CornerRadius(GUIDE_RAIL_CORNER.toPx()) else CornerRadius.Zero
                 drawRoundRect(fill, topLeft = Offset(x0, 0f), size = Size(w, size.height - 1f), cornerRadius = radius)
                 if (focused) {
                     // Apple TV draws a 4pt ring at 1080p (about 4px); Android TV
@@ -1137,7 +1140,7 @@ private fun GridRow(
                         Color.White,
                         topLeft = Offset(x0 + bw / 2, bw / 2),
                         size = Size(w - bw, size.height - 1f - bw),
-                        cornerRadius = if (roundedArtwork) CornerRadius((radius.x - bw / 2).coerceAtLeast(0f)) else radius,
+                        cornerRadius = if (roundedCells) CornerRadius((radius.x - bw / 2).coerceAtLeast(0f)) else radius,
                         style = Stroke(width = bw),
                     )
                 }

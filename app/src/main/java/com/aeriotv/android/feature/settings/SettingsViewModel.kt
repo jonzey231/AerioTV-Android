@@ -113,6 +113,13 @@ class SettingsViewModel @Inject constructor(
     fun setRoundedArtworkGuide(value: Boolean) {
         viewModelScope.launch { prefs.setRoundedArtworkGuide(value) }
     }
+
+    /** Live TV > Rounded Program Cells (default OFF). */
+    val roundedProgramCells: StateFlow<Boolean> = prefs.roundedProgramCells
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    fun setRoundedProgramCells(value: Boolean) {
+        viewModelScope.launch { prefs.setRoundedProgramCells(value) }
+    }
     fun setShowChannelNumbers(value: Boolean) {
         viewModelScope.launch { prefs.setShowChannelNumbers(value) }
     }

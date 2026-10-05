@@ -226,6 +226,17 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Settings > Live TV > "Rounded Program Cells". Rounds the guide's program
+     * cells at the rail radius, independent of the logo toggle above (GH #87
+     * follow-up: rounded logos with flat cells). Default OFF.
+     */
+    val roundedProgramCells: Flow<Boolean> =
+        store.data.map { it[KEY_ROUNDED_PROGRAM_CELLS] ?: false }
+    suspend fun setRoundedProgramCells(value: Boolean) {
+        store.edit { it[KEY_ROUNDED_PROGRAM_CELLS] = value }
+    }
+
+    /**
      * Settings > Appearance > Time Format: "system" (default, follows the
      * device's 24-hour setting), "12", or "24". Drive-synced as "timeFormat",
      * the same key Apple uses.
@@ -2136,6 +2147,7 @@ class AppPreferences @Inject constructor(
         val KEY_SHOW_PROGRAM_SUBTITLES = booleanPreferencesKey("ui_show_program_subtitles")
         val KEY_ROUNDED_ARTWORK = booleanPreferencesKey("ui_rounded_artwork")
         val KEY_ROUNDED_ARTWORK_GUIDE = booleanPreferencesKey("ui_rounded_artwork_guide")
+        val KEY_ROUNDED_PROGRAM_CELLS = booleanPreferencesKey("guide_rounded_program_cells")
         val KEY_TIME_FORMAT = stringPreferencesKey("ui_time_format")
         val KEY_HIDDEN_EPG_BADGES = stringPreferencesKey("ui_hidden_epg_badges")
         val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")

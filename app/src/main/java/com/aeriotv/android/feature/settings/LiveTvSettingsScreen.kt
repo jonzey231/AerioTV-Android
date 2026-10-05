@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Palette
@@ -93,6 +94,7 @@ fun LiveTvSettingsScreen(
     val showProgramSubtitles by viewModel.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
     val roundedArtwork by viewModel.roundedArtwork.collectAsStateWithLifecycle(initialValue = true)
     val roundedArtworkGuide by viewModel.roundedArtworkGuide.collectAsStateWithLifecycle(initialValue = false)
+    val roundedProgramCells by viewModel.roundedProgramCells.collectAsStateWithLifecycle(initialValue = false)
     val defaultLiveTVView by viewModel.defaultLiveTVView.collectAsStateWithLifecycle(initialValue = "")
     val liveTvLayout by viewModel.liveTvLayout.collectAsStateWithLifecycle(initialValue = "basic")
     val phoneGroupSelector by viewModel.phoneGroupSelector.collectAsStateWithLifecycle(initialValue = "sidebar")
@@ -181,11 +183,18 @@ fun LiveTvSettingsScreen(
                             onCheckedChange = viewModel::setShowProgramSubtitles,
                         )
                         SettingsToggleRow(
-                            title = "Rounded Corners in Guide View",
-                            subtitle = "Rounds channel logos in the Guide's channel column.",
+                            title = "Rounded Guide Logos",
+                            subtitle = "Round the channel logos in the guide.",
                             leadingIcon = if (isTv) Icons.Filled.GridOn else null,
                             checked = roundedArtworkGuide,
                             onCheckedChange = viewModel::setRoundedArtworkGuide,
+                        )
+                        SettingsToggleRow(
+                            title = "Rounded Program Cells",
+                            subtitle = "Round the program cells in the guide to match the logos.",
+                            leadingIcon = if (isTv) Icons.Filled.RoundedCorner else null,
+                            checked = roundedProgramCells,
+                            onCheckedChange = viewModel::setRoundedProgramCells,
                         )
                     }
                 }

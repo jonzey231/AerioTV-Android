@@ -42,6 +42,8 @@ data class RoundedArtwork(
     val list: Boolean = true,
     /** The guide rail logos, and nothing else. Default OFF. */
     val guide: Boolean = false,
+    /** The guide's program cells. Default OFF. */
+    val programCells: Boolean = false,
 )
 
 val LocalRoundedArtwork = staticCompositionLocalOf { RoundedArtwork() }

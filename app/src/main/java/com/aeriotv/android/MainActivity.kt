@@ -1212,6 +1212,7 @@ class MainActivity : ComponentActivity() {
             // read by every logo / program-art surface (core/ui/ArtworkCorners.kt).
             val roundedArtwork by appPreferences.roundedArtwork.collectAsState(initial = true)
             val roundedArtworkGuide by appPreferences.roundedArtworkGuide.collectAsState(initial = false)
+            val roundedProgramCells by appPreferences.roundedProgramCells.collectAsState(initial = false)
             CompositionLocalProvider(
                 LocalAppTextScale provides textScale,
                 com.aeriotv.android.ui.scale.LocalSubtextScale provides subtextScale,
@@ -1220,6 +1221,7 @@ class MainActivity : ComponentActivity() {
                     com.aeriotv.android.core.ui.RoundedArtwork(
                         list = roundedArtwork,
                         guide = roundedArtworkGuide,
+                        programCells = roundedProgramCells,
                     ),
             ) {
             ProvideAppTextScale {
