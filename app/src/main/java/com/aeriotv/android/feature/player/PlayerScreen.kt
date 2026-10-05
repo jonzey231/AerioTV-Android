@@ -555,6 +555,7 @@ fun PlayerScreen(
         // actually IDLE (a stop path that missed clearing currentChannelId).
         // Skipping the prime against a dead player was the silent-black-
         // screen failure: no logs, Stream Info idle, no server client.
+        var adoptLive = false
         if (exoHolder.currentChannelId != channelId || exoHolder.isIdle()) {
             Log.i(TAG, "Channel switch on Exo persistent player -> $url")
             // Trace: this is a real tune entry (channel-list / recents / deep
@@ -574,7 +575,22 @@ fun PlayerScreen(
             // the session.
             val artworkUri = ch.tvgLogo.takeIf { it.isNotBlank() }
                 ?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
-            exoHolder.playUrl(
+            // Keep Recent Channels Live re-tune: play the kept channel's
+            // buffer at its live edge, fed by the kept connection itself. No
+            // new request to the server (Apple parity). Falls through to a
+            // normal tune when there is no usable kept buffer.
+            val keptWriter = if (exoHolder.canBufferLiveRewind(url)) {
+                timeshiftController.retainedWriterFor(channelId)
+            } else null
+            adoptLive = keptWriter != null && exoHolder.playRetainedLive(
+                writer = keptWriter,
+                url = url,
+                title = ch.name,
+                subtitle = nowProgramme?.title.orEmpty(),
+                artworkUri = artworkUri,
+                channelId = channelId,
+            )
+            if (!adoptLive) exoHolder.playUrl(
                 url = url,
                 title = ch.name,
                 subtitle = nowProgramme?.title.orEmpty(),
@@ -604,7 +620,9 @@ fun PlayerScreen(
             // GH #65 follow-on (VPS migration): the filler must chase the
             // holder's post-failover URL, not the stored channel row's.
             timeshiftController.currentPlayUrlProvider = { exoHolder.currentPlayUrl }
-            timeshiftController.onFullscreenLiveStarted(channelId, ch.name, url, httpHeaders, logoUrl = ch.tvgLogo)
+            timeshiftController.onFullscreenLiveStarted(
+                channelId, ch.name, url, httpHeaders, logoUrl = ch.tvgLogo, adoptLive = adoptLive,
+            )
         } else {
             timeshiftController.onFullscreenLiveStopped()
         }
@@ -614,13 +632,23 @@ fun PlayerScreen(
     // Buffered segments stay on disk until the retention reaper runs.
     DisposableEffect(Unit) {
         onDispose {
-            if (exoHolder.isTimeshifting) exoHolder.goLive()
+            // Adopted kept channel: the buffer's own connection is still
+            // live and goes straight back to the kept list; a Go Live here
+            // would open a direct connection only to close it.
+            if (exoHolder.isTimeshifting && !exoHolder.isAdoptedLive) exoHolder.goLive()
             // Keep Recent Channels Live: a close (X, Back without a mini,
             // hold-Back stop, PiP X) keeps the channel live like a flip.
             // Minimize to the mini keeps PLAYING it, and multiview launch
             // hands off to tiles, so neither is retained.
-            val keepOnClose = exoWindowState.mode.value != ExoWindowState.Mode.Mini &&
-                !PlayerCloseIntent.consumeMultiviewLaunch()
+            val toMini = exoWindowState.mode.value == ExoWindowState.Mode.Mini
+            val toMultiview = PlayerCloseIntent.consumeMultiviewLaunch()
+            val keepOnClose = !toMini && !toMultiview
+            if (!keepOnClose) {
+                Log.i(
+                    "AerioTV",
+                    "[RETAIN] not kept on close: " + if (toMini) "minimized to the mini player" else "multiview launch",
+                )
+            }
             timeshiftController.onFullscreenLiveStopped(keepIfEnabled = keepOnClose)
         }
     }

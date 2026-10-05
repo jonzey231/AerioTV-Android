@@ -115,7 +115,7 @@ class TimeshiftController @Inject constructor(
         val channelName: String,
         val logoUrl: String?,
         /** Wall time the channel started being kept live (demotion). */
-        val sinceMs: Long,
+        var sinceMs: Long,
         /** FROZEN at demotion. Never consults [currentPlayUrlProvider]:
          *  by demotion time the holder is already tuning the NEW channel,
          *  so chasing the provider would record the wrong channel. */
@@ -128,6 +128,30 @@ class TimeshiftController @Inject constructor(
     }
 
     private val retained = LinkedHashMap<String, RetainedSession>()
+
+    /**
+     * A kept channel the user tuned back to while its OWN fill connection
+     * keeps feeding the buffer, which the player reads from its live edge
+     * ([AerioExoPlayerHolder.playRetainedLive]). No new server connection is
+     * opened on re-tune (Apple parity: the kept remuxer's live window
+     * resumes with no new ingest). Closing or flipping away hands the same
+     * running connection straight back to [retained]. Serial scope only.
+     */
+    private var adoptedSession: RetainedSession? = null
+
+    /** Lock-free snapshot of the kept writers, read on the Main thread by
+     *  PlayerScreen at tune time so the player can start on the kept buffer
+     *  before the serial adoption task runs. */
+    @Volatile private var retainedWriters: Map<String, TimeshiftWriter> = emptyMap()
+
+    /** The kept buffer for [channelId] when it is still writable, else null. */
+    fun retainedWriterFor(channelId: String): TimeshiftWriter? =
+        retainedWriters[channelId]?.takeIf { !it.closed }
+
+    /** Called (on the serial scope) when the adopted live connection ended
+     *  on its own while the player was reading it; the holder re-tunes the
+     *  direct stream so playback does not stall at the buffer head. */
+    @Volatile var onAdoptedFillEnded: ((String) -> Unit)? = null
 
     data class RetainedChannel(
         val channelId: String,
@@ -144,6 +168,7 @@ class TimeshiftController @Inject constructor(
     val retainedChannels: StateFlow<List<RetainedChannel>> = _retainedChannels
 
     private fun publishRetained() {
+        retainedWriters = retained.mapValues { it.value.writer }
         _retainedChannels.value = retained.values.map {
             RetainedChannel(it.channelId, it.channelName, it.logoUrl, it.sinceMs)
         }
@@ -206,6 +231,10 @@ class TimeshiftController @Inject constructor(
         streamUrl: String,
         headers: Map<String, String> = emptyMap(),
         logoUrl: String? = null,
+        /** True when the player is already reading the kept buffer's live
+         *  edge (no new connection): adoption keeps the kept fill running as
+         *  this session's live feed instead of stopping it. */
+        adoptLive: Boolean = false,
     ) {
         liveUrl = streamUrl
         liveHeaders = headers
@@ -219,7 +248,7 @@ class TimeshiftController @Inject constructor(
                 // Settings changed underneath live retained sessions:
                 // release them rather than leaving orphan fillers running.
                 if (!keepRecent && retained.isNotEmpty()) {
-                    retained.values.forEach { releaseRetained(it) }
+                    retained.values.forEach { releaseRetained(it, "Keep Recent Channels Live turned off") }
                     retained.clear()
                     publishRetained()
                 }
@@ -232,25 +261,40 @@ class TimeshiftController @Inject constructor(
                 // connection than the retained filler, so mark the splice.
                 val adopted = retained.remove(channelId)
                 if (adopted != null) {
-                    stopRetainedFill(adopted)
+                    val liveFill = adoptLive && !adopted.writer.closed &&
+                        adopted.fillJob?.isActive == true
+                    if (!liveFill) stopRetainedFill(adopted)
                     publishRetained()
                     if (!adopted.writer.closed) {
-                        adopted.writer.markDiscontinuity()
                         currentChannelId = channelId
                         currentChannelName = channelName
                         currentChannelLogo = logoUrl
                         activeWriter = adopted.writer
+                        if (liveFill) {
+                            // The kept connection IS this session's live
+                            // feed now: same bytes, no splice. Registered as
+                            // the independent fill so pause/rewind never
+                            // start a second connection, and Go Live /
+                            // stop / demote own its lifetime.
+                            adoptedSession = adopted
+                            fillJob = adopted.fillJob
+                            Log.i(TAG, "adopted retained buffer for $channelName (live fill kept, no new connection)")
+                        } else {
+                            // The player's own connection takes over: mark
+                            // the splice for the tee.
+                            adopted.writer.markDiscontinuity()
+                            Log.i(TAG, "adopted retained buffer for $channelName")
+                        }
                         _state.value = State(
                             buffering = true,
                             tailWallMs = adopted.writer.tailWallMs,
                             headWallMs = adopted.writer.headWallMs,
                         )
-                        Log.i(TAG, "adopted retained buffer for $channelName")
                         return@launch
                     }
                     // Writer died in the background (disk full, etc.):
                     // release the corpse and fall through to a fresh start.
-                    releaseRetained(adopted)
+                    releaseRetained(adopted, "buffer closed before re-tune")
                 }
                 val writer = store.startSession(
                     channelId = channelId,
@@ -286,6 +330,17 @@ class TimeshiftController @Inject constructor(
      * scope only.
      */
     private fun demoteCurrentSession(maxCount: Int) {
+        // Adopted kept channel leaving the screen: its own connection is
+        // still filling the buffer, so hand it straight back to [retained]
+        // instead of cancelling it and dialing a new one.
+        val reuse = adoptedSession?.takeIf {
+            it.writer === activeWriter && !it.writer.closed && it.fillJob?.isActive == true
+        }
+        if (reuse != null) {
+            adoptedSession = null
+            fillJob = null
+            fillCall = null
+        }
         stopIndependentFill()
         val writer = activeWriter
         val chId = currentChannelId
@@ -302,8 +357,20 @@ class TimeshiftController @Inject constructor(
         // points at the incoming channel).
         val url = lastPlayUrlSnapshot ?: liveUrl
         lastPlayUrlSnapshot = null
+        if (reuse != null && chId != null) {
+            reuse.sinceMs = System.currentTimeMillis()
+            retained.remove(chId)
+            retained[chId] = reuse
+            evictPastCap(maxCount)
+            publishRetained()
+            Log.i(TAG, "keeping $chName live (${retained.size} retained, same connection, no reconnect)")
+            return
+        }
+        reuse?.let { stopRetainedFill(it) }
         if (chId == null || url == null || writer.closed) {
             // Not retainable: release exactly like stopSessionInternal.
+            Log.i(APP_TAG, "[RETAIN] not kept ${chName ?: "?"}: " +
+                if (writer.closed) "buffer closed" else "no channel id or URL")
             writer.close()
             runCatching { writer.sessionDir.deleteRecursively() }
             return
@@ -319,15 +386,18 @@ class TimeshiftController @Inject constructor(
         )
         retained.remove(chId)
         retained[chId] = session
-        while (retained.size > maxCount.coerceIn(1, 5)) {
-            val oldest = retained.entries.first()
-            retained.remove(oldest.key)
-            releaseRetained(oldest.value)
-            Log.i(TAG, "retention evicted ${oldest.value.channelName}")
-        }
+        evictPastCap(maxCount)
         startRetainedFill(session)
         publishRetained()
         Log.i(TAG, "keeping $chName live (${retained.size} retained)")
+    }
+
+    private fun evictPastCap(maxCount: Int) {
+        while (retained.size > maxCount.coerceIn(1, 5)) {
+            val oldest = retained.entries.first()
+            retained.remove(oldest.key)
+            releaseRetained(oldest.value, "evicted by a newer keep (cap ${maxCount.coerceIn(1, 5)})")
+        }
     }
 
     /**
@@ -400,11 +470,22 @@ class TimeshiftController @Inject constructor(
      *  replaced in the meantime. */
     private fun releaseRetainedAfterFillEnd(session: RetainedSession, reason: String) {
         scope.launch {
+            if (adoptedSession === session) {
+                // On screen: the buffer stays as the foreground session's
+                // rewind window; only the live feed ended. The holder goes
+                // back to a direct tune so playback does not run dry.
+                adoptedSession = null
+                if (fillJob === session.fillJob) fillJob = null
+                session.fillCall = null
+                session.fillJob = null
+                Log.i(APP_TAG, "[RETAIN] adopted live feed ended for ${session.channelName}: $reason")
+                onAdoptedFillEnded?.invoke(session.channelId)
+                return@launch
+            }
             if (retained[session.channelId] !== session) return@launch
             retained.remove(session.channelId)
-            releaseRetained(session)
+            releaseRetained(session, "server ended the kept connection ($reason)")
             publishRetained()
-            Log.i(TAG, "[RETAIN] released ${session.channelName}: $reason")
         }
     }
 
@@ -420,7 +501,8 @@ class TimeshiftController @Inject constructor(
 
     /** Stop and delete a retained session's buffer. Caller removes it from
      *  [retained] and publishes. */
-    private fun releaseRetained(session: RetainedSession) {
+    private fun releaseRetained(session: RetainedSession, reason: String) {
+        Log.i(APP_TAG, "[RETAIN] released ${session.channelName}: $reason")
         stopRetainedFill(session)
         session.writer.close()
         runCatching {
@@ -435,8 +517,7 @@ class TimeshiftController @Inject constructor(
     fun stopRetainedChannel(channelId: String) {
         scope.launch {
             retained.remove(channelId)?.let {
-                releaseRetained(it)
-                Log.i(APP_TAG, "[RETAIN] released by user ${it.channelName}")
+                releaseRetained(it, "released by user")
             }
             publishRetained()
         }
@@ -447,10 +528,7 @@ class TimeshiftController @Inject constructor(
     fun stopAllRetainedByUser() {
         scope.launch {
             if (retained.isEmpty()) return@launch
-            retained.values.forEach {
-                releaseRetained(it)
-                Log.i(APP_TAG, "[RETAIN] released by user ${it.channelName}")
-            }
+            retained.values.forEach { releaseRetained(it, "released by user (Stop All)") }
             retained.clear()
             publishRetained()
         }
@@ -460,10 +538,10 @@ class TimeshiftController @Inject constructor(
      *  fillers are network connections the user cannot see, so they do not
      *  outlive the app being on screen (anti-ghost-stream rule; there is no
      *  FGS for this convenience feature). */
-    fun stopAllRetained() {
+    fun stopAllRetained(reason: String) {
         scope.launch {
             if (retained.isEmpty()) return@launch
-            retained.values.forEach { releaseRetained(it) }
+            retained.values.forEach { releaseRetained(it, reason) }
             retained.clear()
             publishRetained()
         }
@@ -497,6 +575,13 @@ class TimeshiftController @Inject constructor(
                     Log.i(APP_TAG, "[RETAIN] kept on close $name")
                 }
             } else {
+                if (keepIfEnabled) {
+                    Log.i(
+                        APP_TAG,
+                        "[RETAIN] not kept on close ${currentChannelName ?: "?"}: " +
+                            if (activeWriter == null) "no buffer session" else "Keep Recent Channels Live off",
+                    )
+                }
                 stopSessionInternal()
             }
             lastPlayUrlSnapshot = null
@@ -565,6 +650,10 @@ class TimeshiftController @Inject constructor(
     @Volatile private var fillCall: okhttp3.Call? = null
 
     private fun stopIndependentFill() {
+        adoptedSession?.let {
+            adoptedSession = null
+            stopRetainedFill(it)
+        }
         fillCall?.cancel()
         fillCall = null
         fillJob?.cancel()

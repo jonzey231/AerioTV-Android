@@ -3,6 +3,7 @@ package com.aeriotv.android.feature.livetv
 import androidx.compose.foundation.background
 import com.aeriotv.android.feature.main.floatingNavChrome
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,9 +45,12 @@ class RetainedChannelsViewModel @Inject constructor(
 }
 
 /**
- * TV kept-live menu, opened from the floating circle in TvTopTabBar. Phones
- * and tablets use [RetainedChannelsPill] above the bottom nav bar, whose
- * multi-channel text opens this same dialog.
+ * Kept Live list. TV: the action-menu dialog opened from the floating circle
+ * in TvTopTabBar. Phones and tablets: the same contents in a bottom sheet
+ * (FormFactorModal), opened by the multi-channel text of
+ * [RetainedChannelsPill] (iPhone parity): a Stop All header, then each kept
+ * channel with Watch and Stop. Closes on Watch, on Stop All, or when nothing
+ * is kept any more.
  */
 @Composable
 fun RetainedChannelsDialog(
@@ -55,6 +59,22 @@ fun RetainedChannelsDialog(
     onDismiss: () -> Unit,
 ) {
     val retained by viewModel.retained.collectAsStateWithLifecycle()
+    if (!com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+        RetainedChannelsSheet(
+            retained = retained,
+            onWatch = { id ->
+                onDismiss()
+                onJumpToChannel(id)
+            },
+            onStop = viewModel::stop,
+            onStopAll = {
+                viewModel.stopAll()
+                onDismiss()
+            },
+            onDismiss = onDismiss,
+        )
+        return
+    }
     val guard = rememberTvMenuGuard()
     val actions = buildList {
         retained.asReversed().forEach { ch ->
@@ -90,6 +110,85 @@ fun RetainedChannelsDialog(
     )
 }
 
+@Composable
+private fun RetainedChannelsSheet(
+    retained: List<com.aeriotv.android.core.timeshift.TimeshiftController.RetainedChannel>,
+    onWatch: (String) -> Unit,
+    onStop: (String) -> Unit,
+    onStopAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // Nothing kept any more (last Stop, a server end): close the sheet.
+    androidx.compose.runtime.LaunchedEffect(retained.isEmpty()) {
+        if (retained.isEmpty()) onDismiss()
+    }
+    com.aeriotv.android.ui.FormFactorModal(
+        onDismiss = onDismiss,
+        sheetMaxWidth = 600.dp,
+        traceName = "kept-live",
+    ) {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            androidx.compose.material3.Text(
+                text = "Kept Live",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            if (retained.size > 1) {
+                RetainedCardButton(label = "Stop All", onClick = onStopAll)
+            }
+        }
+        retained.asReversed().forEach { ch ->
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(com.aeriotv.android.core.ui.artworkTileShape(6.dp, model = ch.logoUrl))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = androidx.compose.ui.Alignment.Center,
+                ) {
+                    if (!ch.logoUrl.isNullOrBlank()) {
+                        coil3.compose.AsyncImage(
+                            model = ch.logoUrl,
+                            contentDescription = null,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.FiberSmartRecord,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
+                androidx.compose.material3.Text(
+                    text = ch.channelName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                RetainedCardButton(label = "Watch", onClick = { onWatch(ch.channelId) })
+                RetainedCardButton(label = "Stop", onClick = { onStop(ch.channelId) })
+            }
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
+    }
+}
 
 /**
  * Ids of the channels currently kept live, provided at the scaffold level so

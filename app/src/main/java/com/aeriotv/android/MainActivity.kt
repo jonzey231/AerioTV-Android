@@ -472,14 +472,17 @@ class MainActivity : ComponentActivity() {
             runCatching { exoHolder.stop() }
             AerioMediaPlaybackService.stop(this)
         }
-        // Keep Recent Channels Live: retained background fillers are provider
-        // connections the user cannot see, so they never outlive the app
-        // being on screen (anti-ghost-stream rule; no FGS backs this
-        // convenience feature). PiP does not stop the activity, so the
-        // buffer-through-PiP directive is unaffected; config-change
-        // recreations are exempt like the TV playback stop above.
-        if (!isChangingConfigurations) {
-            runCatching { timeshiftController.stopAllRetained() }
+        // Keep Recent Channels Live: a kept channel stays until the user stops
+        // it, a newer keep evicts it, the server ends it, or the app exits
+        // (Logan 2026-10-04). Merely leaving the app (share sheet, a
+        // screenshot hand-off, the app switcher) is not an exit: releasing
+        // here dropped a kept channel 6 s after the keep on the Nothing Phone
+        // (20:15:34, onAppEnteredBackground from a screenshot share). Only a
+        // finishing activity releases; a process the system later kills
+        // takes its sockets with it, and a frozen process's connection ends
+        // server side, which the kept filler logs as its release reason.
+        if (!isChangingConfigurations && isFinishing) {
+            runCatching { timeshiftController.stopAllRetained("app exit") }
         }
         // GH #40: never leave the launcher/home screen on a content-matched
         // resolution; onResume re-applies if a live player is still up.

@@ -1640,6 +1640,15 @@ class AerioExoPlayerHolder @Inject constructor(
             // rendered" from "decoded but never painted". Once per prime, so
             // it's cheap enough for release builds.
             Log.i(TAG, "first video frame rendered ch=$currentChannelId (+${SystemClock.elapsedRealtime() - streamPrimedAtMs}ms)")
+            if (isAdoptedLive && adoptedLiveTuneAtMs != 0L) {
+                Log.i(
+                    "AerioTV",
+                    "[RETAIN] adopted live, no refetch ch=$currentChannelId " +
+                        "firstFrame ${tracer.msSincePress()}ms after press " +
+                        "(${SystemClock.elapsedRealtime() - adoptedLiveTuneAtMs}ms after start)",
+                )
+                adoptedLiveTuneAtMs = 0L
+            }
             tracer.onFirstFrame()
         }
     }
@@ -2152,6 +2161,7 @@ class AerioExoPlayerHolder @Inject constructor(
         val ts = timeshift.get()
         if (ts.activeWriter == null) return false
         isTimeshifting = true
+        isAdoptedLive = false
         val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory { ts.activeWriter }
         val item = MediaItem.Builder()
             .setUri(com.aeriotv.android.core.timeshift.TimeshiftDataSource.uri(fromWallMs))
@@ -2181,6 +2191,7 @@ class AerioExoPlayerHolder @Inject constructor(
         val ts = timeshift.get()
         if (ts.activeWriter == null) return false
         isTimeshifting = true
+        isAdoptedLive = false
         val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory { ts.activeWriter }
         val item = MediaItem.Builder()
             .setUri(
@@ -2201,6 +2212,105 @@ class AerioExoPlayerHolder @Inject constructor(
         return true
     }
 
+    /**
+     * True while the player reads a kept channel's buffer at its live edge,
+     * fed by that channel's own kept connection ([playRetainedLive]). Holder
+     * gates treat it like timeshift (no direct-stream watchdog), but the UI
+     * reads it as live. Cleared by any real rewind, Go Live, re-prime or stop.
+     */
+    @Volatile
+    var isAdoptedLive = false
+        private set
+
+    /** Wall ms the adopted-live tune started, for the first-frame log. */
+    private var adoptedLiveTuneAtMs = 0L
+
+    /**
+     * Keep Recent Channels Live re-tune with NO new server connection (Apple
+     * parity: the kept remuxer's live window resumes with no new ingest).
+     * The kept channel's own fill connection keeps appending to [writer];
+     * the player reads that buffer from [ADOPT_LIVE_CUSHION_MS] behind its
+     * head and follows it at 1x. The cushion is wider than Dispatcharr's
+     * 8 to 9.5 s delivery bursts so the reader never catches the write head
+     * between bursts. All bytes are local, so first frame needs no network.
+     */
+    fun playRetainedLive(
+        writer: com.aeriotv.android.core.timeshift.TimeshiftWriter,
+        url: String,
+        title: String?,
+        subtitle: String?,
+        artworkUri: android.net.Uri?,
+        channelId: String,
+    ): Boolean {
+        if (writer.closed || writer.headWallMs <= writer.tailWallMs) return false
+        val p = appContext?.let { acquireOrCreate(it) } ?: player ?: return false
+        val ts = timeshift.get()
+        val from = (writer.headWallMs - ADOPT_LIVE_CUSHION_MS).coerceAtLeast(writer.tailWallMs)
+        isCatchup = false
+        timeshiftErrorRetries = 0
+        lastGapKey = null
+        gapHops = 0
+        // The direct URL stays the channel's, so Go Live, a feed end and the
+        // failover hooks re-tune the right stream.
+        lastPlayUrl = url
+        lastPlayTitle = title
+        lastPlaySubtitle = subtitle
+        lastPlayArtworkUri = artworkUri
+        lastPlayDrmType = null
+        lastPlayDrmKey = null
+        currentChannelIdForRebuild = channelId
+        currentChannelId = channelId
+        clearPauseStamp("adopted live")
+        resetWatchdogStateForNewStream()
+        setVideoTrackEnabled(!remoteAudioOnly)
+        liveFailover.disarm()
+        tracer.markTuneStart(title, "live")
+        primeGeneration += 1
+        isTimeshifting = true
+        isAdoptedLive = true
+        adoptedLiveTuneAtMs = SystemClock.elapsedRealtime()
+        ts.onAdoptedFillEnded = { id ->
+            mainHandler.post {
+                if (isAdoptedLive && currentChannelId == id) {
+                    Log.i(TAG, "[RETAIN] kept feed ended under adopted playback -> direct tune")
+                    goLive()
+                }
+            }
+        }
+        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory {
+            ts.activeWriter?.takeIf { it === writer } ?: writer
+        }
+        val item = MediaItem.Builder()
+            .setUri(com.aeriotv.android.core.timeshift.TimeshiftDataSource.uri(from))
+            .setMediaId("live-rewind")
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(title)
+                    .setArtist(subtitle)
+                    .setDisplayTitle(title)
+                    .setSubtitle(subtitle)
+                    .setArtworkUri(artworkUri)
+                    .build(),
+            )
+            .build()
+        val source = ProgressiveMediaSource.Factory(factory, tsOnlyExtractorsFactory())
+            .createMediaSource(item)
+        _pipelineLabel.value = "ExoPlayer · Kept Live TS"
+        val staleCalls = takeLiveCallTrackers()
+        p.setMediaSource(source)
+        retireLiveCalls(p, staleCalls)
+        p.prepare()
+        p.playWhenReady = true
+        Log.i(
+            TAG,
+            "[RETAIN] adopted live start ch=$title from=${writer.headWallMs - from}ms behind head, " +
+                "buffer ${(writer.headWallMs - writer.tailWallMs) / 1000}s",
+        )
+        return true
+    }
+
+    private val mainHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+
     /** Return to the live edge by re-tuning the DIRECT live stream. This blacks the
      *  screen ~1s while it re-primes (same cost as a channel tune) but it is CORRECT:
      *  a "smooth" seek to the buffer head instead STARVES -- you can only play as far
@@ -2212,6 +2322,7 @@ class AerioExoPlayerHolder @Inject constructor(
     fun goLive() {
         if (!isTimeshifting) return
         isTimeshifting = false
+        isAdoptedLive = false
         timeshift.get().onGoLive()
         val url = lastPlayUrl ?: return
         Log.i(TAG, "[REWIND] go live -> re-tune direct stream")
@@ -2222,7 +2333,7 @@ class AerioExoPlayerHolder @Inject constructor(
      *  mode) with the playhead within 5s of the buffer head. Lets a smooth
      *  go-live-to-buffer-head still read as "live" for the LIVE indicators. */
     fun isAtLiveEdge(): Boolean {
-        if (!isTimeshifting) return true
+        if (!isTimeshifting || isAdoptedLive) return true
         val w = rewindWindow() ?: return true
         val pos = currentRewindWallMs() ?: return true
         return pos >= w[1] - 5_000
@@ -2399,6 +2510,7 @@ class AerioExoPlayerHolder @Inject constructor(
             timeshift.get().onGoLive()
         }
         isTimeshifting = false
+        isAdoptedLive = false
         isCatchup = false
         timeshiftErrorRetries = 0
         lastGapKey = null
@@ -2730,6 +2842,12 @@ class AerioExoPlayerHolder @Inject constructor(
         hasReachedPlaybackRestart = false
         lastPlayUrl = null
         isCatchup = false
+        // Adopted-live reads a local buffer whose feed the timeshift
+        // controller owns (it is handed back to the kept list on close).
+        if (isAdoptedLive) {
+            isAdoptedLive = false
+            isTimeshifting = false
+        }
         // Disarm the first-byte deadline with the pipeline but KEEP the tried
         // set: an internal retry is the same tune on the same channel.
         liveFailover.disarm()
@@ -3918,6 +4036,11 @@ class AerioExoPlayerHolder @Inject constructor(
         /** Baseline live start gate (bufferForPlaybackMs). See the LoadControl
          *  comment in [acquireOrCreate] for why 1_200 and not 500 or 2_000. */
         private const val LIVE_START_GATE_DEFAULT_MS = 1_200
+
+        /** Kept Live re-tune: how far behind the kept buffer's head the
+         *  player starts. Wider than Dispatcharr's 8 to 9.5 s delivery bursts
+         *  so 1x playback never reaches the write head between bursts. */
+        private const val ADOPT_LIVE_CUSHION_MS = 12_000L
         /** Ceiling on the learned hold-back: past 10 s the tap-to-motion cost
          *  outweighs riding out the gap. */
         private const val LIVE_START_GATE_MAX_MS = 10_000

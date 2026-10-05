@@ -131,6 +131,9 @@ class PlaybackTracer {
      *  tune had no user press, e.g. a watchdog re-prime). */
     private fun sincePress(stamp: Long): Long = if (pressAtMs == 0L) 0L else stamp - pressAtMs
 
+    /** Milliseconds since the last tune press (0 when none). */
+    fun msSincePress(): Long = sincePress(now())
+
     // ---- tune lifecycle ----
 
     /**

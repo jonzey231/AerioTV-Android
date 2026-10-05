@@ -1003,7 +1003,7 @@ class PlaylistRepository @Inject constructor(
         CapabilityCorrections.clear(priorRow.id)
         // Retained live-rewind fillers are open connections counted against
         // the OLD user's stream limit.
-        timeshiftController.stopAllRetained()
+        timeshiftController.stopAllRetained("playlist credentials changed")
         // Memoized XC username + xc_password used by catch-up playback.
         catchupResolver.invalidateCredentialMemos()
         // Forget the stored per-user snapshot outright rather than letting
