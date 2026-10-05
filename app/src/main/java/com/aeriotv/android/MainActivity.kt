@@ -974,10 +974,26 @@ class MainActivity : ComponentActivity() {
         // Remote Control initiative: keep the button map hot for
         // dispatchKeyEvent (which cannot suspend).
         lifecycleScope.launch {
-            appPreferences.effectiveRemoteControlMap.collect { remoteMap = it }
+            appPreferences.effectiveRemoteControlMap.collect { map ->
+                remoteMap = map
+                // Same "custom Left/Right" test as the live dispatch below.
+                val defaults = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT
+                val slots = listOf(
+                    com.aeriotv.android.core.remote.RemoteSlot.LEFT_SHORT,
+                    com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG,
+                    com.aeriotv.android.core.remote.RemoteSlot.RIGHT_SHORT,
+                    com.aeriotv.android.core.remote.RemoteSlot.RIGHT_LONG,
+                )
+                com.aeriotv.android.feature.player.VodHiddenChromeScrub.customHorizontalMap =
+                    map.preset == com.aeriotv.android.core.remote.RemotePreset.CUSTOM &&
+                    slots.any { map.playerAction(it) != defaults.playerAction(it) }
+            }
         }
         lifecycleScope.launch {
-            appPreferences.skipWithoutControls.collect { skipWithoutControls = it }
+            appPreferences.skipWithoutControls.collect {
+                skipWithoutControls = it
+                com.aeriotv.android.feature.player.VodHiddenChromeScrub.skipWithoutControls = it
+            }
         }
         // Audit #47: keep the Android TV launcher's channel row + Watch Next
         // in sync. No-op on phones/tablets (FEATURE_LEANBACK gate inside).

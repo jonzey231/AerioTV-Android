@@ -1,6 +1,7 @@
 package com.aeriotv.android.feature.main
 
 import com.aeriotv.android.ui.theme.textAccent
+import kotlinx.coroutines.launch
 import com.aeriotv.android.core.data.db.entity.dispatcharrCanViewDvr
 import com.aeriotv.android.core.data.db.entity.dispatcharrCanViewVod
 import com.aeriotv.android.core.data.db.entity.dispatcharrCanViewSeries
@@ -646,11 +647,30 @@ fun MainScaffold(
     // so the leaving content's nodes vanish with focus already parked there
     // and no fallback flashes the Live TV pill (Logan: "less than a quarter
     // of a second on Live TV before settling on Favorites").
-    val focusPill = remember { mutableStateOf<((AppTab) -> Unit)?>(null) }
+    val focusPill = remember { mutableStateOf<((AppTab) -> Boolean)?>(null) }
+    val backFocusScope = androidx.compose.runtime.rememberCoroutineScope()
     androidx.activity.compose.BackHandler(enabled = selectedTab != homeTab) {
-        focusPill.value?.invoke(homeTab)
+        val leaving = selectedTab
+        val took = focusPill.value?.invoke(homeTab)
         selectedTab = homeTab
         initialTabApplied = true
+        if (took != null) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.guide("back-to-home from=$leaving to=$homeTab pillFocus=$took")
+            // Back from the Settings rail (Streamer 2026-10-04): the request
+            // above did not land while the rail held focus, and once the
+            // Settings slot hid, focus fell back onto the Settings pill while
+            // Live TV showed as selected (two pills looked active). Ask again
+            // after the switch has composed, so the focused pill and the
+            // selected pill always agree, as they already did for DVR.
+            backFocusScope.launch {
+                androidx.compose.runtime.withFrameNanos { }
+                androidx.compose.runtime.withFrameNanos { }
+                if (selectedTab == homeTab) {
+                    val again = focusPill.value?.invoke(homeTab)
+                    com.aeriotv.android.ui.tv.TvFocusTrace.guide("back-to-home settle to=$homeTab pillFocus=$again")
+                }
+            }
+        }
     }
 
     // Background-activity flag. ORs the content-fetch flags so the activity
@@ -823,7 +843,7 @@ fun MainScaffold(
             (tabs + AppTab.Search).associateWith { FocusRequester() }
         }
         androidx.compose.runtime.SideEffect {
-            focusPill.value = { tab -> runCatching { pillRequesters[tab]?.requestFocus() } }
+            focusPill.value = { tab -> runCatching { pillRequesters[tab]?.requestFocus() ?: false }.getOrDefault(false) }
         }
         // The same requesters, as a "focus MY tab's pill" call for TV page
         // content (Back out of a page lands on the bar, not on Live TV).

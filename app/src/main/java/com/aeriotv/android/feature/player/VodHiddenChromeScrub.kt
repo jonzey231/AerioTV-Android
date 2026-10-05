@@ -20,6 +20,39 @@ package com.aeriotv.android.feature.player
 internal object VodHiddenChromeScrub {
     private var armed = false
 
+    /** Settings > Player > Skip Without Controls (GH #94), kept hot by
+     *  MainActivity. The VOD player (movies, episodes, recordings) never
+     *  enters ExoWindowState Fullscreen, so the activity-layer skip that serves
+     *  live TV never sees its keys; the VOD handler asks here instead. */
+    @Volatile var skipWithoutControls = false
+
+    /** A Custom remote map assigns Left/Right player slots. It wins over Skip
+     *  Without Controls, as it does for live TV. */
+    @Volatile var customHorizontalMap = false
+
+    private var lastSkipAt = 0L
+
+    /** Same repeat pacing as the live player's hidden-chrome skip. */
+    private const val SKIP_REPEAT_MS = 250L
+
+    const val NOT_SKIP = 0
+    const val SKIP = 1
+    const val SWALLOW = 2
+
+    /**
+     * Call for each handled Left/Right KeyDown before [shouldScrub].
+     *
+     * @return [NOT_SKIP] when the press keeps its normal meaning, [SKIP] when
+     *  it should seek by the Skip Back / Skip Forward interval with the chrome
+     *  left hidden, [SWALLOW] for a held repeat inside the pacing window.
+     */
+    fun skipDecision(isRepeat: Boolean, chromeVisible: Boolean, now: Long): Int {
+        if (chromeVisible || !skipWithoutControls || customHorizontalMap) return NOT_SKIP
+        if (isRepeat && now - lastSkipAt < SKIP_REPEAT_MS) return SWALLOW
+        lastSkipAt = now
+        return SKIP
+    }
+
     /**
      * Call once per handled Left/Right KeyDown, before the chrome is revealed.
      *
