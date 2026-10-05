@@ -226,7 +226,8 @@ class CastVideoTranscodeTest {
 
     @Test
     fun `Ultra and 1080p59_94 transcode to H264 720p with the documented log line`() {
-        val ultra = CastVideoPlan(caps = ultraCaps)
+        // A receiver that presents 720p60 keeps the 720p60 down profile.
+        val ultra = CastVideoPlan(caps = ultraCaps.with720p60(true))
         val d = ultra.decide(src)
         assertEquals(
             CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1280, 720, frameStep = 1, bitrateCap = 8_000_000),
@@ -234,14 +235,75 @@ class CastVideoTranscodeTest {
         )
         assertEquals(
             "[Cast] video plan: source=avc1.64002A 1920x1080@59.94 receiver display h264_1080p60=no " +
-                "h264_1080p30=yes hevc_1080p60=no hvc1=no -> transcode H.264 720p59.94 level 4.1 (8000 kbps)",
+                "h264_1080p30=yes h264_720p60=yes hevc_1080p60=no hvc1=no -> transcode H.264 720p59.94 level 4.1 (8000 kbps)",
             ultra.logLine(src, d),
         )
     }
 
+    private fun CastReceiverVideoCaps.with720p60(v: Boolean) =
+        copy(display = display!! + ("h264_720p60" to v))
+
+    private val src720p60: CastVideoStreamInfo get() = src.copy(width = 1280, height = 720, levelIdc = 32)
+
+    @Test
+    fun `720p59_94 without 720p60 transcodes to 720p29_97 at the source size`() {
+        val plan = CastVideoPlan(caps = ultraCaps.with720p60(false))
+        val d = plan.decide(src720p60)
+        assertEquals(
+            CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1280, 720, frameStep = 2, bitrateCap = 8_000_000),
+            d.output,
+        )
+        assertEquals(CastVideoPlan.NO_60FPS_H264, d.reason)
+        assertEquals(listOf("720p60"), d.unsupported)
+        assertEquals(
+            "[Cast] video plan: source=avc1.640020 1280x720@59.94 receiver display h264_1080p60=no " +
+                "h264_1080p30=yes h264_720p60=no hevc_1080p60=no hvc1=no -> transcode H.264 720p29.97 " +
+                "level 4.1 (8000 kbps) (receiver does not display 60 fps H.264)",
+            plan.logLine(src720p60, d),
+        )
+        // Key absent (older receiver page): falls back to h264_1080p60=no.
+        assertEquals(2, CastVideoPlan(caps = ultraCaps).decide(src720p60).output?.frameStep)
+    }
+
+    @Test
+    fun `720p59_94 with 720p60 passes through`() {
+        val plan = CastVideoPlan(caps = ultraCaps.with720p60(true))
+        assertNull(plan.decide(src720p60).output)
+        // Key absent, h264_1080p60=yes: falls back to yes.
+        val full = CastVideoPlan(caps = ultraCaps.copy(display = ultraCaps.display!! + ("h264_1080p60" to true)))
+        assertNull(full.decide(src720p60).output)
+    }
+
+    @Test
+    fun `1080p59_94 without 720p60 transcodes to 1080p29_97 whatever the profile`() {
+        for (profile in CastTranscodeDownProfile.entries) {
+            val plan = CastVideoPlan(caps = ultraCaps.with720p60(false), downProfile = profile)
+            val d = plan.decide(src)
+            assertEquals(
+                profile.rawValue,
+                CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1920, 1080, frameStep = 2, bitrateCap = 8_000_000),
+                d.output,
+            )
+            assertEquals(CastVideoPlan.NO_60FPS_H264, d.reason)
+            assertTrue(
+                plan.logLine(src, d).endsWith(
+                    "h264_720p60=no hevc_1080p60=no hvc1=no -> transcode H.264 1080p29.97 level 4.1 (8000 kbps)" +
+                        " (receiver does not display 60 fps H.264)",
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `720p30 passes through whatever 720p60 says`() {
+        val s30 = src720p60.copy(fps = 29.97)
+        assertNull(CastVideoPlan(caps = ultraCaps.with720p60(false)).decide(s30).output)
+        assertNull(CastVideoPlan(caps = ultraCaps.with720p60(true)).decide(s30).output)
+    }
+
     @Test
     fun `1080p30 profile halves the frame rate and keeps the size`() {
-        val plan = CastVideoPlan(caps = ultraCaps, downProfile = CastTranscodeDownProfile.P1080P30)
+        val plan = CastVideoPlan(caps = ultraCaps.with720p60(true), downProfile = CastTranscodeDownProfile.P1080P30)
         assertEquals(
             CastVideoOutputSpec(CastVideoOutputSpec.Codec.H264, 1920, 1080, frameStep = 2, bitrateCap = 8_000_000),
             plan.decide(src).output,
@@ -252,7 +314,7 @@ class CastVideoTranscodeTest {
     @Test
     fun `sources the Ultra displays pass through`() {
         val ultra = CastVideoPlan(caps = ultraCaps)
-        assertNull("720p60 fits", ultra.decide(src.copy(width = 1280, height = 720, levelIdc = 32)).output)
+        assertNull("720p30 fits", ultra.decide(src.copy(width = 1280, height = 720, fps = 29.97, levelIdc = 32)).output)
         assertNull(
             "1080i29.97 fits",
             ultra.decide(src.copy(fps = 29.97, progressive = false, levelIdc = 40)).output,
@@ -287,7 +349,7 @@ class CastVideoTranscodeTest {
         )
         assertEquals(
             "[Cast] video plan: source=avc1.64002A 1920x1080@59.94 receiver display h264_1080p60=no " +
-                "h264_1080p30=yes hevc_1080p60=yes hvc1=yes -> transcode HEVC 1080p59.94 (12000 kbps)",
+                "h264_1080p30=yes h264_720p60=no hevc_1080p60=yes hvc1=yes -> transcode HEVC 1080p59.94 (12000 kbps)",
             hevcRx.logLine(src, hevcRx.decide(src)),
         )
     }
@@ -358,7 +420,7 @@ class CastVideoTranscodeTest {
         )
         assertEquals(
             "[Cast] video plan: source=hvc1.2.4.L153.B0 3840x2160@50 10-bit HDR HLG receiver display " +
-                "h264_1080p60=yes h264_1080p30=yes hevc_1080p60=yes hvc1=yes hevc_4k60=no " +
+                "h264_1080p60=yes h264_1080p30=yes h264_720p60=yes hevc_1080p60=yes hvc1=yes hevc_4k60=no " +
                 "hevc_1080p60_hlg=no hevc_4k60_hlg=no hvc1.hlg=no " +
                 "-> transcode HEVC 1080p50 (12000 kbps) tone mapped to SDR BT.709",
             streamer.logLine(hevc4K50, streamer.decide(hevc4K50)),
@@ -524,7 +586,7 @@ class CastVideoTranscodeTest {
         assertEquals(
             listOf(
                 "Source: H.264 1920x1080 at 59.94fps",
-                "Transcoding on this tablet to H.264 1280x720 at 59.94fps",
+                "Transcoding on this tablet to H.264 1920x1080 at 29.97fps",
                 "This receiver doesn't support 1080p60",
             ),
             CastVideoPlan.transcodeNote(null, "tablet", ultraPath),

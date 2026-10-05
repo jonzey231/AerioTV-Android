@@ -172,7 +172,9 @@ class AerioCastSender @Inject constructor(
     private var loggedCaps: Map<String, Boolean>? = null
 
     /** The receiver's `display` map (cast.framework canDisplayType):
-     *  h264_1080p60, h264_1080p30, hevc_1080p60, hevc_4k60, h264_4k60, and
+     *  h264_1080p60, h264_1080p30, h264_720p60, hevc_720p60 (2026-10-05;
+     *  absent on older pages, then each reads as its 1080p60 answer),
+     *  hevc_1080p60, hevc_4k60, h264_4k60, and
      *  the HDR forms hevc_1080p60_hlg / _pq, hevc_4k60_hlg / _pq (the
      *  `mse` map adds hvc1.hlg / hvc1.pq). Every key is kept as sent. null
      *  when the page sent none (an older receiver page). Measured 2026-09-26
@@ -216,6 +218,8 @@ class AerioCastSender @Inject constructor(
                     TAG,
                     "[Cast] receiver display: h264_1080p60=${cap("h264_1080p60")} " +
                         "h264_1080p30=${cap("h264_1080p30")} hevc_1080p60=${cap("hevc_1080p60")} " +
+                        "h264_720p60=${display["h264_720p60"]?.let { if (it) "yes" else "no" } ?: "absent"} " +
+                        "hevc_720p60=${display["hevc_720p60"]?.let { if (it) "yes" else "no" } ?: "absent"} " +
                         "hevc_4k60=${cap("hevc_4k60")} h264_4k60=${cap("h264_4k60")} " +
                         "hevc_1080p60_hlg=${cap("hevc_1080p60_hlg")} hevc_1080p60_pq=${cap("hevc_1080p60_pq")} " +
                         "hevc_4k60_hlg=${cap("hevc_4k60_hlg")} hevc_4k60_pq=${cap("hevc_4k60_pq")}",

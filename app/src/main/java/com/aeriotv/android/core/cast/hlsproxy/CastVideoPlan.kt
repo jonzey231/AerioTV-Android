@@ -133,6 +133,19 @@ data class CastReceiverVideoCaps(
     fun mse(key: String): Boolean = mse[key] == true
     fun display(key: String): Boolean = display?.get(key) == true
 
+    /** canDisplayType H.264 1280x720 at 60 fps (`display.h264_720p60`).
+     *  An older receiver page does not send the key; it then falls back to
+     *  the h264_1080p60 answer. The Chromecast Ultra caps H.264 at about
+     *  47 fps at every size, so 720p59.94 passed through renders 30 to 42
+     *  fps with the media clock at about 0.63x (measured 2026-10-05). */
+    val h264720p60: Boolean
+        get() = display?.get("h264_720p60") ?: display("h264_1080p60")
+
+    /** canDisplayType HEVC 1280x720 at 60 fps (`display.hevc_720p60`),
+     *  falling back to the hevc_1080p60 answer when absent. */
+    val hevc720p60: Boolean
+        get() = display?.get("hevc_720p60") ?: display("hevc_1080p60")
+
     /** HEVC at 1080p60 is presentable. */
     val hevc1080: Boolean get() = display("hevc_1080p60") || mse("hvc1")
 
@@ -287,6 +300,7 @@ data class CastVideoPlan(
             val levelFps = if (s.levelIdc > 40) 60.0 else 30.0
             val highRate = (s.fps ?: levelFps) > 31
             if (is4K && !caps.display("h264_4k60")) out.add("4K")
+            if (!is4K && !is1080 && highRate && caps.display != null && !caps.h264720p60) out.add("720p60")
             if (is1080 && !caps.display("h264_1080p60")) {
                 when {
                     !caps.display("h264_1080p30") -> out.add("1080p")
@@ -315,9 +329,14 @@ data class CastVideoPlan(
         val fits = when {
             is4K -> caps.display("h264_4k60")
             is1080 -> caps.display("h264_1080p60") || (!highRate && caps.display("h264_1080p30"))
-            else -> true
+            // 720-class above 30.5 fps needs the receiver to present 60 fps
+            // H.264 (h264_720p60, else its h264_1080p60 answer).
+            else -> !highRate || caps.display == null || caps.h264720p60
         }
         if (fits && !force) return CastVideoDecision(null, "receiver displays the source")
+        // The receiver presents no 60 fps H.264 at any size: the source goes
+        // out as H.264 at 30 fps (every other frame), whatever its size.
+        val no60 = !force && highRate && caps.display != null && !caps.h264720p60
         val trigger = if (force) "Developer switch" else "source above receiver display"
         if (is4K && caps.hevc4K) {
             return CastVideoDecision(withHdr(s, caps, hevcOutput(s, null, null, CastVideoOutputSpec.HEVC_4K_CAP)), trigger)
@@ -327,7 +346,22 @@ data class CastVideoPlan(
                 withHdr(s, caps, hevcOutput(s, 1920, 1080, CastVideoOutputSpec.HEVC_1080_CAP)), trigger,
             )
         }
+        // No HEVC and no 60 fps H.264: 30 fps H.264 at the source size,
+        // whatever the Developer down profile says.
+        if (no60) return CastVideoDecision(h264HalfRateOutput(s, caps), NO_60FPS_H264)
         return CastVideoDecision(h264DownOutput(s, caps, highRate), trigger)
+    }
+
+    /** H.264 High 4.1 at the source size and half the frame rate (every
+     *  other frame; the transcoder keeps the timestamps continuous), for a
+     *  receiver that presents no 60 fps H.264. The size is capped at 1080
+     *  when the receiver presents 1080p30, else at 720 (no 1080 at all). */
+    private fun h264HalfRateOutput(s: CastVideoStreamInfo, caps: CastReceiverVideoCaps): CastVideoOutputSpec {
+        val size = if (caps.display("h264_1080p30")) fit(s.width, s.height, 1920, 1080) else fit(s.width, s.height, 1280, 720)
+        return CastVideoOutputSpec(
+            CastVideoOutputSpec.Codec.H264, size.first, size.second,
+            frameStep = 2, bitrateCap = CastVideoOutputSpec.H264_CAP,
+        )
     }
 
     /**
@@ -460,6 +494,7 @@ data class CastVideoPlan(
             else -> line.append(
                 " receiver display h264_1080p60=${yn(caps.display("h264_1080p60"))}" +
                     " h264_1080p30=${yn(caps.display("h264_1080p30"))}" +
+                    " h264_720p60=${yn(caps.h264720p60)}" +
                     " hevc_1080p60=${yn(caps.display("hevc_1080p60"))}" +
                     " hvc1=${yn(caps.mse("hvc1"))}" +
                     // The 4K keys only decide anything for an HEVC source.
@@ -489,12 +524,16 @@ data class CastVideoPlan(
                 line.append(" -> transcode H.264 ${out.height}p$fps level 4.1 ($kbps kbps)")
         }
         if (source.isHdr && !out.hdr) line.append(" tone mapped to SDR BT.709")
+        if (decision.reason == NO_60FPS_H264) line.append(" (${decision.reason})")
         if (force) line.append(" [forced]")
         return line.toString()
     }
 
     companion object {
         val PASSTHROUGH = CastVideoPlan(caps = null)
+
+        /** Decision reason when the receiver presents no 60 fps H.264. */
+        const val NO_60FPS_H264 = "receiver does not display 60 fps H.264"
 
         /** User-facing codec name: "HEVC" or "H.264". */
         fun codecName(codec: CastVideoOutputSpec.Codec): String = when (codec) {
