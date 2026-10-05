@@ -208,8 +208,8 @@ fun LiveTvSettingsScreen(
                 if (listViewShown) item("list-view") {
                     SettingsSection(header = "List view") {
                         SettingsToggleRow(
-                            title = "Rounded Corners in List View",
-                            subtitle = "Rounds channel logos and program artwork in the Live TV list and on the app's cards.",
+                            title = "Rounded List Logos and Artwork",
+                            subtitle = "Round the channel logos and program artwork in the channel list and on the app's cards.",
                             leadingIcon = if (isTv) Icons.Filled.FilterNone else null,
                             checked = roundedArtwork,
                             onCheckedChange = viewModel::setRoundedArtwork,
