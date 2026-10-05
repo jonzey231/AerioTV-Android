@@ -1089,11 +1089,13 @@ internal fun ChannelRow(
     // full-width gradient into the surface color. The old full-span gradient
     // is what made tinted rows read as "colored cards" instead of cards with
     // a category cue, a visible chunk of the busier-than-iOS feel.
+    // True Black dims the wash to 60 percent (categoryTintScale).
+    val tintScale = com.aeriotv.android.core.category.categoryTintScale(com.aeriotv.android.ui.theme.LocalTrueBlack.current)
     val tintWash = tint?.let {
         Brush.horizontalGradient(
-            0.00f to it.copy(alpha = 0.30f),
-            0.22f to it.copy(alpha = 0.18f),
-            0.45f to it.copy(alpha = 0.06f),
+            0.00f to it.copy(alpha = 0.30f * tintScale),
+            0.22f to it.copy(alpha = 0.18f * tintScale),
+            0.45f to it.copy(alpha = 0.06f * tintScale),
             0.65f to Color.Transparent,
         )
     }

@@ -1350,16 +1350,19 @@ fun MainScaffold(
                 val tabletNav = androidx.compose.ui.platform.LocalConfiguration.current
                     .smallestScreenWidthDp >= 600
                 var navBarWidthPx by remember { mutableStateOf(0) }
-                if ((casting || companionTv != null) && !isTv) {
-                    // Tablet (Logan 2026-10-05, iPad parity): compact and
-                    // centered, the pill's width plus 120 dp, capped at
-                    // 620 dp and at the screen width minus 32 dp.
-                    val tabletCardWidth = if (tabletNav) {
+                // Every card above the nav bar takes exactly the bar's measured
+                // frame (Logan 2026-10-05, all platforms). Tablets: the floating
+                // pill's measured width, centered (screen width minus 32 dp, at
+                // most 620 dp, only until the pill has been measured).
+                val tabletCardWidth = if (tabletNav) {
+                    if (navBarWidthPx > 0) {
+                        with(LocalDensity.current) { navBarWidthPx.toDp() }
+                    } else {
                         val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
-                        val pillW = with(LocalDensity.current) { navBarWidthPx.toDp() }
-                        val wanted = if (navBarWidthPx > 0) minOf(pillW + 120.dp, 620.dp) else 620.dp
-                        minOf(wanted, (screenW - 32.dp).coerceAtLeast(0.dp))
-                    } else null
+                        minOf(620.dp, (screenW - 32.dp).coerceAtLeast(0.dp))
+                    }
+                } else null
+                if ((casting || companionTv != null) && !isTv) {
                     com.aeriotv.android.feature.cast.CastTransportCard(
                         tabletWidth = tabletCardWidth,
                         castSender = castSender,
@@ -1415,15 +1418,30 @@ fun MainScaffold(
                 // Live list (the same dialog the TV circle uses). This scaffold
                 // is not composed under the fullscreen player; there the
                 // Options menu carries the Kept Live rows instead.
-                val showKept = retainedList.isNotEmpty() && !isTv
+                // A channel being cast is not listed (Logan 2026-10-05); it
+                // comes back when casting stops if it is still kept.
+                val castContentNow by castSender.content.collectAsStateWithLifecycle()
+                val castChannelId = if (casting) castContentNow?.mediaId else null
+                val keptRowList = remember(retainedList, castChannelId) {
+                    if (castChannelId == null) retainedList else {
+                        val bare = castChannelId.substringAfter(':', castChannelId)
+                        retainedList.filter {
+                            it.channelId != castChannelId &&
+                                it.channelId.substringAfter(':', it.channelId) != bare
+                        }
+                    }
+                }
+                val showKept = keptRowList.isNotEmpty() && !isTv
                 if (showKept || phoneFab) {
                     // Outer edges line up with the floating nav bar below:
                     // phones replicate FloatingTabBar's frame (centred, 600 dp
                     // cap, 20 dp side insets); tablets take the measured width
                     // of the centred wrap-content capsule. The gap between
                     // pill and button matches the bar's 12 dp inner padding.
-                    val rowFrame = if (tabletNav && navBarWidthPx > 0) {
-                        Modifier.width(with(LocalDensity.current) { navBarWidthPx.toDp() })
+                    // Tablets: the cast card's width rule so the two stack as
+                    // matching capsules (Logan 2026-10-05).
+                    val rowFrame = if (tabletCardWidth != null) {
+                        Modifier.width(tabletCardWidth)
                     } else {
                         Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
                     }
@@ -1435,11 +1453,12 @@ fun MainScaffold(
                     ) {
                         if (showKept) {
                             com.aeriotv.android.feature.livetv.RetainedChannelsPill(
-                                retained = retainedList,
+                                retained = keptRowList,
                                 onTune = tuneRetained,
                                 onOpenList = { showRetainedDialog = true },
                                 onStop = retainedVm::stop,
                                 onStopAll = retainedVm::stopAll,
+                                capsule = tabletNav,
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -1451,7 +1470,7 @@ fun MainScaffold(
                         }
                     }
                     }
-                    Spacer(Modifier.height(if (phoneFab) 10.dp else 8.dp))
+                    Spacer(Modifier.height(if (tabletNav) 12.dp else if (phoneFab) 10.dp else 8.dp))
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right
@@ -1468,10 +1487,10 @@ fun MainScaffold(
                 ) {
                     val channel = miniState.channel
                     val nowProgramme = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
+                    // The nav bar's frame, like every card above it.
                     Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
+                        modifier = (if (tabletCardWidth != null) Modifier.width(tabletCardWidth)
+                            else Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp))
                             .clip(RoundedCornerShape(20.dp))
                             .border(
                                 1.dp,

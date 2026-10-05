@@ -215,11 +215,19 @@ fun RetainedChannelsPill(
     onOpenList: () -> Unit,
     onStop: (String) -> Unit,
     onStopAll: () -> Unit,
+    /** Tablets: full capsule, matching the tablet cast card. */
+    capsule: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     if (retained.isEmpty()) return
-    val shape = androidx.compose.foundation.shape.RoundedCornerShape(26.dp)
     val single = retained.size == 1
+    // Tablets (Apple parity): one kept = true capsule; two or more = the same
+    // surface on a 24 dp rounded rectangle.
+    val shape = when {
+        capsule && single -> androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
+        capsule -> androidx.compose.foundation.shape.RoundedCornerShape(24.dp)
+        else -> androidx.compose.foundation.shape.RoundedCornerShape(26.dp)
+    }
     val latest = retained.last()
     androidx.compose.foundation.layout.Row(
         modifier = modifier

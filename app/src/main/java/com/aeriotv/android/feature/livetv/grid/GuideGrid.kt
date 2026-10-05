@@ -740,6 +740,7 @@ private fun GridRow(
     val outline = if (isTv) MaterialTheme.colorScheme.decorSecondary.copy(alpha = 0.45f) else accent.copy(alpha = 0.18f)
     // Color Programs by Category (Apple CategoryColor.backgroundColor).
     val palette = com.aeriotv.android.core.category.LocalCategoryPalette.current
+    val tintScale = com.aeriotv.android.core.category.categoryTintScale(com.aeriotv.android.ui.theme.LocalTrueBlack.current)
     val badgeStyle = TextStyle(color = Color.White, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
     val showBadges = com.aeriotv.android.core.ui.LocalShowEpgBadges.current
     val showSubtitles = com.aeriotv.android.core.ui.LocalShowProgramSubtitles.current
@@ -1118,9 +1119,9 @@ private fun GridRow(
                 // iOS = accentPrimary 0.25 airing, cardBackground otherwise.
                 val catBase = if (cell.isPlaceholder) null else palette?.resolveBaseColor(cell.category)
                 val fill = when {
-                    catBase != null && isTv -> catBase.copy(alpha = if (focused) 0.55f else if (airing) 0.35f else 0.22f)
+                    catBase != null && isTv -> catBase.copy(alpha = (if (focused) 0.55f else if (airing) 0.35f else 0.22f) * tintScale)
                     focused -> Color.White.copy(alpha = 0.3f)
-                    catBase != null -> catBase.copy(alpha = if (airing) 0.45f else 0.28f)
+                    catBase != null -> catBase.copy(alpha = (if (airing) 0.45f else 0.28f) * tintScale)
                     cell.isPlaceholder -> Color.White.copy(alpha = 0.03f)
                     !isTv && airing -> accent.copy(alpha = 0.25f)
                     !isTv -> surface

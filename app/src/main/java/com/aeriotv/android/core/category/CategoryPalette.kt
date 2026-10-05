@@ -128,3 +128,13 @@ internal fun parseHex(raw: String): Color {
  * grid reads this local so the same programs tint the same way.
  */
 val LocalCategoryPalette = androidx.compose.runtime.staticCompositionLocalOf<CategoryPaletteState?> { null }
+
+/**
+ * True Black Background dims every category tint (guide cells, channel list
+ * cards) to 60 percent of its normal strength so the colors do not glow
+ * against the pure black surface. Apple applies the same factor.
+ */
+const val TRUE_BLACK_TINT_SCALE: Float = 0.6f
+
+/** Multiplier for a category tint's alpha: [TRUE_BLACK_TINT_SCALE] when True Black is on, else 1. */
+fun categoryTintScale(trueBlack: Boolean): Float = if (trueBlack) TRUE_BLACK_TINT_SCALE else 1f

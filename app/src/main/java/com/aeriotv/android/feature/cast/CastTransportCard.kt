@@ -1,7 +1,7 @@
 package com.aeriotv.android.feature.cast
 
 import android.util.Log
-import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
@@ -261,20 +261,18 @@ fun CastTransportCard(
                 .width(tabletWidth)
                 .floatingNavChrome(RoundedCornerShape(percent = 50))
         } else {
+            // Phones (Logan 2026-10-05): the Kept Live pill's capsule and
+            // surface and its frame (600 dp cap, 20 dp side margins), so the
+            // two stack as matching capsules.
             modifier
+                .widthIn(max = 600.dp)
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .border(
-                    1.dp,
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                    RoundedCornerShape(20.dp),
-                )
+                .padding(horizontal = 20.dp)
+                .floatingNavChrome(RoundedCornerShape(percent = 50))
         },
     ) {
         CastMiniController(
-            containerColor = if (tabletWidth != null) androidx.compose.ui.graphics.Color.Transparent
-                else MaterialTheme.colorScheme.surface,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
             horizontalPadding = if (tabletWidth != null) 18.dp else 12.dp,
             title = when {
                 switchingTo != null -> "Switching to $switchingTo"
