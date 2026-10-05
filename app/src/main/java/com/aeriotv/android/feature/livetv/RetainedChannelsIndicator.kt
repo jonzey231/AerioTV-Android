@@ -1,7 +1,7 @@
 package com.aeriotv.android.feature.livetv
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import com.aeriotv.android.feature.main.floatingNavChrome
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -125,9 +125,9 @@ fun RetainedChannelsPill(
     androidx.compose.foundation.layout.Row(
         modifier = modifier
             .height(52.dp)
-            .clip(shape)
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape)
-            .background(MaterialTheme.colorScheme.surface)
+            // Same chrome as the floating nav bar and the Control a TV
+            // button so the row reads as one layer with them.
+            .floatingNavChrome(shape)
             .padding(start = 6.dp, end = 4.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {

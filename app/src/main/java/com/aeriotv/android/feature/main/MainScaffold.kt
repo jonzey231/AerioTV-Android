@@ -1372,9 +1372,23 @@ fun MainScaffold(
                 // is not composed under the fullscreen player; there the
                 // Options menu carries the Kept Live rows instead.
                 val showKept = retainedList.isNotEmpty() && !isTv
+                // Width of the tablet's wrap-content tab capsule, measured
+                // below, so the pill row above it spans exactly the same.
+                var navBarWidthPx by remember { mutableStateOf(0) }
                 if (showKept || phoneFab) {
+                    // Outer edges line up with the floating nav bar below:
+                    // phones replicate FloatingTabBar's frame (centred, 600 dp
+                    // cap, 20 dp side insets); tablets take the measured width
+                    // of the centred wrap-content capsule. The gap between
+                    // pill and button matches the bar's 12 dp inner padding.
+                    val rowFrame = if (tabletNav && navBarWidthPx > 0) {
+                        Modifier.width(with(LocalDensity.current) { navBarWidthPx.toDp() })
+                    } else {
+                        Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
+                    }
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        rowFrame,
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.End,
                     ) {
@@ -1389,11 +1403,12 @@ fun MainScaffold(
                             )
                         }
                         if (phoneFab) {
-                            if (showKept) Spacer(Modifier.width(10.dp))
+                            if (showKept) Spacer(Modifier.width(12.dp))
                             CompanionControlFab(
                                 onClick = { showCompanionPicker = true },
                             )
                         }
+                    }
                     }
                     Spacer(Modifier.height(if (phoneFab) 10.dp else 8.dp))
                 }
@@ -1489,7 +1504,7 @@ fun MainScaffold(
                                 },
                                 tablet = tabletNav,
                                 modifier = Modifier
-                                    .onSizeChanged { barSize = it }
+                                    .onSizeChanged { barSize = it; navBarWidthPx = it.width }
                                     .graphicsLayer {
                                         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(pivotX.coerceIn(0f, 1f), 0.5f)
                                         val sx = 1f - collapse * (1f - pillW / barSize.width.coerceAtLeast(1))
@@ -1574,7 +1589,7 @@ fun MainScaffold(
  *  hairline at 12 percent and a soft black drop shadow. Material styling, no
  *  translucent glass (Logan 2026-10-04, same recipe as the iPad). */
 @Composable
-private fun Modifier.floatingNavChrome(shape: androidx.compose.ui.graphics.Shape): Modifier {
+internal fun Modifier.floatingNavChrome(shape: androidx.compose.ui.graphics.Shape): Modifier {
     val cs = MaterialTheme.colorScheme
     return this
         .dropShadow(
