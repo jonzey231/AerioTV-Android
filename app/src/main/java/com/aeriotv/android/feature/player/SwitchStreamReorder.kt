@@ -65,6 +65,8 @@ internal fun ReorderableStreamList(
     saving: Boolean,
     onSelect: (Int) -> Unit,
     onReorder: (List<Int>) -> Unit,
+    /** Touch: true while a row is being dragged by its handle, so the host sheet can drop its own drag. */
+    onDragActiveChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val isTv = remember(context) { context.isTelevision() }
@@ -95,6 +97,10 @@ internal fun ReorderableStreamList(
         }
     }
     order.forEachIndexed { index, stream ->
+      // Keyed by stream id so a swap mid-drag keeps the dragged row's handle
+      // (and its pointerInput) alive. Unkeyed, the slot's handle restarted on
+      // the first swap, the gesture died, and the sheet took the finger.
+      androidx.compose.runtime.key(stream.id) {
         var menuOpen by remember(stream.id) { mutableStateOf(false) }
         // TV D-pad: the options button sits INSIDE the row's bounds, so a
         // directional search from the focused row rejects it (Compose never
@@ -192,8 +198,7 @@ internal fun ReorderableStreamList(
                     )
                 }
             }
-            return@forEachIndexed
-        }
+        } else {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -233,6 +238,7 @@ internal fun ReorderableStreamList(
                                     from = latestOrder.indexOfFirst { it.id == stream.id }
                                     dragIndex = from
                                     dragOffset = 0f
+                                    onDragActiveChange(true)
                                 },
                                 onDrag = { change, amount ->
                                     change.consume()
@@ -253,11 +259,13 @@ internal fun ReorderableStreamList(
                                     val to = dragIndex
                                     dragIndex = -1
                                     dragOffset = 0f
+                                    onDragActiveChange(false)
                                     if (from >= 0 && to >= 0 && from != to) onReorder(latestOrder.map { it.id })
                                 },
                                 onDragCancel = {
                                     dragIndex = -1
                                     dragOffset = 0f
+                                    onDragActiveChange(false)
                                     order = streams
                                 },
                             )
@@ -272,6 +280,8 @@ internal fun ReorderableStreamList(
                 )
             }
         }
+        }
+    }
     }
 }
 

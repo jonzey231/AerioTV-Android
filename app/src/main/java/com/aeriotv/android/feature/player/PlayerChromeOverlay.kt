@@ -2267,7 +2267,9 @@ fun SwitchStreamSheet(
     /** The full new stream id order to persist. */
     onReorder: (List<Int>) -> Unit = {},
 ) {
-    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
+    // A handle drag owns the finger: the sheet's own drag stays off until drop.
+    var rowDragging by remember { mutableStateOf(false) }
+    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss, sheetGesturesEnabled = !rowDragging) {
         // verticalScroll so channels with many streams (users keep 2-20) are all
         // reachable; FormFactorModal caps the modal height, which otherwise just
         // clipped the rows past the fold (only ~7 were selectable). Works for
@@ -2298,6 +2300,7 @@ fun SwitchStreamSheet(
                     saving = saving,
                     onSelect = onSelect,
                     onReorder = onReorder,
+                    onDragActiveChange = { rowDragging = it },
                 )
             } else {
                 streams.forEach { stream ->

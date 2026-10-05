@@ -87,6 +87,9 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -456,6 +459,10 @@ fun MultiviewScreen(
                     lastInteractionAt = android.os.SystemClock.uptimeMillis()
                 } else {
                     storeHandle.setAudioFocus(idx)
+                    // iPad parity: a tile tap also brings up the chrome
+                    // (Close, Add, Layout) so touch always has a way out.
+                    chromeVisible = true
+                    lastInteractionAt = android.os.SystemClock.uptimeMillis()
                 }
             },
             onTileLongPress = { idx ->
@@ -1245,41 +1252,66 @@ private fun TileGrid(
                                 // arming on the first onDrag made release-in-
                                 // place unreachable in practice (measured on
                                 // Logan's Fold - the menu never opened).
+                                // Runs on the Initial pass (2026-10-04, Onn
+                                // tablet): the Tile's own combinedClickable
+                                // (tap / double tap) consumes the down, so a
+                                // Main-pass detectDragGesturesAfterLongPress
+                                // here never saw a long press and touch had
+                                // no route to the tile menu. Initial runs
+                                // parent first; nothing is consumed until the
+                                // long press fires, so taps still reach Tile.
                                 val dragSlop = viewConfiguration.touchSlop * 2f
-                                var moved = false
-                                var travelled = 0f
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = { offset ->
-                                        moved = false
-                                        travelled = 0f
-                                        dragSource = index
-                                        val pr = pxRects.getOrNull(index)
-                                        dragPos = Offset(
-                                            (pr?.left ?: 0f) + offset.x,
-                                            (pr?.top ?: 0f) + offset.y,
-                                        )
-                                    },
-                                    onDrag = { change, amount ->
-                                        change.consume()
-                                        travelled += amount.getDistance()
+                                val longPressMs = viewConfiguration.longPressTimeoutMillis
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                    val pressStart = down.position
+                                    var longPressed = false
+                                    var lifted = false
+                                    // Phase 1: wait out the long-press timeout without consuming.
+                                    withTimeoutOrNull(longPressMs) {
+                                        while (true) {
+                                            val ev = awaitPointerEvent(PointerEventPass.Initial)
+                                            val c = ev.changes.firstOrNull { it.id == down.id }
+                                            if (c == null || !c.pressed || ev.changes.size > 1) { lifted = true; break }
+                                            if ((c.position - pressStart).getDistance() > viewConfiguration.touchSlop) { lifted = true; break }
+                                        }
+                                    }
+                                    if (lifted) return@awaitEachGesture
+                                    longPressed = true
+                                    dragSource = index
+                                    val pr = pxRects.getOrNull(index)
+                                    dragPos = Offset((pr?.left ?: 0f) + pressStart.x, (pr?.top ?: 0f) + pressStart.y)
+                                    var moved = false
+                                    var travelled = 0f
+                                    var last = pressStart
+                                    var cancelled = false
+                                    // Phase 2: own the pointer (consume on Initial so Tile sees no tap).
+                                    while (longPressed) {
+                                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                                        val c = ev.changes.firstOrNull { it.id == down.id }
+                                        if (c == null) { cancelled = true; break }
+                                        c.consume()
+                                        if (!c.pressed) break
+                                        val delta = c.position - last
+                                        last = c.position
+                                        travelled += delta.getDistance()
                                         if (!moved && travelled > dragSlop) {
                                             moved = true
                                             onTileLongPress(index)
                                         }
-                                        dragPos += amount
-                                    },
-                                    onDragEnd = {
-                                        val from = dragSource
+                                        dragPos += delta
+                                    }
+                                    val from = dragSource
+                                    if (!cancelled) {
                                         if (!moved) {
                                             onTileMenu(index)
                                         } else if (from != null) {
                                             val to = MultiviewGridMath.indexAt(dragPos, pxRects)
                                             if (to != from) onReorder(from, to)
                                         }
-                                        dragSource = null
-                                    },
-                                    onDragCancel = { dragSource = null },
-                                )
+                                    }
+                                    dragSource = null
+                                }
                             }
                         } else {
                             Modifier
