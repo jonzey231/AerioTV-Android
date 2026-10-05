@@ -1459,6 +1459,10 @@ fun MainScaffold(
                                 onStop = retainedVm::stop,
                                 onStopAll = retainedVm::stopAll,
                                 capsule = tabletNav,
+                                // Shares the row with Control a TV: one-line
+                                // pill. Alone: the cast card's shape (Logan
+                                // 2026-10-05).
+                                compact = phoneFab,
                                 modifier = Modifier.weight(1f),
                             )
                         }

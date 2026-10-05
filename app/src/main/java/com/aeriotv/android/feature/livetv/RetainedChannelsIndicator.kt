@@ -5,6 +5,8 @@ import com.aeriotv.android.feature.main.floatingNavChrome
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -215,11 +217,17 @@ fun RetainedChannelsPill(
     onOpenList: () -> Unit,
     onStop: (String) -> Unit,
     onStopAll: () -> Unit,
-    /** Tablets: full capsule, matching the tablet cast card. */
+    /** Tablets: 18 dp side padding, matching the tablet cast card. */
     capsule: Boolean = false,
+    /** Phones, sharing the row with the Control a TV button: the one-line pill. */
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     if (retained.isEmpty()) return
+    if (!compact) {
+        RetainedChannelsCard(retained, onTune, onOpenList, onStop, onStopAll, capsule, modifier)
+        return
+    }
     val single = retained.size == 1
     // Tablets (Apple parity): one kept = true capsule; two or more = the same
     // surface on a 24 dp rounded rectangle.
@@ -284,6 +292,91 @@ fun RetainedChannelsPill(
             RetainedCardButton(label = "Stop", onClick = { onStop(latest.channelId) })
         } else {
             RetainedCardButton(label = "Stop All", onClick = onStopAll)
+        }
+    }
+}
+
+/**
+ * Kept Live dock card (Logan 2026-10-05): the exact shape of the cast card
+ * (CastMiniController inside CastTransportCard): the same capsule and
+ * floating nav chrome, 8 dp vertical padding, 18 dp (tablet) or 12 dp (phone)
+ * side padding, 40 dp tile, 12 dp gap, a bold title and an accent subtitle,
+ * and a 48 dp trailing control, so both cards measure the same height and
+ * radius. Several kept channels stay one capsule; tap opens the list.
+ */
+@Composable
+private fun RetainedChannelsCard(
+    retained: List<com.aeriotv.android.core.timeshift.TimeshiftController.RetainedChannel>,
+    onTune: (String) -> Unit,
+    onOpenList: () -> Unit,
+    onStop: (String) -> Unit,
+    onStopAll: () -> Unit,
+    tablet: Boolean,
+    modifier: Modifier,
+) {
+    val single = retained.size == 1
+    val latest = retained.last()
+    val capsuleShape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
+    androidx.compose.foundation.layout.Row(
+        modifier = modifier
+            .floatingNavChrome(capsuleShape)
+            .clip(capsuleShape)
+            .clickable(onClick = { if (single) onTune(latest.channelId) else onOpenList() })
+            .padding(horizontal = if (tablet) 18.dp else 12.dp, vertical = 8.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        val logo = latest.logoUrl
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(com.aeriotv.android.core.ui.artworkTileShape(6.dp, model = if (single) logo else null))
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            if (single && !logo.isNullOrBlank()) {
+                coil3.compose.AsyncImage(
+                    model = logo,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.FiberSmartRecord,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
+        androidx.compose.foundation.layout.Column(modifier = Modifier.weight(1f)) {
+            androidx.compose.material3.Text(
+                text = if (single) "Keeping ${latest.channelName} live"
+                else "Keeping ${retained.size} channels live",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            androidx.compose.material3.Text(
+                text = if (single) "Tap to watch ${latest.channelName}"
+                else retained.asReversed().joinToString(", ") { it.channelName },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.textAccent,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.heightIn(min = 48.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            if (single) {
+                RetainedCardButton(label = "Stop", onClick = { onStop(latest.channelId) })
+            } else {
+                RetainedCardButton(label = "Stop All", onClick = onStopAll)
+            }
         }
     }
 }
