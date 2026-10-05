@@ -1451,7 +1451,24 @@ private fun Tile(
     // apply live while the grid is open.
     val showLogos by settingsVm.multiviewShowLogos.collectAsState(initial = false)
     val logoPosition by settingsVm.multiviewLogoPosition.collectAsState(initial = "top_left")
-    val logoSize by settingsVm.multiviewLogoSize.collectAsState(initial = 20)
+    val logoSize by settingsVm.multiviewLogoSize.collectAsState(initial = 10)
+    // Displayed video aspect (width / height incl. pixel aspect), tracked from
+    // the tile's ExoPlayer so the logo sits inside the picture, not the
+    // letterbox. 0 = unknown (falls back to 16:9).
+    var videoAspect by remember(tile.id) { mutableStateOf(0f) }
+    var tilePlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    DisposableEffect(tilePlayer) {
+        val p = tilePlayer
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+                }
+            }
+        }
+        p?.let { listener.onVideoSizeChanged(it.videoSize); it.addListener(listener) }
+        onDispose { p?.removeListener(listener) }
+    }
     val shape = if (tileRounded) RoundedCornerShape(8.dp) else RoundedCornerShape(0.dp)
     // D-pad focus (which tile the remote is currently on) is owned by the
     // grid host and passed in as [isDpadFocused]. Distinct from AUDIO focus
@@ -1524,7 +1541,7 @@ private fun Tile(
             cachingMs = cachingMs,
             isAudioFocused = isAudioFocused,
             paused = paused,
-            onPlayer = onPlayer,
+            onPlayer = { p -> tilePlayer = p; onPlayer(p) },
             audioPassthrough = audioPassthrough,
             watchVm = watchVm,
             onFinished = onFinished,
@@ -1560,6 +1577,7 @@ private fun Tile(
                 url = tile.logoUrl,
                 position = logoPosition,
                 sizePercent = logoSize,
+                videoAspect = videoAspect,
                 // The channel-name badge sits top-left while the chrome is up;
                 // push a top-left logo below it so it never covers the name.
                 avoidNameBadge = chromeVisible,
@@ -1583,7 +1601,8 @@ private fun Tile(
 
 /**
  * Channel logo overlay for a Multiview tile. Draws inside the tile in the
- * chosen corner with a small inset, height = tile height x [sizePercent],
+ * chosen corner of the VIDEO rect (aspect fit of [videoAspect], else 16:9,
+ * inside the tile) with an 8dp inset, height = video height x [sizePercent],
  * aspect fit, on the same black 55 percent rounded backdrop as the name
  * badge. Not focusable and not clickable, so taps and D-pad focus go to the
  * tile as before. Loaded through Coil's singleton loader (same loader and
@@ -1594,10 +1613,15 @@ private fun TileChannelLogo(
     url: String,
     position: String,
     sizePercent: Int,
+    videoAspect: Float,
     avoidNameBadge: Boolean,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val logoH = maxHeight * (sizePercent.coerceIn(10, 40) / 100f)
+        val aspect = if (videoAspect > 0f) videoAspect else 16f / 9f
+        val tileAspect = if (maxHeight.value > 0f) maxWidth.value / maxHeight.value else aspect
+        val videoW = if (tileAspect > aspect) maxHeight * aspect else maxWidth
+        val videoH = if (tileAspect > aspect) maxHeight else maxWidth / aspect
+        val logoH = videoH * (sizePercent.coerceIn(5, 25) / 100f)
         val alignment = when (position) {
             "top_right" -> Alignment.TopEnd
             "bottom_left" -> Alignment.BottomStart
@@ -1612,11 +1636,16 @@ private fun TileChannelLogo(
         )
         Box(
             modifier = Modifier
+                .align(Alignment.Center)
+                .size(videoW, videoH),
+        ) {
+        Box(
+            modifier = Modifier
                 .align(alignment)
-                .padding(6.dp)
+                .padding(8.dp)
                 .offset(y = topShift)
                 .height(logoH)
-                .widthIn(max = maxWidth * 0.5f)
+                .widthIn(max = videoW * 0.5f)
                 .clip(RoundedCornerShape(4.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .padding(4.dp),
@@ -1627,6 +1656,7 @@ private fun TileChannelLogo(
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 modifier = Modifier.fillMaxHeight(),
             )
+        }
         }
     }
 }

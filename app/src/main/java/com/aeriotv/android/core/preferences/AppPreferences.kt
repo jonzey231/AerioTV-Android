@@ -1176,12 +1176,12 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_MULTIVIEW_LOGO_POSITION] = value }
     }
 
-    /** Logo height as a percent of tile height, 10 to 40 in steps of 5. Default 20. */
+    /** Logo height as a percent of the video picture height, 5 to 25 in steps of 5. Default 10. */
     val multiviewLogoSize: Flow<Int> = store.data.map {
-        (it[KEY_MULTIVIEW_LOGO_SIZE] ?: 20).coerceIn(10, 40)
+        (it[KEY_MULTIVIEW_LOGO_SIZE] ?: 10).coerceIn(5, 25)
     }
     suspend fun setMultiviewLogoSize(value: Int) {
-        store.edit { it[KEY_MULTIVIEW_LOGO_SIZE] = value.coerceIn(10, 40) }
+        store.edit { it[KEY_MULTIVIEW_LOGO_SIZE] = value.coerceIn(5, 25) }
     }
 
     /**

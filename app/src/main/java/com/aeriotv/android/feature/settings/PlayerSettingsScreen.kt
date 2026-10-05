@@ -123,7 +123,7 @@ fun PlayerSettingsScreen(
     val multiviewRounded by viewModel.multiviewTileCornersRounded.collectAsStateWithLifecycle(initialValue = false)
     val multiviewShowLogos by viewModel.multiviewShowLogos.collectAsStateWithLifecycle(initialValue = false)
     val multiviewLogoPosition by viewModel.multiviewLogoPosition.collectAsStateWithLifecycle(initialValue = "top_left")
-    val multiviewLogoSize by viewModel.multiviewLogoSize.collectAsStateWithLifecycle(initialValue = 20)
+    val multiviewLogoSize by viewModel.multiviewLogoSize.collectAsStateWithLifecycle(initialValue = 10)
 
     val startupRefreshRate by viewModel.startupRefreshRate.collectAsStateWithLifecycle(initialValue = "off")
     val matchContentResolution by viewModel.matchContentResolution.collectAsStateWithLifecycle(initialValue = false)
@@ -511,7 +511,7 @@ fun PlayerSettingsScreen(
                         )
                         SteppedSliderRow(
                             label = "Logo Size",
-                            values = listOf(10, 15, 20, 25, 30, 35, 40),
+                            values = listOf(5, 10, 15, 20, 25),
                             selected = multiviewLogoSize,
                             format = { "$it%" },
                             onSelect = viewModel::setMultiviewLogoSize,
