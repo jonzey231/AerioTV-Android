@@ -393,6 +393,7 @@ fun SettingsTvRailHost(
     val railFocus = remember { FocusRequester() }
     val detailFocus = remember { FocusRequester() }
     var railHasFocus by remember { mutableStateOf(false) }
+    var hostHasFocus by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<SettingsRoute?>(null) }
     // Bumped on EVERY rail focus. Keying the commit on the route alone missed
     // re-focusing the same route after the selection moved elsewhere without
@@ -469,12 +470,18 @@ fun SettingsTvRailHost(
     // Back in the pane returns focus to the rail instead of leaving Settings.
     // Disabled while something is pushed so the nav stack's own handler pops
     // first, and while the rail already holds focus so Back reaches the tabs.
-    androidx.activity.compose.BackHandler(enabled = com.aeriotv.android.feature.main.LocalTabIsActive.current && pushed == null && !railHasFocus) {
-        com.aeriotv.android.ui.tv.TvFocusTrace.settingsBack("rail-host pane->rail")
-        com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("railFocus", "back", railFocus)
+    // Two-step Back, the same as DVR / Movies / TV Shows (Logan 2026-10-04):
+    // Back anywhere in the Settings page (rail or pane, nothing pushed) parks
+    // focus on the Settings pill and the page stays; a second Back on the
+    // pill reaches the scaffold's "Back goes to the home tab" rule.
+    val requestTabPill = com.aeriotv.android.feature.main.LocalTvRequestCurrentTabPill.current
+    androidx.activity.compose.BackHandler(enabled = com.aeriotv.android.feature.main.LocalTabIsActive.current && pushed == null && hostHasFocus && requestTabPill != null) {
+        val landed = requestTabPill?.invoke() == true
+        com.aeriotv.android.ui.tv.TvFocusTrace.key("Back", landed, "settings-to-tab-pill")
+        if (!landed) com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("railFocus", "back", railFocus)
     }
 
-    Row(modifier = Modifier.fillMaxSize()) {
+    Row(modifier = Modifier.fillMaxSize().onFocusChanged { hostHasFocus = it.hasFocus }) {
         SettingsTvRail(
             selection = selection,
             sections = sections,
