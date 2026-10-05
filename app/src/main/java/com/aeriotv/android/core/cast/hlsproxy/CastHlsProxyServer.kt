@@ -81,6 +81,10 @@ class CastHlsProxyServer(
          *  after the previous one is a starved cut (iOS "starved closure"). */
         private const val STARVED_SLACK_S = 0.6
 
+        /** Declared BANDWIDTH of the audio-only variant, bits per second:
+         *  above any AAC or AC-3 / E-AC-3 rate an IPTV mux carries. */
+        internal const val AUDIO_ONLY_BANDWIDTH = 1_000_000
+
         /** Nominal segment target (the remuxer cuts on the first keyframe
          *  after ~3 s). */
         private const val TARGET_SEGMENT_S = 3.0
@@ -128,8 +132,9 @@ class CastHlsProxyServer(
         val durationTicks: Long,
         val discontinuity: Boolean,
         /** The two renditions of the same cut, under the one sequence
-         *  number. [audioData] is null only for a video-only mux. */
-        val videoData: ByteArray,
+         *  number. [audioData] is null only for a video-only mux;
+         *  [videoData] is null only for an audio-only program. */
+        val videoData: ByteArray?,
         val audioData: ByteArray?,
         /** The audio rendition's own EXTINF; within one audio frame of
          *  [durationTicks]. */
@@ -315,9 +320,11 @@ class CastHlsProxyServer(
 
     /** Init segments for [gen]. [audio] is null for a video-only mux, in
      *  which case the master carries no audio rendition. */
-    fun setInitSegments(gen: Int, video: ByteArray, audio: ByteArray?) = synchronized(lock) {
+    fun setInitSegments(gen: Int, video: ByteArray?, audio: ByteArray?) = synchronized(lock) {
         if (!storeOpen) return@synchronized // stopped: see addSegment
-        videoInits[gen] = video
+        // video null = an audio-only program (GH AerioTV#90): the master
+        // then advertises a single audio-only variant.
+        if (video != null) videoInits[gen] = video else videoInits.remove(gen)
         if (audio != null) audioInits[gen] = audio else audioInits.remove(gen)
     }
 
@@ -331,7 +338,7 @@ class CastHlsProxyServer(
 
     fun addSegment(
         gen: Int,
-        videoData: ByteArray,
+        videoData: ByteArray?,
         audioData: ByteArray?,
         durationTicks: Long,
         audioDurationTicks: Long = durationTicks,
@@ -434,7 +441,7 @@ class CastHlsProxyServer(
 
     /** Bitrate of the ring (video + audio), kbps. Caller holds [lock]. */
     private fun ringKbpsLocked(): Int {
-        val bytes = ring.sumOf { it.videoData.size.toLong() + (it.audioData?.size ?: 0) }
+        val bytes = ring.sumOf { (it.videoData?.size ?: 0).toLong() + (it.audioData?.size ?: 0) }
         val secs = ring.sumOf { it.durationTicks } / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
         return if (secs > 0) (bytes * 8 / secs / 1000).toInt() else 0
     }
@@ -538,6 +545,9 @@ class CastHlsProxyServer(
     internal fun demuxedMasterPlaylistText(): String {
         val videoInit = synchronized(lock) { videoInits[generation] }
         val audioInit = synchronized(lock) { audioInits[generation] }
+        if (videoInit == null && audioInit != null) {
+            audioOnlyMasterPlaylistText(audioInit)?.let { return it }
+        }
         val transcoded = synchronized(lock) { generation in videoTranscodedGenerations }
         val streamCodec = videoInit?.let { videoCodecString(it) } ?: "avc1.640028"
         // A re-encoded track declares exactly what the encoder wrote
@@ -560,6 +570,23 @@ class CastHlsProxyServer(
         sb.append(",CLOSED-CAPTIONS=NONE\n")
         sb.append("video.m3u8\n")
         return sb.toString()
+    }
+
+    /** Audio-only program (GH AerioTV#90): one variant, the audio media
+     *  playlist itself, declaring only the audio codec. No RESOLUTION, no
+     *  EXT-X-MEDIA group, no CLOSED-CAPTIONS (there is no video for
+     *  Shaka's CEA parser to walk). BANDWIDTH is a ceiling for any AAC or
+     *  AC-3 family stream an IPTV mux carries. */
+    private fun audioOnlyMasterPlaylistText(audioInit: ByteArray): String? {
+        val codec = audioCodecString(audioInit) ?: return null
+        return "#EXTM3U\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=$AUDIO_ONLY_BANDWIDTH,CODECS=\"$codec\"\n" +
+            "audio.m3u8\n"
+    }
+
+    /** True when the current generation is an audio-only program. */
+    private fun currentGenerationAudioOnly(): Boolean = synchronized(lock) {
+        videoInits[generation] == null && audioInits[generation] != null
     }
 
     /** RFC 6381 audio codec string from the init segment's audio sample
@@ -792,6 +819,11 @@ class CastHlsProxyServer(
                     val began = System.currentTimeMillis()
                     body = seq?.let { s -> awaitSegment(s, Rendition.AUDIO) }
                     waitMs = System.currentTimeMillis() - began
+                    // Audio-only: the audio fetch is the receiver's progress
+                    // (the runway and stale-receiver checks read this).
+                    if (seq != null && body != null && seq > highestVideoSeq && currentGenerationAudioOnly()) {
+                        highestVideoSeq = seq
+                    }
                     mime = MIME_SEGMENT
                 }
                 else -> {

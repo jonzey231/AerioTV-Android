@@ -1495,7 +1495,8 @@ class AerioCastSender @Inject constructor(
             Log.i(
                 TAG,
                 "[Cast] load channel=${base.title} " +
-                    "audio=${started.audioCodec.ifBlank { "unknown" }} mode=passthrough",
+                    "audio=${started.audioCodec.ifBlank { "unknown" }} mode=passthrough" +
+                    if (started.audioOnly) " audioOnly=true" else "",
             )
             // The DEMUXED master is the only playlist the proxy serves:
             // the audio rendition declares ac-3 / ec-3 honestly in its own
@@ -1519,9 +1520,6 @@ class AerioCastSender @Inject constructor(
      * never transcoded, so the audio arm names what the receiver lacks.
      */
     private fun describeRefusal(e: UnsupportedCodecException): String {
-        if (e.audioOnly) {
-            return "This channel is audio only, which cannot be cast yet."
-        }
         val codec = e.codecName.removeSuffix(" audio").removeSuffix(" video")
         if (e.isVideo) {
             return "This channel's video is $codec, which cannot be cast to this receiver."

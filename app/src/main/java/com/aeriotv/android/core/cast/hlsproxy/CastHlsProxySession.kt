@@ -293,6 +293,10 @@ class CastHlsProxySession @Inject constructor(
      *  sender's cast load log line. */
     @Volatile private var audioCodec: String = ""
 
+    /** True once the current channel's ingest serves an audio-only
+     *  program (GH AerioTV#90). */
+    @Volatile private var audioOnly: Boolean = false
+
     /** The sender's video plan for the current channel (receiver caps plus
      *  the Developer switches); the remuxer applies it at the source SPS. */
     @Volatile private var videoPlan: CastVideoPlan = CastVideoPlan.PASSTHROUGH
@@ -327,6 +331,9 @@ class CastHlsProxySession @Inject constructor(
          *  arrived before the first segments (never observed in the
          *  field, but the log line must not lie). */
         val audioCodec: String,
+        /** True for an audio-only program: the master advertises a single
+         *  audio-only variant (GH AerioTV#90). */
+        val audioOnly: Boolean = false,
     )
 
     /**
@@ -369,6 +376,7 @@ class CastHlsProxySession @Inject constructor(
             demuxedPlaylistUrl = startChannelBlocking(rawTsUrl, headers, allowAc3Passthrough, false) +
                 "/demuxed.m3u8",
             audioCodec = audioCodec,
+            audioOnly = audioOnly,
         )
     }
 
@@ -388,6 +396,7 @@ class CastHlsProxySession @Inject constructor(
         activeUrl = rawTsUrl
         sessionError.value = null
         audioCodec = ""
+        audioOnly = false
         _videoPath.value = null
         // Channel change keeps the ring: the receiver's cached playlist
         // still promises the old channel's last segments, so they stay
@@ -494,6 +503,10 @@ class CastHlsProxySession @Inject constructor(
         failFastOnHttpError: Boolean,
     ) {
         var currentGen = gen
+        // AUTO for the channel's first connection; pinned to FORCE or NEVER
+        // by its first init so a reconnect cannot change the shape of the
+        // playlists the receiver already loaded (audio-only vs video).
+        var audioOnlyPolicy = TsToFmp4Remuxer.AudioOnlyPolicy.AUTO
         ingestJob = ingestScope.launch {
             var consecutiveFailures = 0
             var connected = false
@@ -543,7 +556,38 @@ class CastHlsProxySession @Inject constructor(
                      *  ingest connection, i.e. per generation. */
                     private var localSeq = 0
 
+                    override fun onAudioOnlyInit(audio: ByteArray) {
+                        audioOnlyPolicy = TsToFmp4Remuxer.AudioOnlyPolicy.FORCE
+                        audioOnly = true
+                        server.setVideoTranscoded(currentGen, false)
+                        server.setInitSegments(currentGen, null, audio)
+                        debugLog(
+                            context, TAG,
+                            "[AUDIO-ONLY] init ready gen=$currentGen ainit=${audio.size} B (no video rendition)",
+                        )
+                    }
+
+                    override fun onAudioOnlySegment(audio: ByteArray, durationTicks: Long) {
+                        server.addSegment(
+                            gen = currentGen,
+                            videoData = null,
+                            audioData = audio,
+                            durationTicks = durationTicks,
+                            audioDurationTicks = durationTicks,
+                        )
+                        segmentsLogged++
+                        val segSeconds = durationTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+                        debugLog(
+                            context, TAG,
+                            "[AUDIO-ONLY] seg=$localSeq t=${"%.2f".format(segmentStartSeconds)}s " +
+                                "dur=${"%.2f".format(segSeconds)}s apts=${"%.3f".format(firstAudioPtsSeconds)} " +
+                                "audio=$audioSamples aseg=${audio.size} B",
+                        )
+                        localSeq++
+                    }
+
                     override fun onInitSegments(video: ByteArray, audio: ByteArray?) {
+                        audioOnlyPolicy = TsToFmp4Remuxer.AudioOnlyPolicy.NEVER
                         server.setVideoTranscoded(currentGen, remuxerRef?.videoIsTranscoded == true)
                         server.setInitSegments(currentGen, video, audio)
                         debugLog(
@@ -651,6 +695,7 @@ class CastHlsProxySession @Inject constructor(
                     log = { msg -> debugLog(context, TAG, msg) },
                     allowAc3Passthrough = allowAc3Passthrough,
                     videoPlan = plan,
+                    audioOnlyPolicy = audioOnlyPolicy,
                     videoDelivery = delivery,
                     videoTranscoderFactory = { info, spec, keyTicks, sink, deliver ->
                         CastVideoTranscoder(
@@ -725,15 +770,7 @@ class CastHlsProxySession @Inject constructor(
                     // audio outside AAC and the AC-3 family this receiver
                     // decodes have no path. Surfaced to the sender's ready
                     // wait as the cast failure.
-                    if (e.audioOnly) {
-                        debugLogWarn(
-                            context, TAG,
-                            "[AUDIO-ONLY] detected: no video track in PMT; the cast proxy cuts " +
-                                "segments on video keyframes and cannot serve audio-only, refusing the cast",
-                        )
-                    } else {
-                        debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
-                    }
+                    debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
                     sessionError.value = e
                     return@launch
                 } catch (t: Throwable) {

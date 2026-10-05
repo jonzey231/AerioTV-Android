@@ -18,8 +18,6 @@ class UnsupportedCodecException(
     val codecName: String,
     /** True for a video-stream refusal, false for audio. */
     val isVideo: Boolean = true,
-    /** True when the PMT has no video stream at all (a radio channel). */
-    val audioOnly: Boolean = false,
 ) : Exception("Cast HLS proxy cannot serve $codecName")
 
 /**
@@ -93,7 +91,25 @@ class TsToFmp4Remuxer(
     /** Builds the transcoder (the MediaCodec one in production, a fake in
      *  the unit tests). null keeps the video path passthrough. */
     private val videoTranscoderFactory: CastVideoTranscoderFactory? = null,
+    /** Whether this connection may run audio-only (GH AerioTV#90). The
+     *  session pins it after its first generation so a reconnect never
+     *  changes the shape of the playlists the receiver already loaded. */
+    private val audioOnlyPolicy: AudioOnlyPolicy = AudioOnlyPolicy.AUTO,
+    /** Segment target in audio-only mode, cut on audio frame boundaries. */
+    private val audioOnlySegmentTicks: Long = 2 * TICKS_PER_SECOND,
 ) {
+    /** How the remuxer treats a program with no usable video. */
+    enum class AudioOnlyPolicy {
+        /** Audio-only when the PMT lists no video, or when the video PID
+         *  sends no parameter sets within [AUDIO_ONLY_FALLBACK_TICKS] of
+         *  audio (the AudioOnlyTrackGuard rule on the local player). */
+        AUTO,
+        /** Always audio-only: any video PID is ignored. */
+        FORCE,
+        /** Never audio-only: the session already serves video. */
+        NEVER,
+    }
+
     interface Listener {
         /** The init segments of a generation: [video] is a video-only moov,
          *  [audio] an audio-only moov carrying the ac-3 / ec-3 / mp4a
@@ -187,6 +203,17 @@ class TsToFmp4Remuxer(
          *  transcode fails, before [feed] throws
          *  [CastVideoTranscodeException]. */
         fun onVideoTranscodeFailed(reason: String) {}
+
+        /** Audio-only mode (GH AerioTV#90): the generation's single init,
+         *  an audio-only moov (track 2, mp4a / ac-3 / ec-3). Fired instead
+         *  of [onInitSegments]; there is no video rendition at all. */
+        fun onAudioOnlyInit(audio: ByteArray) {}
+
+        /** Audio-only mode: one segment, cut on an audio frame boundary
+         *  about every [audioOnlySegmentTicks]; [durationTicks] is the sum
+         *  of its frame durations (its EXTINF). Fired instead of
+         *  [onMediaSegment]. */
+        fun onAudioOnlySegment(audio: ByteArray, durationTicks: Long) {}
     }
 
     companion object {
@@ -218,6 +245,11 @@ class TsToFmp4Remuxer(
         private const val MAX_AUDIO_ANCHOR_DRIFT_FRAMES = 8L
 
         private const val STREAM_TYPE_AAC_ADTS = 0x0F
+
+        /** Audio span after which a video PID that never produced
+         *  parameter sets is dropped and the program runs audio-only.
+         *  Same 3 s as AudioOnlyTrackGuard on the local player. */
+        const val AUDIO_ONLY_FALLBACK_TICKS = 3 * TICKS_PER_SECOND
 
         /** Names for the refusal message; anything not listed reports the
          *  raw stream_type. */
@@ -270,6 +302,16 @@ class TsToFmp4Remuxer(
     private var audioPid = -1
     /** PMT parsed; [audioPid] < 0 after this means a video-only mux. */
     private var pmtSeen = false
+
+    /** Audio-only mode (GH AerioTV#90): no video rendition, segments cut
+     *  on audio frame boundaries. Set at the PMT (no video stream) or by
+     *  the 3 s fallback (video PID silent). */
+    var isAudioOnly = false
+        private set
+
+    /** First audio PES PTS (unwrapped) seen while the video PID has not
+     *  produced parameter sets yet; the 3 s fallback measures from it. */
+    private var firstAudioPtsBeforeVideo = -1L
 
     private val videoPes = PesAssembler { payload, pts, dts -> onVideoAccessUnit(payload, pts, dts) }
     private val audioPes = PesAssembler { payload, pts, _ -> onAudioPes(payload, pts) }
@@ -569,6 +611,11 @@ class TsToFmp4Remuxer(
         }
         // Refuse before any media flows: the ingest surfaces this as the
         // user-visible cast failure with the codec name.
+        val forceAudioOnly = audioOnlyPolicy == AudioOnlyPolicy.FORCE && audio >= 0
+        if (forceAudioOnly) {
+            video = -1
+            videoType = -1
+        }
         if (video >= 0 && videoType != STREAM_TYPE_H264 && videoType != STREAM_TYPE_HEVC) {
             throw UnsupportedCodecException(STREAM_TYPE_NAMES[videoType] ?: "video stream_type 0x%02X".format(videoType))
         }
@@ -590,11 +637,19 @@ class TsToFmp4Remuxer(
             audioSource = passthrough
         }
         if (video < 0) {
-            // GH AerioTV#90: segments are cut on video keyframes and the
-            // demuxed master always carries a video rendition, so an
-            // audio-only program has no path through this proxy yet. The
-            // session logs the [AUDIO-ONLY] line (this file stays pure logic).
-            throw UnsupportedCodecException("audio-only stream", isVideo = false, audioOnly = true)
+            if (audio < 0) {
+                throw UnsupportedCodecException("a program with neither video nor audio")
+            }
+            if (audioOnlyPolicy == AudioOnlyPolicy.NEVER) {
+                // This session already serves a video rendition; a
+                // reconnect whose PMT lost its video cannot change the
+                // playlists' shape. Not terminal: the ingest reconnects.
+                throw IllegalStateException("PMT lists no video on a session that serves video")
+            }
+            // GH AerioTV#90: a radio channel. One audio rendition, segments
+            // cut on audio frame boundaries.
+            isAudioOnly = true
+            log("[AUDIO-ONLY] PMT lists no video${if (forceAudioOnly) " (pinned by session)" else ""}: serving audio-only")
         }
         videoPid = video
         audioPid = audio // may stay -1: video-only mux is fine
@@ -938,8 +993,40 @@ class TsToFmp4Remuxer(
     // ---- audio path ----
 
     private fun onAudioPes(payload: ByteArray, pts33: Long) {
+        maybeFallBackToAudioOnly(pts33)
         val source = audioSource
         if (source == null) onAdtsAudioPes(payload, pts33) else onAc3AudioPes(source, payload, pts33)
+    }
+
+    /** The AudioOnlyTrackGuard rule: a video PID that has produced no
+     *  parameter sets after [AUDIO_ONLY_FALLBACK_TICKS] of audio is
+     *  dropped and the program runs audio-only. Only before any init went
+     *  out, and never when the session pins video. */
+    private fun maybeFallBackToAudioOnly(pts33: Long) {
+        if (isAudioOnly || initSent || videoPid < 0 || sps != null) return
+        if (audioOnlyPolicy != AudioOnlyPolicy.AUTO) return
+        val pts = pts33 // raw 33-bit; the wrap is folded into the span below
+        if (firstAudioPtsBeforeVideo < 0) {
+            firstAudioPtsBeforeVideo = pts
+            return
+        }
+        var span = pts - firstAudioPtsBeforeVideo
+        if (span < -(PTS_WRAP / 2)) span += PTS_WRAP
+        if (span < 0) {
+            firstAudioPtsBeforeVideo = pts // a splice backwards: start over
+            return
+        }
+        if (span < AUDIO_ONLY_FALLBACK_TICKS) return
+        log(
+            "[AUDIO-ONLY] no video parameter sets after ${"%.1f".format(span / TICKS_PER_SECOND.toDouble())} s " +
+                "of audio: dropping video PID $videoPid, serving audio-only",
+        )
+        videoPid = -1
+        isAudioOnly = true
+        videoQueue.clear()
+        heldVideo.clear()
+        pendingCutDts = -1L
+        maybeEmitInit()
     }
 
     /**
@@ -1179,8 +1266,50 @@ class TsToFmp4Remuxer(
      *  ms, was the missing tail that [flushGenerationTail] now emits. */
     private fun queueAudio(data: ByteArray, framePts: Long, durationTicks: Long) {
         if (!audioQueueOpen) return
+        if (isAudioOnly) {
+            queueAudioOnly(data, framePts, durationTicks)
+            return
+        }
         if (framePts < timelineBasePts) return
         audioQueue.add(AudioSample(data, framePts, durationTicks))
+    }
+
+    /** Audio-only mode: the first frame anchors the timeline, and a
+     *  segment is cut as soon as the queued frames span
+     *  [audioOnlySegmentTicks], so every cut is on a frame boundary and the
+     *  next segment's tfdt is exactly this one's end. */
+    private fun queueAudioOnly(data: ByteArray, framePts: Long, durationTicks: Long) {
+        if (timelineBase < 0) {
+            timelineBase = framePts
+            timelineBasePts = framePts
+        }
+        if (framePts < timelineBase) return
+        audioQueue.add(AudioSample(data, framePts, durationTicks))
+        val first = audioQueue.first()
+        val last = audioQueue.last()
+        if (last.pts + last.durationTicks - first.pts >= audioOnlySegmentTicks) {
+            finalizeAudioOnlySegment()
+        }
+    }
+
+    private fun finalizeAudioOnlySegment() {
+        if (audioQueue.isEmpty()) return
+        val segAudio = ArrayList(audioQueue)
+        audioQueue.clear()
+        sequenceNumber++
+        val segment = buildMediaSegment(emptyList(), LongArray(0), segAudio, Rendition.AUDIO_ONLY)
+        val durationTicks = segAudio.sumOf { it.durationTicks.coerceAtLeast(1L) }
+        val ticks = TICKS_PER_SECOND.toDouble()
+        listener.onSegmentComposition(
+            videoSamples = 0,
+            audioSamples = segAudio.size,
+            firstVideoDtsSeconds = -1.0,
+            firstVideoPtsSeconds = -1.0,
+            firstAudioPtsSeconds = (segAudio.first().pts - timelineBase) / ticks,
+            segmentStartSeconds = emittedTicks / ticks,
+        )
+        emittedTicks += durationTicks
+        listener.onAudioOnlySegment(segment, durationTicks)
     }
 
     // ---- segmenter ----
@@ -1199,10 +1328,20 @@ class TsToFmp4Remuxer(
      *  source IDR while the encoder is still warming up, and the audio
      *  demuxed meanwhile belongs to the first segment. */
     private val audioQueueOpen: Boolean
-        get() = timelineBasePts >= 0 && (initSent || videoMode == VideoMode.TRANSCODE)
+        get() = if (isAudioOnly) {
+            initSent
+        } else {
+            timelineBasePts >= 0 && (initSent || videoMode == VideoMode.TRANSCODE)
+        }
 
     private fun maybeEmitInit() {
         if (initSent || !pmtSeen) return
+        if (isAudioOnly) {
+            if (!audioConfigReady) return
+            listener.onAudioOnlyInit(buildInitSegment(Rendition.AUDIO_ONLY))
+            initSent = true
+            return
+        }
         when (videoMode) {
             VideoMode.UNDECIDED -> return
             VideoMode.PASSTHROUGH -> if (sps == null || pps == null || (isHevc && vps == null)) return
@@ -1253,6 +1392,12 @@ class TsToFmp4Remuxer(
      *  the segment's EXTINF be that common end. The next generation then
      *  starts where this one really stopped. */
     private fun flushGenerationTail() {
+        if (isAudioOnly) {
+            // Every queued frame is whole, so the tail is simply the frames
+            // not yet cut: one last, shorter segment.
+            if (initSent) finalizeAudioOnlySegment()
+            return
+        }
         // A pending cut takes effect first: the held samples belong to a
         // segment of their own, and the audio that the cut was waiting
         // for has either arrived by now or never will.
