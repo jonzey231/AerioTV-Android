@@ -14,6 +14,7 @@ import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.data.db.entity.dispatcharrVersionAtLeast
 import com.aeriotv.android.core.data.db.entity.capabilitiesNeedProbe
 import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
+import com.aeriotv.android.core.data.db.entity.canSwitchStream
 import com.aeriotv.android.core.data.capability.CAPABILITIES_SCHEMA
 import com.aeriotv.android.core.data.capability.Capability
 import com.aeriotv.android.core.data.capability.CapabilityCorrections
@@ -947,7 +948,7 @@ class PlaylistRepository @Inject constructor(
         // THIS account can actually do. Best-effort; a failure just leaves the
         // snapshot unprobed, which renders every affordance enabled and lets
         // the server speak.
-        runCatching { probeCapabilities(playlistId, force = true) }
+        runCatching { probeCapabilities(playlistId, force = true, trigger = "playlist save") }
             .onFailure { Log.w(TAG_CAPS, "initial capability probe failed", it) }
         // The user just edited connection details: probe the LAN URL now so
         // the very next request routes correctly instead of waiting for a
@@ -1035,7 +1036,11 @@ class PlaylistRepository @Inject constructor(
             .onFailure { Log.w(TAG_CAPS, "account facts reset failed", it) }
     }
 
-    suspend fun probeCapabilities(playlistId: String, force: Boolean = false): Boolean {
+    suspend fun probeCapabilities(
+        playlistId: String,
+        force: Boolean = false,
+        trigger: String = "gated surface",
+    ): Boolean {
         // One pass per playlist at a time. Launch fires the coordinator probe
         // while a gated surface (DVR / On Demand) can fire its own within the
         // same second; without this the server saw two identical probes and the
@@ -1045,7 +1050,20 @@ class PlaylistRepository @Inject constructor(
         val running = inFlightCapabilityProbes.putIfAbsent(playlistId, pending)
         if (running != null) return running.await()
         return try {
+            val before = dao.byId(playlistId)
+            val oldLevel = before?.permsLevelLabel() ?: "unknown"
+            val willProbe = before != null && before.isDispatcharrDirectConnect() &&
+                (force || before.capabilitiesNeedProbe())
+            if (willProbe) lastCapabilityProbeAt[playlistId] = System.currentTimeMillis()
             val result = probeCapabilitiesUncoalesced(playlistId, force)
+            if (willProbe) {
+                val newLevel = dao.byId(playlistId)?.permsLevelLabel() ?: "unknown"
+                Log.i(
+                    TAG_PERMS,
+                    "level $oldLevel -> $newLevel trigger=$trigger" +
+                        if (result) "" else " (refresh failed, kept last good)",
+                )
+            }
             pending.complete(result)
             result
         } catch (t: Throwable) {
@@ -1261,6 +1279,27 @@ class PlaylistRepository @Inject constructor(
     }
 
     /** One in-flight probe per playlist id; concurrent callers join it. */
+    /** When each playlist was last probed this process (throttles the
+     *  foreground and gate-check triggers; nothing polls on its own). */
+    private val lastCapabilityProbeAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Milliseconds since [playlistId] was last probed this process. */
+    fun msSinceCapabilityProbe(playlistId: String): Long =
+        lastCapabilityProbeAt[playlistId]?.let { System.currentTimeMillis() - it } ?: Long.MAX_VALUE
+
+    /**
+     * Re-read the ACTIVE playlist's user level and permission flags now
+     * (Switch Stream open, reorder save, a 403 on either). Joins a probe that
+     * is already running. Returns the fresh Switch Stream gate, failing
+     * closed: an unknown level is false.
+     */
+    suspend fun recheckSwitchStreamAllowed(trigger: String): Boolean {
+        val playlist = dao.firstActive() ?: return false
+        if (!playlist.isDispatcharrDirectConnect()) return false
+        runCatching { probeCapabilities(playlist.id, force = true, trigger = trigger) }
+        return dao.byId(playlist.id)?.canSwitchStream() ?: false
+    }
+
     private val inFlightCapabilityProbes =
         ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
@@ -1273,7 +1312,11 @@ class PlaylistRepository @Inject constructor(
      * triggers (return to foreground, gated-surface entry) pass false and keep
      * the TTL.
      */
-    suspend fun probeAllCapabilities(force: Boolean = false) {
+    suspend fun probeAllCapabilities(
+        force: Boolean = false,
+        trigger: String = "foreground",
+        minIntervalMs: Long = 0L,
+    ) {
         // ACTIVE PLAYLIST ONLY (Logan 2026-09-16). A saved-but-inactive
         // playlist is not being used by anything on screen, and probing it
         // meant every launch and every foreground fired a users/me (plus a
@@ -1283,7 +1326,11 @@ class PlaylistRepository @Inject constructor(
         // to the newly active one.
         val playlist = dao.firstActive() ?: return
         if (!playlist.isDispatcharrDirectConnect()) return
-        runCatching { probeCapabilities(playlist.id, force) }
+        // Foreground: once a minute per playlist re-reads for real, so an
+        // admin's grant or revoke applies on the next return to the app.
+        val due = force ||
+            (minIntervalMs > 0L && msSinceCapabilityProbe(playlist.id) >= minIntervalMs)
+        runCatching { probeCapabilities(playlist.id, due, trigger) }
     }
 
     suspend fun refresh(playlist: PlaylistEntity): Result<List<M3UChannel>> = runCatching {
@@ -1318,7 +1365,8 @@ class PlaylistRepository @Inject constructor(
         // removed) and a no-op on failure (last good snapshot kept, flagged
         // stale). Re-read the row so THIS pass uses the fresh values.
         val probed = if (playlist.isDispatcharrDirectConnect()) {
-            runCatching { probeCapabilities(playlist.id, force = true) }.getOrDefault(false)
+            runCatching { probeCapabilities(playlist.id, force = true, trigger = "playlist refresh") }
+                .getOrDefault(false)
         } else false
         val fresh = if (probed) dao.byId(playlist.id) ?: playlist else playlist
         val liveVersion = if (probed) {
@@ -3082,7 +3130,7 @@ class PlaylistRepository @Inject constructor(
         // (the Movies tab only came back after a relaunch). An inactive
         // playlist is never probed, so its snapshot's age says nothing about
         // whether it is still true: a switch is the one moment we must ask.
-        runCatching { probeCapabilities(playlistId, force = true) }
+        runCatching { probeCapabilities(playlistId, force = true, trigger = "playlist switch") }
             .onFailure { Log.w(TAG_CAPS, "switch-active capability probe failed", it) }
         val entity = dao.byId(playlistId)
             ?: throw IllegalStateException("Playlist $playlistId vanished after switch")
@@ -4075,6 +4123,13 @@ private fun Double.formatChannelNumber(): String {
  *  server per playlist. */
 
 private const val TAG_CAPS = "AerioCaps"
+private const val TAG_PERMS = "PermsRefresh"
+
+/** "10", "1", "0", or "unknown" (no snapshot to gate on) for the PermsRefresh log. */
+private fun PlaylistEntity.permsLevelLabel(): String {
+    val caps = capabilities()
+    return if (caps.isUnknownSnapshot) "unknown" else caps.effectiveUserLevel.toString()
+}
 
 /** Per-stage timing for playlist saves (Edit Playlist / Add Playlist). */
 private const val TAG_SAVE = "AerioSave"

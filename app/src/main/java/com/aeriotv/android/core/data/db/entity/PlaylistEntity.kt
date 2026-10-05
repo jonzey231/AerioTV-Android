@@ -411,7 +411,10 @@ fun PlaylistEntity.dispatcharrCanViewSeries(): Boolean =
  * [deriveCapabilities], not a hunt through the player UI.
  */
 fun PlaylistEntity.canSwitchStream(): Boolean =
-    isDispatcharrDirectConnect() && capabilities().allows(Capability.CanSwitchStream)
+    // FAIL CLOSED: admin-only, so an unknown level (never probed, identity
+    // reset, probe not landed yet) hides the option instead of offering a
+    // picker that would 403. Only a measured admin level shows it.
+    isDispatcharrDirectConnect() && capabilities().isKnownAllowed(Capability.CanSwitchStream)
 
 /** Whether the server is at least [minimum] ("0.30.0"); false when unknown. */
 fun PlaylistEntity.dispatcharrVersionAtLeast(minimum: String): Boolean {

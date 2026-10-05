@@ -44,10 +44,11 @@ val LocalCanRecordToServer = compositionLocalOf { true }
  * per-user permission, the change is one line in `deriveCapabilities` and every
  * call site follows.
  *
- * Defaults to true so a read outside any provider falls back to the per-channel
- * dispatcharrChannelId gate (Direct-Connect-only).
+ * Defaults to FALSE (fail closed): a read outside any provider, or with no
+ * measured user level, hides admin-only affordances rather than offering
+ * something the server will refuse with 403.
  */
-val LocalIsDispatcharrAdmin = compositionLocalOf { true }
+val LocalIsDispatcharrAdmin = compositionLocalOf { false }
 
 /**
  * Effective DVR access of the active playlist's account: "none" / "view" /

@@ -2349,6 +2349,11 @@ class PlaylistViewModel @Inject constructor(
     suspend fun saveChannelStreamOrder(channelIntPk: Int, streamIds: List<Int>): Result<Unit> =
         runCatching { repository.saveDispatcharrChannelStreamOrder(channelIntPk, streamIds) }
 
+    /** Re-read the user level now (Switch Stream open / reorder save / 403)
+     *  and return the fresh Switch Stream gate; false when unknown. */
+    suspend fun recheckSwitchStreamAllowed(trigger: String): Boolean =
+        runCatching { repository.recheckSwitchStreamAllowed(trigger) }.getOrDefault(false)
+
     /** M3U account id -> source name, to label Switch Stream rows with their M3U.
      *  Empty on failure / non-Dispatcharr (the source label is then omitted). */
     suspend fun loadM3uAccountNames(): Map<Int, String> =

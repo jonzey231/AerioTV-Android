@@ -1206,7 +1206,7 @@ fun AerioTVNavHost(
                     LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: true),
                     // Switch Stream: change_stream is still IsAdmin server-side,
                     // but the gate now runs through Capability.CanSwitchStream.
-                    LocalIsDispatcharrAdmin provides (state.playlist?.canSwitchStream() ?: true),
+                    LocalIsDispatcharrAdmin provides (state.playlist?.canSwitchStream() ?: false),
                 ) {
                 PlayerScreen(
                     channels = playableChannels,
@@ -1278,6 +1278,9 @@ fun AerioTVNavHost(
                     },
                     onSaveChannelStreamOrder = { channelIntPk, streamIds ->
                         vm.saveChannelStreamOrder(channelIntPk, streamIds).getOrThrow()
+                    },
+                    onRecheckSwitchStreamAllowed = { trigger ->
+                        vm.recheckSwitchStreamAllowed(trigger)
                     },
                     onLoadCurrentStreamId = { channelUuid ->
                         vm.loadCurrentStreamId(channelUuid)

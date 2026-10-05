@@ -2049,8 +2049,19 @@ class DispatcharrClient @Inject constructor() {
             contentType(ContentType.Application.Json)
             setBody(JsonObject(mapOf("streams" to JsonArray(streamIds.map { JsonPrimitive(it) }))))
         }
+        // 403 here is the account's LEVEL (channel PATCH is IsAdmin), not a
+        // rotated key: report it with the server's text instead of letting
+        // unauthorizedCheck send it down the key-rebootstrap path.
+        if (response.status.value == 403) {
+            throw StreamOrderSaveException(403, dispatcharrErrorReason(runCatching { response.bodyAsText() }.getOrNull()))
+        }
         unauthorizedCheck(response, url)
-        if (!response.status.isSuccess()) throw StreamOrderSaveException(response.status.value)
+        if (!response.status.isSuccess()) {
+            throw StreamOrderSaveException(
+                response.status.value,
+                dispatcharrErrorReason(runCatching { response.bodyAsText() }.getOrNull()),
+            )
+        }
         return response.status.value
     }
 
@@ -2104,11 +2115,14 @@ class DispatcharrClient @Inject constructor() {
             "DispatcharrSwitch",
             "change_stream POST $url stream_id=$streamId -> HTTP ${response.status.value} body=$respBody",
         )
+        // 403 = the account is not an admin (change_stream is IsAdmin), not a
+        // rotated key; keep it out of unauthorizedCheck's re-bootstrap path.
+        if (response.status.value == 403) {
+            throw DispatcharrHttpFailure(403, dispatcharrErrorReason(respBody))
+        }
         unauthorizedCheck(response, url)
         if (!response.status.isSuccess()) {
-            throw DispatcharrError.Transport(
-                "Switch Stream failed: HTTP ${response.status.value} ${response.status.description} body=$respBody",
-            )
+            throw DispatcharrHttpFailure(response.status.value, dispatcharrErrorReason(respBody))
         }
         return respBody?.let { body ->
             runCatching {
@@ -3508,5 +3522,35 @@ internal object EpisodesBySeasonLenientSerializer :
 }
 
 
+/**
+ * A Dispatcharr non-2xx carrying the status and the server's own error text
+ * (`detail` / `error` / `message`), when it sent one. Switch Stream and the
+ * reorder save show both, worded identically to Apple.
+ */
+open class DispatcharrHttpFailure(val status: Int, val reason: String?) :
+    Exception(if (reason.isNullOrBlank()) "HTTP $status" else "HTTP $status: $reason")
+
 /** Switch Stream reorder: Dispatcharr answered [status] to the channel PATCH. */
-class StreamOrderSaveException(val status: Int) : Exception("HTTP $status")
+class StreamOrderSaveException(status: Int, reason: String? = null) :
+    DispatcharrHttpFailure(status, reason)
+
+/**
+ * The server's error text from a DRF / Dispatcharr error body: the first of
+ * `detail`, `error`, `message`, else a short non-HTML raw body. Mirrors Apple
+ * DispatcharrAPI.forbiddenReason so both platforms show the same words.
+ */
+fun dispatcharrErrorReason(body: String?): String? {
+    if (body.isNullOrBlank()) return null
+    val obj = runCatching {
+        kotlinx.serialization.json.Json.parseToJsonElement(body) as? JsonObject
+    }.getOrNull()
+    if (obj != null) {
+        for (key in listOf("detail", "error", "message")) {
+            val v = (obj[key] as? JsonPrimitive)?.contentOrNull
+            if (!v.isNullOrEmpty()) return v.take(200)
+        }
+    }
+    val text = body.take(200).trim()
+    if (text.isEmpty() || text.startsWith("<")) return null
+    return text
+}

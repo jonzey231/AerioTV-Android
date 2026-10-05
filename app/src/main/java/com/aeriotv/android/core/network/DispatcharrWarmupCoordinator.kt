@@ -97,7 +97,14 @@ class DispatcharrWarmupCoordinator @Inject constructor(
             // showing admin affordances. A return to the foreground keeps the
             // TTL (cheap, frequent, and the snapshot is usually minutes old);
             // so do the opportunistic DVR / On Demand entry checks.
-            runCatching { playlistRepository.get().probeAllCapabilities(force = forceProbe) }
+            runCatching {
+                playlistRepository.get().probeAllCapabilities(
+                    force = forceProbe,
+                    trigger = if (isColdLaunch) "cold launch" else "foreground",
+                    // Foreground re-reads at most once a minute per playlist.
+                    minIntervalMs = FOREGROUND_REPROBE_MS,
+                )
+            }
                 .onFailure { Log.w(TAG, "capability probe pass failed: ${it.message}") }
         }
         // Cast audio, 2026-09-13: the launch / foreground re-resolve of the

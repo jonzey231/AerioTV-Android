@@ -4,6 +4,7 @@ import kotlinx.coroutines.sync.withLock
 import android.util.Log
 import android.view.ViewGroup
 import android.widget.Toast
+import com.aeriotv.android.core.data.capability.deniedMessage
 import com.aeriotv.android.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -146,6 +147,10 @@ fun PlayerScreen(
     /** Switch Stream reorder (Dispatcharr admin): persist the channel's stream
      *  order (channel int pk, full ordered stream ids). Throws on failure. */
     onSaveChannelStreamOrder: suspend (Int, List<Int>) -> Unit = { _, _ -> },
+    /** Re-read the Dispatcharr user level now and return the fresh Switch
+     *  Stream gate (trigger names the reason for the PermsRefresh log).
+     *  Defaults to false: fail closed when no host wires it. */
+    onRecheckSwitchStreamAllowed: suspend (String) -> Boolean = { false },
     onLoadCurrentStreamId: suspend (String) -> Int? = { null },
     onLoadCurrentStreamUrl: suspend (String) -> String? = { null },
     /** LAN/WAN verdict-flip signal (LAN URL key) for mid-stream re-tune. */
@@ -1922,6 +1927,7 @@ fun PlayerScreen(
             scrubStep = scrubStep,
             onLoadChannelStreams = onLoadChannelStreams,
             onLoadCurrentStreamId = onLoadCurrentStreamId,
+            onRecheckSwitchStreamAllowed = onRecheckSwitchStreamAllowed,
             reportInteraction = reportInteraction,
             onClose = onClose,
             onTuneChannelId = { id ->
@@ -2269,6 +2275,7 @@ fun PlayerScreen(
         scope = scope,
         onSwitchChannelStream = onSwitchChannelStream,
         onSaveChannelStreamOrder = onSaveChannelStreamOrder,
+        onRecheckSwitchStreamAllowed = onRecheckSwitchStreamAllowed,
         onLoadChannelStreamsForReorder = onLoadChannelStreams,
         onLoadCurrentStreamUrl = onLoadCurrentStreamUrl,
         onLaunchMultiview = onLaunchMultiview,
@@ -2387,6 +2394,7 @@ private fun PlayerSheets(
     scope: kotlinx.coroutines.CoroutineScope,
     onSwitchChannelStream: suspend (String, Int) -> String?,
     onSaveChannelStreamOrder: suspend (Int, List<Int>) -> Unit,
+    onRecheckSwitchStreamAllowed: suspend (String) -> Boolean,
     onLoadChannelStreamsForReorder: suspend (Int) -> List<StreamOption>,
     onLoadCurrentStreamUrl: suspend (String) -> String?,
     onLaunchMultiview: () -> Unit,
@@ -2486,7 +2494,13 @@ private fun PlayerSheets(
                 val ch = currentChannel
                 switchStream = null
                 if (ch != null) {
+                    // Optimistic radio mark; every failure path below puts the
+                    // previous one back (Apple SwitchStreamView parity).
+                    val previousSwitched = switchedStreamId
                     switchedStreamId = id
+                    fun revert() {
+                        if (switchedStreamId == id) switchedStreamId = previousSwitched
+                    }
                     val uuid = ch.id.removePrefix("disp:")
                     val proxyUrl = ch.url
                     scope.launch {
@@ -2508,9 +2522,23 @@ private fun PlayerSheets(
                         //   2. Keep the connection and let ExoPlayer play through the
                         //      splice. No reopen on silence: Dispatcharr fails over itself;
                         //      only a fatal player error or a confirmed dead session reopens.
-                        val newUrl = runCatching { onSwitchChannelStream(uuid, id) }.getOrNull()
+                        val first = runCatching { onSwitchChannelStream(uuid, id) }
+                        val newUrl = first.getOrNull()
                         if (newUrl.isNullOrBlank()) {
-                            Toast.makeText(context, "Stream switch failed", Toast.LENGTH_SHORT).show()
+                            revert()
+                            val error = first.exceptionOrNull()
+                            Log.w(TAG, "[SwitchStream] change_stream failed stream=$id: ${error?.message ?: "no url in response"}")
+                            Toast.makeText(
+                                context,
+                                if (error != null) switchStreamFailureMessage("switch the stream", error)
+                                else SWITCH_NOT_CONFIRMED_MESSAGE,
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            if ((error as? com.aeriotv.android.core.network.DispatcharrHttpFailure)?.status == 403) {
+                                // The server says the level changed: re-read it
+                                // so the Switch Stream gate follows.
+                                onRecheckSwitchStreamAllowed("403 on change_stream")
+                            }
                             return@launch
                         }
 
@@ -2534,10 +2562,11 @@ private fun PlayerSheets(
                         }
                         if (currentChannel?.id != ch.id || switchedStreamId != id) return@launch
                         if (!confirmed) {
+                            revert()
                             Toast.makeText(
                                 context,
-                                "Stream switch not confirmed; staying on current feed",
-                                Toast.LENGTH_SHORT,
+                                SWITCH_NOT_CONFIRMED_MESSAGE,
+                                Toast.LENGTH_LONG,
                             ).show()
                             return@launch
                         }
@@ -2589,18 +2618,31 @@ private fun PlayerSheets(
                     // Saves run one at a time in drop order (touch drags stay
                     // live while a PATCH is in flight), so the last drop wins.
                     val fresh = reorderSaveLock.withLock {
-                    val failure = runCatching { onSaveChannelStreamOrder(chPk, ids) }.exceptionOrNull()
-                    if (failure == null) {
+                    // Fresh user level before the write; a demoted account gets
+                    // the permission message and the server's order back, with
+                    // no PATCH sent.
+                    val allowed = onRecheckSwitchStreamAllowed("stream reorder save")
+                    val failure = if (allowed) {
+                        runCatching { onSaveChannelStreamOrder(chPk, ids) }.exceptionOrNull()
+                    } else null
+                    if (!allowed) {
+                        Log.w(TAG, "[SwitchStream] reorder skipped ch=$chPk: account is not a Dispatcharr admin on a fresh read")
+                        Toast.makeText(
+                            context,
+                            com.aeriotv.android.core.data.capability.Capability.CanSwitchStream.deniedMessage(),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else if (failure == null) {
                         Log.i(TAG, "[SwitchStream] reorder saved ch=$chPk order=$ids")
                     } else {
-                        val status = (failure as? com.aeriotv.android.core.network.StreamOrderSaveException)?.status
+                        val status = (failure as? com.aeriotv.android.core.network.DispatcharrHttpFailure)?.status
                         Log.w(TAG, "[SwitchStream] reorder failed status=${status ?: -1} ch=$chPk: ${failure.message}")
                         Toast.makeText(
                             context,
-                            if (status != null) "Could not save stream order (HTTP $status)"
-                            else "Could not save stream order",
+                            switchStreamFailureMessage("save the stream order", failure),
                             Toast.LENGTH_LONG,
                         ).show()
+                        if (status == 403) onRecheckSwitchStreamAllowed("403 on stream reorder")
                     }
                     // Refetch either way so the sheet shows the server's order.
                     runCatching { onLoadChannelStreamsForReorder(chPk) }.getOrNull()
@@ -2684,6 +2726,7 @@ private fun LiveRewindChromeSection(
     scrubStep: (Int, Boolean) -> Unit,
     onLoadChannelStreams: suspend (Int) -> List<StreamOption>,
     onLoadCurrentStreamId: suspend (String) -> Int?,
+    onRecheckSwitchStreamAllowed: suspend (String) -> Boolean,
     reportInteraction: () -> Unit,
     onClose: () -> Unit,
     /** Keep Recent Channels Live: tune a kept channel from the Options menu. */
@@ -2951,6 +2994,17 @@ private fun LiveRewindChromeSection(
             val chPk = ch.dispatcharrChannelId ?: return@PlayerChromeOverlay
             val uuid = ch.id.removePrefix("disp:")
             scope.launch {
+                // Re-read the user level before opening: an admin can promote
+                // or demote the account at any time, and the picker follows
+                // the live answer (fail closed), not the launch-time one.
+                if (!onRecheckSwitchStreamAllowed("Switch Stream open")) {
+                    Toast.makeText(
+                        context,
+                        com.aeriotv.android.core.data.capability.Capability.CanSwitchStream.deniedMessage(),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@launch
+                }
                 val streams = onLoadChannelStreams(chPk)
                 // Prefer the in-session selection for the radio mark: after an
                 // event-apply switch the server leaves /proxy/ts/status's stream_id
@@ -3278,4 +3332,25 @@ internal object PlayerCloseIntent {
     @Volatile private var multiview = false
     fun markMultiviewLaunch() { multiview = true }
     fun consumeMultiviewLaunch(): Boolean = multiview.also { multiview = false }
+}
+
+
+/** Apple SwitchStreamView wording, word for word. */
+private const val SWITCH_NOT_CONFIRMED_MESSAGE =
+    "The switch didn't take effect. The server may be busy; the current stream is unchanged."
+
+/**
+ * Switch Stream / reorder failure line, identical to Apple
+ * SwitchStreamFlow.failureMessage: "Couldn't switch the stream (HTTP 403):
+ * <server text>", or "Couldn't switch the stream (HTTP 500)." when the server
+ * sent no text, or "Couldn't switch the stream: <error>" with no HTTP status.
+ */
+private fun switchStreamFailureMessage(action: String, error: Throwable): String {
+    val http = error as? com.aeriotv.android.core.network.DispatcharrHttpFailure
+    if (http != null) {
+        val reason = http.reason?.trim().orEmpty()
+        return if (reason.isNotEmpty()) "Couldn't $action (HTTP ${http.status}): $reason"
+        else "Couldn't $action (HTTP ${http.status})."
+    }
+    return "Couldn't $action: ${error.message ?: error.javaClass.simpleName}"
 }
