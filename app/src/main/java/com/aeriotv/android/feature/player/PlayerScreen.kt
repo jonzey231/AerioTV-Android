@@ -274,6 +274,15 @@ fun PlayerScreen(
     var catchupOffsetMs by remember { mutableStateOf(0L) }
     val catchupPositionMsState = remember { mutableStateOf(0L) }
     var catchupPositionMs by catchupPositionMsState
+    // GH #116: last position observed while the catch-up stream was READY.
+    // The resume save reads this, never catchupPositionMs: on exit the held
+    // player is stopped/re-primed before this screen disposes, and the 500 ms
+    // ticker then wrote offset + 0 into catchupPositionMs, so the save saw a
+    // sub-60 s position and silently dropped the entry (no "resume saved").
+    var catchupResumeMs by remember { mutableStateOf(-1L) }
+    // Set once the resume lookup has run (and any resume re-tune was issued),
+    // so the opening seconds before the resume seek cannot overwrite the entry.
+    var catchupResumeSettled by remember { mutableStateOf(false) }
     // Task #149: serialized native re-mints (rapid skips coalesce to the
     // latest target; see VODPlayerScreen's twin for the rationale).
     var nativeRemintInFlight by remember { mutableStateOf(false) }
@@ -1357,10 +1366,26 @@ fun PlayerScreen(
         var reportUnsupported = false
         var lastReportAtMs = 0L
         var lastReportedPaused: Boolean? = null
+        var lastResumeSaveAtMs = android.os.SystemClock.elapsedRealtime()
         while (true) {
             catchupPositionMs = (catchupOffsetMs + (exoHolder.player?.contentPosition ?: 0L))
                 .coerceIn(0L, catchupDurationMs)
             tsPaused = exoHolder.isPaused()
+            if (catchupResumeSettled && exoHolder.isCatchup &&
+                exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_READY
+            ) {
+                catchupResumeMs = catchupPositionMs
+                // GH #116: checkpoint every 30 s while playing, so a kill or
+                // an exit path that skips disposal still resumes.
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                if (nowMs - lastResumeSaveAtMs >= 30_000L) {
+                    lastResumeSaveAtMs = nowMs
+                    com.aeriotv.android.core.playback.CatchupResumeStore.save(
+                        context, initialChannelId, catchupStartMillis,
+                        catchupResumeMs, catchupDurationMs,
+                    )
+                }
+            }
             if (isNativeCatchup && !reportUnsupported) {
                 val nowMs = android.os.SystemClock.elapsedRealtime()
                 val pausedChanged = lastReportedPaused != tsPaused
@@ -1461,7 +1486,11 @@ fun PlayerScreen(
         if (!isCatchupMode) return@LaunchedEffect
         val saved = com.aeriotv.android.core.playback.CatchupResumeStore.get(
             context, initialChannelId, catchupStartMillis, catchupDurationMs,
-        ) ?: return@LaunchedEffect
+        ) ?: run {
+            Log.i(TAG, "[CATCHUP] no resume entry for $initialChannelId@$catchupStartMillis")
+            catchupResumeSettled = true
+            return@LaunchedEffect
+        }
         // Let the initial tune come up before re-tuning to the saved spot.
         var waited = 0L
         while (exoHolder.player?.playbackState != androidx.media3.common.Player.STATE_READY &&
@@ -1470,15 +1499,22 @@ fun PlayerScreen(
             delay(200L)
             waited += 200L
         }
-        if (exoHolder.player?.playerError != null) return@LaunchedEffect
+        // No playerError gate: the re-tune itself is the recovery path
+        // (native re-mints a fresh session, Xtream rebuilds the window URL).
+        catchupResumeMs = saved
         commitScrubCatchup(saved)
+        catchupResumeSettled = true
         Log.i(TAG, "[CATCHUP] resuming at ${saved / 1000L}s")
     }
     LaunchedEffect(Unit) {
         if (!isCatchupMode) return@LaunchedEffect
         while (true) {
             delay(1_000L)
-            if (exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+            // ENDED alone is not "reached the end": a revoked session or a
+            // dropped TS connection also ends the progressive source mid-program.
+            if (exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_ENDED &&
+                catchupPositionMs >= catchupDurationMs - com.aeriotv.android.core.playback.CatchupResumeStore.END_MARGIN_MS
+            ) {
                 com.aeriotv.android.core.playback.CatchupResumeStore.clear(
                     context, initialChannelId, catchupStartMillis,
                 )
@@ -1489,10 +1525,13 @@ fun PlayerScreen(
         onDispose {
             if (isCatchupMode) {
                 val ended = exoHolder.player?.playbackState ==
-                    androidx.media3.common.Player.STATE_ENDED
+                    androidx.media3.common.Player.STATE_ENDED &&
+                    catchupPositionMs >= catchupDurationMs - com.aeriotv.android.core.playback.CatchupResumeStore.END_MARGIN_MS
+                // Never observed READY (and no resume applied): keep any entry.
+                if (!ended && catchupResumeMs < 0L) return@onDispose
                 com.aeriotv.android.core.playback.CatchupResumeStore.save(
                     context, initialChannelId, catchupStartMillis,
-                    if (ended) catchupDurationMs else catchupPositionMs, catchupDurationMs,
+                    if (ended) catchupDurationMs else catchupResumeMs, catchupDurationMs,
                 )
             }
         }

@@ -441,6 +441,11 @@ fun VODPlayerScreen(
     // "no archive" and close the player mid-replay. One silent re-mint
     // at the current position absorbs that; a second 4xx closes.
     var nativeRemintRecoveryUsed by remember { mutableStateOf(false) }
+    // GH #116: catch-up resume position, recorded only while the player is
+    // READY and after the resume lookup settled, so teardown and re-tune
+    // transients (offset + 0) can never overwrite or drop the saved entry.
+    var catchupResumeMs by remember { mutableStateOf(-1L) }
+    var catchupResumeSettled by remember { mutableStateOf(false) }
 
     // ── Catch-up mode (task #136) ────────────────────────────────────────
     // durationMs is pinned to the programme length and positionMs is
@@ -1471,18 +1476,30 @@ fun VODPlayerScreen(
         }
         LaunchedEffect(exoPlayer) {
             val player = exoPlayer ?: return@LaunchedEffect
-            if (!isCatchup || catchupChannelId.isBlank() || catchupExpandHandoff) return@LaunchedEffect
+            if (!isCatchup) return@LaunchedEffect
+            if (catchupChannelId.isBlank() || catchupExpandHandoff) {
+                Log.i(TAG, "[CATCHUP] resume skipped (channel=${catchupChannelId.isNotBlank()} handoff=$catchupExpandHandoff)")
+                catchupResumeSettled = true
+                return@LaunchedEffect
+            }
             val progLen = catchupEndMillis - catchupStartMillis
             val saved = com.aeriotv.android.core.playback.CatchupResumeStore.get(
                 context, catchupChannelId, catchupStartMillis, progLen,
-            ) ?: return@LaunchedEffect
+            ) ?: run {
+                Log.i(TAG, "[CATCHUP] no resume entry for $catchupChannelId@$catchupStartMillis")
+                catchupResumeSettled = true
+                return@LaunchedEffect
+            }
             var waited = 0L
             while (player.playbackState != androidx.media3.common.Player.STATE_READY && waited < 8_000L) {
                 delay(200L)
                 waited += 200L
             }
-            if (player.playerError != null) return@LaunchedEffect
+            // No playerError gate: the re-tune is itself the recovery path
+            // (native re-mints a fresh session, Xtream rebuilds the window URL).
+            catchupResumeMs = saved
             seekPlayer(saved)
+            catchupResumeSettled = true
             Log.i(TAG, "[CATCHUP] resuming at ${saved / 1000L}s")
         }
         LaunchedEffect(exoPlayer) {
@@ -1490,7 +1507,11 @@ fun VODPlayerScreen(
             if (!isCatchup || catchupChannelId.isBlank()) return@LaunchedEffect
             while (true) {
                 delay(1_000L)
-                if (player.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                // ENDED alone is not "reached the end": a revoked session or a
+                // dropped TS connection also ends the source mid-program.
+                if (player.playbackState == androidx.media3.common.Player.STATE_ENDED &&
+                    positionMs >= (catchupEndMillis - catchupStartMillis) - com.aeriotv.android.core.playback.CatchupResumeStore.END_MARGIN_MS
+                ) {
                     com.aeriotv.android.core.playback.CatchupResumeStore.clear(
                         context, catchupChannelId, catchupStartMillis,
                     )
@@ -1502,10 +1523,13 @@ fun VODPlayerScreen(
                 val player = exoPlayer ?: return@onDispose
                 if (!isCatchup || catchupChannelId.isBlank()) return@onDispose
                 val progLen = catchupEndMillis - catchupStartMillis
-                val ended = player.playbackState == androidx.media3.common.Player.STATE_ENDED
+                val ended = player.playbackState == androidx.media3.common.Player.STATE_ENDED &&
+                    positionMs >= progLen - com.aeriotv.android.core.playback.CatchupResumeStore.END_MARGIN_MS
+                // Never observed READY (and no resume applied): keep any entry.
+                if (!ended && catchupResumeMs < 0L) return@onDispose
                 com.aeriotv.android.core.playback.CatchupResumeStore.save(
                     context, catchupChannelId, catchupStartMillis,
-                    if (ended) progLen else positionMs, progLen,
+                    if (ended) progLen else catchupResumeMs, progLen,
                 )
             }
         }
@@ -1673,6 +1697,7 @@ fun VODPlayerScreen(
             var reportUnsupported = false
             var lastReportAtMs = 0L
             var lastReportedPaused: Boolean? = null
+            var lastResumeSaveAtMs = android.os.SystemClock.elapsedRealtime()
             while (true) {
                 delay(500L)
                 if (isDragging) continue
@@ -1683,6 +1708,19 @@ fun VODPlayerScreen(
                     positionMs = catchupOffsetMs + player.contentPosition.coerceAtLeast(0L)
                     durationMs = catchupEndMillis - catchupStartMillis
                     isPaused = !player.playWhenReady
+                    if (catchupResumeSettled && catchupChannelId.isNotBlank() &&
+                        player.playbackState == androidx.media3.common.Player.STATE_READY
+                    ) {
+                        catchupResumeMs = positionMs
+                        val nowMs = android.os.SystemClock.elapsedRealtime()
+                        if (nowMs - lastResumeSaveAtMs >= 30_000L) {
+                            lastResumeSaveAtMs = nowMs
+                            com.aeriotv.android.core.playback.CatchupResumeStore.save(
+                                context, catchupChannelId, catchupStartMillis,
+                                catchupResumeMs, catchupEndMillis - catchupStartMillis,
+                            )
+                        }
+                    }
                     if (isNativeCatchup && !reportUnsupported) {
                         val nowMs = android.os.SystemClock.elapsedRealtime()
                         val pausedChanged = lastReportedPaused != isPaused
