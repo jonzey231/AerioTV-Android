@@ -21,6 +21,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -179,6 +188,16 @@ fun AddToMultiviewSheet(
     // the user taps/clicks the field to bring up the keyboard).
     var searchActive by remember { mutableStateOf(false) }
 
+    // TV: when the keyboard closes over the search field, the field kept focus
+    // and swallowed D-pad Up/Down, so nothing visible held focus and Play was
+    // unreachable (observed 2026-10-04). These requesters let the sheet hand
+    // focus to the first result (or Play, or the search toggle) instead.
+    val searchToggleFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val searchFieldFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val firstResultFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val playFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    var searchFieldFocused by remember { mutableStateOf(false) }
+
     // Playable channels only, indexed for the recents join. The
     // now-playing channel (currentChannel) is EXCLUDED here so it never
     // appears as an "add" option -- it is implicitly Tile 1, shown pinned
@@ -249,6 +268,19 @@ fun AddToMultiviewSheet(
     // at least one picked channel (>= 2 tiles) for a real multiview grid.
     val canLaunch = selected.size >= 2
 
+    // TV: first result when the search has any, else Play when it can launch,
+    // else the search toggle (Play is disabled below two tiles and cannot hold
+    // focus). Never leaves focus on the text field.
+    fun focusFirstResultOrPlay() {
+        val target = when {
+            filtered.isNotEmpty() && runCatching { firstResultFocus.requestFocus() }.isSuccess -> "result0"
+            canLaunch && runCatching { playFocus.requestFocus() }.isSuccess -> "Play"
+            runCatching { searchToggleFocus.requestFocus() }.isSuccess -> "searchToggle"
+            else -> "none"
+        }
+        com.aeriotv.android.ui.tv.TvFocusTrace.player("mvsheet focus handoff -> $target")
+    }
+
     // #46: soft-limit performance warning. Gates every ADD path in this sheet
     // once the grid already holds softLimit (4) tiles -- i.e. adding the
     // 5th+ -- unless the user picked Don't Show Again (persisted) or a
@@ -318,7 +350,18 @@ fun AddToMultiviewSheet(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onLaunch, enabled = canLaunch) {
+                TextButton(
+                    onClick = onLaunch,
+                    enabled = canLaunch,
+                    modifier = Modifier
+                        .focusRequester(playFocus)
+                        .onFocusChanged {
+                            if (isTvDevice) {
+                                if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("mvsheet:Play")
+                                else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("mvsheet:Play")
+                            }
+                        },
+                ) {
                     Text(
                         text = "Play (${selected.size})",
                         color = if (canLaunch) MaterialTheme.colorScheme.textAccent
@@ -389,6 +432,14 @@ fun AddToMultiviewSheet(
                             searchActive = !searchActive
                             if (!searchActive) query = ""
                         },
+                        modifier = Modifier
+                            .focusRequester(searchToggleFocus)
+                            .onFocusChanged {
+                                if (isTvDevice) {
+                                    if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("mvsheet:searchToggle")
+                                    else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("mvsheet:searchToggle")
+                                }
+                            },
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Search,
@@ -411,7 +462,37 @@ fun AddToMultiviewSheet(
                                     }
                                 }
                             },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(searchFieldFocus)
+                                .onFocusChanged {
+                                    searchFieldFocused = it.isFocused
+                                    if (isTvDevice) {
+                                        if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("mvsheet:searchField")
+                                        else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("mvsheet:searchField")
+                                    }
+                                }
+                                .onPreviewKeyEvent { ev ->
+                                    // TV: the text field consumes vertical D-pad
+                                    // moves once the keyboard is down; route them
+                                    // out explicitly so the list and header stay
+                                    // reachable.
+                                    if (!isTvDevice || ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                    when (ev.key) {
+                                        Key.DirectionDown -> {
+                                            com.aeriotv.android.ui.tv.TvFocusTrace.player("mvsheet search field Down")
+                                            focusFirstResultOrPlay()
+                                            true
+                                        }
+                                        Key.DirectionUp -> {
+                                            com.aeriotv.android.ui.tv.TvFocusTrace.player("mvsheet search field Up")
+                                            if (canLaunch) runCatching { playFocus.requestFocus() }
+                                            else runCatching { searchToggleFocus.requestFocus() }
+                                            true
+                                        }
+                                        else -> false
+                                    }
+                                },
                         )
                     } else if (groups.size > 1) {
                         LazyRow(
@@ -489,7 +570,7 @@ fun AddToMultiviewSheet(
                             }
                             item(key = "hdr_all") { SectionHeader("All Channels") }
                         }
-                        items(items = filtered, key = { "all_${it.url}" }) { channel ->
+                        itemsIndexed(items = filtered, key = { _, it -> "all_${it.url}" }) { index, channel ->
                             val isSel = channel.id in selectedIds
                             val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying(nowMs)
                             ChannelPickerRow(
@@ -498,6 +579,22 @@ fun AddToMultiviewSheet(
                                 selected = isSel,
                                 atCap = !isSel && atCapNow,
                                 onToggle = { commitChannel(channel, isSel) },
+                                modifier = if (index == 0 && searchActive) Modifier
+                                    .focusRequester(firstResultFocus)
+                                    // TV: Up from the first result skips the text
+                                    // field (focusing it reopens the keyboard) and
+                                    // lands on Play, or the search toggle when
+                                    // Play is disabled.
+                                    .focusProperties {
+                                        if (isTvDevice) up = if (canLaunch) playFocus else searchToggleFocus
+                                    }
+                                    .onFocusChanged {
+                                        if (isTvDevice) {
+                                            if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("mvsheet:result0")
+                                            else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("mvsheet:result0")
+                                        }
+                                    }
+                                else Modifier,
                             )
                         }
                     }
@@ -706,6 +803,30 @@ fun AddToMultiviewSheet(
             onDismissRequest = onDismiss,
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
+            // TV: Back that closes the IME never reaches Compose, so watch the IME
+            // inset on the sheet's own window and hand focus off the field when the
+            // keyboard goes away.
+            if (isTvDevice) {
+                val view = androidx.compose.ui.platform.LocalView.current
+                val currentFocusHandoff by androidx.compose.runtime.rememberUpdatedState({ focusFirstResultOrPlay() })
+                val fieldFocusedNow by androidx.compose.runtime.rememberUpdatedState(searchFieldFocused)
+                androidx.compose.runtime.DisposableEffect(view) {
+                    var imeWasVisible = false
+                    val listener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(view)
+                        val imeVisible = insets?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                        if (imeVisible != imeWasVisible) {
+                            com.aeriotv.android.ui.tv.TvFocusTrace.player("mvsheet ime visible=$imeVisible fieldFocused=$fieldFocusedNow")
+                            if (imeWasVisible && !imeVisible && fieldFocusedNow) {
+                                view.post { currentFocusHandoff() }
+                            }
+                            imeWasVisible = imeVisible
+                        }
+                    }
+                    view.viewTreeObserver.addOnGlobalLayoutListener(listener)
+                    onDispose { view.viewTreeObserver.removeOnGlobalLayoutListener(listener) }
+                }
+            }
             Surface(
                 modifier = Modifier
                     .fillMaxWidth(0.6f)
@@ -864,13 +985,14 @@ private fun ChannelPickerRow(
     selected: Boolean,
     atCap: Boolean,
     onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val baseColor = if (selected)
         MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
     else
         MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(baseColor)

@@ -147,6 +147,7 @@ fun AppearanceSettingsScreen(
     val useCustomAccent by viewModel.useCustomAccent.collectAsStateWithLifecycle(initialValue = false)
     val customAccentHex by viewModel.customAccentHex.collectAsStateWithLifecycle(initialValue = "")
     val timeFormat by viewModel.timeFormat.collectAsStateWithLifecycle(initialValue = "system")
+    val trueBlack by viewModel.trueBlack.collectAsStateWithLifecycle()
 
     var accentPickerOpen by remember { mutableStateOf(false) }
 
@@ -268,6 +269,14 @@ fun AppearanceSettingsScreen(
                             leadingIcon = Icons.Filled.Contrast,
                             tvChoiceSheet = true,
                         )
+                        // GH #105: OLED true black. Applies to the dark
+                        // rendition only (Dark, or System resolving to dark).
+                        com.aeriotv.android.ui.settings.SettingsToggleRow(
+                            title = "True Black Background",
+                            subtitle = "Use pure black for backgrounds, for OLED screens.",
+                            checked = trueBlack,
+                            onCheckedChange = viewModel::setTrueBlack,
+                        )
                     }
                 }
 
@@ -293,6 +302,7 @@ fun AppearanceSettingsScreen(
                     PreviewCard(
                         theme = currentTheme,
                         customAccentHex = customAccentHex.takeIf { useCustomAccent },
+                        trueBlack = trueBlack,
                     )
                 }
 
@@ -634,7 +644,7 @@ private fun CustomAccentRow(
  * customAccentHex when set, otherwise from the theme's preset.
  */
 @Composable
-private fun PreviewCard(theme: AppTheme, customAccentHex: String?) {
+private fun PreviewCard(theme: AppTheme, customAccentHex: String?, trueBlack: Boolean = false) {
     val accent = if (customAccentHex != null && customAccentHex.length == 6) parseHex(customAccentHex)
     else theme.accentPrimary
     if (rememberIsTvDevice()) {
@@ -653,7 +663,8 @@ private fun PreviewCard(theme: AppTheme, customAccentHex: String?) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(theme.cardBackground)
+                // True Black: card #0A0A0A over the (already #000000) page.
+                .background(com.aeriotv.android.ui.theme.darkCardBackground(theme, trueBlack))
                 .border(
                     width = 1.dp,
                     color = accent.copy(alpha = 0.35f),

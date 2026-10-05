@@ -120,6 +120,13 @@ class SettingsViewModel @Inject constructor(
     fun setRoundedProgramCells(value: Boolean) {
         viewModelScope.launch { prefs.setRoundedProgramCells(value) }
     }
+
+    /** Appearance > True Black Background (default OFF, GH #105). */
+    val trueBlack: StateFlow<Boolean> = prefs.trueBlack
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    fun setTrueBlack(value: Boolean) {
+        viewModelScope.launch { prefs.setTrueBlack(value) }
+    }
     fun setShowChannelNumbers(value: Boolean) {
         viewModelScope.launch { prefs.setShowChannelNumbers(value) }
     }

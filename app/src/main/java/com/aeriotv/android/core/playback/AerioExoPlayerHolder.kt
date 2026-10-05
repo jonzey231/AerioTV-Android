@@ -379,7 +379,31 @@ class AerioExoPlayerHolder @Inject constructor(
         val entry = channelId?.let { cachedLiveStartBuffers[it + FORCE_HLS_OFFSET_KEY_SUFFIX] }
             ?: return FORCE_HLS_TARGET_OFFSET_MS
         if (System.currentTimeMillis() - entry.learnedAtMs > HOLDBACK_LEARNED_TTL_MS) return FORCE_HLS_TARGET_OFFSET_MS
+        restampLearnedOnUse(channelId + FORCE_HLS_OFFSET_KEY_SUFFIX, entry)
         return maxOf(FORCE_HLS_TARGET_OFFSET_MS, entry.ms)
+    }
+
+    /** A tune that applies a learned value rolls its 30 minute TTL forward,
+     *  so expiry counts from the last tune that used it (never forever: an
+     *  unused value still lapses 30 minutes after its last use). */
+    private val lastRestampAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun restampLearnedOnUse(
+        key: String,
+        entry: com.aeriotv.android.core.preferences.LearnedStartBuffer,
+    ) {
+        val now = System.currentTimeMillis()
+        // 20 s debounce (Apple parity): one tune can read the value more than
+        // once (tune path plus rebuffer gate), so re-stamp and log only once.
+        val last = lastRestampAtMs[key]
+        if (last != null && now - last < RESTAMP_DEBOUNCE_MS) return
+        lastRestampAtMs[key] = now
+        Log.i(TAG, "[HOLDBACK] learned value re-stamped on use")
+        cachedLiveStartBuffers = cachedLiveStartBuffers +
+            (key to com.aeriotv.android.core.preferences.LearnedStartBuffer(entry.ms, now))
+        prefScope.launch {
+            cachedLiveStartBuffers = appPreferences.setLiveStartBufferMs(key, entry.ms, now)
+        }
     }
     init {
         // Multiview tiles read the same per-channel target/learned offset.
@@ -2717,6 +2741,9 @@ class AerioExoPlayerHolder @Inject constructor(
             )
         }
         val learnedGateMs = if (learnedExpired) 0 else learnedEntry?.ms ?: 0
+        if (!forcedHls && !learnedExpired && learnedEntry != null && learnedEntry.ms > 0) {
+            restampLearnedOnUse(effectiveChannelId!!, learnedEntry)
+        }
         // Forced HLS skips the learned TS start gate: the playlist's own
         // target duration governs the start, not the TS burst shape.
         // Forced HLS starts on one Dispatcharr burst plus margin so the first
@@ -4333,6 +4360,7 @@ class AerioExoPlayerHolder @Inject constructor(
          *  and uses the base gate, so one bad session does not pin a channel
          *  (Logan 2026-09-12). A fresh learn re-arms it. */
         private const val HOLDBACK_LEARNED_TTL_MS = 30L * 60L * 1_000L
+        private const val RESTAMP_DEBOUNCE_MS = 20_000L
         private const val HLS_GATE_KEY_FLAG = 1_000_000
         const val FORCE_HLS_MIN_BUFFER_MS = 15_000
         const val FORCE_HLS_START_GATE_MS = 6_500

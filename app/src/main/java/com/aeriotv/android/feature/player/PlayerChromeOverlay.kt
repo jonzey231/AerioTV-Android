@@ -1186,9 +1186,13 @@ private fun PlayerMoreMenu(
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = moreMenuTheme.accentPrimary,
-            surface = moreMenuTheme.cardBackground,
+            surface = com.aeriotv.android.ui.theme.darkCardBackground(
+                moreMenuTheme, com.aeriotv.android.ui.theme.LocalTrueBlack.current,
+            ),
             onSurface = TextPrimary,
-            surfaceVariant = moreMenuTheme.cardBackground,
+            surfaceVariant = com.aeriotv.android.ui.theme.darkCardBackground(
+                moreMenuTheme, com.aeriotv.android.ui.theme.LocalTrueBlack.current,
+            ),
         ),
     ) {
     DropdownMenu(

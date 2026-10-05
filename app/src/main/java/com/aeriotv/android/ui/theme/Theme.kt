@@ -18,6 +18,23 @@ import androidx.core.view.WindowCompat
 
 val LocalAppTheme = staticCompositionLocalOf { AppTheme.Aerio }
 
+/** True when Appearance > True Black Background is on (GH #105). */
+val LocalTrueBlack = staticCompositionLocalOf { false }
+
+/** OLED true-black palette: page backgrounds pure black, cards / sheets a very
+ *  dark gray so elevation still reads. Accent and text colors are unchanged. */
+val TrueBlackBackground = Color(0xFF000000)
+val TrueBlackSurface = Color(0xFF0A0A0A)
+
+/** Dark-rendition card surface for [theme], honoring True Black. For chrome
+ *  that forces the dark palette over video (player menus, sheets). */
+fun darkCardBackground(theme: AppTheme, trueBlack: Boolean): Color =
+    if (trueBlack) TrueBlackSurface else theme.cardBackground
+
+/** Dark-rendition page background for [theme], honoring True Black. */
+fun darkAppBackground(theme: AppTheme, trueBlack: Boolean): Color =
+    if (trueBlack) TrueBlackBackground else theme.appBackground
+
 @Composable
 fun AerioTVTheme(
     appTheme: AppTheme = AppTheme.Aerio,
@@ -25,6 +42,9 @@ fun AerioTVTheme(
     // Orthogonal appearance axis. Defaults to Dark so any caller that has not
     // yet threaded the preference (and every existing install) is unchanged.
     appearanceMode: AppearanceMode = AppearanceMode.Dark,
+    // Appearance > True Black Background (GH #105). Affects the dark rendition
+    // only; Light mode keeps its own surfaces.
+    trueBlack: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     // Resolve the mode axis to a concrete light/dark decision. Only System
@@ -47,8 +67,8 @@ fun AerioTVTheme(
 
     // Surface + ink selection per mode. The dark branch keeps the ORIGINAL
     // values verbatim; the light branch reads the theme's light rendition.
-    val appBackground = if (isDark) appTheme.appBackground else appTheme.lightAppBackground
-    val cardBackground = if (isDark) appTheme.cardBackground else appTheme.lightCardBackground
+    val appBackground = if (isDark) darkAppBackground(appTheme, trueBlack) else appTheme.lightAppBackground
+    val cardBackground = if (isDark) darkCardBackground(appTheme, trueBlack) else appTheme.lightCardBackground
     val textPrimary = if (isDark) TextPrimary else TextPrimaryLight
 
     // Android TV needs a 10-foot type scale + slightly brighter dim text. iOS
@@ -153,6 +173,7 @@ fun AerioTVTheme(
     CompositionLocalProvider(
         LocalAppTheme provides appTheme,
         LocalIsDarkTheme provides isDark,
+        LocalTrueBlack provides trueBlack,
         LocalBaseTextColors provides baseTextColors,
         LocalTextAccent provides textAccent,
     ) {

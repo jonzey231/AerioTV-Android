@@ -103,7 +103,7 @@ object Routes {
     // landing on the tabs. Plain navigate(SEARCH) keeps the default false.
     const val SEARCH = "search?fromPlayer={fromPlayer}"
     fun search(fromPlayer: Boolean) = "search?fromPlayer=$fromPlayer"
-    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&autoResume={autoResume}&recEnd={recEnd}&recChannelId={recChannelId}&recId={recId}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}"
+    const val RECORDING_PLAYER = "recording_player/{playbackUrl}/{title}?isDvr={isDvr}&fromStart={fromStart}&autoResume={autoResume}&recEnd={recEnd}&recChannelId={recChannelId}&recId={recId}&csStart={csStart}&csEnd={csEnd}&csTz={csTz}&csUuid={csUuid}&csChannel={csChannel}"
 
     fun configure(type: SourceType) = "configure/${type.name}"
     // mini=true (Remote Control, Logan spec): the player mounts, primes
@@ -158,10 +158,13 @@ object Routes {
         // catch-up sessions - seeks re-mint a session instead of
         // rebuilding an XC wall-clock URL, and close revokes the session.
         csUuid: String = "",
+        // GH #116: catch-up channel id, keys the resume position.
+        csChannel: String = "",
     ) =
         "recording_player/${Uri.encode(playbackUrl)}/${Uri.encode(title)}" +
             "?isDvr=$isDvr&fromStart=$fromStart&autoResume=$autoResume&recEnd=$recEnd&recChannelId=$recChannelId" +
-            "&recId=$recId&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}"
+            "&recId=$recId&csStart=$csStart&csEnd=$csEnd&csTz=${Uri.encode(csTz)}&csUuid=${Uri.encode(csUuid)}" +
+            "&csChannel=${Uri.encode(csChannel)}"
 }
 
 /**
@@ -1103,7 +1106,7 @@ fun AerioTVNavHost(
                                 Routes.recordingPlayer(
                                     playbackUrl, title,
                                     csStart = progStart, csEnd = progEnd, csTz = panelTz,
-                                    csUuid = channelUuid,
+                                    csUuid = channelUuid, csChannel = catchupChannelId,
                                 ),
                             )
                         }
@@ -1775,6 +1778,7 @@ fun AerioTVNavHost(
                     navArgument("csEnd") { type = NavType.LongType; defaultValue = 0L },
                     navArgument("csTz") { type = NavType.StringType; defaultValue = "" },
                     navArgument("csUuid") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("csChannel") { type = NavType.StringType; defaultValue = "" },
                 ),
             ) { entry ->
                 val playbackUrl = Uri.decode(entry.arguments?.getString("playbackUrl").orEmpty())
@@ -1810,6 +1814,7 @@ fun AerioTVNavHost(
                 val csEnd = entry.arguments?.getLong("csEnd") ?: 0L
                 val csTz = Uri.decode(entry.arguments?.getString("csTz").orEmpty())
                 val csUuid = Uri.decode(entry.arguments?.getString("csUuid").orEmpty())
+                val csChannel = Uri.decode(entry.arguments?.getString("csChannel").orEmpty())
                 // A recording is either a local file:// capture (no auth) or a
                 // Dispatcharr server URL that needs the active source's
                 // X-API-Key. Resolve the playlist's auth headers like the VOD
@@ -1878,6 +1883,7 @@ fun AerioTVNavHost(
                     catchupEndMillis = csEnd,
                     catchupTz = csTz,
                     catchupChannelUuid = csUuid,
+                    catchupChannelId = csChannel,
                     onRemintCatchup = { uuid, currentUrl, absStartMillis ->
                         // Task #183: csEnd rides along so the re-mint asks the
                         // provider for only the REMAINING programme length.

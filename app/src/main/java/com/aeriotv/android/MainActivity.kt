@@ -1187,6 +1187,7 @@ class MainActivity : ComponentActivity() {
             // the persisted-absence value both resolve to Dark, so an existing
             // install sees zero visual change on upgrade.
             val appearanceMode by appPreferences.appearanceMode.collectAsState(initial = AppearanceMode.Dark)
+            val trueBlack by appPreferences.trueBlack.collectAsState(initial = false)
             val useCustomAccent by appPreferences.useCustomAccent.collectAsState(initial = false)
             val customAccentHex by appPreferences.customAccentHex.collectAsState(initial = "")
             val customAccent = if (useCustomAccent && customAccentHex.length == 6) {
@@ -1229,6 +1230,7 @@ class MainActivity : ComponentActivity() {
                 appTheme = theme,
                 customAccent = customAccent,
                 appearanceMode = appearanceMode,
+                trueBlack = trueBlack,
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),

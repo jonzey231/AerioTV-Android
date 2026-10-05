@@ -237,6 +237,17 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Settings > Appearance > "True Black Background" (GH #105). When on, the
+     * dark rendition of every theme paints page backgrounds pure black and
+     * card / sheet surfaces near-black (#0A0A0A) for OLED screens. Default OFF.
+     */
+    val trueBlack: Flow<Boolean> =
+        store.data.map { it[KEY_APPEARANCE_TRUE_BLACK] ?: false }
+    suspend fun setTrueBlack(value: Boolean) {
+        store.edit { it[KEY_APPEARANCE_TRUE_BLACK] = value }
+    }
+
+    /**
      * Settings > Appearance > Time Format: "system" (default, follows the
      * device's 24-hour setting), "12", or "24". Drive-synced as "timeFormat",
      * the same key Apple uses.
@@ -1538,6 +1549,7 @@ class AppPreferences @Inject constructor(
         // Appearance mode is the OPPOSITE of defaultLiveTVView: it MUST sync so
         // the user's Dark/Light/System choice follows them to every device.
         data[KEY_APPEARANCE_MODE]?.let { out["appearanceMode"] = it }
+        data[KEY_APPEARANCE_TRUE_BLACK]?.let { out["appearanceTrueBlack"] = it.toString() }
         data[KEY_DEFAULT_TAB]?.let { out["defaultTab"] = it }
         data[KEY_TIME_FORMAT]?.let { out["timeFormat"] = it }
         // NOTE: defaultLiveTVView is intentionally NOT synced -- it is a per-device
@@ -1605,6 +1617,7 @@ class AppPreferences @Inject constructor(
                     put("subtextScale", KEY_SUBTEXT_SCALE)
                     put("textContrast", KEY_TEXT_CONTRAST)
                     put("appearanceMode", KEY_APPEARANCE_MODE)
+                    put("appearanceTrueBlack", KEY_APPEARANCE_TRUE_BLACK)
                     put("defaultTab", KEY_DEFAULT_TAB)
                     put("timeFormat", KEY_TIME_FORMAT)
                     put("skipLoadingScreen", KEY_SKIP_LOADING_SCREEN)
@@ -1643,6 +1656,7 @@ class AppPreferences @Inject constructor(
             keys["subtextScale"]?.toFloatOrNull()?.let { prefs[KEY_SUBTEXT_SCALE] = snapTextScale(it).toDouble() }
             keys["textContrast"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_CONTRAST] = snapTextContrast(it).toDouble() }
             keys["appearanceMode"]?.let { prefs[KEY_APPEARANCE_MODE] = it }
+            keys["appearanceTrueBlack"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPEARANCE_TRUE_BLACK] = it }
             keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB] = it }
             keys["timeFormat"]?.let { prefs[KEY_TIME_FORMAT] = it }
             // defaultLiveTVView is per-device now (see snapshotSyncablePreferences);
@@ -2148,6 +2162,7 @@ class AppPreferences @Inject constructor(
         val KEY_ROUNDED_ARTWORK = booleanPreferencesKey("ui_rounded_artwork")
         val KEY_ROUNDED_ARTWORK_GUIDE = booleanPreferencesKey("ui_rounded_artwork_guide")
         val KEY_ROUNDED_PROGRAM_CELLS = booleanPreferencesKey("guide_rounded_program_cells")
+        val KEY_APPEARANCE_TRUE_BLACK = booleanPreferencesKey("appearance_true_black")
         val KEY_TIME_FORMAT = stringPreferencesKey("ui_time_format")
         val KEY_HIDDEN_EPG_BADGES = stringPreferencesKey("ui_hidden_epg_badges")
         val KEY_SHOW_EPG_BADGES_TV = booleanPreferencesKey("ui_show_epg_badges_tv")

@@ -1453,6 +1453,50 @@ fun PlayerScreen(
             }
         }
     }
+    // GH #116: catch-up resume. Same model as the recording player (GH #75):
+    // no up-front choice, playback silently auto-resumes at the saved position
+    // (Apple parity, 2026-10-05). Keyed by channel id + program
+    // start; saved on exit, cleared once playback reaches the end.
+    LaunchedEffect(Unit) {
+        if (!isCatchupMode) return@LaunchedEffect
+        val saved = com.aeriotv.android.core.playback.CatchupResumeStore.get(
+            context, initialChannelId, catchupStartMillis, catchupDurationMs,
+        ) ?: return@LaunchedEffect
+        // Let the initial tune come up before re-tuning to the saved spot.
+        var waited = 0L
+        while (exoHolder.player?.playbackState != androidx.media3.common.Player.STATE_READY &&
+            waited < 8_000L
+        ) {
+            delay(200L)
+            waited += 200L
+        }
+        if (exoHolder.player?.playerError != null) return@LaunchedEffect
+        commitScrubCatchup(saved)
+        Log.i(TAG, "[CATCHUP] resuming at ${saved / 1000L}s")
+    }
+    LaunchedEffect(Unit) {
+        if (!isCatchupMode) return@LaunchedEffect
+        while (true) {
+            delay(1_000L)
+            if (exoHolder.player?.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                com.aeriotv.android.core.playback.CatchupResumeStore.clear(
+                    context, initialChannelId, catchupStartMillis,
+                )
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isCatchupMode) {
+                val ended = exoHolder.player?.playbackState ==
+                    androidx.media3.common.Player.STATE_ENDED
+                com.aeriotv.android.core.playback.CatchupResumeStore.save(
+                    context, initialChannelId, catchupStartMillis,
+                    if (ended) catchupDurationMs else catchupPositionMs, catchupDurationMs,
+                )
+            }
+        }
+    }
     val scrubStep: (Int, Boolean) -> Unit = step@{ dir, isRepeat ->
         if (!tsState.buffering && !isCatchupMode) return@step
         val now = android.os.SystemClock.uptimeMillis()

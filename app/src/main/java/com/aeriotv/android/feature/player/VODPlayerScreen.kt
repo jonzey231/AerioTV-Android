@@ -305,6 +305,9 @@ fun VODPlayerScreen(
      *  an XC wall-clock URL, and closing the player revokes the
      *  session (frees the server's per-session provider slot). */
     catchupChannelUuid: String = "",
+    /** GH #116: the catch-up program's channel id; keys the resume
+     *  position together with catchupStartMillis. Blank = no resume. */
+    catchupChannelId: String = "",
     /** Task #149: mint a fresh native session for a seek re-tune at the
      *  given absolute UTC start. Returns the new absolute playback URL
      *  or null (the player keeps its current window). */
@@ -1454,6 +1457,56 @@ fun VODPlayerScreen(
                         context, "Resuming from $label", android.widget.Toast.LENGTH_SHORT,
                     ).show()
                 }
+            }
+        }
+
+        // GH #116: catch-up resume, same model as recordings above (GH #75):
+        // no up-front choice, silent auto-resume (Apple parity), not the "Resuming from M:SS"
+        // toast. Keyed by channel id + program start; saved on exit,
+        // cleared once playback reaches the end.
+        // A mini-player expand hands over a session already at its spot.
+        val catchupExpandHandoff = remember {
+            PhoneVodMini.restoreUrl(streamUrl) != streamUrl ||
+                PhoneVodMini.restoreCatchupOffset(streamUrl) > 0L
+        }
+        LaunchedEffect(exoPlayer) {
+            val player = exoPlayer ?: return@LaunchedEffect
+            if (!isCatchup || catchupChannelId.isBlank() || catchupExpandHandoff) return@LaunchedEffect
+            val progLen = catchupEndMillis - catchupStartMillis
+            val saved = com.aeriotv.android.core.playback.CatchupResumeStore.get(
+                context, catchupChannelId, catchupStartMillis, progLen,
+            ) ?: return@LaunchedEffect
+            var waited = 0L
+            while (player.playbackState != androidx.media3.common.Player.STATE_READY && waited < 8_000L) {
+                delay(200L)
+                waited += 200L
+            }
+            if (player.playerError != null) return@LaunchedEffect
+            seekPlayer(saved)
+            Log.i(TAG, "[CATCHUP] resuming at ${saved / 1000L}s")
+        }
+        LaunchedEffect(exoPlayer) {
+            val player = exoPlayer ?: return@LaunchedEffect
+            if (!isCatchup || catchupChannelId.isBlank()) return@LaunchedEffect
+            while (true) {
+                delay(1_000L)
+                if (player.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                    com.aeriotv.android.core.playback.CatchupResumeStore.clear(
+                        context, catchupChannelId, catchupStartMillis,
+                    )
+                }
+            }
+        }
+        DisposableEffect(exoPlayer) {
+            onDispose {
+                val player = exoPlayer ?: return@onDispose
+                if (!isCatchup || catchupChannelId.isBlank()) return@onDispose
+                val progLen = catchupEndMillis - catchupStartMillis
+                val ended = player.playbackState == androidx.media3.common.Player.STATE_ENDED
+                com.aeriotv.android.core.playback.CatchupResumeStore.save(
+                    context, catchupChannelId, catchupStartMillis,
+                    if (ended) progLen else positionMs, progLen,
+                )
             }
         }
 
