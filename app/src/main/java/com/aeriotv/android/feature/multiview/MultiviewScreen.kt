@@ -63,6 +63,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.asImageBitmap
+import coil3.toBitmap
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -1674,11 +1676,14 @@ private fun Tile(
 /**
  * Channel logo overlay for a Multiview tile. Draws inside the tile in the
  * chosen corner of the VIDEO rect (aspect fit of [videoAspect], else 16:9,
- * inside the tile) with an 8dp inset. Equal-area rule (matches Apple): with
- * h = video height x [sizePercent], the image gets the area of a 3:1 logo
- * h tall (3 x h x h) at its own aspect, clamped to a 2h tall by 4h wide box
- * and never wider than half the video rect. Until Coil reports the
- * intrinsic size the aspect is assumed 3:1. Drawn on the same black 55 percent rounded backdrop as the name
+ * inside the tile) with an 8dp inset. The logo is measured by its OPAQUE
+ * bounding box (alpha scan, cached per URL) and only that region is drawn.
+ * With a = cropW / cropH and h = video height x [sizePercent] minus the
+ * backdrop padding: height = h x clamp(sqrt(3 / a), 1, 2), width = height x a,
+ * width capped at 4h and at half the video width (height follows the cap).
+ * A 3:1 or wider logo stays h tall, a square one is 1.73h, a tall one 2h.
+ * Until the crop is known the aspect is assumed 3:1. Drawn on the same black
+ * 55 percent rounded backdrop as the name
  * badge. Not focusable and not clickable, so taps and D-pad focus go to the
  * tile as before. Loaded through Coil's singleton loader (same loader and
  * cache as the guide).
@@ -1696,21 +1701,21 @@ private fun TileChannelLogo(
         val tileAspect = if (maxHeight.value > 0f) maxWidth.value / maxHeight.value else aspect
         val videoW = if (tileAspect > aspect) maxHeight * aspect else maxWidth
         val videoH = if (tileAspect > aspect) maxHeight else maxWidth / aspect
-        val h = videoH * (sizePercent.coerceIn(5, 25) / 100f)
-        // Intrinsic aspect from Coil; 3:1 until the image has loaded.
-        var logoAspect by remember(url) { mutableStateOf(3f) }
-        // Area = 3h^2 at aspect a: width = h*sqrt(3a), height = h*sqrt(3/a).
-        val a = logoAspect
-        val rawW = h * kotlin.math.sqrt(3f * a)
-        val rawH = h * kotlin.math.sqrt(3f / a)
-        val scale = minOf(
-            1f,
-            (h * 2f) / rawH,
-            (h * 4f) / rawW,
-            (videoW * 0.5f) / rawW,
-        )
-        val logoW = rawW * scale
-        val logoH = rawH * scale
+        // Backdrop padding is 4dp per side; h excludes it (old footprint).
+        val h = (videoH * (sizePercent.coerceIn(5, 25) / 100f) - 8.dp).coerceAtLeast(1.dp)
+        var decoded by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+        var crop by remember(url) { mutableStateOf(TileLogoCrop.cache.get(url)) }
+        val c = crop
+        val a = if (c != null && c.width() > 0 && c.height() > 0) {
+            c.width().toFloat() / c.height().toFloat()
+        } else 3f
+        var logoH = h * kotlin.math.sqrt(3f / a).coerceIn(1f, 2f)
+        var logoW = logoH * a
+        val maxW = minOf(h * 4f, videoW * 0.5f - 8.dp)
+        if (logoW > maxW) {
+            logoW = maxW
+            logoH = maxW / a
+        }
         val alignment = when (position) {
             "top_right" -> Alignment.TopEnd
             "bottom_left" -> Alignment.BottomStart
@@ -1737,20 +1742,82 @@ private fun TileChannelLogo(
                 .background(Color.Black.copy(alpha = 0.55f))
                 .padding(4.dp),
         ) {
-            coil3.compose.AsyncImage(
+            val loader = coil3.compose.rememberAsyncImagePainter(
                 model = url,
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 onSuccess = { state ->
-                    val sz = state.painter.intrinsicSize
-                    if (sz.width.isFinite() && sz.height.isFinite() && sz.width > 0f && sz.height > 0f) {
-                        logoAspect = sz.width / sz.height
+                    val bmp = TileLogoCrop.softwareBitmap(state.result.image)
+                    if (bmp != null) {
+                        decoded = bmp
+                        val r = TileLogoCrop.cache.get(url)
+                            ?: TileLogoCrop.opaqueBounds(bmp).also { TileLogoCrop.cache.put(url, it) }
+                        crop = r
                     }
                 },
+            )
+            val bmp = decoded
+            val painter = if (bmp != null && c != null && c.width() > 0 && c.height() > 0) {
+                remember(bmp, c) {
+                    androidx.compose.ui.graphics.painter.BitmapPainter(
+                        bmp.asImageBitmap(),
+                        srcOffset = androidx.compose.ui.unit.IntOffset(c.left, c.top),
+                        srcSize = androidx.compose.ui.unit.IntSize(c.width(), c.height()),
+                    )
+                }
+            } else loader
+            androidx.compose.foundation.Image(
+                painter = painter,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 modifier = Modifier.size(logoW, logoH),
             )
         }
         }
+    }
+}
+
+/** Opaque-bounds measurement for Multiview channel logos, cached per URL. */
+private object TileLogoCrop {
+    val cache = android.util.LruCache<String, android.graphics.Rect>(64)
+
+    /** Software ARGB copy of a Coil image (hardware bitmaps cannot be read). */
+    fun softwareBitmap(image: coil3.Image): android.graphics.Bitmap? {
+        val raw = runCatching { image.toBitmap() }.getOrNull() ?: return null
+        return if (raw.config == android.graphics.Bitmap.Config.HARDWARE) {
+            raw.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+        } else raw
+    }
+
+    /** Alpha bounding rect, scanned on a 4 px grid; full canvas if nothing is opaque. */
+    fun opaqueBounds(bmp: android.graphics.Bitmap): android.graphics.Rect {
+        val w = bmp.width
+        val hh = bmp.height
+        if (w <= 0 || hh <= 0) return android.graphics.Rect(0, 0, w, hh)
+        val step = 4
+        var minX = w; var minY = hh; var maxX = -1; var maxY = -1
+        val row = IntArray(w)
+        var y = 0
+        while (y < hh) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            var x = 0
+            while (x < w) {
+                if ((row[x] ushr 24) > 8) {
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+                x += step
+            }
+            y += step
+        }
+        if (maxX < 0) return android.graphics.Rect(0, 0, w, hh)
+        // Widen by one stride so the grid never clips an edge.
+        return android.graphics.Rect(
+            (minX - step + 1).coerceAtLeast(0),
+            (minY - step + 1).coerceAtLeast(0),
+            (maxX + step).coerceAtMost(w),
+            (maxY + step).coerceAtMost(hh),
+        )
     }
 }
 
