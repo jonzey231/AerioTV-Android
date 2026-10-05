@@ -2869,6 +2869,17 @@ class PlaylistRepository @Inject constructor(
         }
     }
 
+    /** Switch Stream reorder (admin): persist [streamIds] as the channel's
+     *  stream order. Throws on failure (StreamOrderSaveException carries the
+     *  HTTP status). */
+    suspend fun saveDispatcharrChannelStreamOrder(channelIntPk: Int, streamIds: List<Int>) {
+        val playlist = activePlaylist() ?: error("No active playlist")
+        val base = effectiveBaseUrl(playlist)
+        dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            dispatcharrClient.updateChannelStreamOrder(base, key, channelIntPk, streamIds)
+        }
+    }
+
     /**
      * Map of Dispatcharr M3U account id -> source name, to label each alternate
      * in the Switch Stream sheet with the M3U it comes from. Empty for

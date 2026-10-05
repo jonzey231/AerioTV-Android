@@ -709,6 +709,27 @@ class AerioExoPlayerHolder @Inject constructor(
      *  other path (watchdog, error reload, 503 backoff) already re-primed. */
     @Volatile private var primeGeneration = 0L
 
+    /** Read-only view of [primeGeneration] for the follow-poller: a deferred
+     *  follow that sees it move knows the connection was reopened meanwhile. */
+    val currentPrimeGeneration: Long get() = primeGeneration
+
+    /**
+     * GH #117 (FrankieBBBB, Shield): a kept-connection follow that lands while
+     * a 503 quick retry is pending, or right after its re-prime reopened the
+     * source (IDLE, or BUFFERING with nothing buffered), crashed
+     * ExoPlayer:Playback with IllegalStateException. True while following now
+     * is unsafe; the follow-poller defers and re-arms once this clears. Main thread.
+     */
+    fun isFollowUnsafe(): Boolean {
+        if (stoppingRetryJob?.isActive == true) return true
+        val p = player ?: return true
+        return when (p.playbackState) {
+            Player.STATE_IDLE -> true
+            Player.STATE_BUFFERING -> bufferedAheadMs(p) <= 0L
+            else -> false
+        }
+    }
+
     /** The live raw-TS source currently primed, wrapped so a stream switch can
      *  hard-switch onto the new stream on the same connection. Main thread. */
     private var switchSkipSource: SwitchSkipMediaSource? = null
@@ -887,6 +908,14 @@ class AerioExoPlayerHolder @Inject constructor(
         if (p == null || isTimeshifting) {
             Log.i(TAG, "[SWITCH] no live player to follow; nothing to do")
             return@withContext false
+        }
+        // GH #117: never request a skip on a source that a 503 quick retry is
+        // about to replace or has just reopened. The reopen already carries the
+        // new upstream, so there is no old buffer to drop.
+        if (isFollowUnsafe()) {
+            Log.i(TAG, "[SWITCH] player recovering (state=${p.playbackState}, quick retry pending=${stoppingRetryJob?.isActive == true}); no kept-connection skip")
+            switchWindowUntilMs = SystemClock.elapsedRealtime() + SWITCH_WINDOW_MS
+            return@withContext true
         }
         val startAt = SystemClock.elapsedRealtime()
         val startGen = primeGeneration

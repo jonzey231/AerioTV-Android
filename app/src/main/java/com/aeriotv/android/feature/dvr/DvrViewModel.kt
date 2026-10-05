@@ -1349,7 +1349,14 @@ private fun DispatcharrRecording.toRecording(
     fun num(o: kotlinx.serialization.json.JsonObject?, k: String): Double? =
         (o?.get(k) as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull()
     val info = cp?.get("stream_info") as? kotlinx.serialization.json.JsonObject
-    val poster = str(cp, "poster_url")?.let { resolveArtUrl(it, baseUrl) }
+    // PR 77 (ant462): prefer the poster Dispatcharr cached on the user's OWN
+    // server (custom_properties.poster_logo_id -> /api/channels/logos/<id>/cache/,
+    // byte-identical to the upstream art, LAN-local); the any-host poster_url
+    // (839a5c52) stays the fallback. Server-scheduled rows nest it under program.
+    val posterLogoId = (num(cp, "poster_logo_id") ?: num(program, "poster_logo_id"))
+        ?.toInt()?.takeIf { it > 0 }
+    val poster = posterLogoId?.takeIf { baseUrl.isNotBlank() }?.let { client.logoUrl(baseUrl, it) }
+        ?: (str(cp, "poster_url") ?: str(program, "poster_url"))?.let { resolveArtUrl(it, baseUrl) }
     val bytesWritten = num(cp, "bytes_written")?.toLong()?.takeIf { it > 0 }
     return DvrViewModel.Recording(
         id = "server-$id",

@@ -130,6 +130,19 @@ fun AddToMultiviewSheet(
     // split below -- so a bottom sheet's gesture model never reaches a D-pad.)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val state by playlistVm.state.collectAsStateWithLifecycle()
+    // GH #96 (Apple parity): what is airing now is read against a clock the
+    // sheet owns, sampled when it opens and re-sampled each minute while it
+    // stays up, so a row never shows a program that already ended. Opening
+    // also runs the existing stale-guide refresh (the foreground hook);
+    // isEpgLoading drives the indicator above the list while it runs.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        playlistVm.refreshEpgIfStale()
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(60_000L - (nowMs % 60_000L))
+        }
+    }
     val onDemandState by onDemandVm.state.collectAsStateWithLifecycle()
     // Browse lists are windows over the stored catalog (GH #109), the same
     // filtered + sorted libraries the Movies and TV Shows tabs show.
@@ -431,6 +444,11 @@ fun AddToMultiviewSheet(
             }
 
             val atCapNow = selected.size >= multiviewStore.maxTiles
+            if (pickerSource == PickerSource.Channels && state.isEpgLoading) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                )
+            }
             LazyColumn(
                 // TV: fill the remaining Dialog-panel height (weight, inside the
                 // bounded-height panel Column). Phone: a fixed max height inside
@@ -452,7 +470,7 @@ fun AddToMultiviewSheet(
                                 NowPlayingPinnedRow(
                                     channel = currentChannel,
                                     nowTitle = state.epgByChannel[currentChannel.guideMatchKey]
-                                        ?.nowPlaying()?.title.orEmpty(),
+                                        ?.nowPlaying(nowMs)?.title.orEmpty(),
                                 )
                             }
                         }
@@ -460,7 +478,7 @@ fun AddToMultiviewSheet(
                             item(key = "hdr_recent") { SectionHeader("Recent") }
                             items(items = recentChannels, key = { "recent_${it.url}" }) { channel ->
                                 val isSel = channel.id in selectedIds
-                                val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
+                                val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying(nowMs)
                                 ChannelPickerRow(
                                     channel = channel,
                                     nowTitle = now?.title.orEmpty(),
@@ -473,7 +491,7 @@ fun AddToMultiviewSheet(
                         }
                         items(items = filtered, key = { "all_${it.url}" }) { channel ->
                             val isSel = channel.id in selectedIds
-                            val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
+                            val now = state.epgByChannel[channel.guideMatchKey]?.nowPlaying(nowMs)
                             ChannelPickerRow(
                                 channel = channel,
                                 nowTitle = now?.title.orEmpty(),

@@ -2345,6 +2345,10 @@ class PlaylistViewModel @Inject constructor(
         runCatching { repository.listDispatcharrChannelStreams(channelIntPk) }
             .getOrDefault(emptyList())
 
+    /** Switch Stream reorder (admin). Result failure carries the exception. */
+    suspend fun saveChannelStreamOrder(channelIntPk: Int, streamIds: List<Int>): Result<Unit> =
+        runCatching { repository.saveDispatcharrChannelStreamOrder(channelIntPk, streamIds) }
+
     /** M3U account id -> source name, to label Switch Stream rows with their M3U.
      *  Empty on failure / non-Dispatcharr (the source label is then omitted). */
     suspend fun loadM3uAccountNames(): Map<Int, String> =

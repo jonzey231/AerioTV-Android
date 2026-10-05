@@ -2255,6 +2255,12 @@ fun SwitchStreamSheet(
     currentStreamId: Int?,
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
+    /** Dispatcharr admin only: show the reorder affordances. */
+    canReorder: Boolean = false,
+    /** A reorder PATCH is in flight. */
+    saving: Boolean = false,
+    /** The full new stream id order to persist. */
+    onReorder: (List<Int>) -> Unit = {},
 ) {
     com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
         // verticalScroll so channels with many streams (users keep 2-20) are all
@@ -2279,6 +2285,14 @@ fun SwitchStreamSheet(
                     style = MaterialTheme.typography.bodySmall.subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
+                )
+            } else if (canReorder && streams.size > 1) {
+                ReorderableStreamList(
+                    streams = streams,
+                    currentStreamId = currentStreamId,
+                    saving = saving,
+                    onSelect = onSelect,
+                    onReorder = onReorder,
                 )
             } else {
                 streams.forEach { stream ->

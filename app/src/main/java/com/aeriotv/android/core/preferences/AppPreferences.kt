@@ -1769,6 +1769,18 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_SKIP_FORWARD_SECONDS] = value }
     }
 
+    /**
+     * GH #94 (Apple parity): Settings > Player > "Skip Without Controls".
+     * TV only. With the controls hidden, D-pad Left/Right skip back/forward
+     * by the Skip intervals instead of opening the timeline. Default OFF.
+     * Device-local.
+     */
+    val skipWithoutControls: Flow<Boolean> =
+        store.data.map { it[KEY_SKIP_WITHOUT_CONTROLS] ?: false }
+    suspend fun setSkipWithoutControls(value: Boolean) {
+        store.edit { it[KEY_SKIP_WITHOUT_CONTROLS] = value }
+    }
+
     /** How many recent channels stay live (1-5, default 2). */
     val liveRewindKeepCount: kotlinx.coroutines.flow.Flow<Int> =
         store.data.map { (it[KEY_LIVE_REWIND_KEEP_COUNT] ?: 2).coerceIn(1, 5) }
@@ -2201,6 +2213,7 @@ class AppPreferences @Inject constructor(
         val KEY_LIVE_REWIND_KEEP_COUNT = intPreferencesKey("live_rewind_keep_count")
         val KEY_SKIP_BACK_SECONDS = intPreferencesKey("skip_back_seconds")
         val KEY_SKIP_FORWARD_SECONDS = intPreferencesKey("skip_forward_seconds")
+        val KEY_SKIP_WITHOUT_CONTROLS = booleanPreferencesKey("skip_without_controls")
         val KEY_LIVE_REWIND_BUDGET_GB = intPreferencesKey("live_rewind_budget_gb")
         val KEY_DVR_CUSTOM_FOLDER_URI = stringPreferencesKey("dvr_custom_folder_uri")
         val KEY_DVR_KEEP_AWAKE = booleanPreferencesKey("dvr_keep_awake_during_recording")

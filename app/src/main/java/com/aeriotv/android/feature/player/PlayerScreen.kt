@@ -141,6 +141,9 @@ fun PlayerScreen(
     startInMini: Boolean = false,
     onLoadChannelStreams: suspend (Int) -> List<StreamOption> = { emptyList() },
     onSwitchChannelStream: suspend (String, Int) -> String? = { _, _ -> null },
+    /** Switch Stream reorder (Dispatcharr admin): persist the channel's stream
+     *  order (channel int pk, full ordered stream ids). Throws on failure. */
+    onSaveChannelStreamOrder: suspend (Int, List<Int>) -> Unit = { _, _ -> },
     onLoadCurrentStreamId: suspend (String) -> Int? = { null },
     onLoadCurrentStreamUrl: suspend (String) -> String? = { null },
     /** LAN/WAN verdict-flip signal (LAN URL key) for mid-stream re-tune. */
@@ -966,6 +969,11 @@ fun PlayerScreen(
             // switch/dead-session detection was needed. That was the reporter's
             // "never recovers until I close and reopen".
             var everSteady = false
+            // GH #117: a follow deferred while a 503 quick retry owned the
+            // player. Holds the prime generation seen at deferral; when the
+            // retry has since reopened the source, that reopen is already on
+            // the new upstream and is adopted without a kept-connection skip.
+            var deferredFollowGen: Long? = null
             while (isActive) {
                 delay(backoffMs)
                 if (currentChannel?.id != ch.id) break
@@ -1082,6 +1090,32 @@ fun PlayerScreen(
                     // EXACTLY when this reprime is needed.
                     if (switchStream != null || exoHolder.isReprimeInFlight ||
                         exoHolder.isTimeshifting || currentChannel?.id != ch.id) continue
+                    // GH #117: skip while the 503 quick retry is pending or the
+                    // player is IDLE / BUFFERING with 0 ms buffered (the retry's
+                    // fresh source). Baseline stays put, so the next poll re-arms.
+                    val (unsafe, gen) = withContext(Dispatchers.Main.immediate) {
+                        exoHolder.isFollowUnsafe() to exoHolder.currentPrimeGeneration
+                    }
+                    if (unsafe) {
+                        if (deferredFollowGen == null) {
+                            deferredFollowGen = gen
+                            android.util.Log.i(
+                                "DispatcharrSwitch",
+                                "[FOLLOW] external switch ch=${ch.id} deferred: quick retry or reopen in progress",
+                            )
+                        }
+                        continue
+                    }
+                    val deferredGen = deferredFollowGen
+                    deferredFollowGen = null
+                    if (deferredGen != null && gen != deferredGen) {
+                        android.util.Log.i(
+                            "DispatcharrSwitch",
+                            "[FOLLOW] external switch ch=${ch.id} adopted: source reopened during the retry",
+                        )
+                        baseline = statusUrl
+                        continue
+                    }
                     android.util.Log.w(
                         "DispatcharrSwitch",
                         "[FOLLOW] external switch ch=${ch.id} following onto $statusUrl",
@@ -1853,8 +1887,36 @@ fun PlayerScreen(
             scrubTargetWallMs == null && !recentsOverlayVisible &&
             !channelListVisible && !interactionLocked
     }
+    // GH #94 Skip Without Controls: Left/Right stay at the activity layer
+    // while nothing on screen wants them (see ExoWindowState).
+    androidx.compose.runtime.SideEffect {
+        exoWindowState.dpadHorizontalCaptured = !chromeVisible && !recentsOverlayVisible &&
+            !channelListVisible && !interactionLocked && !isCatchupMode
+    }
+    // Same seek the chrome's Rewind / Forward circles run; false when the
+    // transport is disabled (no rolling buffer and no catch-up).
+    val skipHook by androidx.compose.runtime.rememberUpdatedState { forward: Boolean ->
+        val seekEnabled = (tsState.buffering && !isCatchupMode) || isCatchupMode
+        if (!seekEnabled) {
+            false
+        } else {
+            val deltaMs = if (forward) SkipIntervals.forwardMs else -SkipIntervals.backMs
+            if (isCatchupMode) {
+                commitScrubCatchup(catchupPositionMs + deltaMs)
+            } else {
+                val nowWall = if (tsState.timeshifting) tsPositionWallMs else System.currentTimeMillis()
+                commitScrubWall(nowWall + deltaMs)
+            }
+            true
+        }
+    }
     DisposableEffect(exoWindowState) {
-        onDispose { exoWindowState.dpadVerticalCaptured = true }
+        exoWindowState.onSkipRequest = { forward -> skipHook(forward) }
+        onDispose {
+            exoWindowState.dpadVerticalCaptured = true
+            exoWindowState.dpadHorizontalCaptured = false
+            exoWindowState.onSkipRequest = null
+        }
     }
     // streamUnavailable is a KEY (not just a guard): when it clears on
     // recovery, this effect must re-fire so the chrome that was pinned open
@@ -2103,6 +2165,8 @@ fun PlayerScreen(
         playbackSpeedSheetState = playbackSpeedSheetState,
         scope = scope,
         onSwitchChannelStream = onSwitchChannelStream,
+        onSaveChannelStreamOrder = onSaveChannelStreamOrder,
+        onLoadChannelStreamsForReorder = onLoadChannelStreams,
         onLoadCurrentStreamUrl = onLoadCurrentStreamUrl,
         onLaunchMultiview = onLaunchMultiview,
     )
@@ -2219,6 +2283,8 @@ private fun PlayerSheets(
     playbackSpeedSheetState: MutableState<Float?>,
     scope: kotlinx.coroutines.CoroutineScope,
     onSwitchChannelStream: suspend (String, Int) -> String?,
+    onSaveChannelStreamOrder: suspend (Int, List<Int>) -> Unit,
+    onLoadChannelStreamsForReorder: suspend (Int) -> List<StreamOption>,
     onLoadCurrentStreamUrl: suspend (String) -> String?,
     onLaunchMultiview: () -> Unit,
 ) {
@@ -2405,6 +2471,35 @@ private fun PlayerSheets(
                 }
             },
             onDismiss = { switchStream = null },
+            canReorder = com.aeriotv.android.ui.LocalIsDispatcharrAdmin.current &&
+                currentChannel?.dispatcharrChannelId != null,
+            saving = state.saving,
+            onReorder = { ids ->
+                val chPk = currentChannel?.dispatcharrChannelId ?: return@SwitchStreamSheet
+                switchStream = state.copy(saving = true)
+                scope.launch {
+                    val failure = runCatching { onSaveChannelStreamOrder(chPk, ids) }.exceptionOrNull()
+                    if (failure == null) {
+                        Log.i(TAG, "[SwitchStream] reorder saved ch=$chPk order=$ids")
+                    } else {
+                        val status = (failure as? com.aeriotv.android.core.network.StreamOrderSaveException)?.status
+                        Log.w(TAG, "[SwitchStream] reorder failed status=${status ?: -1} ch=$chPk: ${failure.message}")
+                        Toast.makeText(
+                            context,
+                            if (status != null) "Could not save stream order (HTTP $status)"
+                            else "Could not save stream order",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                    // Refetch either way so the sheet shows the server's order.
+                    val fresh = runCatching { onLoadChannelStreamsForReorder(chPk) }.getOrNull()
+                    val open = switchStream ?: return@launch
+                    switchStream = open.copy(
+                        streams = fresh?.takeIf { it.isNotEmpty() } ?: open.streams,
+                        saving = false,
+                    )
+                }
+            },
         )
     }
     playbackSpeedSheet?.let { current ->
@@ -3036,6 +3131,7 @@ private data class AudioTracksState(
 private data class SwitchStreamState(
     val streams: List<StreamOption>,
     val currentStreamId: Int?,
+    val saving: Boolean = false,
 )
 
 /**

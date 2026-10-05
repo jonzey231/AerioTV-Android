@@ -134,6 +134,29 @@ class ExoWindowState @Inject constructor() {
     @Volatile var dpadVerticalCaptured: Boolean = true
 
     /**
+     * PR #101 (ruckusvol) re-implementation: whether the fullscreen player
+     * currently OWNS D-pad LEFT/RIGHT, so MainActivity can split a CUSTOM
+     * Left/Right map into short and long presses ahead of Compose focus, the
+     * way [dpadVerticalCaptured] does for Up/Down. PlayerScreen publishes it:
+     * `!chromeVisible && !recentsOverlayVisible && !channelListVisible &&
+     * !interactionLocked && !isCatchupMode`. Unlike vertical it does NOT
+     * release on the scrub HUD (a held seek keeps scrubbing), and it releases
+     * for all of catch-up (PlayerScreen's own block always scrubs there).
+     * Defaults FALSE: until PlayerScreen publishes it, the keys reach
+     * PlayerScreen's own Left/Right block exactly as before.
+     */
+    @Volatile var dpadHorizontalCaptured: Boolean = false
+
+    /**
+     * GH #94 Skip Without Controls: skip by the Skip Back / Skip Forward
+     * interval (forward = true for Skip Forward), the same seek the chrome's
+     * skip buttons run (live rewind or catch-up). Registered by the
+     * fullscreen live PlayerScreen, cleared on dispose. Returns true when a
+     * skip ran; false (or null hook) lets the key fall through.
+     */
+    @Volatile var onSkipRequest: ((forward: Boolean) -> Boolean)? = null
+
+    /**
      * Remote Control phase A2: session-scoped last-channel zap memory
      * (`lastChannel` zap-back, a 1-deep stack). [recordTune] is called
      * on every successful live tune with the channel's stable id; it

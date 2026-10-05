@@ -101,6 +101,25 @@ class MainActivity : ComponentActivity() {
      *  release doesn't also fire the short action. */
     private var dpadVertLongFired = false
 
+    /** PR #101: same as [dpadVertLongFired], for the custom LEFT/RIGHT split. */
+    private var dpadHorizLongFired = false
+
+    /** PR #101: a captured LEFT/RIGHT ACTION_DOWN was seen, so a stray
+     *  ACTION_UP (capture can flip between the DOWN and UP of one press)
+     *  never fires the short action on its own. */
+    private var dpadHorizDownSeen = false
+
+    /** uptimeMillis of the last horizontal short action or skip dispatched
+     *  while a key auto-repeats; bounds a held key to one action per
+     *  [DPAD_HORIZ_REPEAT_MS] (scrubStep's own held-scrub throttle). */
+    private var dpadHorizLastSeekAt = 0L
+
+    /** GH #94: this press's DOWN was consumed as a skip, so its UP is too. */
+    private var dpadHorizSkipActive = false
+
+    /** GH #94 Settings > Player > Skip Without Controls (hot for dispatchKeyEvent). */
+    @Volatile private var skipWithoutControls = false
+
     /**
      * Audit task #22 mini-player resume. The Google TV Streamer remote has
      * no dedicated play/pause key, so we repurpose a double-press of D-pad
@@ -260,6 +279,88 @@ class MainActivity : ComponentActivity() {
                     KeyEvent.ACTION_UP -> {
                         if (!dpadVertLongFired) dispatchPlayerAction(shortAction)
                         dpadVertLongFired = false
+                        return true
+                    }
+                }
+            }
+        }
+        // Live LEFT/RIGHT on bare fullscreen video. Precedence (Logan
+        // 2026-10-04): a CUSTOM Left/Right map first (PR #101, the same
+        // short/long split as UP/DOWN above), then Skip Without Controls
+        // (GH #94), then the default (PlayerScreen's own Left/Right block).
+        if (isTelevisionDevice() &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+            exoWindowState.mode.value == ExoWindowState.Mode.Fullscreen
+        ) {
+            val isLeft = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+            val shortSlot = if (isLeft) com.aeriotv.android.core.remote.RemoteSlot.LEFT_SHORT
+                else com.aeriotv.android.core.remote.RemoteSlot.RIGHT_SHORT
+            val longSlot = if (isLeft) com.aeriotv.android.core.remote.RemoteSlot.LEFT_LONG
+                else com.aeriotv.android.core.remote.RemoteSlot.RIGHT_LONG
+            val shortAction = remoteMap.playerAction(shortSlot)
+            val longAction = remoteMap.playerAction(longSlot)
+            val defaults = com.aeriotv.android.core.remote.RemoteControlMap.DEFAULT
+            val customHoriz = remoteMap.preset == com.aeriotv.android.core.remote.RemotePreset.CUSTOM &&
+                (shortAction != defaults.playerAction(shortSlot) || longAction != defaults.playerAction(longSlot))
+            if (event.action == KeyEvent.ACTION_UP && dpadHorizSkipActive) {
+                dpadHorizSkipActive = false
+                return true
+            }
+            if (customHoriz) {
+                if (!exoWindowState.dpadHorizontalCaptured) {
+                    // Chrome / a menu / an overlay / catch-up owns Left/Right
+                    // now (or PlayerScreen has not published capture): hand the
+                    // keys to Compose, where PlayerScreen's block honors the map.
+                } else if (longAction == com.aeriotv.android.core.remote.PlayerRemoteAction.NONE) {
+                    if (event.action == KeyEvent.ACTION_DOWN &&
+                        shortAction != com.aeriotv.android.core.remote.PlayerRemoteAction.NONE
+                    ) {
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (event.repeatCount == 0 || now - dpadHorizLastSeekAt >= DPAD_HORIZ_REPEAT_MS) {
+                            dpadHorizLastSeekAt = now
+                            if (dispatchPlayerAction(shortAction)) return true
+                        } else {
+                            return true // rate-limited repeat
+                        }
+                    }
+                } else {
+                    when (event.action) {
+                        KeyEvent.ACTION_DOWN -> {
+                            if (event.repeatCount == 0) {
+                                dpadHorizLongFired = false
+                                dpadHorizDownSeen = true
+                            } else if (!dpadHorizLongFired &&
+                                (event.isLongPress || event.repeatCount >= MINI_CLOSE_HOLD_REPEAT)
+                            ) {
+                                dpadHorizLongFired = true
+                                dispatchPlayerAction(longAction)
+                            }
+                            return true
+                        }
+                        KeyEvent.ACTION_UP -> {
+                            if (dpadHorizDownSeen && !dpadHorizLongFired) dispatchPlayerAction(shortAction)
+                            dpadHorizLongFired = false
+                            dpadHorizDownSeen = false
+                            return true
+                        }
+                    }
+                }
+            } else if (skipWithoutControls &&
+                event.action == KeyEvent.ACTION_DOWN &&
+                // Chrome hidden, no scrub HUD, no overlay or menu.
+                exoWindowState.dpadVerticalCaptured
+            ) {
+                val skip = exoWindowState.onSkipRequest
+                if (skip != null) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (event.repeatCount > 0 && now - dpadHorizLastSeekAt < DPAD_HORIZ_REPEAT_MS) {
+                        dpadHorizSkipActive = true
+                        return true
+                    }
+                    if (skip(!isLeft)) {
+                        dpadHorizLastSeekAt = now
+                        dpadHorizSkipActive = true
                         return true
                     }
                 }
@@ -858,6 +959,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             appPreferences.effectiveRemoteControlMap.collect { remoteMap = it }
         }
+        lifecycleScope.launch {
+            appPreferences.skipWithoutControls.collect { skipWithoutControls = it }
+        }
         // Audit #47: keep the Android TV launcher's channel row + Watch Next
         // in sync. No-op on phones/tablets (FEATURE_LEANBACK gate inside).
         homeChannelsPublisher.start(lifecycleScope)
@@ -1190,5 +1294,9 @@ class MainActivity : ComponentActivity() {
          *  pin first; this bounds a missed release. Mirrors the guide hold-Left
          *  pin's 2.5s safety timeout. */
         const val RIGHT_HOLD_PIN_MS = 2_500L
+
+        /** Floor (ms) between horizontal short actions / skips while a key
+         *  auto-repeats; mirrors scrubStep's 250 ms held-scrub throttle. */
+        const val DPAD_HORIZ_REPEAT_MS = 250L
     }
 }

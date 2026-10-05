@@ -2944,9 +2944,16 @@ class OnDemandViewModel @Inject constructor(
                 }
             }.fold(
                 onSuccess = { page ->
+                    // PR 92 parity: when the episodes listing is empty, take
+                    // the seasons provider-info already embedded (its
+                    // `episodes` map), so the series is not left with none.
+                    val episodes = page.results.ifEmpty {
+                        _state.value.seriesProviderInfo[seriesId]?.embeddedEpisodes.orEmpty()
+                            .also { if (it.isNotEmpty()) android.util.Log.i("OnDemandVM", "series $seriesId: episodes listing empty, using ${it.size} from provider-info") }
+                    }
                     _state.update { st ->
                         st.copy(
-                            episodesBySeries = st.episodesBySeries + (seriesId to page.results),
+                            episodesBySeries = st.episodesBySeries + (seriesId to episodes),
                             episodesLoadingFor = st.episodesLoadingFor - seriesId,
                             episodesErrorFor = st.episodesErrorFor - seriesId,
                         )

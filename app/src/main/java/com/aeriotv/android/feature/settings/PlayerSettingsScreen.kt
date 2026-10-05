@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import com.aeriotv.android.core.preferences.PLAYER_EDGE_LEFT
 import com.aeriotv.android.core.preferences.PLAYER_EDGE_RIGHT
 import com.aeriotv.android.core.ui.SkipIntervals
@@ -72,6 +73,16 @@ fun PlayerSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val isTv = rememberIsTvDevice()
+    // GH #94: read straight from AppPreferences (no SettingsViewModel hop).
+    val playerPrefsContext = androidx.compose.ui.platform.LocalContext.current
+    val playerPrefs = androidx.compose.runtime.remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            playerPrefsContext.applicationContext,
+            PlayerSettingsEntryPoint::class.java,
+        ).appPreferences()
+    }
+    val playerPrefsScope = androidx.compose.runtime.rememberCoroutineScope()
+    val skipWithoutControls by playerPrefs.skipWithoutControls.collectAsStateWithLifecycle(initialValue = false)
 
     val cardChannelLogo by viewModel.playerCardShowChannelLogo
         .collectAsStateWithLifecycle(initialValue = true)
@@ -317,6 +328,15 @@ fun PlayerSettingsScreen(
                             format = ::formatSkipSeconds,
                             onSelect = viewModel::setSkipForwardSeconds,
                         )
+                    }
+                    if (isTv) {
+                        // GH #94 (Apple parity): bare-video Left/Right skip.
+                        SettingsToggleRow(
+                            title = "Skip Without Controls",
+                            checked = skipWithoutControls,
+                            onCheckedChange = { v -> playerPrefsScope.launch { playerPrefs.setSkipWithoutControls(v) } },
+                        )
+                        SettingsSectionFooter("With the controls hidden, Left and Right skip right away instead of opening the timeline.")
                     }
                     if (isTv) {
                         SettingsSectionFooter("How far the skip buttons and a single left or right press move in live rewind, catch-up, recordings, movies, and TV shows. Holding left or right still scrubs faster the longer you hold.")
@@ -610,3 +630,9 @@ private const val LIVE_REWIND_FOOTER =
     "Buffers the channel you are watching so you can pause and " +
         "rewind live TV. Uses device storage while you watch; " +
         "buffered video is removed automatically."
+
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface PlayerSettingsEntryPoint {
+    fun appPreferences(): com.aeriotv.android.core.preferences.AppPreferences
+}

@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -158,7 +159,7 @@ private const val AUTO_HIDE_MS = PLAYER_CHROME_HIDE_MS
  * receive it). PlayPause is the default landing spot when controls reveal;
  * LEFT/RIGHT cycle Rewind <-> PlayPause <-> Forward; UP enters Scrubber.
  */
-private enum class TvVodFocusZone { None, Rewind, PlayPause, Forward, Options, Scrubber }
+private enum class TvVodFocusZone { None, Rewind, PlayPause, Forward, Multiview, Options, Scrubber }
 
 /**
  * WatchProgress identity for one VOD / episode / recording playback, collapsed
@@ -335,6 +336,8 @@ fun VODPlayerScreen(
      *  says nothing about what played; DVR and live playback have no provider
      *  copy at all. Leaving this at its no-op default is what excludes them. */
     onLearnStream: suspend (relationId: Int, stream: VodLearnedStream) -> Unit = { _, _ -> },
+    /** GH #76: non-null on a DVR recording; shows the Multiview button. */
+    onMultiview: (() -> Unit)? = null,
 ) {
     // Keep the screen on during VOD playback. Matches PlayerScreen for the
     // same reason: system screen-timeout would otherwise dim/sleep the panel
@@ -960,6 +963,7 @@ fun VODPlayerScreen(
                                 showOptionsSheet = true
                                 lastInteractionAt = now
                             }
+                            TvVodFocusZone.Multiview -> { onMultiview?.invoke() }
                             else -> { togglePlayPause() } // PlayPause / None
                         }
                     }
@@ -977,7 +981,8 @@ fun VODPlayerScreen(
                             TvVodFocusZone.Scrubber -> scrubStep(-1, isRepeat)
                             TvVodFocusZone.PlayPause -> { tvFocusZone = TvVodFocusZone.Rewind; lastInteractionAt = now }
                             TvVodFocusZone.Forward -> { tvFocusZone = TvVodFocusZone.PlayPause; lastInteractionAt = now }
-                            TvVodFocusZone.Options -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now }
+                            TvVodFocusZone.Options -> { tvFocusZone = if (onMultiview != null) TvVodFocusZone.Multiview else TvVodFocusZone.Forward; lastInteractionAt = now }
+                            TvVodFocusZone.Multiview -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now }
                             else -> { tvFocusZone = TvVodFocusZone.Rewind; lastInteractionAt = now } // Rewind/None: stay leftmost
                         }
                         chromeVisible = true
@@ -995,7 +1000,8 @@ fun VODPlayerScreen(
                             TvVodFocusZone.Scrubber -> scrubStep(+1, isRepeat)
                             TvVodFocusZone.PlayPause -> { tvFocusZone = TvVodFocusZone.Forward; lastInteractionAt = now }
                             TvVodFocusZone.Rewind -> { tvFocusZone = TvVodFocusZone.PlayPause; lastInteractionAt = now }
-                            TvVodFocusZone.Forward -> { tvFocusZone = TvVodFocusZone.Options; lastInteractionAt = now }
+                            TvVodFocusZone.Forward -> { tvFocusZone = if (onMultiview != null) TvVodFocusZone.Multiview else TvVodFocusZone.Options; lastInteractionAt = now }
+                            TvVodFocusZone.Multiview -> { tvFocusZone = TvVodFocusZone.Options; lastInteractionAt = now }
                             else -> { tvFocusZone = TvVodFocusZone.Options; lastInteractionAt = now } // Options/None: stay rightmost
                         }
                         chromeVisible = true
@@ -1844,6 +1850,7 @@ fun VODPlayerScreen(
                         showOptionsSheet = true
                         lastInteractionAt = android.os.SystemClock.uptimeMillis()
                     },
+                    onMultiview = onMultiview,
                     // Generated from the VOD player's OWN key model (it runs a
                     // focus-zone transport and deliberately ignores the remote
                     // map), so the pairs follow the zone the user is in.
@@ -2233,6 +2240,7 @@ private fun BottomChrome(
     isDvr: Boolean = false,
     onSeekToLive: () -> Unit = {},
     onOptions: () -> Unit = {},
+    onMultiview: (() -> Unit)? = null,
     /** "1080p · 59.94 fps" for the band's right end; null hides it. TV only. */
     formatBadge: String? = null,
     /** Remote hint strip pairs (TV only; empty = nothing drawn). Rendered as
@@ -2383,6 +2391,16 @@ private fun BottomChrome(
             // Options entry point (rightmost): Switch Version / Audio Track /
             // Subtitles sheet. Same white-fill focus visual as the skip
             // buttons under the TV zone model.
+            if (onMultiview != null) {
+                Spacer(Modifier.width(8.dp))
+                TransportIconButton(
+                    icon = Icons.Outlined.GridView,
+                    contentDescription = "Multiview",
+                    onClick = onMultiview,
+                    focused = isTvForm && tvFocusZone == TvVodFocusZone.Multiview,
+                    isTvForm = isTvForm,
+                )
+            }
             Spacer(Modifier.width(8.dp))
             TransportIconButton(
                 icon = Icons.Outlined.Tune,

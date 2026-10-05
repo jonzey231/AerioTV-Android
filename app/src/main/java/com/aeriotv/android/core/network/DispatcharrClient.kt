@@ -2029,6 +2029,32 @@ class DispatcharrClient @Inject constructor() {
         )
 
     /**
+     * PATCH /api/channels/channels/<id>/ with `{"streams": [ids in order]}`:
+     * persist a new failover order for the channel's member streams. Source:
+     * Dispatcharr apps/channels/serializers.py ChannelSerializer.update, which
+     * rewrites ChannelStream.order from the list position and DELETES any
+     * member missing from the list, so callers must send the full membership
+     * (as listed by [listChannelStreams]). Admin only server-side.
+     * Returns the HTTP status; throws [StreamOrderSaveException] on non-2xx.
+     */
+    suspend fun updateChannelStreamOrder(
+        baseUrl: String,
+        apiKey: String,
+        channelId: Int,
+        streamIds: List<Int>,
+    ): Int {
+        val url = "${baseUrl.trimEnd('/')}/api/channels/channels/$channelId/"
+        val response: HttpResponse = client.patch(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(JsonObject(mapOf("streams" to JsonArray(streamIds.map { JsonPrimitive(it) }))))
+        }
+        unauthorizedCheck(response, url)
+        if (!response.status.isSuccess()) throw StreamOrderSaveException(response.status.value)
+        return response.status.value
+    }
+
+    /**
      * GET /api/m3u/accounts/ -- the playlist's M3U source accounts. Used to map
      * a stream's m3u_account id to a human source name in the Switch Stream
      * picker ("which M3U is this stream from"). Direct Connect only.
@@ -2808,8 +2834,13 @@ data class DispatcharrVODEpisode(
     @SerialName("imdb_id")
     val imdbId: String? = null,
     @SerialName("custom_properties")
+    @Serializable(with = VODCustomPropsLenientSerializer::class)
     val customProperties: VODCustomProps? = null,
     val streams: List<DispatcharrVODStreamOption> = emptyList(),
+    /** Episode still as series provider-info sends it (top level, already a
+     *  proxied URL); the episodes listing carries it in custom_properties. */
+    @SerialName("movie_image")
+    val movieImage: String? = null,
 ) {
     val displayName: String get() = title.ifBlank { name.orEmpty() }
     /** Runtime in SECONDS; see [resolveDurationSeconds]. */
@@ -2827,6 +2858,7 @@ data class DispatcharrVODEpisode(
         get() = customProperties?.stringField("movie_image")
             ?: customProperties?.stringField("cover")
             ?: customProperties?.stringField("image")
+            ?: movieImage?.takeIf { it.isNotBlank() }
 
     /** Per-episode director from custom_properties.crew (TMDB-derived). */
     val crew: String?
@@ -2887,8 +2919,21 @@ data class DispatcharrVODProviderInfo(
     @SerialName("movie_image")
     val movieImage: String? = null,
     @SerialName("custom_properties")
+    @Serializable(with = VODCustomPropsLenientSerializer::class)
     val customProperties: VODCustomProps? = null,
+    /** Series provider-info only: every episode this provider carries, keyed
+     *  by season number (Dispatcharr `include_episodes`, on by default; see
+     *  apps/vod/api_views.py series provider_info). Decoded into the slim
+     *  episode model from the stream. Used when /api/vod/episodes/ comes back
+     *  empty (PR 92 parity). */
+    @Serializable(with = EpisodesBySeasonLenientSerializer::class)
+    val episodes: Map<String, List<DispatcharrVODEpisode>>? = null,
 ) {
+    /** [episodes] flattened in season / episode order, or empty. */
+    val embeddedEpisodes: List<DispatcharrVODEpisode>
+        get() = episodes.orEmpty().values.flatten()
+            .sortedWith(compareBy({ it.seasonNumber ?: 0 }, { it.episodeNumber ?: 0 }))
+
     /** Runtime in SECONDS; see [resolveDurationSeconds]. */
     val durationSeconds: Int? get() = resolveDurationSeconds(durationSecs, duration)
 
@@ -3030,6 +3075,7 @@ data class DispatcharrVODSeries(
      *  category here (`category_id`), not at the top level, so the object is
      *  kept raw and read lazily via [vodCategoryId]. */
     @SerialName("custom_properties")
+    @Serializable(with = JsonObjectOrStringSerializer::class)
     val customPropertiesRaw: JsonObject? = null,
 ) {
     val displayName: String get() = name.ifBlank { title.orEmpty() }
@@ -3072,6 +3118,7 @@ data class DispatcharrVODMovie(
     val categoryName: String? = null,
     /** Raw `custom_properties` blob; see DispatcharrVODSeries.customPropertiesRaw. */
     @SerialName("custom_properties")
+    @Serializable(with = JsonObjectOrStringSerializer::class)
     val customPropertiesRaw: JsonObject? = null,
 ) {
     val displayName: String get() = title.ifBlank { name.orEmpty() }
@@ -3420,3 +3467,46 @@ internal fun missingFieldName(t: Throwable): String? {
 
 internal fun missingFieldSuffix(t: Throwable): String =
     missingFieldName(t)?.let { " (missing '$it')" } ?: ""
+
+
+/**
+ * PR 92 parity: Dispatcharr sometimes sends `custom_properties` as the object
+ * serialized into a JSON STRING (the raw-SQL listings do for some rows). A
+ * plain object decode threw and dropped the whole row or page. Strings are
+ * parsed back into the object; anything unparseable becomes an empty object.
+ */
+internal object JsonObjectOrStringSerializer :
+    kotlinx.serialization.json.JsonTransformingSerializer<JsonObject>(JsonObject.serializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = objectOrParsedString(element)
+}
+
+internal object VODCustomPropsLenientSerializer :
+    kotlinx.serialization.json.JsonTransformingSerializer<VODCustomProps>(VODCustomProps.serializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = objectOrParsedString(element)
+}
+
+private fun objectOrParsedString(element: JsonElement): JsonElement {
+    if (element is JsonObject) return element
+    val text = (element as? JsonPrimitive)?.takeIf { it.isString }?.content
+    val parsed = text?.let { runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) }.getOrNull() }
+    return parsed as? JsonObject ?: JsonObject(emptyMap())
+}
+
+/** `episodes` as `{"<season>": [...]}`; any other shape (an empty list from
+ *  an older build) decodes as an empty map instead of failing provider-info. */
+internal object EpisodesBySeasonLenientSerializer :
+    kotlinx.serialization.json.JsonTransformingSerializer<Map<String, List<DispatcharrVODEpisode>>>(
+        kotlinx.serialization.builtins.MapSerializer(
+            kotlinx.serialization.serializer<String>(),
+            kotlinx.serialization.builtins.ListSerializer(DispatcharrVODEpisode.serializer()),
+        ),
+    ) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        if (element is JsonObject) {
+            JsonObject(element.filterValues { it is kotlinx.serialization.json.JsonArray })
+        } else JsonObject(emptyMap())
+}
+
+
+/** Switch Stream reorder: Dispatcharr answered [status] to the channel PATCH. */
+class StreamOrderSaveException(val status: Int) : Exception("HTTP $status")

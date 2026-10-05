@@ -1273,6 +1273,9 @@ fun AerioTVNavHost(
                     onSwitchChannelStream = { channelUuid, streamId ->
                         vm.switchChannelStream(channelUuid, streamId).getOrThrow()
                     },
+                    onSaveChannelStreamOrder = { channelIntPk, streamIds ->
+                        vm.saveChannelStreamOrder(channelIntPk, streamIds).getOrThrow()
+                    },
                     onLoadCurrentStreamId = { channelUuid ->
                         vm.loadCurrentStreamId(channelUuid)
                     },
@@ -1847,6 +1850,7 @@ fun AerioTVNavHost(
                 // reopen route drops fromStart / autoResume: an expand adopts the
                 // playing instance, so no start or resume handling may run.
                 val recMiniToken = remember { com.aeriotv.android.feature.player.PhoneVodMiniRouteToken() }
+                var recMvOpen by remember { mutableStateOf(false) }
                 com.aeriotv.android.feature.player.PhoneVodMiniRoute(
                     info = remember(playbackUrl, title) {
                         com.aeriotv.android.feature.player.PhoneVodMini.Info(
@@ -1905,7 +1909,30 @@ fun AerioTVNavHost(
                     recEndMillis = recEnd,
                     completedUrl = completedUrl,
                     onContinueOnLive = continueOnLive,
+                    // GH #76: catch-up sessions are not recordings; no tile.
+                    onMultiview = if (csUuid.isBlank()) ({ recMvOpen = true }) else null,
                 )
+                if (recMvOpen) {
+                    com.aeriotv.android.feature.player.RecordingMultiviewPicker(
+                        seedTile = remember(playbackUrl, recId) {
+                            com.aeriotv.android.feature.player.recordingMultiviewTile(
+                                recordingKey = if (recId > 0) "server-$recId" else playbackUrl,
+                                title = title.ifBlank { "Recording" },
+                                playbackUrl = playbackUrl,
+                                headers = headers,
+                                inProgress = isDvr,
+                            )
+                        },
+                        onLaunch = {
+                            recMvOpen = false
+                            // Pop the recording player (its player releases on
+                            // dispose) so only the tiles make sound.
+                            navController.popBackStack()
+                            navController.navigate(Routes.MULTIVIEW) { launchSingleTop = true }
+                        },
+                        onClose = { recMvOpen = false },
+                    )
+                }
             }
         }
     }

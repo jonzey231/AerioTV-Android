@@ -1124,8 +1124,10 @@ private fun GridRow(
                     airing -> Color.White.copy(alpha = 0.12f)
                     else -> Color.White.copy(alpha = 0.05f)
                 }
-                // Logan 2026-09-02: the ring follows the cell's own square shape.
-                val radius = CornerRadius.Zero
+                // Logan 2026-09-02: the ring follows the cell's own shape.
+                // GH #87: "Rounded corners in Guide view" also rounds the
+                // program cells, at the rail's radius (Apple does the same).
+                val radius = if (roundedArtwork) CornerRadius(GUIDE_RAIL_CORNER.toPx()) else CornerRadius.Zero
                 drawRoundRect(fill, topLeft = Offset(x0, 0f), size = Size(w, size.height - 1f), cornerRadius = radius)
                 if (focused) {
                     // Apple TV draws a 4pt ring at 1080p (about 4px); Android TV
@@ -1135,7 +1137,7 @@ private fun GridRow(
                         Color.White,
                         topLeft = Offset(x0 + bw / 2, bw / 2),
                         size = Size(w - bw, size.height - 1f - bw),
-                        cornerRadius = radius,
+                        cornerRadius = if (roundedArtwork) CornerRadius((radius.x - bw / 2).coerceAtLeast(0f)) else radius,
                         style = Stroke(width = bw),
                     )
                 }
