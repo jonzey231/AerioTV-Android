@@ -2267,9 +2267,20 @@ fun SwitchStreamSheet(
     /** The full new stream id order to persist. */
     onReorder: (List<Int>) -> Unit = {},
 ) {
-    // A handle drag owns the finger: the sheet's own drag stays off until drop.
+    // Reorder mode: the sheet never drags or swipes away. A handle drag owns
+    // the finger, and a quick drag on a row body (Onn 2026-10-04 23:20:45,
+    // a 340 px fling 0.35 s long) used to hand its leftover to the sheet and
+    // dismiss it. Only a tap outside (scrim), Back, or Done closes it.
     var rowDragging by remember { mutableStateOf(false) }
-    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss, sheetGesturesEnabled = !rowDragging) {
+    val reorderMode = canReorder && streams.size > 1
+    val dismissFrom: (String) -> Unit = { reason ->
+        android.util.Log.i("PlayerScreen", "[SwitchStream] sheet dismiss reason=$reason rowDragging=$rowDragging")
+        onDismiss()
+    }
+    com.aeriotv.android.ui.FormFactorModal(
+        onDismiss = { if (!rowDragging) dismissFrom("outside-or-back") },
+        sheetGesturesEnabled = !reorderMode && !rowDragging,
+    ) {
         // verticalScroll so channels with many streams (users keep 2-20) are all
         // reachable; FormFactorModal caps the modal height, which otherwise just
         // clipped the rows past the fold (only ~7 were selectable). Works for
@@ -2279,12 +2290,23 @@ fun SwitchStreamSheet(
                 .padding(horizontal = 20.dp, vertical = 4.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            Text(
-                text = "Switch Stream",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-            )
+            androidx.compose.foundation.layout.Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "Switch Stream",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (reorderMode && !com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+                    androidx.compose.material3.TextButton(onClick = { dismissFrom("done") }) {
+                        Text("Done")
+                    }
+                }
+            }
             Spacer(Modifier.height(12.dp))
             if (streams.isEmpty()) {
                 Text(
@@ -2300,7 +2322,10 @@ fun SwitchStreamSheet(
                     saving = saving,
                     onSelect = onSelect,
                     onReorder = onReorder,
-                    onDragActiveChange = { rowDragging = it },
+                    onDragActiveChange = {
+                        rowDragging = it
+                        android.util.Log.i("PlayerScreen", "[SwitchStream] row drag active=$it")
+                    },
                 )
             } else {
                 streams.forEach { stream ->

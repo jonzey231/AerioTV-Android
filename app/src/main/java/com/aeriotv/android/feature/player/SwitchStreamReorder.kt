@@ -47,15 +47,18 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import android.util.Log
 import com.aeriotv.android.core.pip.isTelevision
 import com.aeriotv.android.ui.scale.DropdownMenu
 
 /**
  * Switch Stream rows for Dispatcharr ADMINS: the same radio rows, plus a way
- * to change the channel's stream order. Touch drags a handle; TV (and a
- * long-press on touch) opens a Move Up / Move Down menu from the row's
- * options button. Every committed move hands the FULL new id order to
- * [onReorder]; [saving] disables further moves while the PATCH is in flight.
+ * to change the channel's stream order. Touch drags a handle (no menu, no
+ * long press: the row itself only selects); TV opens a Move Up / Move Down
+ * menu from the row's options button or a long press. Every committed move
+ * hands the FULL new id order to [onReorder]. On TV [saving] disables further
+ * moves while the PATCH is in flight; touch drags stay live (the host
+ * serializes saves) so a drag started right after a drop is not lost.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -72,12 +75,21 @@ internal fun ReorderableStreamList(
     val isTv = remember(context) { context.isTelevision() }
     // Local order so a drag can preview; reset whenever the server list changes.
     var order by remember { mutableStateOf(streams) }
-    // After every save (success or failure) show the server's refetched order.
-    androidx.compose.runtime.LaunchedEffect(streams, saving) { if (!saving) order = streams }
-    var dragIndex by remember(streams) { mutableStateOf(-1) }
+    var dragIndex by remember { mutableStateOf(-1) }
+    // After every save (success or failure) show the server's refetched order,
+    // but never under a finger: a refetch landing mid-drag used to reset the
+    // order and the drag index, and the drag died. It applies on the drop.
+    androidx.compose.runtime.LaunchedEffect(streams, saving, dragIndex) {
+        if (!saving && dragIndex < 0) order = streams
+    }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var rowHeightPx by remember { mutableFloatStateOf(1f) }
     val latestOrder by rememberUpdatedState(order)
+    // The handle's pointerInput outlives recompositions (keyed by stream id
+    // only), so it reads the newest server list and callbacks through these.
+    val latestStreams by rememberUpdatedState(streams)
+    val latestOnReorder by rememberUpdatedState(onReorder)
+    val latestOnDragActive by rememberUpdatedState(onDragActiveChange)
 
     fun move(from: Int, to: Int) {
         if (saving || from !in order.indices || to !in order.indices || from == to) return
@@ -204,79 +216,90 @@ internal fun ReorderableStreamList(
                 .fillMaxWidth()
                 .onSizeChanged { rowHeightPx = it.height.toFloat().coerceAtLeast(1f) }
                 .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
-                .combinedClickable(
-                    onClick = { onSelect(stream.id) },
-                    onLongClick = { if (!saving) menuOpen = true },
-                )
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RadioButton(
-                selected = currentStreamId == stream.id,
-                onClick = { onSelect(stream.id) },
-                colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
-            )
-            Text(
-                text = stream.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            Box {
+            // Tap on the radio + title selects. The handle sits OUTSIDE this
+            // click target, so a press held on the handle never selects the
+            // stream on release. No long press on touch: it opened the TV
+            // Move Up / Move Down menu under a finger resting on the handle.
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onSelect(stream.id) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = currentStreamId == stream.id,
+                    onClick = null,
+                    colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.padding(12.dp),
+                )
+                Text(
+                    text = stream.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            // 48dp square hit box (the old 24dp icon was the whole target;
+            // touches a few px off it fell to the row or the sheet). The drag
+            // starts on the first move past touch slop, no long-press delay.
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(48.dp)
+                    .pointerInput(stream.id) {
+                        var from = -1
+                        detectDragGestures(
+                            onDragStart = {
+                                from = latestOrder.indexOfFirst { it.id == stream.id }
+                                dragIndex = from
+                                dragOffset = 0f
+                                latestOnDragActive(true)
+                                Log.i(SWITCH_TAG, "[SwitchStream] drag start id=${stream.id} index=$from")
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragOffset += amount.y
+                                val cur = dragIndex
+                                if (cur < 0) return@detectDragGestures
+                                val step = when {
+                                    dragOffset > rowHeightPx * 0.5f && cur < latestOrder.lastIndex -> 1
+                                    dragOffset < -rowHeightPx * 0.5f && cur > 0 -> -1
+                                    else -> 0
+                                }
+                                if (step != 0) {
+                                    order = latestOrder.toMutableList().apply { add(cur + step, removeAt(cur)) }
+                                    dragIndex = cur + step
+                                    dragOffset -= step * rowHeightPx
+                                    Log.i(SWITCH_TAG, "[SwitchStream] drag swap id=${stream.id} ${cur}->${cur + step}")
+                                }
+                            },
+                            onDragEnd = {
+                                val to = dragIndex
+                                dragIndex = -1
+                                dragOffset = 0f
+                                val changed = from >= 0 && to >= 0 && from != to
+                                Log.i(SWITCH_TAG, "[SwitchStream] drop id=${stream.id} from=$from to=$to save=$changed")
+                                if (changed) latestOnReorder(latestOrder.map { it.id })
+                                latestOnDragActive(false)
+                            },
+                            onDragCancel = {
+                                Log.i(SWITCH_TAG, "[SwitchStream] drag cancel id=${stream.id} from=$from")
+                                dragIndex = -1
+                                dragOffset = 0f
+                                order = latestStreams
+                                latestOnDragActive(false)
+                            },
+                        )
+                    },
+            ) {
                 Icon(
                     imageVector = Icons.Filled.DragHandle,
                     contentDescription = "Drag to Reorder",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .padding(horizontal = 8.dp)
-                        .size(24.dp)
-                        .pointerInput(stream.id, saving) {
-                            if (saving) return@pointerInput
-                            var from = -1
-                            detectDragGestures(
-                                onDragStart = {
-                                    from = latestOrder.indexOfFirst { it.id == stream.id }
-                                    dragIndex = from
-                                    dragOffset = 0f
-                                    onDragActiveChange(true)
-                                },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    dragOffset += amount.y
-                                    val cur = dragIndex
-                                    val step = when {
-                                        dragOffset > rowHeightPx * 0.6f && cur < latestOrder.lastIndex -> 1
-                                        dragOffset < -rowHeightPx * 0.6f && cur > 0 -> -1
-                                        else -> 0
-                                    }
-                                    if (step != 0) {
-                                        order = latestOrder.toMutableList().apply { add(cur + step, removeAt(cur)) }
-                                        dragIndex = cur + step
-                                        dragOffset -= step * rowHeightPx
-                                    }
-                                },
-                                onDragEnd = {
-                                    val to = dragIndex
-                                    dragIndex = -1
-                                    dragOffset = 0f
-                                    onDragActiveChange(false)
-                                    if (from >= 0 && to >= 0 && from != to) onReorder(latestOrder.map { it.id })
-                                },
-                                onDragCancel = {
-                                    dragIndex = -1
-                                    dragOffset = 0f
-                                    onDragActiveChange(false)
-                                    order = streams
-                                },
-                            )
-                        },
-                )
-                StreamMoveMenu(
-                    expanded = menuOpen,
-                    onDismiss = { menuOpen = false },
-                    canMoveUp = index > 0,
-                    canMoveDown = index < order.lastIndex,
-                    onMove = { delta -> menuOpen = false; move(index, index + delta) },
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
@@ -302,3 +325,5 @@ private fun StreamMoveMenu(
         }
     }
 }
+
+private const val SWITCH_TAG = "PlayerScreen"

@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.player
 
+import kotlinx.coroutines.sync.withLock
 import android.util.Log
 import android.view.ViewGroup
 import android.widget.Toast
@@ -2312,6 +2313,8 @@ private fun PlayerSheets(
     var subtitles by subtitlesState
     var audioTracks by audioTracksState
     var switchStream by switchStreamState
+    val reorderSaveLock = remember { kotlinx.coroutines.sync.Mutex() }
+    var reorderSaveGen by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var switchedStreamId by switchedStreamIdState
     var playbackSpeedSheet by playbackSpeedSheetState
     recordTarget?.let { target ->
@@ -2493,8 +2496,14 @@ private fun PlayerSheets(
             saving = state.saving,
             onReorder = { ids ->
                 val chPk = currentChannel?.dispatcharrChannelId ?: return@SwitchStreamSheet
-                switchStream = state.copy(saving = true)
+                // Read the LIVE state, not the captured one: a drop right after
+                // a refetch otherwise wrote the pre-refetch list back.
+                switchStream = (switchStream ?: return@SwitchStreamSheet).copy(saving = true)
+                val gen = ++reorderSaveGen
                 scope.launch {
+                    // Saves run one at a time in drop order (touch drags stay
+                    // live while a PATCH is in flight), so the last drop wins.
+                    val fresh = reorderSaveLock.withLock {
                     val failure = runCatching { onSaveChannelStreamOrder(chPk, ids) }.exceptionOrNull()
                     if (failure == null) {
                         Log.i(TAG, "[SwitchStream] reorder saved ch=$chPk order=$ids")
@@ -2509,7 +2518,11 @@ private fun PlayerSheets(
                         ).show()
                     }
                     // Refetch either way so the sheet shows the server's order.
-                    val fresh = runCatching { onLoadChannelStreamsForReorder(chPk) }.getOrNull()
+                    runCatching { onLoadChannelStreamsForReorder(chPk) }.getOrNull()
+                    }
+                    // Only the newest save's refetch updates the sheet; an older
+                    // one would flash the order back while a later save runs.
+                    if (gen != reorderSaveGen) return@launch
                     val open = switchStream ?: return@launch
                     switchStream = open.copy(
                         streams = fresh?.takeIf { it.isNotEmpty() } ?: open.streams,
