@@ -130,7 +130,24 @@ class MainActivity : ComponentActivity() {
      * press when it lands inside the double-press window AND the mini-player
      * is showing. That keeps single-press OK working in all other contexts.
      */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (isTelevisionDevice()) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.player(
+                "window focus=$hasFocus view=${currentFocus?.javaClass?.simpleName ?: "none"}",
+            )
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) &&
+            isTelevisionDevice()
+        ) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.player(
+                "activity key Center view=${currentFocus?.javaClass?.simpleName ?: "none"} windowFocus=${hasWindowFocus()}",
+            )
+        }
         // The mini-player no longer hijacks OK. Previously, while the mini was
         // Active, EVERY D-pad Select was consumed (double-press = resume), which
         // trapped the user: a single OK on a guide cell did nothing, so they

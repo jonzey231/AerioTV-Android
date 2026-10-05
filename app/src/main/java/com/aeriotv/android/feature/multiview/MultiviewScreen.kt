@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -1300,6 +1302,7 @@ private fun TileGrid(
                     // D-pad selection ring (TV only): the tile the remote is
                     // currently on. Suppressed in fullscreen (single tile).
                     isDpadFocused = isTv && !anyFullscreen && index == dpadIndex,
+                    singleTile = tiles.size <= 1,
                     onTap = { onTileTap(index) },
                     onDoubleTap = { onTileDoubleTap(index) },
                     onPlayer = { player -> onTilePlayer(index, player) },
@@ -1432,6 +1435,8 @@ private fun Tile(
     focusFadedOut: Boolean,
     watchVm: com.aeriotv.android.feature.watchprogress.WatchProgressViewModel,
     isDpadFocused: Boolean,
+    // Single tile: full-screen controls cover the corners, so no logo.
+    singleTile: Boolean,
     onTap: () -> Unit,
     onDoubleTap: () -> Unit,
     onPlayer: (ExoPlayer?) -> Unit,
@@ -1442,6 +1447,11 @@ private fun Tile(
 ) {
     val audioPassthrough by settingsVm.audioPassthroughEnabled
         .collectAsState(initial = false)
+    // Show Channel Logos (Settings > Multiview). Collected here so changes
+    // apply live while the grid is open.
+    val showLogos by settingsVm.multiviewShowLogos.collectAsState(initial = false)
+    val logoPosition by settingsVm.multiviewLogoPosition.collectAsState(initial = "top_left")
+    val logoSize by settingsVm.multiviewLogoSize.collectAsState(initial = 20)
     val shape = if (tileRounded) RoundedCornerShape(8.dp) else RoundedCornerShape(0.dp)
     // D-pad focus (which tile the remote is currently on) is owned by the
     // grid host and passed in as [isDpadFocused]. Distinct from AUDIO focus
@@ -1545,6 +1555,16 @@ private fun Tile(
                 )
             }
         }
+        if (showLogos && !singleTile && tile.logoUrl.isNotBlank()) {
+            TileChannelLogo(
+                url = tile.logoUrl,
+                position = logoPosition,
+                sizePercent = logoSize,
+                // The channel-name badge sits top-left while the chrome is up;
+                // push a top-left logo below it so it never covers the name.
+                avoidNameBadge = chromeVisible,
+            )
+        }
         // Audio-focus indicator. centerIcon mode shows the speaker icon over
         // the active tile while the chrome is visible. grayPersistent and
         // themeFading are border-only — handled above on the outer Box.
@@ -1556,6 +1576,56 @@ private fun Tile(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .size(48.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Channel logo overlay for a Multiview tile. Draws inside the tile in the
+ * chosen corner with a small inset, height = tile height x [sizePercent],
+ * aspect fit, on the same black 55 percent rounded backdrop as the name
+ * badge. Not focusable and not clickable, so taps and D-pad focus go to the
+ * tile as before. Loaded through Coil's singleton loader (same loader and
+ * cache as the guide).
+ */
+@Composable
+private fun TileChannelLogo(
+    url: String,
+    position: String,
+    sizePercent: Int,
+    avoidNameBadge: Boolean,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val logoH = maxHeight * (sizePercent.coerceIn(10, 40) / 100f)
+        val alignment = when (position) {
+            "top_right" -> Alignment.TopEnd
+            "bottom_left" -> Alignment.BottomStart
+            "bottom_right" -> Alignment.BottomEnd
+            else -> Alignment.TopStart
+        }
+        // Name badge is ~labelSmall + 2x2dp padding + 6dp inset (about 28dp).
+        val topShift by androidx.compose.animation.core.animateDpAsState(
+            targetValue = if (alignment == Alignment.TopStart && avoidNameBadge) 28.dp else 0.dp,
+            animationSpec = androidx.compose.animation.core.tween(350),
+            label = "tileLogoShift",
+        )
+        Box(
+            modifier = Modifier
+                .align(alignment)
+                .padding(6.dp)
+                .offset(y = topShift)
+                .height(logoH)
+                .widthIn(max = maxWidth * 0.5f)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(4.dp),
+        ) {
+            coil3.compose.AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                modifier = Modifier.fillMaxHeight(),
             )
         }
     }

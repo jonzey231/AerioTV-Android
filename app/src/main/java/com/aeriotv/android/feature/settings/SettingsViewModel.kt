@@ -610,6 +610,19 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setMultiviewTilePadding(value) }
     }
 
+    val multiviewShowLogos: Flow<Boolean> = prefs.multiviewShowLogos
+    fun setMultiviewShowLogos(value: Boolean) {
+        viewModelScope.launch { prefs.setMultiviewShowLogos(value) }
+    }
+    val multiviewLogoPosition: Flow<String> = prefs.multiviewLogoPosition
+    fun setMultiviewLogoPosition(value: String) {
+        viewModelScope.launch { prefs.setMultiviewLogoPosition(value) }
+    }
+    val multiviewLogoSize: Flow<Int> = prefs.multiviewLogoSize
+    fun setMultiviewLogoSize(value: Int) {
+        viewModelScope.launch { prefs.setMultiviewLogoSize(value) }
+    }
+
     val multiviewTileCornersRounded: Flow<Boolean> = prefs.multiviewTileCornersRounded
     fun setMultiviewTileCornersRounded(value: Boolean) {
         viewModelScope.launch { prefs.setMultiviewTileCornersRounded(value) }

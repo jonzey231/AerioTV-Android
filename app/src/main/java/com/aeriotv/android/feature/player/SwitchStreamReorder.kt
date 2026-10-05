@@ -28,6 +28,14 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -82,12 +90,31 @@ internal fun ReorderableStreamList(
     }
     order.forEachIndexed { index, stream ->
         var menuOpen by remember(stream.id) { mutableStateOf(false) }
+        // TV D-pad: the options button sits INSIDE the row's bounds, so a
+        // directional search from the focused row rejects it (Compose never
+        // offers a candidate the focused node contains; same reason as the
+        // GH #79 reveal button in TvFocus.kt). Right from the row and Left
+        // from the button are routed explicitly instead.
+        val rowFocus = remember(stream.id) { FocusRequester() }
+        val moreFocus = remember(stream.id) { FocusRequester() }
+        var rowFocused by remember(stream.id) { mutableStateOf(false) }
         val dragging = dragIndex == index
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .onSizeChanged { rowHeightPx = it.height.toFloat().coerceAtLeast(1f) }
                 .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
+                .focusRequester(rowFocus)
+                .onPreviewKeyEvent { event ->
+                    isTv && rowFocused && !saving &&
+                        event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight &&
+                        runCatching { moreFocus.requestFocus() }.isSuccess
+                }
+                .onFocusChanged {
+                    rowFocused = it.isFocused
+                    if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("switch:row$index")
+                    else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("switch:row$index")
+                }
                 .combinedClickable(
                     onClick = { onSelect(stream.id) },
                     onLongClick = { if (!saving) menuOpen = true },
@@ -97,7 +124,10 @@ internal fun ReorderableStreamList(
         ) {
             RadioButton(
                 selected = currentStreamId == stream.id,
-                onClick = { onSelect(stream.id) },
+                // TV: the row itself is the select target (OK selects, long
+                // press opens the menu), so the radio is display only and the
+                // row's D-pad stops are just row and options button.
+                onClick = if (isTv) null else ({ onSelect(stream.id) }),
                 colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
             )
             Text(
@@ -108,7 +138,20 @@ internal fun ReorderableStreamList(
             )
             Box {
                 if (isTv) {
-                    IconButton(onClick = { menuOpen = true }, enabled = !saving) {
+                    IconButton(
+                        onClick = { menuOpen = true },
+                        enabled = !saving,
+                        modifier = Modifier
+                            .focusRequester(moreFocus)
+                            .onPreviewKeyEvent { event ->
+                                event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft &&
+                                    runCatching { rowFocus.requestFocus() }.isSuccess
+                            }
+                            .onFocusChanged {
+                                if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("switch:more$index")
+                                else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("switch:more$index")
+                            },
+                    ) {
                         Icon(Icons.Filled.MoreVert, contentDescription = "Stream Order Options")
                     }
                 } else {

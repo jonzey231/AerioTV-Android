@@ -1160,6 +1160,30 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED] = value }
     }
 
+    /** Discord request: draw each tile's channel logo on the tile. Default off. */
+    val multiviewShowLogos: Flow<Boolean> = store.data.map {
+        it[KEY_MULTIVIEW_SHOW_LOGOS] ?: false
+    }
+    suspend fun setMultiviewShowLogos(value: Boolean) {
+        store.edit { it[KEY_MULTIVIEW_SHOW_LOGOS] = value }
+    }
+
+    /** Logo corner: top_left (default), top_right, bottom_left, bottom_right. */
+    val multiviewLogoPosition: Flow<String> = store.data.map {
+        it[KEY_MULTIVIEW_LOGO_POSITION] ?: "top_left"
+    }
+    suspend fun setMultiviewLogoPosition(value: String) {
+        store.edit { it[KEY_MULTIVIEW_LOGO_POSITION] = value }
+    }
+
+    /** Logo height as a percent of tile height, 10 to 40 in steps of 5. Default 20. */
+    val multiviewLogoSize: Flow<Int> = store.data.map {
+        (it[KEY_MULTIVIEW_LOGO_SIZE] ?: 20).coerceIn(10, 40)
+    }
+    suspend fun setMultiviewLogoSize(value: Int) {
+        store.edit { it[KEY_MULTIVIEW_LOGO_SIZE] = value.coerceIn(10, 40) }
+    }
+
     /**
      * iOS `multiviewPerfWarningSuppressed` parity (issue #46). Set by the
      * "Don't Show Again" button on the soft-limit performance warning;
@@ -2198,6 +2222,9 @@ class AppPreferences @Inject constructor(
         val KEY_MULTIVIEW_TILE_PADDING = booleanPreferencesKey("multiview_tile_padding")
         val KEY_MULTIVIEW_TILE_CORNERS_ROUNDED = booleanPreferencesKey("multiview_tile_corners_rounded")
         val KEY_MULTIVIEW_LAYOUT_MODE = stringPreferencesKey("multiview_layout_mode")
+        val KEY_MULTIVIEW_SHOW_LOGOS = booleanPreferencesKey("multiview_show_logos")
+        val KEY_MULTIVIEW_LOGO_POSITION = stringPreferencesKey("multiview_logo_position")
+        val KEY_MULTIVIEW_LOGO_SIZE = intPreferencesKey("multiview_logo_size")
         val KEY_MULTIVIEW_PERF_WARNING_SUPPRESSED =
             booleanPreferencesKey("multiview_perf_warning_suppressed")
         val KEY_CHANNEL_COLLECTIONS = stringPreferencesKey("channel_collections")

@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.FirstPage
@@ -120,6 +121,9 @@ fun PlayerSettingsScreen(
     val multiviewStyle by viewModel.multiviewAudioFocusStyle.collectAsStateWithLifecycle(initialValue = "centerIcon")
     val multiviewPadding by viewModel.multiviewTilePadding.collectAsStateWithLifecycle(initialValue = false)
     val multiviewRounded by viewModel.multiviewTileCornersRounded.collectAsStateWithLifecycle(initialValue = false)
+    val multiviewShowLogos by viewModel.multiviewShowLogos.collectAsStateWithLifecycle(initialValue = false)
+    val multiviewLogoPosition by viewModel.multiviewLogoPosition.collectAsStateWithLifecycle(initialValue = "top_left")
+    val multiviewLogoSize by viewModel.multiviewLogoSize.collectAsStateWithLifecycle(initialValue = 20)
 
     val startupRefreshRate by viewModel.startupRefreshRate.collectAsStateWithLifecycle(initialValue = "off")
     val matchContentResolution by viewModel.matchContentResolution.collectAsStateWithLifecycle(initialValue = false)
@@ -482,6 +486,37 @@ fun PlayerSettingsScreen(
                         onSelect = viewModel::setMultiviewTileCornersRounded,
                         footer = "Square keeps the cinema-grid look; rounded softens each tile with a 12pt radius.",
                     )
+                    SettingsToggleRow(
+                        title = "Show Channel Logos",
+                        subtitle = "Show each channel's logo on its tile so you can tell streams apart.",
+                        leadingIcon = if (isTv) Icons.Filled.Image else null,
+                        checked = multiviewShowLogos,
+                        onCheckedChange = viewModel::setMultiviewShowLogos,
+                    )
+                    if (multiviewShowLogos) {
+                        val corners = listOf(
+                            SettingsPickerOption("top_left", "Top Left"),
+                            SettingsPickerOption("top_right", "Top Right"),
+                            SettingsPickerOption("bottom_left", "Bottom Left"),
+                            SettingsPickerOption("bottom_right", "Bottom Right"),
+                        )
+                        SettingsPickerRow(
+                            title = "Logo Position",
+                            tvChoiceSheet = true,
+                            inlineTitle = true,
+                            options = corners,
+                            selected = corners.firstOrNull { it.value == multiviewLogoPosition }?.value
+                                ?: "top_left",
+                            onSelect = viewModel::setMultiviewLogoPosition,
+                        )
+                        SteppedSliderRow(
+                            label = "Logo Size",
+                            values = listOf(10, 15, 20, 25, 30, 35, 40),
+                            selected = multiviewLogoSize,
+                            format = { "$it%" },
+                            onSelect = viewModel::setMultiviewLogoSize,
+                        )
+                    }
                 }
 
                 // MARK: Display (TV only)

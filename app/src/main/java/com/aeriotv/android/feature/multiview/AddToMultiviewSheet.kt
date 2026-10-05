@@ -694,6 +694,10 @@ fun AddToMultiviewSheet(
     // the header comment ("BACK to dismiss") always promised but never wired.
     BackHandler(onBack = onDismiss)
     if (isTvDevice) {
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            com.aeriotv.android.ui.tv.TvFocusTrace.player("sheet open AddToMultiview")
+            onDispose { com.aeriotv.android.ui.tv.TvFocusTrace.player("sheet close AddToMultiview") }
+        }
         // Android TV: a centered Dialog panel. No drag/swipe semantics, so the
         // D-pad can scroll the list freely; Back / Cancel / Play dismiss it.
         // onDismissRequest KEEPS selections (onDismiss); the "Cancel" text

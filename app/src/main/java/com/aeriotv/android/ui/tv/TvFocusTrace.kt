@@ -72,6 +72,11 @@ object TvFocusTrace {
         Log.i(TAG, "[MOVE] $anchor $from -> $to $detail")
     }
 
+    /** Live player chrome: sheets, window focus and OK routing (one line per event). */
+    fun player(detail: String) {
+        Log.i(TAG, "[PLAYER] $detail")
+    }
+
     /** A D-pad / Back decision at a page-level handler. */
     fun key(key: String, consumed: Boolean, by: String) {
         Log.i(TAG, "[KEY] $key consumed=$consumed by=$by")

@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -1515,6 +1516,18 @@ fun PlayerScreen(
                 // gating this on chromeVisible meant the press that REVEALED
                 // the chrome did not seed the countdown.
                 reportInteraction()
+                if (isTvForm && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                    event.nativeKeyEvent.repeatCount == 0
+                ) {
+                    when (event.nativeKeyEvent.keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> "Center"
+                        else -> com.aeriotv.android.ui.tv.TvFocusTrace.nameOf(event)
+                    }?.let { k ->
+                        com.aeriotv.android.ui.tv.TvFocusTrace.player(
+                            "key $k chrome=$chromeVisible mvSheet=$multiviewPickerOpen",
+                        )
+                    }
+                }
                 // GH #71: digit keys (and OK / Back while digits are
                 // pending) belong to channel-number entry on TV. Checked
                 // first so no mapping below can steal a digit; every other
@@ -1664,6 +1677,10 @@ fun PlayerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(playbackFocus)
+                .onFocusChanged {
+                    if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("player:surface")
+                    else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("player:surface")
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
