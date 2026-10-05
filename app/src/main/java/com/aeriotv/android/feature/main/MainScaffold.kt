@@ -833,7 +833,7 @@ fun MainScaffold(
         val requestCurrentTabPill: () -> Boolean = remember {
             {
                 val r = pillRequestersRef.value[selectedTab]
-                r != null && runCatching { r.requestFocus() }.isSuccess
+                r != null && runCatching { r.requestFocus() }.getOrDefault(false)
             }
         }
         // Chrome-collapse channel: long content surfaces (the On Demand grids)

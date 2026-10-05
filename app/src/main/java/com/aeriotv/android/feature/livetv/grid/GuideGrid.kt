@@ -274,7 +274,7 @@ fun GuideGrid(
                 Key.DirectionUp -> {
                     if (down) {
                         val left = onLeaveTop() ||
-                            (topNav?.let { runCatching { it.requestFocus() }.isSuccess } ?: false)
+                            (topNav?.let { runCatching { it.requestFocus() }.getOrDefault(false) } ?: false)
                         if (left) clockSelected = false
                     }
                     true
@@ -320,7 +320,7 @@ fun GuideGrid(
                         if (isTv) { traceBy = "grid-top-row->clock"; clockSelected = true; return@handler true }
                         if (onLeaveTop()) { traceBy = "grid-top-row->onLeaveTop"; return@handler true }
                         traceBy = "grid-top-row->topNav"
-                        return@handler topNav?.let { runCatching { it.requestFocus() }.isSuccess } ?: false
+                        return@handler topNav?.let { runCatching { it.requestFocus() }.getOrDefault(false) } ?: false
                     }
                     traceBy = "grid-moveRows"
                     true
