@@ -1459,10 +1459,9 @@ fun MainScaffold(
                                 onStop = retainedVm::stop,
                                 onStopAll = retainedVm::stopAll,
                                 capsule = tabletNav,
-                                // Shares the row with Control a TV: one-line
-                                // pill. Alone: the cast card's shape (Logan
+                                // Always the cast card's shape; beside
+                                // Control a TV it only gets narrower (Logan
                                 // 2026-10-05).
-                                compact = phoneFab,
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -1470,6 +1469,9 @@ fun MainScaffold(
                             if (showKept) Spacer(Modifier.width(12.dp))
                             CompanionControlFab(
                                 onClick = { showCompanionPicker = true },
+                                // Beside the Kept Live card: a circle of the
+                                // card's height.
+                                diameter = if (showKept) com.aeriotv.android.feature.livetv.RetainedCardHeight else null,
                             )
                         }
                     }
@@ -1675,14 +1677,22 @@ internal fun Modifier.floatingNavChrome(shape: androidx.compose.ui.graphics.Shap
  * primary border) rather than a filled pill, mirroring the iOS glass FAB.
  */
 @Composable
-private fun CompanionControlFab(onClick: () -> Unit, tablet: Boolean = false) {
+private fun CompanionControlFab(
+    onClick: () -> Unit,
+    tablet: Boolean = false,
+    /** Beside the Kept Live card: a circle of this diameter. */
+    diameter: androidx.compose.ui.unit.Dp? = null,
+) {
     // Same shape and chrome as MinimizedTabPill, which it sits opposite
     // once the bar minimizes (Logan 2026-09-09).
     Box(
         modifier = Modifier
             // Tablets: a 56 dp circle level with the 56 dp tab capsule.
-            .size(width = if (tablet) 56.dp else 64.dp, height = if (tablet) 56.dp else 52.dp)
-            .floatingNavChrome(if (tablet) CircleShape else RoundedCornerShape(26.dp))
+            .then(
+                if (diameter != null) Modifier.size(diameter)
+                else Modifier.size(width = if (tablet) 56.dp else 64.dp, height = if (tablet) 56.dp else 52.dp),
+            )
+            .floatingNavChrome(if (tablet || diameter != null) CircleShape else RoundedCornerShape(26.dp))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

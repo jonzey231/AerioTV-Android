@@ -201,14 +201,24 @@ private fun RetainedChannelsSheet(
  */
 val LocalRetainedChannelIds = androidx.compose.runtime.compositionLocalOf { emptySet<String>() }
 
+/** Kept Live card vertical padding, the cast card's 8 dp. */
+val RetainedCardVerticalPadding = 8.dp
+/** Kept Live card trailing control height, the cast card's 48 dp. */
+val RetainedCardControlHeight = 48.dp
 /**
- * Keep Recent Channels Live pill (Apple parity, Logan 2026-10-04), phone and
- * tablet only. One compact line in the card slot above the bottom nav bar,
- * sharing its row with the Control a TV button (pill leading, button
- * trailing). TV uses the top-bar kept-live circle and its dialog instead.
- * One kept: channel logo, "Keeping <name> live" (tap tunes it, adopting the
- * kept stream exactly as a re-tune does) and Stop. Two or more: "Keeping N
- * channels live" (tap opens the Kept Live list) and Stop All.
+ * Height of the Kept Live card (64 dp): the Control a TV button beside it on
+ * phones takes this diameter so the row reads as one shape (Logan 2026-10-05).
+ */
+val RetainedCardHeight = RetainedCardVerticalPadding * 2 + RetainedCardControlHeight
+
+/**
+ * Keep Recent Channels Live card (Apple parity, Logan 2026-10-04), phone and
+ * tablet only, in the card slot above the bottom nav bar. One shape
+ * everywhere, the cast card's (Logan 2026-10-05); sharing the row with the
+ * Control a TV button it only gets narrower. TV uses the top-bar kept-live
+ * circle and its dialog instead. One kept: tap tunes it (adopting the kept
+ * stream exactly as a re-tune does), Stop. Two or more: tap opens the Kept
+ * Live list, Stop All.
  */
 @Composable
 fun RetainedChannelsPill(
@@ -219,81 +229,10 @@ fun RetainedChannelsPill(
     onStopAll: () -> Unit,
     /** Tablets: 18 dp side padding, matching the tablet cast card. */
     capsule: Boolean = false,
-    /** Phones, sharing the row with the Control a TV button: the one-line pill. */
-    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     if (retained.isEmpty()) return
-    if (!compact) {
-        RetainedChannelsCard(retained, onTune, onOpenList, onStop, onStopAll, capsule, modifier)
-        return
-    }
-    val single = retained.size == 1
-    // Tablets (Apple parity): one kept = true capsule; two or more = the same
-    // surface on a 24 dp rounded rectangle.
-    val shape = when {
-        capsule && single -> androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
-        capsule -> androidx.compose.foundation.shape.RoundedCornerShape(24.dp)
-        else -> androidx.compose.foundation.shape.RoundedCornerShape(26.dp)
-    }
-    val latest = retained.last()
-    androidx.compose.foundation.layout.Row(
-        modifier = modifier
-            .height(52.dp)
-            // Same chrome as the floating nav bar and the Control a TV
-            // button so the row reads as one layer with them.
-            .floatingNavChrome(shape)
-            .padding(start = 6.dp, end = 4.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-        androidx.compose.foundation.layout.Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
-                .clickable(onClick = { if (single) onTune(latest.channelId) else onOpenList() })
-                .padding(4.dp),
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        ) {
-            val logo = latest.logoUrl
-            androidx.compose.foundation.layout.Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(com.aeriotv.android.core.ui.artworkTileShape(6.dp, model = logo))
-                    .background(MaterialTheme.colorScheme.background),
-                contentAlignment = androidx.compose.ui.Alignment.Center,
-            ) {
-                if (single && !logo.isNullOrBlank()) {
-                    coil3.compose.AsyncImage(
-                        model = logo,
-                        contentDescription = null,
-                        modifier = Modifier.size(32.dp),
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.FiberSmartRecord,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-            androidx.compose.foundation.layout.Spacer(Modifier.width(10.dp))
-            androidx.compose.material3.Text(
-                text = if (single) "Keeping ${latest.channelName} live"
-                else "Keeping ${retained.size} channels live",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            )
-        }
-        if (single) {
-            RetainedCardButton(label = "Stop", onClick = { onStop(latest.channelId) })
-        } else {
-            RetainedCardButton(label = "Stop All", onClick = onStopAll)
-        }
-    }
+    RetainedChannelsCard(retained, onTune, onOpenList, onStop, onStopAll, capsule, modifier)
 }
 
 /**
@@ -322,7 +261,7 @@ private fun RetainedChannelsCard(
             .floatingNavChrome(capsuleShape)
             .clip(capsuleShape)
             .clickable(onClick = { if (single) onTune(latest.channelId) else onOpenList() })
-            .padding(horizontal = if (tablet) 18.dp else 12.dp, vertical = 8.dp),
+            .padding(horizontal = if (tablet) 18.dp else 12.dp, vertical = RetainedCardVerticalPadding),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         val logo = latest.logoUrl
@@ -369,7 +308,7 @@ private fun RetainedChannelsCard(
             )
         }
         androidx.compose.foundation.layout.Box(
-            modifier = Modifier.heightIn(min = 48.dp),
+            modifier = Modifier.heightIn(min = RetainedCardControlHeight),
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             if (single) {
