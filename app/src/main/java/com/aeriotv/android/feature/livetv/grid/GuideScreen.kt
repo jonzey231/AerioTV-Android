@@ -808,8 +808,17 @@ fun GuideScreen(
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=catchup-return channel=${ret.channelId} found=false ${traceGates()}")
             return@LaunchedEffect
         }
-        grid.scrollViewportTo(ret.viewportStartMs, animated = false)
-        grid.focusRowAt(row, ret.cellStartMs)
+        // The played program may have aged out of the rows window (or the
+        // EPG moved): fall back to the program airing now on that row.
+        val playedCell = grid.rows.cellAt(row, ret.cellStartMs)
+        if (playedCell != null && playedCell.startMillis == ret.cellStartMs) {
+            grid.scrollViewportTo(ret.viewportStartMs, animated = false)
+            grid.focusRowAt(row, ret.cellStartMs)
+        } else {
+            val nowCell = grid.rows.cellAt(row, System.currentTimeMillis())
+            com.aeriotv.android.ui.tv.TvFocusTrace.guide("refocus after=catchup-return channel=${ret.channelId} played-cell-missing fallback=now")
+            grid.focusRowAt(row, nowCell?.startMillis)
+        }
         var held = 0
         var attempts = 0
         while (attempts < 20 && held < 6) {

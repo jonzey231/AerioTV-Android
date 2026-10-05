@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,12 +33,14 @@ private val AUDIO_ONLY_TEXT_MIN_HEIGHT = 160.dp
 /**
  * What an audio-only (radio) stream shows where the video would be
  * (GH jonzey231/AerioTV#90), the same rule on Apple and Android:
- *  - a dark vertical gradient background (never plain black);
+ *  - the card fills the same 16:9 rect a video would (aspect fit inside the
+ *    surface, centered), black outside it like a letterboxed video;
+ *  - a dark vertical gradient inside that rect (never plain black);
  *  - the channel logo centered, 40 percent of the shorter side in the full
  *    player, 55 percent when [compact] (mini player, PiP, Multiview tile);
  *  - without a logo, a music note in an accent-colored circle of that size;
  *  - the channel name and the label "Audio Only" under it, only when the
- *    surface is at least 160 dp tall.
+ *    16:9 rect is at least 160 dp tall.
  * Purely decorative: no focus, no pointer input, so taps, D-pad and the player
  * chrome above it behave exactly as on video.
  */
@@ -48,9 +51,13 @@ fun AudioOnlyArtwork(
     compact: Boolean = false,
 ) {
     val accent = LocalAppTheme.current.accentPrimary
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
     BoxWithConstraints(
         modifier = Modifier
-            .fillMaxSize()
+            .aspectRatio(16f / 9f)
             .background(
                 Brush.verticalGradient(listOf(Color(0xFF1C2230), Color(0xFF07080C))),
             ),
@@ -107,5 +114,6 @@ fun AudioOnlyArtwork(
                 )
             }
         }
+    }
     }
 }

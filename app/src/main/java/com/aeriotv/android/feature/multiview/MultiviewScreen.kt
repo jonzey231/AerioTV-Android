@@ -1508,6 +1508,9 @@ private fun Tile(
                         tracks.groups.none { it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO }
                 if (audioOnlyNow == tileAudioOnly) return
                 tileAudioOnly = audioOnlyNow
+                // The audio-only card is a 16:9 rect like a video, so the
+                // corner logo and focus border size against 16:9.
+                if (audioOnlyNow) videoAspect = 16f / 9f
                 firstAudioLogged = false
                 if (audioOnlyNow) {
                     android.util.Log.i("AerioMultiview", "[AUDIO-ONLY] detected: no video track tile=${tile.displayName}")
@@ -1641,7 +1644,7 @@ private fun Tile(
                 compact = true,
             )
         }
-        if (showLogos && !singleTile && tile.logoUrl.isNotBlank() && !tileAudioOnly) {
+        if (showLogos && !singleTile && tile.logoUrl.isNotBlank()) {
             TileChannelLogo(
                 url = tile.logoUrl,
                 position = logoPosition,
