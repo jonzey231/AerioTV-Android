@@ -295,28 +295,28 @@ object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Your whole library",
-            body = "Movies and TV Shows no longer stop at 40,000 titles. The catalog is stored on the device as it loads, resumes where it left off after a restart, and never loads the whole library into memory.",
+            title = "Multiview channel logos",
+            body = "Settings > Player > Multiview can show each tile's channel logo inside the picture, with a corner position and a size from 5 to 25 percent.",
         ),
         WhatsNewItem(
-            title = "Guide channel column",
-            body = "Channel number, favorite star and catch-up icon sit in a band above the logo, and the logo fills the space below it. Season and episode moved from the guide cells to the program details.",
+            title = "Reorder a channel's streams",
+            body = "Dispatcharr Direct Connect admins can reorder a channel's streams from Switch Stream: drag the handle on phones and tablets, or use the reorder button on TV.",
         ),
         WhatsNewItem(
-            title = "Playlist switching keeps your data",
-            body = "Switching playlists no longer clears the previous playlist's guide or library, and permissions refresh the moment you switch. Refresh Everything rebuilds the library from scratch.",
+            title = "Skip Without Controls",
+            body = "A new Player setting: with the controls hidden, Left and Right skip back and forward instead of opening the timeline. Works for live TV, recordings and movies.",
         ),
         WhatsNewItem(
-            title = "Rounded corners, two toggles",
-            body = "Rounded corners for List view and Guide view are now separate in Settings > Live TV, and guide artwork follows the Guide toggle.",
+            title = "Kept Live and tablets",
+            body = "Closing the player can keep recent channels live for an instant return, shown on a Kept Live card. Tablets use the phone's bottom tab bar.",
         ),
         WhatsNewItem(
-            title = "Android TV: Guide only",
-            body = "The List view is retired on TV. Live TV always opens the Guide, and its options live under Guide Presentation in Appearance.",
+            title = "Smoother Android TV",
+            body = "Back on DVR, Movies, TV Shows and Settings returns to the tab bar first, focus fixes across the guide and player, and hidden tabs no longer rebuild every 2 seconds.",
         ),
         WhatsNewItem(
             title = "Fixes",
-            body = "Switching streams on a slow provider no longer freezes the picture. The interface no longer runs off the screen after a resolution switch on the Google TV Streamer. Crash reports are captured automatically for the log export.",
+            body = "Fixed a crash when a stream switch followed a 503 retry. Guide colors and drag precision match the Apple app. The guide paints faster at launch.",
         ),
     )
 }
