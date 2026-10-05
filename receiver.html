@@ -715,8 +715,13 @@
     // and frame rate). Sent beside 'mse' as 'display'; senders that do not
     // know the key ignore it.
     const DISPLAY_PROBES = {
+      // 720p60: a 720p59.94 source is not presentable on every device
+      // (Chromecast Ultra, 2026-10-05); senders fall back to h264_1080p60
+      // when this key is missing.
+      h264_720p60: ['video/mp4', 'avc1.640020', 1280, 720, 60],
       h264_1080p60: ['video/mp4', 'avc1.64002A', 1920, 1080, 60],
       h264_1080p30: ['video/mp4', 'avc1.640028', 1920, 1080, 30],
+      hevc_720p60: ['video/mp4', 'hvc1.1.6.L123.B0', 1280, 720, 60],
       hevc_1080p60: ['video/mp4', 'hvc1.1.6.L153.B0', 1920, 1080, 60],
       hevc_4k60: ['video/mp4', 'hvc1.1.6.L153.B0', 3840, 2160, 60],
       h264_4k60: ['video/mp4', 'avc1.640033', 3840, 2160, 60],
