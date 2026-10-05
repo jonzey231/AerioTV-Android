@@ -1674,8 +1674,11 @@ private fun Tile(
 /**
  * Channel logo overlay for a Multiview tile. Draws inside the tile in the
  * chosen corner of the VIDEO rect (aspect fit of [videoAspect], else 16:9,
- * inside the tile) with an 8dp inset, height = video height x [sizePercent],
- * aspect fit, on the same black 55 percent rounded backdrop as the name
+ * inside the tile) with an 8dp inset. Equal-area rule (matches Apple): with
+ * h = video height x [sizePercent], the image gets the area of a 3:1 logo
+ * h tall (3 x h x h) at its own aspect, clamped to a 2h tall by 4h wide box
+ * and never wider than half the video rect. Until Coil reports the
+ * intrinsic size the aspect is assumed 3:1. Drawn on the same black 55 percent rounded backdrop as the name
  * badge. Not focusable and not clickable, so taps and D-pad focus go to the
  * tile as before. Loaded through Coil's singleton loader (same loader and
  * cache as the guide).
@@ -1693,7 +1696,21 @@ private fun TileChannelLogo(
         val tileAspect = if (maxHeight.value > 0f) maxWidth.value / maxHeight.value else aspect
         val videoW = if (tileAspect > aspect) maxHeight * aspect else maxWidth
         val videoH = if (tileAspect > aspect) maxHeight else maxWidth / aspect
-        val logoH = videoH * (sizePercent.coerceIn(5, 25) / 100f)
+        val h = videoH * (sizePercent.coerceIn(5, 25) / 100f)
+        // Intrinsic aspect from Coil; 3:1 until the image has loaded.
+        var logoAspect by remember(url) { mutableStateOf(3f) }
+        // Area = 3h^2 at aspect a: width = h*sqrt(3a), height = h*sqrt(3/a).
+        val a = logoAspect
+        val rawW = h * kotlin.math.sqrt(3f * a)
+        val rawH = h * kotlin.math.sqrt(3f / a)
+        val scale = minOf(
+            1f,
+            (h * 2f) / rawH,
+            (h * 4f) / rawW,
+            (videoW * 0.5f) / rawW,
+        )
+        val logoW = rawW * scale
+        val logoH = rawH * scale
         val alignment = when (position) {
             "top_right" -> Alignment.TopEnd
             "bottom_left" -> Alignment.BottomStart
@@ -1716,8 +1733,6 @@ private fun TileChannelLogo(
                 .align(alignment)
                 .padding(8.dp)
                 .offset(y = topShift)
-                .height(logoH)
-                .widthIn(max = videoW * 0.5f)
                 .clip(RoundedCornerShape(4.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .padding(4.dp),
@@ -1726,7 +1741,13 @@ private fun TileChannelLogo(
                 model = url,
                 contentDescription = null,
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                modifier = Modifier.fillMaxHeight(),
+                onSuccess = { state ->
+                    val sz = state.painter.intrinsicSize
+                    if (sz.width.isFinite() && sz.height.isFinite() && sz.width > 0f && sz.height > 0f) {
+                        logoAspect = sz.width / sz.height
+                    }
+                },
+                modifier = Modifier.size(logoW, logoH),
             )
         }
         }
