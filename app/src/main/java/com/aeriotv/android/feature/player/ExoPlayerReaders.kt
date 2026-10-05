@@ -436,6 +436,14 @@ fun rememberVideoFormatBadge(player: ExoPlayer?, resetKey: Any? = null): String?
     var format by androidx.compose.runtime.remember(player, resetKey) {
         androidx.compose.runtime.mutableStateOf<Format?>(null)
     }
+    // Audio-only (radio) streams, GH AerioTV#90: no video group at all, so the
+    // badge names the audio instead ("AAC 48 kHz · 128 kbps").
+    var audioFormat by androidx.compose.runtime.remember(player, resetKey) {
+        androidx.compose.runtime.mutableStateOf<Format?>(null)
+    }
+    var audioOnly by androidx.compose.runtime.remember(player, resetKey) {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
     androidx.compose.runtime.DisposableEffect(player, resetKey) {
         val p = player ?: return@DisposableEffect onDispose { }
         val listener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
@@ -466,11 +474,66 @@ fun rememberVideoFormatBadge(player: ExoPlayer?, resetKey: Any? = null): String?
                 reason: Int,
             ) {
                 format = null
+                audioFormat = null
+                audioOnly = false
+            }
+            override fun onAudioInputFormatChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                newFormat: Format,
+                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+            ) {
+                audioFormat = newFormat
+            }
+            override fun onTracksChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                tracks: androidx.media3.common.Tracks,
+            ) {
+                audioOnly = isAudioOnlyTracks(tracks)
             }
         }
         format = p.videoFormat
+        audioFormat = p.audioFormat
+        audioOnly = isAudioOnlyTracks(p.currentTracks)
         p.addAnalyticsListener(listener)
         onDispose { p.removeAnalyticsListener(listener) }
     }
+    if (audioOnly) return audioFormatBadge(audioFormat)
     return videoFormatBadge(format, measuredFps)
+}
+
+/** Audio present and no video group at all (a radio stream). */
+internal fun isAudioOnlyTracks(tracks: androidx.media3.common.Tracks): Boolean =
+    tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO } &&
+        tracks.groups.none { it.type == C.TRACK_TYPE_VIDEO }
+
+/**
+ * Format badge for an audio-only stream: "AAC 48 kHz · 128 kbps". The bitrate
+ * half is dropped when the stream does not declare one; null until the audio
+ * format is known.
+ */
+@OptIn(UnstableApi::class)
+fun audioFormatBadge(format: Format?): String? {
+    val f = format ?: return null
+    val mime = f.sampleMimeType.orEmpty()
+    val codec = when (mime) {
+        "audio/mp4a-latm" -> "AAC"
+        "audio/ac3" -> "AC-3"
+        "audio/eac3", "audio/eac3-joc" -> "E-AC-3"
+        "audio/mpeg" -> "MP3"
+        "audio/mpeg-L1" -> "MP1"
+        "audio/mpeg-L2" -> "MP2"
+        "audio/opus" -> "Opus"
+        "audio/flac" -> "FLAC"
+        "audio/vnd.dts", "audio/vnd.dts.hd" -> "DTS"
+        "audio/true-hd" -> "TrueHD"
+        else -> mime.removePrefix("audio/").uppercase().ifBlank { return null }
+    }
+    val rate = f.sampleRate.takeIf { it > 0 }?.let { hz ->
+        val khz = hz / 1000.0
+        if (khz % 1.0 == 0.0) "${khz.toInt()} kHz" else "${"%.1f".format(java.util.Locale.US, khz)} kHz"
+    }
+    val bitrate = (f.averageBitrate.takeIf { it > 0 } ?: f.bitrate.takeIf { it > 0 })
+        ?.let { "${(it + 500) / 1000} kbps" }
+    val head = if (rate != null) "$codec $rate" else codec
+    return if (bitrate != null) "$head · $bitrate" else head
 }

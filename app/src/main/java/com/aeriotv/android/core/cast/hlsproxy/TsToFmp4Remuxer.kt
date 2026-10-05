@@ -18,6 +18,8 @@ class UnsupportedCodecException(
     val codecName: String,
     /** True for a video-stream refusal, false for audio. */
     val isVideo: Boolean = true,
+    /** True when the PMT has no video stream at all (a radio channel). */
+    val audioOnly: Boolean = false,
 ) : Exception("Cast HLS proxy cannot serve $codecName")
 
 /**
@@ -587,7 +589,13 @@ class TsToFmp4Remuxer(
             }
             audioSource = passthrough
         }
-        if (video < 0) throw UnsupportedCodecException("no video stream in PMT")
+        if (video < 0) {
+            // GH AerioTV#90: segments are cut on video keyframes and the
+            // demuxed master always carries a video rendition, so an
+            // audio-only program has no path through this proxy yet. The
+            // session logs the [AUDIO-ONLY] line (this file stays pure logic).
+            throw UnsupportedCodecException("audio-only stream", isVideo = false, audioOnly = true)
+        }
         videoPid = video
         audioPid = audio // may stay -1: video-only mux is fine
         pmtSeen = true

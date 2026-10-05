@@ -1519,6 +1519,9 @@ class AerioCastSender @Inject constructor(
      * never transcoded, so the audio arm names what the receiver lacks.
      */
     private fun describeRefusal(e: UnsupportedCodecException): String {
+        if (e.audioOnly) {
+            return "This channel is audio only, which cannot be cast yet."
+        }
         val codec = e.codecName.removeSuffix(" audio").removeSuffix(" video")
         if (e.isVideo) {
             return "This channel's video is $codec, which cannot be cast to this receiver."

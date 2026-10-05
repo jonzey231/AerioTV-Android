@@ -1489,16 +1489,46 @@ private fun Tile(
     // letterbox. 0 = unknown (falls back to 16:9).
     var videoAspect by remember(tile.id) { mutableStateOf(0f) }
     var tilePlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    // Audio-only (radio) tile, GH AerioTV#90: tracks carry audio and no video
+    // group, so the tile shows the channel logo instead of a black cell.
+    var tileAudioOnly by remember(tile.id) { mutableStateOf(false) }
     DisposableEffect(tilePlayer) {
         val p = tilePlayer
+        var firstAudioLogged = false
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 if (videoSize.width > 0 && videoSize.height > 0) {
                     videoAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                 }
             }
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                if (tracks.groups.isEmpty()) return
+                val audioOnlyNow =
+                    tracks.groups.any { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO } &&
+                        tracks.groups.none { it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO }
+                if (audioOnlyNow == tileAudioOnly) return
+                tileAudioOnly = audioOnlyNow
+                firstAudioLogged = false
+                if (audioOnlyNow) {
+                    android.util.Log.i("AerioMultiview", "[AUDIO-ONLY] detected: no video track tile=${tile.displayName}")
+                    p?.let { if (it.isPlaying) onIsPlayingChanged(true) }
+                }
+            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying && tileAudioOnly && !firstAudioLogged) {
+                    firstAudioLogged = true
+                    android.util.Log.i(
+                        "AerioMultiview",
+                        "[AUDIO-ONLY] first audio rendered, treating as first frame tile=${tile.displayName}",
+                    )
+                }
+            }
         }
-        p?.let { listener.onVideoSizeChanged(it.videoSize); it.addListener(listener) }
+        p?.let {
+            listener.onVideoSizeChanged(it.videoSize)
+            listener.onTracksChanged(it.currentTracks)
+            it.addListener(listener)
+        }
         onDispose { p?.removeListener(listener) }
     }
     val shape = if (tileRounded) RoundedCornerShape(8.dp) else RoundedCornerShape(0.dp)
@@ -1604,7 +1634,14 @@ private fun Tile(
                 )
             }
         }
-        if (showLogos && !singleTile && tile.logoUrl.isNotBlank()) {
+        if (tileAudioOnly) {
+            com.aeriotv.android.feature.player.AudioOnlyArtwork(
+                logoUrl = tile.logoUrl,
+                name = tile.displayName,
+                compact = true,
+            )
+        }
+        if (showLogos && !singleTile && tile.logoUrl.isNotBlank() && !tileAudioOnly) {
             TileChannelLogo(
                 url = tile.logoUrl,
                 position = logoPosition,
@@ -1983,6 +2020,18 @@ private fun ExoTile(
                 // tracer self-guards).
                 override fun onRenderedFirstFrame() {
                     tracer.onFirstFrame()
+                }
+
+                // Audio-only (radio) tile: first audio playback is the first
+                // frame for the tune summary (GH AerioTV#90).
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    val groups = player.currentTracks.groups
+                    if (isPlaying &&
+                        groups.any { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO } &&
+                        groups.none { it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO }
+                    ) {
+                        tracer.onFirstFrame()
+                    }
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -2391,8 +2440,17 @@ private fun buildTileMediaSource(
                 .createMediaSource(mediaItem)
         url.endsWith(".ts", ignoreCase = true) ||
             url.contains("/proxy/ts/", ignoreCase = true) -> {
-            val extractors = DefaultExtractorsFactory()
-                .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
+            // AudioOnlyTrackGuard (GH AerioTV#90): a radio channel whose PMT
+            // declares a video PID that never carries a picture still prepares.
+            val extractors = androidx.media3.extractor.ExtractorsFactory {
+                DefaultExtractorsFactory()
+                    .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
+                    .createExtractors()
+                    .map { e ->
+                        if (e is TsExtractor) com.aeriotv.android.core.playback.AudioOnlyTrackGuard(e) else e
+                    }
+                    .toTypedArray()
+            }
             ProgressiveMediaSource.Factory(dataSourceFactory, extractors)
                 .setLoadErrorHandlingPolicy(com.aeriotv.android.core.playback.DispatcharrConnectionLimit.LoadErrorPolicy())
                 .createMediaSource(mediaItem)

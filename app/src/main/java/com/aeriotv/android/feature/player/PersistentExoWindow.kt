@@ -599,6 +599,17 @@ fun BoxScope.PersistentExoWindow(
             },
         )
         }
+        // Audio-only (radio) stream, GH AerioTV#90: channel logo centered on
+        // the surface instead of black. Drawn under every overlay below, so
+        // the mini controls and PlayerScreen's chrome stay on top.
+        val audioOnly by holder.audioOnly.collectAsStateWithLifecycle()
+        if (audioOnly) {
+            AudioOnlyArtwork(
+                logoUrl = holder.currentArtworkUri?.toString().orEmpty(),
+                name = holder.currentTitle.orEmpty(),
+                compact = mode == ExoWindowState.Mode.Mini || inPip,
+            )
+        }
         if (stashFadeCover > 0f) {
             Box(
                 Modifier

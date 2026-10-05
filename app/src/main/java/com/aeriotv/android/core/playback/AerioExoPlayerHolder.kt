@@ -1224,6 +1224,52 @@ class AerioExoPlayerHolder @Inject constructor(
      *  reconnect, so the player UI can show "Channel unavailable" instead of an
      *  endless black screen. Cleared on the next [playUrl]. */
     val streamUnavailable: StateFlow<Boolean> = _streamUnavailable.asStateFlow()
+
+    // ---- audio-only (radio) streams, GH AerioTV#90 ----
+    // True once the current tune's tracks carry audio and NO video group at all
+    // (a radio channel, or a declared-but-empty video PID that
+    // AudioOnlyTrackGuard dropped). The player screen and the multiview tile
+    // draw the channel logo instead of a black surface while it is set, and the
+    // first audio playback stands in for the first video frame everywhere the
+    // holder keys on one (stall watchdog, resume gate, tune trace).
+    private val _audioOnly = MutableStateFlow(false)
+    val audioOnly: StateFlow<Boolean> = _audioOnly.asStateFlow()
+
+    /** Logo and title of the current tune, for the audio-only presentation. */
+    val currentArtworkUri: android.net.Uri? get() = lastPlayArtworkUri
+    val currentTitle: String? get() = lastPlayTitle
+
+    private fun resetAudioOnly() {
+        _audioOnly.value = false
+    }
+
+    private fun onTracksForAudioOnly(tracks: Tracks) {
+        if (tracks.groups.isEmpty()) return
+        val hasVideo = tracks.groups.any { it.type == C.TRACK_TYPE_VIDEO }
+        val hasAudio = tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }
+        val now = hasAudio && !hasVideo
+        if (now == _audioOnly.value) return
+        _audioOnly.value = now
+        if (now) {
+            Log.i(TAG, "[AUDIO-ONLY] detected: no video track ch=$currentChannelId")
+            maybeAudioOnlyFirstFrame()
+        }
+    }
+
+    /** First audio playback on an audio-only stream counts as the first frame. */
+    private fun maybeAudioOnlyFirstFrame() {
+        val p = player ?: return
+        if (!_audioOnly.value || videoFrameRendered) return
+        if (!p.isPlaying || p.playbackState != Player.STATE_READY) return
+        videoFrameRendered = true
+        noFrameHealAttempts = 0
+        Log.i(
+            TAG,
+            "[AUDIO-ONLY] first audio rendered, treating as first frame ch=$currentChannelId " +
+                "(+${SystemClock.elapsedRealtime() - streamPrimedAtMs}ms)",
+        )
+        tracer.onFirstFrame()
+    }
     private val _lastErrorText = MutableStateFlow<String?>(null)
     /** Task #150: the most recent playback failure in user-showable form
      *  (error code name + cause message, or the no-data description). The
@@ -1478,7 +1524,10 @@ class AerioExoPlayerHolder @Inject constructor(
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying && player?.playbackState == Player.STATE_READY) armWatchdog()
+            if (isPlaying) maybeAudioOnlyFirstFrame()
         }
+
+        override fun onTracksChanged(tracks: Tracks) = onTracksForAudioOnly(tracks)
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             // Live Rewind filler lifecycle (GH #51): the chrome transport was
@@ -2310,7 +2359,9 @@ class AerioExoPlayerHolder @Inject constructor(
             it is androidx.media3.extractor.mp4.FragmentedMp4Extractor
         }
         if (ts == null) return@ExtractorsFactory all
-        val continuous: Extractor = ContinuousTsExtractor(ts)
+        // AudioOnlyTrackGuard (GH AerioTV#90): a PMT that declares a video PID
+        // which never carries a picture must not hold preparation forever.
+        val continuous: Extractor = ContinuousTsExtractor(AudioOnlyTrackGuard(ts))
         buildList {
             fmp4?.let { add(it) }
             add(object : Extractor by continuous {
@@ -3583,6 +3634,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastKnownPositionMs = 0L
         lastPositionAdvanceAtMs = now
         videoFrameRendered = false
+        resetAudioOnly()
         streamPrimedAtMs = now
         lastKnownBufferedPositionMs = 0L
         lastBufferAdvanceAtMs = now
@@ -3919,6 +3971,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastKnownPositionMs = 0L
         lastPositionAdvanceAtMs = now
         videoFrameRendered = false
+        resetAudioOnly()
         streamPrimedAtMs = now
         lastKnownBufferedPositionMs = 0L
         lastBufferAdvanceAtMs = now
@@ -4022,6 +4075,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastKnownPositionMs = 0L
         lastPositionAdvanceAtMs = SystemClock.elapsedRealtime()
         videoFrameRendered = false
+        resetAudioOnly()
         noFrameHealAttempts = 0
         noDataHealAttempts = 0
         stoppingRetries = 0

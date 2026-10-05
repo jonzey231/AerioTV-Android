@@ -725,7 +725,15 @@ class CastHlsProxySession @Inject constructor(
                     // audio outside AAC and the AC-3 family this receiver
                     // decodes have no path. Surfaced to the sender's ready
                     // wait as the cast failure.
-                    debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
+                    if (e.audioOnly) {
+                        debugLogWarn(
+                            context, TAG,
+                            "[AUDIO-ONLY] detected: no video track in PMT; the cast proxy cuts " +
+                                "segments on video keyframes and cannot serve audio-only, refusing the cast",
+                        )
+                    } else {
+                        debugLogWarn(context, TAG, "unsupported codec, refusing to cast: ${e.codecName}")
+                    }
                     sessionError.value = e
                     return@launch
                 } catch (t: Throwable) {
