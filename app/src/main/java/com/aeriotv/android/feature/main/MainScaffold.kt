@@ -1241,8 +1241,15 @@ fun MainScaffold(
       // reserve matches where the pill actually is.
       val navBarInset = WindowInsets.navigationBars.asPaddingValues()
           .calculateBottomPadding()
+      // Height of the whole bottom overlay (cast card, Kept Live row, mini
+      // row, tab pill, system inset), measured below. While a card or the
+      // Kept Live row shows it outgrows the flat reserve, and the reserve
+      // follows it so every tab's last row scrolls clear (Logan 2026-10-05,
+      // iPad parity). Bar alone stays at the flat reserve.
+      var bottomOverlayHeightPx by remember { mutableStateOf(0) }
+      val bottomOverlayHeight = with(LocalDensity.current) { bottomOverlayHeightPx.toDp() }
       androidx.compose.runtime.CompositionLocalProvider(
-          LocalTabBarBottomInset provides 96.dp + navBarInset,
+          LocalTabBarBottomInset provides maxOf(96.dp + navBarInset, bottomOverlayHeight + 12.dp),
       ) {
       androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -1300,6 +1307,9 @@ fun MainScaffold(
                     .onGloballyPositioned {
                         com.aeriotv.android.feature.player.PhoneMiniChrome
                             .bottomChromeTopPx.floatValue = it.boundsInRoot().top
+                        if (it.size.height != bottomOverlayHeightPx) {
+                            bottomOverlayHeightPx = it.size.height
+                        }
                     }
                     .navigationBarsPadding()
                     .padding(bottom = 10.dp),
