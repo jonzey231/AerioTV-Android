@@ -105,10 +105,24 @@ internal fun formatFps(fps: Float): String {
     return if (rounded % 1.0 == 0.0) rounded.toInt().toString() else rounded.toString()
 }
 
+/**
+ * Best measured rate for [player] when the container reports none: the exact
+ * PTS-median from [DisplayFrameRateMatcher] when it is measuring THIS player,
+ * else the decoder-counter rate from [ContentFpsMeter]. Snapped; 0 = unknown.
+ */
+@OptIn(UnstableApi::class)
+internal fun measuredFpsFor(player: ExoPlayer, matcherFps: Float, meterFps: Float): Float {
+    val pts = if (DisplayFrameRateMatcher.attachedPlayer === player) matcherFps else 0f
+    return ContentFpsMeter.snap(if (pts > 0f) pts else meterFps)
+}
+
 @OptIn(UnstableApi::class)
 fun ExoPlayer.captureStreamInfo(): StreamInfoSnapshot {
     val format = videoFormat
-    val facts = videoFormatFacts(format, DisplayFrameRateMatcher.contentFps.value)
+    val facts = videoFormatFacts(
+        format,
+        measuredFpsFor(this, DisplayFrameRateMatcher.contentFps.value, ContentFpsMeter.current(this)),
+    )
     val width = facts.displayWidth
     val height = facts.height
     val fps = facts.fps
@@ -126,13 +140,11 @@ fun ExoPlayer.captureStreamInfo(): StreamInfoSnapshot {
                 append("${width}x${height}")
                 facts.scanLabel?.let { append(" ($it)") }
             }
-            if (fps != null) {
-                if (isNotEmpty()) append("  ")
-                // Same spelling the format badge uses (formatFps).
-                append("${formatFps(fps)}fps")
-            }
         }
         if (resFps.isNotBlank()) add(resFps)
+        // Own line under the resolution, Apple wording ("59.94fps", two
+        // decimals). Pixel format is not exposed by MediaCodec here.
+        if (fps != null && fps > 0f) add("${"%.2f".format(java.util.Locale.US, fps)}fps")
         if (colorInfo != null) {
             val parts = buildList {
                 colorSpaceLabel(colorInfo.colorSpace)?.let(::add)
@@ -414,8 +426,13 @@ fun videoFormatBadge(format: Format?, fallbackFps: Float? = null): String? {
 @OptIn(UnstableApi::class)
 @androidx.compose.runtime.Composable
 fun rememberVideoFormatBadge(player: ExoPlayer?, resetKey: Any? = null): String? {
-    val measuredFps by DisplayFrameRateMatcher.contentFps
+    val matcherFps by DisplayFrameRateMatcher.contentFps
         .collectAsStateWithLifecycle()
+    val meterFlow = androidx.compose.runtime.remember(player) {
+        player?.let { ContentFpsMeter.flowFor(it) } ?: kotlinx.coroutines.flow.MutableStateFlow(0f)
+    }
+    val meterFps by meterFlow.collectAsStateWithLifecycle()
+    val measuredFps = player?.let { measuredFpsFor(it, matcherFps, meterFps) } ?: 0f
     var format by androidx.compose.runtime.remember(player, resetKey) {
         androidx.compose.runtime.mutableStateOf<Format?>(null)
     }

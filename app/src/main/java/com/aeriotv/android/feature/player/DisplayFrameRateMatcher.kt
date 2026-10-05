@@ -71,6 +71,11 @@ object DisplayFrameRateMatcher {
     @Volatile var latestHandle: Any? = null
         private set
 
+    /** The player [contentFps] belongs to, so another player (VOD, a
+     *  Multiview tile) never borrows the main player's rate. */
+    @Volatile var attachedPlayer: ExoPlayer? = null
+        private set
+
     /** Fired (on the metadata thread) whenever the requested rate class
      *  changes. MainActivity uses it to pick a display MODE at that rate when
      *  the seamless request cannot be honoured (2160p50 on a 60 Hz mode). */
@@ -106,8 +111,14 @@ object DisplayFrameRateMatcher {
             }
             lastPtsUs = presentationTimeUs
             if (deltasUs.size >= 30) {
+                // Trimmed MEAN, not the median: some feeds carry PTS rounded
+                // to whole milliseconds (16 / 17 ms alternating at 59.94), and
+                // a median lands on 17 ms = 58.82 fps (measured on the Streamer
+                // 2026-10-05). The mean of the middle 80% recovers 16.68 ms.
                 val sorted = deltasUs.sorted()
-                val fps = (1_000_000.0 / sorted[sorted.size / 2]).toFloat()
+                val trim = sorted.size / 10
+                val mid = sorted.subList(trim, sorted.size - trim)
+                val fps = (1_000_000.0 / mid.average()).toFloat()
                 if (abs(fps - contentFps.value) > 0.2f) contentFps.value = fps
                 // Map measured CONTENT fps to the rate we actually request.
                 // Only the 50 / 59.94 / 60 class is ever requested: 25 / 29.97
@@ -152,6 +163,7 @@ object DisplayFrameRateMatcher {
         }
         player.setVideoFrameMetadataListener(listener)
         latestHandle = listener
+        attachedPlayer = player
         return listener
     }
 
