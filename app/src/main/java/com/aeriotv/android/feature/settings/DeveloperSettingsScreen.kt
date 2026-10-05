@@ -119,6 +119,7 @@ fun DeveloperSettingsScreen(
     val loggingEnabled by settingsVm.debugLoggingEnabled.collectAsStateWithLifecycle(initialValue = false)
     val castForceHevc by settingsVm.castForceHevcTranscode.collectAsStateWithLifecycle(initialValue = false)
     val castDownProfile by settingsVm.castTranscodeDownProfile.collectAsStateWithLifecycle(initialValue = "720p60")
+    val forceHls by settingsVm.developerForceHls.collectAsStateWithLifecycle(initialValue = false)
 
     val isTv = rememberIsTvDevice()
     var pendingEnable by remember { mutableStateOf(false) }
@@ -169,6 +170,10 @@ fun DeveloperSettingsScreen(
                     onRequestEnable = { pendingEnable = true },
                     onRequestDisable = { pendingDisable = true },
                 )
+            }
+            // Force HLS (Dispatcharr native HLS test), TV, phone and tablet.
+            item("force-hls") {
+                ForceHlsSection(checked = forceHls, onCheckedChange = settingsVm::setDeveloperForceHls)
             }
             // Section order follows Apple per platform. Phone: Logging, What's
             // Captured, Cast, Log File. TV: Logging, Log File, What's Captured,
@@ -317,6 +322,19 @@ private fun LoggingSection(
             checked = enabled,
             // Route through the confirm dialogs instead of flipping directly.
             onCheckedChange = { value -> if (value) onRequestEnable() else onRequestDisable() },
+        )
+    }
+}
+
+/** Developer test switch: ask Dispatcharr for HLS output on every live channel. */
+@Composable
+private fun ForceHlsSection(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    SettingsSection(header = "Streams") {
+        SettingsToggleRow(
+            title = "Force HLS",
+            subtitle = "Request HLS output from Dispatcharr for every live channel instead of the TS stream. For testing.",
+            checked = checked,
+            onCheckedChange = onCheckedChange,
         )
     }
 }

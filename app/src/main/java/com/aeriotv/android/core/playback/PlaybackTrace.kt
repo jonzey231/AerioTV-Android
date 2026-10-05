@@ -435,8 +435,16 @@ class PlaybackTracer {
     }
 
     private fun liveOffsetMs(player: Player?): Long {
-        val off = player?.currentLiveOffset ?: C.TIME_UNSET
-        return if (off == C.TIME_UNSET) -1L else off
+        val p = player ?: return -1L
+        val off = p.currentLiveOffset
+        if (off != C.TIME_UNSET) return off
+        // HLS playlists without PROGRAM-DATE-TIME leave the wall-clock offset
+        // unset; fall back to distance from the live window edge.
+        val tl = p.currentTimeline
+        if (tl.isEmpty) return -1L
+        val w = tl.getWindow(p.currentMediaItemIndex, androidx.media3.common.Timeline.Window())
+        if (!w.isLive() || w.durationMs == C.TIME_UNSET) return -1L
+        return (w.durationMs - p.currentPosition).coerceAtLeast(0L)
     }
 
     // ---- periodic heartbeat ----

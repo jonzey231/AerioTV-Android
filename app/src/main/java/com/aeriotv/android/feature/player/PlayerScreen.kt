@@ -647,8 +647,10 @@ fun PlayerScreen(
             // hands off to tiles, so neither is retained.
             val toMini = exoWindowState.mode.value == ExoWindowState.Mode.Mini
             val toMultiview = PlayerCloseIntent.consumeMultiviewLaunch()
-            val keepOnClose = !toMini && !toMultiview
-            if (!keepOnClose) {
+            val hlsSession = exoHolder.lastTuneWasForcedHls
+            if (hlsSession) Log.i("AerioTV", "[FORCE-HLS] keep live skipped on HLS session")
+            val keepOnClose = !toMini && !toMultiview && !hlsSession
+            if (toMini || toMultiview) {
                 Log.i(
                     "AerioTV",
                     "[RETAIN] not kept on close: " + if (toMini) "minimized to the mini player" else "multiview launch",

@@ -143,7 +143,7 @@ class AerioExoPlayerHolder @Inject constructor(
         val ext = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
         val kind = when {
             isRawTsUrl(url) -> "TS"
-            ext == "m3u8" -> "HLS"
+            ext == "m3u8" || ForceHls.isForcedHlsUrl(url) -> "HLS"
             ext == "mpd" -> "DASH"
             ext in setOf("mp4", "m4v", "mov") -> "MP4"
             ext == "mkv" -> "MKV"
@@ -179,6 +179,33 @@ class AerioExoPlayerHolder @Inject constructor(
     /** At least LIVE_MAX_BUFFER_FLOOR_MS so the post-stall resume gate is reachable. */
     private fun liveMaxBufferFor(bufferFloorMs: Int, gateMs: Int): Int =
         maxOf(minBufferFor(bufferFloorMs, gateMs) * 2, LIVE_MAX_BUFFER_FLOOR_MS)
+
+    /** Developer Force HLS: the load control is keyed by gate PLUS an HLS
+     *  flag so a forced HLS tune gets its own delegate (bigger min buffer and
+     *  rebuffer resume) through the same gate-switch path. */
+    private fun gateKeyFor(gateMs: Int, hls: Boolean, rebufferMs: Int = 0): Int =
+        // Forced HLS: the rebuffer resume gate rides in the key (100 ms units,
+        // at least 1) so a changed live offset target gets its own delegate.
+        if (hls) gateMs + HLS_GATE_KEY_FLAG * (rebufferMs / 100).coerceAtLeast(1) else gateMs
+    private fun isHlsGateKey(key: Int): Boolean = key >= HLS_GATE_KEY_FLAG
+    private fun gateOfKey(key: Int): Int = key % HLS_GATE_KEY_FLAG
+    /** Forced HLS resume-after-rebuffer gate carried by [key]. */
+    private fun hlsRebufferOfKey(key: Int): Int = (key / HLS_GATE_KEY_FLAG) * 100
+    private fun minBufferForKey(bufferFloorMs: Int, key: Int): Int {
+        val base = minBufferFor(bufferFloorMs, gateOfKey(key))
+        // DefaultLoadControl requires minBufferMs >= the rebuffer gate.
+        return if (isHlsGateKey(key)) maxOf(base, FORCE_HLS_MIN_BUFFER_MS, hlsRebufferOfKey(key)) else base
+    }
+    private fun maxBufferForKey(bufferFloorMs: Int, key: Int): Int {
+        val base = liveMaxBufferFor(bufferFloorMs, gateOfKey(key))
+        return if (isHlsGateKey(key)) maxOf(base, minBufferForKey(bufferFloorMs, key) * 2) else base
+    }
+    /** Start gate kind the next [acquireOrCreate] builds with: forced HLS or not. */
+    @Volatile private var desiredForcedHls: Boolean = false
+    /** True when the most recent live tune was a forced HLS session. Survives
+     *  stop() so the close path can decide Keep Live after the X. */
+    @Volatile var lastTuneWasForcedHls: Boolean = false
+        private set
     /** Start gate the next [acquireOrCreate] must build with, stamped by
      *  [playUrl] from the learned per-channel hold-back. */
     @Volatile private var desiredStartGateMs: Int = LIVE_START_GATE_DEFAULT_MS
@@ -257,6 +284,14 @@ class AerioExoPlayerHolder @Inject constructor(
         prefScope.launch {
             appPreferences.liveStartBufferMs.collect { cachedLiveStartBuffers = it }
         }
+        // Developer Force HLS: mirrored into ForceHls so the next tune (main
+        // player and Multiview tiles) picks a flip up with no restart.
+        prefScope.launch {
+            appPreferences.developerForceHls.collect {
+                ForceHls.enabled = it
+                Log.i(ForceHls.TAG, "[FORCE-HLS] developer switch ${if (it) "ON" else "OFF"}")
+            }
+        }
         // Learned live start buffer: the tracer reports the feed shape at every
         // stall, this decides whether the feed was bursty-but-real-time.
         tracer.onStall = { snapshot -> learnStartBuffer(snapshot) }
@@ -313,8 +348,56 @@ class AerioExoPlayerHolder @Inject constructor(
      *
      * Never touches the running playback.
      */
+    /** Developer Force HLS: a stall raises the NEXT tune's live offset target
+     *  for this channel by the measured gap (capped, same 30 minute TTL as the
+     *  TS hold-back). Stored in the start-buffer map under a distinct key. */
+    private fun learnHlsLiveOffset(snapshot: PlaybackTracer.FeedStallSnapshot) {
+        val channelId = currentChannelIdForRebuild ?: return
+        learnHlsLiveOffsetFor(channelId, snapshot.worstGapMs)
+    }
+
+    /** Shared with Multiview tiles via [ForceHls.learnLiveOffset]. */
+    private fun learnHlsLiveOffsetFor(channelId: String, worstGapMs: Long) {
+        val key = channelId + FORCE_HLS_OFFSET_KEY_SUFFIX
+        val now = System.currentTimeMillis()
+        val prior = cachedLiveStartBuffers[key]
+            ?.takeIf { now - it.learnedAtMs <= HOLDBACK_LEARNED_TTL_MS }?.ms ?: 0
+        val base = maxOf(prior, FORCE_HLS_TARGET_OFFSET_MS)
+        val next = (base + worstGapMs.toInt())
+            .coerceAtMost(FORCE_HLS_LEARNED_OFFSET_MAX_MS)
+            .coerceAtLeast(prior)
+        Log.i(ForceHls.TAG, "[FORCE-HLS] learned live offset $next ms for ch=$channelId (gap $worstGapMs ms)")
+        cachedLiveStartBuffers = cachedLiveStartBuffers +
+            (key to com.aeriotv.android.core.preferences.LearnedStartBuffer(next, now))
+        prefScope.launch {
+            cachedLiveStartBuffers = appPreferences.setLiveStartBufferMs(key, next, now)
+        }
+    }
+
+    /** Live offset target for a forced HLS tune of [channelId]. */
+    private fun hlsLiveOffsetFor(channelId: String?): Int {
+        val entry = channelId?.let { cachedLiveStartBuffers[it + FORCE_HLS_OFFSET_KEY_SUFFIX] }
+            ?: return FORCE_HLS_TARGET_OFFSET_MS
+        if (System.currentTimeMillis() - entry.learnedAtMs > HOLDBACK_LEARNED_TTL_MS) return FORCE_HLS_TARGET_OFFSET_MS
+        return maxOf(FORCE_HLS_TARGET_OFFSET_MS, entry.ms)
+    }
+    init {
+        // Multiview tiles read the same per-channel target/learned offset.
+        ForceHls.liveOffsetLookup = { id -> hlsLiveOffsetFor(id) }
+        ForceHls.learnLiveOffset = { id, gapMs -> learnHlsLiveOffsetFor(id, gapMs) }
+    }
+
+    /** Offset target for the in-flight forced HLS tune, stamped by playUrl. */
+    @Volatile private var forceHlsTargetOffsetMs: Int = FORCE_HLS_TARGET_OFFSET_MS
+
     private fun learnStartBuffer(snapshot: PlaybackTracer.FeedStallSnapshot) {
         if (!snapshot.isLive) return
+        // Developer Force HLS: the bursty-feed learning is a TS-path tool; an
+        // HLS session is buffered by Media3 from the playlist.
+        if (lastPlayUrl?.let(ForceHls::isForcedHlsUrl) == true) {
+            learnHlsLiveOffset(snapshot)
+            return
+        }
         val channelId = currentChannelIdForRebuild ?: return
         // A stream switch (its window, a skip, or the watch) and a same-channel
         // re-prime both stall by construction; that is not the feed's shape.
@@ -409,6 +492,9 @@ class AerioExoPlayerHolder @Inject constructor(
         val url = lastPlayUrl ?: return false
         if (isTimeshifting || isCatchup) return false
         if (PlaybackTracer.urlKind(url) != "live") return false
+        // Developer Force HLS: Media3's HLS buffering (target duration,
+        // EXT-X-START) governs; the TS resume gate and rejoin stay out.
+        if (ForceHls.isForcedHlsUrl(url)) return false
         if (!hasReachedPlaybackRestart || !videoFrameRendered) return false
         return p.playWhenReady || resumeGateActive
     }
@@ -1341,6 +1427,17 @@ class AerioExoPlayerHolder @Inject constructor(
         return fresh
     }
 
+    /** Developer Force HLS warm join + trough ramp (shared with Multiview tiles). */
+    private val forceHlsCushion = ForceHlsCushion("main")
+
+    private fun resetForceHlsCushion(reason: String) = forceHlsCushion.reset(player, reason)
+
+    private fun tickForceHlsCushion(p: ExoPlayer, now: Long) {
+        val url = lastPlayUrl
+        val forced = url != null && ForceHls.isForcedHlsUrl(url) && !isTimeshifting && !isCatchup
+        forceHlsCushion.tick(p, forced, forceHlsTargetOffsetMs.toLong(), now)
+    }
+
     /** Arms the watchdog on first steady playback + recovers on a hard error. */
     private val watchdogListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1678,7 +1775,41 @@ class AerioExoPlayerHolder @Inject constructor(
                 )
                 adoptedLiveTuneAtMs = 0L
             }
+            if (forceHlsTuneAtMs != 0L) {
+                Log.i(
+                    ForceHls.TAG,
+                    "[FORCE-HLS] first frame ch=$currentChannelId " +
+                        "${SystemClock.elapsedRealtime() - forceHlsTuneAtMs}ms after tune",
+                )
+                forceHlsTuneAtMs = 0L
+            }
             tracer.onFirstFrame()
+        }
+    }
+
+    /** elapsedRealtime of the last forced-HLS tune, 0 once its first frame logged. */
+    @Volatile private var forceHlsTuneAtMs = 0L
+    /** The resolved server session behind the playing token playlist. */
+    @Volatile private var forceHlsSession: ForceHls.Session? = null
+    /** Entry URL whose redirect could not be resolved; played directly once. */
+    private var forceHlsResolveSkipUrl: String? = null
+    private var forceHlsResolveGeneration = 0
+
+    /** Logs the redirect target of a forced-HLS request (302 to /proxy/hls/...). */
+    private val forceHlsRedirectListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+        override fun onLoadCompleted(
+            eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+            loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+            mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+        ) {
+            val requested = loadEventInfo.dataSpec.uri.toString()
+            if (!ForceHls.isEntryUrl(requested)) return
+            val landed = loadEventInfo.uri.toString()
+            if (landed != requested) {
+                Log.i(ForceHls.TAG, "[FORCE-HLS] 302 Location: $landed")
+            } else {
+                Log.i(ForceHls.TAG, "[FORCE-HLS] no redirect observed, served at $requested")
+            }
         }
     }
 
@@ -1733,8 +1864,11 @@ class AerioExoPlayerHolder @Inject constructor(
         val bufferFloorMs = cachedBufferFloorMs
         // Learned live start gate for THIS tune, stamped by playUrl. Clamped so a
         // corrupt stored value can never push the start gate past the ceiling.
-        val startGateMs = desiredStartGateMs
-            .coerceIn(LIVE_START_GATE_DEFAULT_MS, LIVE_START_GATE_MAX_MS)
+        val startGateMs = gateKeyFor(
+            desiredStartGateMs.coerceIn(LIVE_START_GATE_DEFAULT_MS, LIVE_START_GATE_MAX_MS),
+            desiredForcedHls,
+            forceHlsTargetOffsetMs,
+        )
         // watchdogReloadEnabled is kept current by the autoRecoverFrozenStreams
         // collector launched in init{}; no blocking read needed here.
         player?.let { existing ->
@@ -1750,7 +1884,7 @@ class AerioExoPlayerHolder @Inject constructor(
                     Log.i(TAG, "[HOLDBACK] start gate $builtWithStartGateMs -> $startGateMs ms on the running player")
                     gateLoadControl?.requestGate(startGateMs)
                     builtWithStartGateMs = startGateMs
-                    builtMaxBufferMs = liveMaxBufferFor(bufferFloorMs, startGateMs)
+                    builtMaxBufferMs = maxBufferForKey(bufferFloorMs, startGateMs)
                 }
                 return existing
             }
@@ -1816,25 +1950,34 @@ class AerioExoPlayerHolder @Inject constructor(
         // the load control nothing to work with. min = gate + 4s keeps the same
         // 4 s of real cushion the tuning above describes.
         // (Bounds computed per gate by minBufferFor / liveMaxBufferFor.)
-        val liveMaxBufferMs = liveMaxBufferFor(bufferFloorMs, startGateMs)
+        val liveMaxBufferMs = maxBufferForKey(bufferFloorMs, startGateMs)
         // The post-stall resume gate can only hold for what the LoadControl will
         // actually keep buffered ahead (target is clamped to maxBufferMs - 1 s),
         // and minBufferMs * 2 is only ~10.4 s at the base start gate. A live
         // player therefore gets at least 14 s of max buffer so a 12 s gate is
         // reachable; the MIN bound is untouched, so steady-state behaviour and
         // the Buffer Size ladder are unchanged.
-        val loadControl = GateSwitchingLoadControl(startGateMs) { gateMs, allocator ->
+        val loadControl = GateSwitchingLoadControl(startGateMs) { gateKey, allocator ->
+            val gateMs = gateOfKey(gateKey)
+            val hls = isHlsGateKey(gateKey)
+            if (hls) {
+                Log.i(
+                    ForceHls.TAG,
+                    "[FORCE-HLS] load control min ${minBufferForKey(bufferFloorMs, gateKey)} ms, " +
+                        "max ${maxBufferForKey(bufferFloorMs, gateKey)} ms, rebuffer resume ${hlsRebufferOfKey(gateKey)} ms",
+                )
+            }
             DefaultLoadControl.Builder()
                 .setAllocator(allocator)
                 .setBufferDurationsMs(
-                    /* minBufferMs = */ minBufferFor(bufferFloorMs, gateMs),
+                    /* minBufferMs = */ minBufferForKey(bufferFloorMs, gateKey),
                     // Real headroom between the bounds at EVERY rung. The old
                     // maxOf(8_000, minBufferMs) degenerated to min == max once the
                     // floor reached 8s, leaving the load control nothing to work
                     // with on precisely the setting chosen for poor networks.
-                    /* maxBufferMs = */ liveMaxBufferFor(bufferFloorMs, gateMs),
+                    /* maxBufferMs = */ maxBufferForKey(bufferFloorMs, gateKey),
                     /* bufferForPlaybackMs = */ gateMs,
-                    /* bufferForPlaybackAfterRebufferMs = */ 2_000,
+                    /* bufferForPlaybackAfterRebufferMs = */ if (hls) hlsRebufferOfKey(gateKey) else 2_000,
                 )
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build()
@@ -1886,6 +2029,8 @@ class AerioExoPlayerHolder @Inject constructor(
                 addAnalyticsListener(LoadErrorDiagnosticsListener())
                 // Always-on tune/stall/feed tracer (tag AerioTrace).
                 addAnalyticsListener(tracer.analyticsListener)
+                // Developer Force HLS: log the 302 Location Media3 followed.
+                addAnalyticsListener(forceHlsRedirectListener)
                 // Always-on frame-pacing timer ([JUDDER] / [PERF] render=).
                 // The single video-frame-metadata slot is shared with
                 // DisplayFrameRateMatcher: PersistentExoWindow re-registers
@@ -2006,6 +2151,21 @@ class AerioExoPlayerHolder @Inject constructor(
             .setMediaId(title.orEmpty().ifBlank { url })
             .setMediaMetadata(mediaMetadata)
         if (drmConfiguration != null) mediaItemBuilder.setDrmConfiguration(drmConfiguration)
+        if (ForceHls.isForcedHlsUrl(url)) {
+            // Overrides EXT-X-START (-5 s): the proxy delivers in 5 to 6 s
+            // bursts, so a 5 s join drains to nothing. No rate nudging here.
+            val target = forceHlsTargetOffsetMs
+            mediaItemBuilder.setLiveConfiguration(
+                MediaItem.LiveConfiguration.Builder()
+                    .setTargetOffsetMs(target.toLong())
+                    .setMinOffsetMs(FORCE_HLS_MIN_OFFSET_MS)
+                    .setMaxOffsetMs(FORCE_HLS_MAX_OFFSET_MS)
+                    .setMinPlaybackSpeed(1.0f)
+                    .setMaxPlaybackSpeed(1.0f)
+                    .build(),
+            )
+            Log.i(ForceHls.TAG, "[FORCE-HLS] live offset target $target ms")
+        }
         val mediaItem = mediaItemBuilder.build()
         _pipelineLabel.value = pipelineLabelFor(url, drm = drmUuid != null && drmLicenseKey != null)
         return when {
@@ -2037,7 +2197,10 @@ class AerioExoPlayerHolder @Inject constructor(
                     .setLoadErrorHandlingPolicy(Live503LoadErrorPolicy())
                     .createMediaSource(mediaItem)
             }
-            url.endsWith(".m3u8", ignoreCase = true) -> {
+            url.endsWith(".m3u8", ignoreCase = true) || ForceHls.isForcedHlsUrl(url) -> {
+                if (ForceHls.isForcedHlsUrl(url)) {
+                    Log.i(ForceHls.TAG, "[FORCE-HLS] media source: HlsMediaSource (TS extractor, tee, switch skip skipped)")
+                }
                 HlsMediaSource.Factory(dataSourceFactory)
                     .setLoadErrorHandlingPolicy(Live503LoadErrorPolicy())
                     .createMediaSource(mediaItem)
@@ -2295,6 +2458,7 @@ class AerioExoPlayerHolder @Inject constructor(
         liveFailover.disarm()
         tracer.markTuneStart(title, "live")
         primeGeneration += 1
+        resetForceHlsCushion("prime")
         isTimeshifting = true
         isAdoptedLive = true
         adoptedLiveTuneAtMs = SystemClock.elapsedRealtime()
@@ -2475,6 +2639,7 @@ class AerioExoPlayerHolder @Inject constructor(
      * [artworkUri] for the MediaSession notification + lock-screen
      * art.
      */
+    @Suppress("NAME_SHADOWING")
     fun playUrl(
         url: String,
         title: String? = null,
@@ -2500,6 +2665,40 @@ class AerioExoPlayerHolder @Inject constructor(
         // catch-up or DVR source is a seekable file served as fast as the link
         // allows, so the bursty-feed problem this solves does not exist there
         // and a deeper gate would only slow the open.
+        // Developer Force HLS: Dispatcharr live only (path match); a re-prime of
+        // an already rewritten url is left as is (never double-added).
+        val url = if (PlaybackTracer.urlKind(url) == "live") {
+            ForceHls.apply(url, "live tune")
+        } else url
+        // Developer Force HLS: resolve the entry 302 ONCE off the main thread
+        // and re-enter with the token playlist. Media3 reloads a media
+        // playlist from the URL it was given, so handing it the entry URL
+        // would mint a new server client every target duration.
+        if (ForceHls.isEntryUrl(url) && forceHlsResolveSkipUrl != url) {
+            val hdrs = httpHeaders
+            val gen = ++forceHlsResolveGeneration
+            forceHlsTuneAtMs = SystemClock.elapsedRealtime()
+            prefScope.launch {
+                val t0 = SystemClock.elapsedRealtime()
+                val session = ForceHls.resolveSession(url, forceHlsRequestHeaders(hdrs))
+                withContext(Dispatchers.Main) {
+                    if (gen != forceHlsResolveGeneration) return@withContext
+                    val ms = SystemClock.elapsedRealtime() - t0
+                    if (session != null) {
+                        forceHlsSession = session
+                        Log.i(ForceHls.TAG, "[FORCE-HLS] resolved in ${ms}ms; playing token playlist")
+                        playUrl(session.playlistUrl, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey, channelId)
+                    } else {
+                        Log.w(ForceHls.TAG, "[FORCE-HLS] could not resolve the entry redirect in ${ms}ms; opening the entry URL directly")
+                        forceHlsResolveSkipUrl = url
+                        playUrl(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey, channelId)
+                    }
+                }
+            }
+            return
+        }
+        forceHlsResolveSkipUrl = null
+        val forcedHls = ForceHls.isForcedHlsUrl(url)
         val kind = PlaybackTracer.urlKind(url)
         val effectiveChannelId = channelId ?: currentChannelIdForRebuild
         // A learned hold-back expires after 30 minutes so one bad session cannot
@@ -2518,10 +2717,28 @@ class AerioExoPlayerHolder @Inject constructor(
             )
         }
         val learnedGateMs = if (learnedExpired) 0 else learnedEntry?.ms ?: 0
-        val startGateMs = maxOf(LIVE_START_GATE_DEFAULT_MS, learnedGateMs)
+        // Forced HLS skips the learned TS start gate: the playlist's own
+        // target duration governs the start, not the TS burst shape.
+        // Forced HLS starts on one Dispatcharr burst plus margin so the first
+        // 5 to 6 s burst gap does not drain a 1.2 s start buffer.
+        val startGateMs = if (forcedHls) FORCE_HLS_START_GATE_MS
+        else maxOf(LIVE_START_GATE_DEFAULT_MS, learnedGateMs)
             .coerceAtMost(LIVE_START_GATE_MAX_MS)
+        if (forcedHls) {
+            Log.i(ForceHls.TAG, "[FORCE-HLS] learned TS start gate skipped")
+            Log.i(ForceHls.TAG, "[FORCE-HLS] start gate $startGateMs ms")
+            forceHlsTargetOffsetMs = hlsLiveOffsetFor(effectiveChannelId)
+            // Fast start, then spend the cushion at the first stall: resume
+            // only once a full target offset is buffered again.
+            Log.i(ForceHls.TAG, "[FORCE-HLS] rebuffer gate $forceHlsTargetOffsetMs ms")
+            if (forceHlsTuneAtMs == 0L) forceHlsTuneAtMs = SystemClock.elapsedRealtime()
+        } else {
+            forceHlsTuneAtMs = 0L
+        }
         Log.i(TAG, "[HOLDBACK] ch=${title ?: "?"} start gate $startGateMs ms (learned $learnedGateMs ms)")
         desiredStartGateMs = startGateMs
+        desiredForcedHls = forcedHls
+        if (kind == "live") lastTuneWasForcedHls = forcedHls
         // acquireOrCreate rebuilds when the gate changed (DefaultLoadControl is
         // fixed at build time). Doing it HERE, before the source is primed, is
         // what keeps a raised gate out of a running playback.
@@ -2580,6 +2797,7 @@ class AerioExoPlayerHolder @Inject constructor(
         setVideoTrackEnabled(!remoteAudioOnly)
         tracer.markTuneStart(title, kind)
         primeGeneration += 1
+        resetForceHlsCushion("prime")
         noteSourceOpen(url, effectiveChannelId)
         val staleCalls = takeLiveCallTrackers()
         val source = wrapForSwitchSkip(
@@ -2802,6 +3020,15 @@ class AerioExoPlayerHolder @Inject constructor(
 
     /** Sanitize a User-Agent for okhttp3; falls back to the default UA if the
      *  value would otherwise be empty after stripping illegal chars. */
+    /** Force HLS resolve/DELETE go through a bare OkHttpClient whose default
+     *  UA is "okhttp/x.y"; send the player's User-Agent instead so the server
+     *  sees the same client identity as the playlist and segment requests. */
+    private fun forceHlsRequestHeaders(headers: Map<String, String>): Map<String, String> {
+        val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+        val rest = headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+        return rest + ("User-Agent" to okHttpSafeUserAgent(ua ?: DEFAULT_PLAYBACK_USER_AGENT))
+    }
+
     private fun okHttpSafeUserAgent(ua: String): String =
         sanitizeOkHttpHeaderValue(ua).ifBlank { DEFAULT_PLAYBACK_USER_AGENT }
 
@@ -2834,6 +3061,9 @@ class AerioExoPlayerHolder @Inject constructor(
     }
 
     private fun isRawTsUrl(url: String): Boolean {
+        // Developer Force HLS: a Dispatcharr live URL asking for HLS is a
+        // playlist, so every TS-only path (tee, switch skip, stall nets) skips it.
+        if (ForceHls.isForcedHlsUrl(url)) return false
         if (url.endsWith(".ts", ignoreCase = true)) return true
         // Dispatcharr / Xtream proxy URLs that have no file extension
         // but ARE raw MPEG-TS. The path shape is the strongest signal:
@@ -2861,7 +3091,14 @@ class AerioExoPlayerHolder @Inject constructor(
      *  command("stop"). */
     fun stop() {
         val p = player ?: return
+        resetForceHlsCushion("stop")
         _pipelineLabel.value = null
+        forceHlsResolveGeneration++
+        forceHlsSession?.let { session ->
+            forceHlsSession = null
+            val hdrs = httpHeaders
+            prefScope.launch { ForceHls.endSession(session, forceHlsRequestHeaders(hdrs)) }
+        }
         // A deliberate stop outranks any waiting clean-end reconnect.
         cleanEndJob?.cancel()
         cleanEndJob = null
@@ -3100,6 +3337,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 // holds, playWhenReady is false and the stale-position check
                 // deliberately skips the stream.
                 tickResumeGate(p, now)
+                tickForceHlsCushion(p, now)
 
                 // Cold-start NO-DATA net (never-started stream). Runs INDEPENDENT
                 // of hasReachedPlaybackRestart: a dead Dispatcharr proxy stream
@@ -3243,6 +3481,18 @@ class AerioExoPlayerHolder @Inject constructor(
                 val ingestReloadMs =
                     if (rawTsLive) LIVE_INGEST_RELOAD_SILENCE_MS else staleReloadThresholdMs
                 val bufferOk = !rawTsLive || bufferAheadNowMs < STALL_OVERLAY_EMPTY_BUFFER_MS
+                // Developer Force HLS: a rebuffer that is filling toward the
+                // (long) resume gate is a deliberate hold, not a wedge.
+                val forcedHlsHold = lastPlayUrl?.let(ForceHls::isForcedHlsUrl) == true &&
+                    p.playbackState == Player.STATE_BUFFERING &&
+                    bufferAheadNowMs < forceHlsTargetOffsetMs &&
+                    now - lastBufferAdvanceAtMs < staleReloadThresholdMs
+                if (forcedHlsHold) {
+                    if (staleMs >= staleReloadThresholdMs) {
+                        Log.i(ForceHls.TAG, "[FORCE-HLS] rebuffer hold ${bufferAheadNowMs}/${forceHlsTargetOffsetMs} ms; watchdog reload skipped")
+                    }
+                    continue
+                }
                 if (watchdogReloadEnabled &&
                     staleMs >= staleReloadThresholdMs &&
                     ingestStaleMs >= ingestReloadMs &&
@@ -3310,6 +3560,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastKnownBufferedPositionMs = 0L
         lastBufferAdvanceAtMs = now
         primeGeneration += 1
+        resetForceHlsCushion("prime")
         noteSourceOpen(url, currentChannelIdForRebuild ?: currentChannelId)
         val staleCalls = takeLiveCallTrackers()
         val source = wrapForSwitchSkip(
@@ -3646,6 +3897,7 @@ class AerioExoPlayerHolder @Inject constructor(
         lastBufferAdvanceAtMs = now
         LoggingPlayerListener.sawTracksChangedSincePrime = false
         primeGeneration += 1
+        resetForceHlsCushion("prime")
         noteSourceOpen(url, currentChannelIdForRebuild ?: currentChannelId)
         val staleCalls = takeLiveCallTrackers()
         val source = wrapForSwitchSkip(
@@ -4081,6 +4333,14 @@ class AerioExoPlayerHolder @Inject constructor(
          *  and uses the base gate, so one bad session does not pin a channel
          *  (Logan 2026-09-12). A fresh learn re-arms it. */
         private const val HOLDBACK_LEARNED_TTL_MS = 30L * 60L * 1_000L
+        private const val HLS_GATE_KEY_FLAG = 1_000_000
+        const val FORCE_HLS_MIN_BUFFER_MS = 15_000
+        const val FORCE_HLS_START_GATE_MS = 6_500
+        private const val FORCE_HLS_TARGET_OFFSET_MS = ForceHls.DEFAULT_TARGET_OFFSET_MS
+        private const val FORCE_HLS_MIN_OFFSET_MS = 8_000L
+        private const val FORCE_HLS_MAX_OFFSET_MS = 30_000L
+        private const val FORCE_HLS_LEARNED_OFFSET_MAX_MS = 20_000
+        private const val FORCE_HLS_OFFSET_KEY_SUFFIX = "#hls_live_offset"
         /** Cushion added on top of the worst observed delivery gap so the feed
          *  has room to land the next burst before the buffer runs dry. */
         private const val RESUME_GATE_HEADROOM_MS = 2_000L

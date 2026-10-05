@@ -755,6 +755,12 @@ class AppPreferences @Inject constructor(
      * re-encode every H.264 cast channel on the phone, HEVC when the receiver
      * presents it, else the H.264 profile below. Per device, never synced.
      */
+    /** Developer: request Dispatcharr HLS output for live channels (test). Per device, never synced. */
+    val developerForceHls: Flow<Boolean> = store.data.map { it[KEY_DEVELOPER_FORCE_HLS] ?: false }
+    suspend fun setDeveloperForceHls(value: Boolean) {
+        store.edit { it[KEY_DEVELOPER_FORCE_HLS] = value }
+    }
+
     val castForceHevcTranscode: Flow<Boolean> = store.data.map { it[KEY_CAST_FORCE_HEVC_TRANSCODE] ?: false }
     suspend fun setCastForceHevcTranscode(value: Boolean) {
         store.edit { it[KEY_CAST_FORCE_HEVC_TRANSCODE] = value }
@@ -2142,6 +2148,7 @@ class AppPreferences @Inject constructor(
         val KEY_AUTO_ROTATE = booleanPreferencesKey("app_behaviors_auto_rotate")
         val KEY_DEBUG_LOGGING_ENABLED = booleanPreferencesKey("debug_logging_enabled")
         val KEY_CAST_FORCE_HEVC_TRANSCODE = booleanPreferencesKey("cast_force_hevc_transcode")
+        val KEY_DEVELOPER_FORCE_HLS = booleanPreferencesKey("developer_force_hls")
         val KEY_CAST_TRANSCODE_DOWN_PROFILE = stringPreferencesKey("cast_transcode_down_profile")
         val KEY_APPLE_TV_CHANNEL_FLIP = booleanPreferencesKey("app_behaviors_apple_tv_channel_flip")
         val KEY_PLAYER_BRIGHTNESS_GESTURE = booleanPreferencesKey("in_player_gesture_brightness")

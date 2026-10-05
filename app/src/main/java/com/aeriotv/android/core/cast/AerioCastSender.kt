@@ -1351,6 +1351,12 @@ class AerioCastSender @Inject constructor(
      * torn down; the content stays visible so Stop Casting still works.
      */
     private fun castLiveViaProxy(base: Content, rawTsUrl: String, headers: Map<String, String>) {
+        if (com.aeriotv.android.core.playback.ForceHls.enabled) {
+            android.util.Log.i(
+                "AerioTV",
+                "[FORCE-HLS] cast sender stays on TS (phone proxy ingests raw MPEG-TS): $rawTsUrl",
+            )
+        }
         // A channel change on the web receiver is a FRESH CAST, not a splice
         // (2026-09-13). Re-pointing the proxy at a new ingest generation inside
         // the same HLS stream made a Chromecast Ultra's decoder chew on the

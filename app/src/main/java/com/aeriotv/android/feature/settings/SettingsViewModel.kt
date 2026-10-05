@@ -500,6 +500,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setDebugLoggingEnabled(value) }
     }
 
+    val developerForceHls: Flow<Boolean> = prefs.developerForceHls
+    fun setDeveloperForceHls(value: Boolean) {
+        viewModelScope.launch { prefs.setDeveloperForceHls(value) }
+    }
+
     val castForceHevcTranscode: Flow<Boolean> = prefs.castForceHevcTranscode
     fun setCastForceHevcTranscode(value: Boolean) {
         viewModelScope.launch { prefs.setCastForceHevcTranscode(value) }

@@ -1742,6 +1742,26 @@ private fun ExoTile(
     val isVod = tile.kind == TileKind.Vod
     val currentUrlRef = remember { mutableStateOf("") }
     val playerRef = remember { mutableStateOf<ExoPlayer?>(null) }
+    // Developer Force HLS: the tile gets the main player's HLS treatment
+    // (load profile, per-channel target, warm join, trough ramp).
+    val forcedHlsTile = tile.kind == TileKind.Live && (
+        com.aeriotv.android.core.playback.ForceHls.isForcedHlsUrl(url) ||
+            (com.aeriotv.android.core.playback.ForceHls.enabled &&
+                com.aeriotv.android.core.playback.ForceHls.isDispatcharrLive(url))
+        )
+    val forceHlsTargetMs = remember(tile.id, url) {
+        com.aeriotv.android.core.playback.ForceHls.liveOffsetLookup(
+            com.aeriotv.android.core.playback.ForceHls.channelKeyFor(url),
+        )
+    }
+    val forceHlsCushion = remember(tile.id) { com.aeriotv.android.core.playback.ForceHlsCushion(channelName) }
+    // Developer Force HLS: one Dispatcharr HLS session per tile (live only).
+    val forceHlsTile = remember(tile.id) {
+        val ua = "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
+        val hdrs = if (headers.keys.any { it.equals("User-Agent", ignoreCase = true) }) headers
+        else headers + ("User-Agent" to ua)
+        com.aeriotv.android.core.playback.ForceHlsTileSession(channelName, hdrs)
+    }
     val statsStopRef = remember { mutableStateOf<java.util.concurrent.atomic.AtomicBoolean?>(null) }
     val audioGateRef = remember { mutableStateOf<com.aeriotv.android.core.playback.TileAudioGate?>(null) }
     // Live tile connections, closed on swap / re-prime / release (see TileLiveCalls).
@@ -1800,6 +1820,22 @@ private fun ExoTile(
                 DefaultLoadControl.Builder()
                     .setBufferDurationsMs(15_000, 50_000, 2_000, 5_000)
                     .build()
+            } else if (forcedHlsTile) {
+                // Developer Force HLS: the main player's HLS profile. Start on
+                // one Dispatcharr burst plus margin; resume after a rebuffer
+                // only once a full target offset is buffered again.
+                val holder = com.aeriotv.android.core.playback.AerioExoPlayerHolder
+                val rebufferMs = forceHlsTargetMs
+                val minMs = maxOf(holder.FORCE_HLS_MIN_BUFFER_MS, rebufferMs)
+                Log.i(
+                    "AerioTV",
+                    "[FORCE-HLS] tile $channelName start gate ${holder.FORCE_HLS_START_GATE_MS} ms, " +
+                        "min $minMs ms, max ${minMs * 2} ms, rebuffer gate $rebufferMs ms",
+                )
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(minMs, minMs * 2, holder.FORCE_HLS_START_GATE_MS, rebufferMs)
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .build()
             } else {
                 val minBufferMs = maxOf(5_000, cachingMs)
                 DefaultLoadControl.Builder()
@@ -1839,7 +1875,7 @@ private fun ExoTile(
                 }
             val dataSourceFactory: () -> androidx.media3.datasource.DataSource.Factory = {
                 vodDataSourceFactory
-                    ?: tracer.wrapDataSourceFactory(liveCalls.newFactory(headers, tileUserAgent, 30_000))
+                    ?: tracer.wrapDataSourceFactory(forceHlsTile.wrap(liveCalls.newFactory(headers, tileUserAgent, 30_000)))
             }
             // Tiles decode audio to PCM (no passthrough): PCM AudioTracks are
             // mixed by the platform in any number, so every tile can keep its
@@ -2171,10 +2207,12 @@ private fun ExoTile(
                                 DefaultDataSource.Factory(view.context, swapHttp)
                             } else {
                                 // DefaultHttpDataSource defaults: 8 s connect + read.
-                                liveCalls.newFactory(
-                                    headers,
-                                    "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})",
-                                    8_000,
+                                forceHlsTile.wrap(
+                                    liveCalls.newFactory(
+                                        headers,
+                                        "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})",
+                                        8_000,
+                                    ),
                                 )
                             },
                         )
@@ -2208,6 +2246,7 @@ private fun ExoTile(
         },
         onRelease = { _ ->
             Log.i(TAG, "Tile ExoPlayer releasing: $channelName")
+            forceHlsTile.end("tile released")
             statsStopRef.value?.set(true)
             onPlayer(null)
             tracer.tracedPlayer = null
@@ -2224,11 +2263,31 @@ private fun ExoTile(
     // 1 s heartbeat poll for the tracer (parity with the live holder's
     // watchdog cadence). The tracer itself rate-limits to one [PERF] + one
     // [FEED] line per 15 s and is silent while the tile is not playing.
+    // Developer Force HLS: a tile stall raises this channel's learned offset
+    // the same way a main player stall does (applies to the next tune).
+    LaunchedEffect(tracer, forcedHlsTile, url) {
+        val key = com.aeriotv.android.core.playback.ForceHls.channelKeyFor(url)
+        tracer.onStall = if (forcedHlsTile && key != null) {
+            { snapshot ->
+                if (snapshot.isLive) com.aeriotv.android.core.playback.ForceHls.learnLiveOffset(key, snapshot.worstGapMs)
+            }
+        } else null
+    }
     LaunchedEffect(playerRef.value) {
         val p = playerRef.value ?: return@LaunchedEffect
+        var lastItem: androidx.media3.common.MediaItem? = null
         while (true) {
             kotlinx.coroutines.delay(1_000L)
             tracer.tick(p)
+            if (forcedHlsTile) {
+                // A new source (swap, retry, reconnect) is a new prime.
+                val item = p.currentMediaItem
+                if (item !== lastItem) {
+                    lastItem = item
+                    forceHlsCushion.reset(p, "prime")
+                }
+                forceHlsCushion.tick(p, true, forceHlsTargetMs.toLong(), android.os.SystemClock.elapsedRealtime())
+            }
         }
     }
 
@@ -2314,12 +2373,18 @@ private fun ExoTile(
 
 @OptIn(UnstableApi::class)
 private fun buildTileMediaSource(
-    url: String,
+    requestedUrl: String,
     dataSourceFactory: androidx.media3.datasource.DataSource.Factory,
 ): androidx.media3.exoplayer.source.MediaSource {
+    // Developer Force HLS: same Dispatcharr live rewrite as the main player.
+    val url = com.aeriotv.android.core.playback.ForceHls.apply(requestedUrl, "multiview tile")
+    val forcedHls = com.aeriotv.android.core.playback.ForceHls.isForcedHlsUrl(url)
+    if (forcedHls) {
+        android.util.Log.i("AerioTV", "[FORCE-HLS] multiview tile media source: HlsMediaSource")
+    }
     val mediaItem = MediaItem.fromUri(url)
     return when {
-        url.endsWith(".m3u8", ignoreCase = true) ->
+        url.endsWith(".m3u8", ignoreCase = true) || forcedHls ->
             HlsMediaSource.Factory(dataSourceFactory)
                 // A Dispatcharr connection-limit refusal is shown, never re-GET.
                 .setLoadErrorHandlingPolicy(com.aeriotv.android.core.playback.DispatcharrConnectionLimit.LoadErrorPolicy())
