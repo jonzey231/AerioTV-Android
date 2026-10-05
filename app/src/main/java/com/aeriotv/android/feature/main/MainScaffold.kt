@@ -1335,8 +1335,23 @@ fun MainScaffold(
                 }
                 val companionTv = companionConn
                     as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
+                // Tablets (sw >= 600 dp) and the measured width of the
+                // tablet's wrap-content tab capsule (set by the pill below).
+                val tabletNav = androidx.compose.ui.platform.LocalConfiguration.current
+                    .smallestScreenWidthDp >= 600
+                var navBarWidthPx by remember { mutableStateOf(0) }
                 if ((casting || companionTv != null) && !isTv) {
+                    // Tablet (Logan 2026-10-05, iPad parity): compact and
+                    // centered, the pill's width plus 120 dp, capped at
+                    // 620 dp and at the screen width minus 32 dp.
+                    val tabletCardWidth = if (tabletNav) {
+                        val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+                        val pillW = with(LocalDensity.current) { navBarWidthPx.toDp() }
+                        val wanted = if (navBarWidthPx > 0) minOf(pillW + 120.dp, 620.dp) else 620.dp
+                        minOf(wanted, (screenW - 32.dp).coerceAtLeast(0.dp))
+                    } else null
                     com.aeriotv.android.feature.cast.CastTransportCard(
+                        tabletWidth = tabletCardWidth,
                         castSender = castSender,
                         companionRemote = companionRemote,
                         channels = state.channels,
@@ -1364,7 +1379,8 @@ fun MainScaffold(
                             viewModel.switchChannelStream(uuid, streamId).getOrThrow()
                         },
                     )
-                    Spacer(Modifier.height(8.dp))
+                    // 12 dp above the pill on tablets (iPad parity).
+                    Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
                 }
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
@@ -1381,8 +1397,6 @@ fun MainScaffold(
                 // trailing edge on the pill row (below) and never moves with
                 // the collapse (Logan 2026-10-04). Phones keep the above-the-bar
                 // spot that drops level with the minimized pill.
-                val tabletNav = androidx.compose.ui.platform.LocalConfiguration.current
-                    .smallestScreenWidthDp >= 600
                 val phoneFab = showControlFab && bottomBarVisible && !tabletNav
                 // Keep Recent Channels Live pill (Apple parity, Logan
                 // 2026-10-04): one compact line sharing the Control a TV
@@ -1392,9 +1406,6 @@ fun MainScaffold(
                 // is not composed under the fullscreen player; there the
                 // Options menu carries the Kept Live rows instead.
                 val showKept = retainedList.isNotEmpty() && !isTv
-                // Width of the tablet's wrap-content tab capsule, measured
-                // below, so the pill row above it spans exactly the same.
-                var navBarWidthPx by remember { mutableStateOf(0) }
                 if (showKept || phoneFab) {
                     // Outer edges line up with the floating nav bar below:
                     // phones replicate FloatingTabBar's frame (centred, 600 dp

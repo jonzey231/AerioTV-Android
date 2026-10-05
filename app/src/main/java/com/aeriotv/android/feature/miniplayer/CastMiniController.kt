@@ -69,13 +69,16 @@ fun CastMiniController(
      *  "Receiver: ..." stat, then the two-line transcode note while the
      *  phone is transcoding. Empty for the companion transport. */
     detailLines: List<String> = emptyList(),
+    /** Tablets draw the tab pill's chrome behind the row instead. */
+    containerColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.surface,
+    horizontalPadding: androidx.compose.ui.unit.Dp = 12.dp,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(containerColor)
             .clickable(onClick = onTap)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = horizontalPadding, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(

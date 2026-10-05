@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import com.aeriotv.android.feature.main.floatingNavChrome
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -68,6 +70,9 @@ fun CastTransportCard(
     loadCurrentStreamId: suspend (String) -> Int?,
     switchChannelStream: suspend (String, Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** Tablets (iPad parity, Logan 2026-10-05): the card's fixed width; it
+     *  then takes the tab pill's capsule and chrome. Null on phones. */
+    tabletWidth: androidx.compose.ui.unit.Dp? = null,
 ) {
     val castState by castSender.state.collectAsStateWithLifecycle()
     val castContent by castSender.content.collectAsStateWithLifecycle()
@@ -251,17 +256,26 @@ fun CastTransportCard(
     }
 
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                RoundedCornerShape(20.dp),
-            ),
+        modifier = if (tabletWidth != null) {
+            modifier
+                .width(tabletWidth)
+                .floatingNavChrome(RoundedCornerShape(percent = 50))
+        } else {
+            modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    RoundedCornerShape(20.dp),
+                )
+        },
     ) {
         CastMiniController(
+            containerColor = if (tabletWidth != null) androidx.compose.ui.graphics.Color.Transparent
+                else MaterialTheme.colorScheme.surface,
+            horizontalPadding = if (tabletWidth != null) 18.dp else 12.dp,
             title = when {
                 switchingTo != null -> "Switching to $switchingTo"
                 hasContent -> title
