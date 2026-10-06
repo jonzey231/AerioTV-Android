@@ -294,8 +294,8 @@ fun Capability.deniedMessage(): String = when (this) {
         "Catch-up is not enabled for your Dispatcharr account. " +
             "Ask your server administrator to enable it."
     Capability.CanSwitchStream ->
-        "Switching streams needs a Dispatcharr administrator account. " +
-            "Ask your server administrator for access."
+        "Your Dispatcharr account can't switch streams. " +
+            "Switching needs an administrator account."
     Capability.CanManagePlaylists ->
         "Your Dispatcharr account cannot change server playlists. " +
             "Ask your server administrator for access."

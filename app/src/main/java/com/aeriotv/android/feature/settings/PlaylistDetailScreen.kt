@@ -326,7 +326,7 @@ fun PlaylistDetailScreen(
                     .collectAsStateWithLifecycle(initialValue = DispatcharrAccountFacts())
                 Section(
                     header = "Dispatcharr User Permissions",
-                    footer = "Set by your Dispatcharr admin. Permissions refresh when you " +
+                    footer = "Set by your Dispatcharr admin. Permissions also refresh when you " +
                         "open the app or use Refresh Playlist.",
                 ) {
                     // One block, one focus stop on TV (or none on phones):
@@ -456,6 +456,20 @@ fun PlaylistDetailScreen(
                                 )
                             }
                         }
+                    }
+                    // Unthrottled re-read of the user level (Apple parity:
+                    // ServerDetailView). Active playlist only, hidden otherwise
+                    // like Test Connection. The rows above read the DAO row,
+                    // so they update live.
+                    if (isActivePlaylist) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        val permsRefreshing by viewModel.permissionsRefreshing.collectAsStateWithLifecycle()
+                        ActionRow(
+                            icon = Icons.Filled.Refresh,
+                            label = if (permsRefreshing) "Refreshing..." else "Refresh Permissions",
+                            onClick = { viewModel.refreshPermissionsNow() },
+                            running = permsRefreshing,
+                        )
                     }
                 }
             }

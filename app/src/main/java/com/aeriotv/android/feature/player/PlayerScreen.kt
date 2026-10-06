@@ -4,7 +4,6 @@ import kotlinx.coroutines.sync.withLock
 import android.util.Log
 import android.view.ViewGroup
 import android.widget.Toast
-import com.aeriotv.android.core.data.capability.deniedMessage
 import com.aeriotv.android.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -2530,7 +2529,7 @@ private fun PlayerSheets(
                             Log.w(TAG, "[SwitchStream] change_stream failed stream=$id: ${error?.message ?: "no url in response"}")
                             Toast.makeText(
                                 context,
-                                if (error != null) switchStreamFailureMessage("switch the stream", error)
+                                if (error != null) switchStreamFailureMessage("switch the stream", SWITCH_DENIED_MESSAGE, error)
                                 else SWITCH_NOT_CONFIRMED_MESSAGE,
                                 Toast.LENGTH_LONG,
                             ).show()
@@ -2629,7 +2628,7 @@ private fun PlayerSheets(
                         Log.w(TAG, "[SwitchStream] reorder skipped ch=$chPk: account is not a Dispatcharr admin on a fresh read")
                         Toast.makeText(
                             context,
-                            com.aeriotv.android.core.data.capability.Capability.CanSwitchStream.deniedMessage(),
+                            REORDER_DENIED_MESSAGE,
                             Toast.LENGTH_LONG,
                         ).show()
                     } else if (failure == null) {
@@ -2639,7 +2638,7 @@ private fun PlayerSheets(
                         Log.w(TAG, "[SwitchStream] reorder failed status=${status ?: -1} ch=$chPk: ${failure.message}")
                         Toast.makeText(
                             context,
-                            switchStreamFailureMessage("save the stream order", failure),
+                            switchStreamFailureMessage("save the stream order", REORDER_DENIED_MESSAGE, failure),
                             Toast.LENGTH_LONG,
                         ).show()
                         if (status == 403) onRecheckSwitchStreamAllowed("403 on stream reorder")
@@ -3000,7 +2999,7 @@ private fun LiveRewindChromeSection(
                 if (!onRecheckSwitchStreamAllowed("Switch Stream open")) {
                     Toast.makeText(
                         context,
-                        com.aeriotv.android.core.data.capability.Capability.CanSwitchStream.deniedMessage(),
+                        SWITCH_DENIED_MESSAGE,
                         Toast.LENGTH_LONG,
                     ).show()
                     return@launch
@@ -3339,15 +3338,24 @@ internal object PlayerCloseIntent {
 private const val SWITCH_NOT_CONFIRMED_MESSAGE =
     "The switch didn't take effect. The server may be busy; the current stream is unchanged."
 
+/** Plain denial lines for a pre-check denial or a 403, identical to Apple
+ *  SwitchStreamFlow.switchDeniedMessage / reorderDeniedMessage. */
+internal const val SWITCH_DENIED_MESSAGE =
+    "Your Dispatcharr account can't switch streams. Switching needs an administrator account."
+internal const val REORDER_DENIED_MESSAGE =
+    "Your Dispatcharr account can't reorder streams. Reordering needs an administrator account."
+
 /**
  * Switch Stream / reorder failure line, identical to Apple
- * SwitchStreamFlow.failureMessage: "Couldn't switch the stream (HTTP 403):
- * <server text>", or "Couldn't switch the stream (HTTP 500)." when the server
- * sent no text, or "Couldn't switch the stream: <error>" with no HTTP status.
+ * SwitchStreamFlow.failureMessage: a 403 returns [deniedMessage]; otherwise
+ * "Couldn't switch the stream (HTTP 500): <server text>", or "Couldn't switch
+ * the stream (HTTP 500)." when the server sent no text, or "Couldn't switch
+ * the stream: <error>" with no HTTP status.
  */
-private fun switchStreamFailureMessage(action: String, error: Throwable): String {
+private fun switchStreamFailureMessage(action: String, deniedMessage: String, error: Throwable): String {
     val http = error as? com.aeriotv.android.core.network.DispatcharrHttpFailure
     if (http != null) {
+        if (http.status == 403) return deniedMessage
         val reason = http.reason?.trim().orEmpty()
         return if (reason.isNotEmpty()) "Couldn't $action (HTTP ${http.status}): $reason"
         else "Couldn't $action (HTTP ${http.status})."

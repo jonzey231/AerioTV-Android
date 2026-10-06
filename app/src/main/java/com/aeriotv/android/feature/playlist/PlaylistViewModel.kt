@@ -2366,6 +2366,26 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
+    private val _permissionsRefreshing = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** True while the playlist page's "Refresh Permissions" probe runs. */
+    val permissionsRefreshing: kotlinx.coroutines.flow.StateFlow<Boolean> = _permissionsRefreshing
+
+    /** Playlist page "Refresh Permissions": probe the active playlist now,
+     *  no throttle (Apple ServerDetailView.refreshPermissions parity). */
+    fun refreshPermissionsNow() {
+        if (_permissionsRefreshing.value) return
+        _permissionsRefreshing.value = true
+        viewModelScope.launch {
+            try {
+                runCatching {
+                    repository.probeAllCapabilities(force = true, trigger = "manual refresh")
+                }
+            } finally {
+                _permissionsRefreshing.value = false
+            }
+        }
+    }
+
     /** Re-read the user level now (Switch Stream open / reorder save / 403)
      *  and return the fresh Switch Stream gate; false when unknown. */
     suspend fun recheckSwitchStreamAllowed(trigger: String): Boolean =
