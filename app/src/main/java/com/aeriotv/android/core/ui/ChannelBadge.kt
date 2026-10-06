@@ -154,6 +154,8 @@ fun channelBadgeLayout(
      * (the guide rail) never overflows.
      */
     logoScale: Float = 1f,
+    /** Smallest logo side, in px, when [logoScale] shrinks (2.5% and 5%). */
+    logoFloor: Float = 0f,
 ): ChannelBadgeGeometry {
     if (slotWidth <= 0f || slotHeight <= 0f) return ChannelBadgeGeometry(null, null, null)
     val hasNumber = numberHeight > 0f
@@ -207,6 +209,11 @@ fun channelBadgeLayout(
         if (logoScale > 1f) {
             logoWidth = minOf(logoWidth, maxOf(baseW, columnWidth))
             logoHeight = minOf(logoHeight, maxOf(baseH, roomForLogo))
+        } else {
+            // Below 10% (down to 2.5%): a legible floor, never above stock.
+            val floor = logoFloor
+            logoWidth = minOf(baseW, maxOf(logoWidth, floor))
+            logoHeight = minOf(baseH, maxOf(logoHeight, floor))
         }
     }
     val blockHeight = logoHeight + gap + textHeight

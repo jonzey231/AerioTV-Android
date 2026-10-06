@@ -70,16 +70,21 @@ data class GuideRailPrefs(
 /**
  * Settings > Live TV > Logo Size (Discord request 2026-10-06, identical spec on
  * Apple). The SAME ladder, labels and default as Multiview's Logo Size, read
- * relative to the default: 10 draws today's size, 5 half, 25 two and a half
- * times. It multiplies the "logos grow when numbers or names are hidden"
+ * relative to the default: 10 draws today's size, 5 half, 2.5 a quarter, 25
+ * two and a half times. It multiplies the "logos grow when numbers or names are hidden"
  * result; the guide rail caps growth at the room its cell has.
  */
-val LIVE_TV_LOGO_SIZES = listOf(5, 10, 15, 20, 25)
-const val LIVE_TV_LOGO_SIZE_DEFAULT = 10
-fun liveTvLogoScale(percent: Int): Float {
-    val snapped = LIVE_TV_LOGO_SIZES.minByOrNull { kotlin.math.abs(it - percent) } ?: LIVE_TV_LOGO_SIZE_DEFAULT
+// Values are TENTHS of a percent (see AppPreferences.channelLogoSize): the
+// Multiview ladder plus a 2.5% stop, Live TV only.
+val LIVE_TV_LOGO_SIZES = listOf(25, 50, 100, 150, 200, 250)
+const val LIVE_TV_LOGO_SIZE_DEFAULT = 100
+fun liveTvLogoScale(tenths: Int): Float {
+    val snapped = LIVE_TV_LOGO_SIZES.minByOrNull { kotlin.math.abs(it - tenths) } ?: LIVE_TV_LOGO_SIZE_DEFAULT
     return snapped.toFloat() / LIVE_TV_LOGO_SIZE_DEFAULT
 }
+/** Settings label for a stop in tenths: "2.5%", "10%". */
+fun liveTvLogoSizeLabel(tenths: Int): String =
+    if (tenths % 10 == 0) "${tenths / 10}%" else "${tenths / 10}.${tenths % 10}%"
 val LocalGuideRailPrefs = androidx.compose.runtime.compositionLocalOf { GuideRailPrefs() }
 
 /**

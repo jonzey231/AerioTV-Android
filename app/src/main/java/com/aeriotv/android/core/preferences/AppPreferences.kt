@@ -168,16 +168,24 @@ class AppPreferences @Inject constructor(
     }
 
     /**
-     * Settings > Live TV > Logo Size (Apple `ui.channelLogoSize`). The same
-     * ladder and default as Multiview's Logo Size: 5 to 25 in steps of 5,
-     * default 10. Read relative to the default (10 = today's size), see
-     * [com.aeriotv.android.core.ui.liveTvLogoScale].
+     * Settings > Live TV > Logo Size (Apple `ui.channelLogoSize`). Stored in
+     * TENTHS of a percent so the 2.5% stop fits an Int: 25, 50, 100, 150,
+     * 200, 250; default 100 (10%). Read relative to the default (100 =
+     * today's size), see [com.aeriotv.android.core.ui.liveTvLogoScale].
+     * Migration: the first build stored whole percents under
+     * `ui_channel_logo_size`; while the tenths key is absent that value is
+     * read times ten, and the first write moves it to the tenths key and
+     * drops the legacy one.
      */
     val channelLogoSize: Flow<Int> = store.data.map {
-        (it[KEY_CHANNEL_LOGO_SIZE] ?: 10).coerceIn(5, 25)
+        (it[KEY_CHANNEL_LOGO_SIZE_TENTHS] ?: it[KEY_CHANNEL_LOGO_SIZE_LEGACY]?.times(10) ?: 100)
+            .coerceIn(25, 250)
     }
-    suspend fun setChannelLogoSize(value: Int) {
-        store.edit { it[KEY_CHANNEL_LOGO_SIZE] = value.coerceIn(5, 25) }
+    suspend fun setChannelLogoSize(tenths: Int) {
+        store.edit {
+            it[KEY_CHANNEL_LOGO_SIZE_TENTHS] = tenths.coerceIn(25, 250)
+            it.remove(KEY_CHANNEL_LOGO_SIZE_LEGACY)
+        }
     }
 
     /**
@@ -2169,7 +2177,9 @@ class AppPreferences @Inject constructor(
         val KEY_APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
-        val KEY_CHANNEL_LOGO_SIZE = intPreferencesKey("ui_channel_logo_size")
+        /** Whole percents, first build of Logo Size only; migrated on read. */
+        val KEY_CHANNEL_LOGO_SIZE_LEGACY = intPreferencesKey("ui_channel_logo_size")
+        val KEY_CHANNEL_LOGO_SIZE_TENTHS = intPreferencesKey("ui_channel_logo_size_tenths")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
         val KEY_SHOW_CHANNEL_NAMES = booleanPreferencesKey("ui_show_channel_names")
         val KEY_SHOW_PROGRAM_SUBTITLES = booleanPreferencesKey("ui_show_program_subtitles")

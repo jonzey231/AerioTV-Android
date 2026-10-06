@@ -65,7 +65,7 @@ fun LiveTVTabContent(
         .collectAsStateWithLifecycle(initialValue = true)
     val showProgramSubtitles by settingsVm.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
     val showChannelLogos by settingsVm.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
-    val channelLogoSize by settingsVm.channelLogoSize.collectAsStateWithLifecycle(initialValue = 10)
+    val channelLogoSize by settingsVm.channelLogoSize.collectAsStateWithLifecycle(initialValue = 100)
     val showChannelNumbers by settingsVm.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNames by settingsVm.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val hiddenEpgBadges by settingsVm.hiddenEpgBadges
