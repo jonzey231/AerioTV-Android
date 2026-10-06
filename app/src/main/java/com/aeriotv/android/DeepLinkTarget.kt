@@ -43,6 +43,10 @@ sealed interface DeepLinkTarget {
      */
     data object ExitPlayer : DeepLinkTarget
 
+    /** Cast Connect multiview.open: the store is already staged; pop any
+     *  player and open Multiview, as TV Play does. */
+    data object OpenMultiview : DeepLinkTarget
+
     /**
      * Open the Settings tab directly on one page, for automated screenshots
      * (`aeriotv://settings/<page>`). [page] is the raw, lower-cased path

@@ -272,6 +272,9 @@ fun MainScaffold(
             onDismiss = { showRetainedDialog = false },
         )
     }
+    // Multiview staging dock card + sheet (phones and tablets, Logan 2026-10-06).
+    val multiviewStore = com.aeriotv.android.feature.multiview.rememberMultiviewStoreHandle()
+    var showMultiviewSheet by remember { mutableStateOf(false) }
     val favoritesVm: FavoritesViewModel = hiltViewModel()
     // null until the DB emits: on the phone, backing out of the player
     // recomposes this scaffold from scratch and an empty INITIAL list read as
@@ -469,6 +472,60 @@ fun MainScaffold(
         ).castSender()
     }
     val castState by castSender.state.collectAsStateWithLifecycle()
+    // Multiview to the TV: only a Cast Connect session into the AerioTV
+    // Android TV app can open Multiview; the web receiver cannot.
+    // Gated on the receiverInfo "multiview": true flag (Apple sender parity).
+    val castTarget by castSender.receiverTarget.collectAsStateWithLifecycle()
+    val castMultiview by castSender.receiverMultiview.collectAsStateWithLifecycle()
+    val mvReceiverName: String? = (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
+        ?.takeIf {
+            castMultiview &&
+                castTarget == com.aeriotv.android.core.cast.AerioCastSender.ReceiverTarget.ANDROID_TV_APP
+        }
+        ?.let { it.deviceName?.takeIf { n -> n.isNotBlank() } ?: "TV" }
+    val playStagedHere: () -> Unit = {
+        showMultiviewSheet = false
+        multiviewStore.setStaging(false)
+        onLaunchMultiview()
+    }
+    val playStagedOnReceiver: () -> Unit = {
+        showMultiviewSheet = false
+        val playlistId = state.playlist?.id.orEmpty()
+        val refs = multiviewStore.selected.value
+            .filter { it.kind == com.aeriotv.android.feature.multiview.TileKind.Live }
+            .map { com.aeriotv.android.core.cast.CastControl.MultiviewChannelRef(it.id, playlistId) }
+        castSender.sendMultiviewOpen(refs, multiviewStore.audioFocusedIndex.value)
+        multiviewStore.clear()
+        multiviewStore.setStaging(false)
+    }
+    // Card Play: Play Here, or the play-where prompt when the TV app can take it.
+    val playStagedMultiview: () -> Unit = {
+        if (mvReceiverName == null) playStagedHere()
+        else PlayWhereRouter.route(castSender, "Multiview", playStagedHere, playStagedOnReceiver)
+    }
+    if (showMultiviewSheet) {
+        val sheetTiles by multiviewStore.selected.collectAsStateWithLifecycle()
+        com.aeriotv.android.feature.multiview.MultiviewStagedSheet(
+            tiles = sheetTiles,
+            receiverName = mvReceiverName,
+            onRemove = { id -> multiviewStore.removeTile(id) },
+            onReorder = { ids ->
+                val current = multiviewStore.selected.value
+                val focusedId = current.getOrNull(multiviewStore.audioFocusedIndex.value)?.id
+                val reordered = ids.mapNotNull { id -> current.firstOrNull { it.id == id } } +
+                    current.filter { it.id !in ids }
+                multiviewStore.restore(reordered, reordered.indexOfFirst { it.id == focusedId }.coerceAtLeast(0))
+            },
+            onClear = {
+                showMultiviewSheet = false
+                multiviewStore.clear()
+                multiviewStore.setStaging(false)
+            },
+            onPlayHere = playStagedHere,
+            onPlayOnReceiver = playStagedOnReceiver,
+            onDismiss = { showMultiviewSheet = false },
+        )
+    }
     // GH #33 companion remote: same-pattern "Controlling <TV>" indicator card +
     // tap-to-reopen-the-remote, mirroring the Now-Casting card below.
     val companionRemote = remember {
@@ -1440,7 +1497,41 @@ fun MainScaffold(
                     }
                 }
                 val showKept = keptRowList.isNotEmpty() && !isTv
-                if (showKept || phoneFab) {
+                // Multiview staging dock card (Logan 2026-10-06): same capsule
+                // and frame as the cast and Kept Live cards, stacked above Kept
+                // Live. Beside the Control a TV button only when it is the
+                // last card in the stack (no Kept Live card below it).
+                val mvStaging by multiviewStore.isStaging.collectAsStateWithLifecycle()
+                val mvTiles by multiviewStore.selected.collectAsStateWithLifecycle()
+                val showMv = mvStaging && mvTiles.isNotEmpty() && !isTv
+                val mvRowFrame = if (tabletCardWidth != null) {
+                    Modifier.width(tabletCardWidth)
+                } else {
+                    Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
+                }
+                if (showMv) {
+                    val mvFab = phoneFab && !showKept
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
+                            com.aeriotv.android.feature.multiview.MultiviewDockCard(
+                                tiles = mvTiles,
+                                tablet = tabletNav,
+                                onOpen = { showMultiviewSheet = true },
+                                onPlay = playStagedMultiview,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (mvFab) {
+                                Spacer(Modifier.width(12.dp))
+                                CompanionControlFab(
+                                    onClick = { showCompanionPicker = true },
+                                    diameter = com.aeriotv.android.feature.livetv.RetainedCardHeight,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(if (tabletNav) 12.dp else if (mvFab) 10.dp else 8.dp))
+                }
+                if (showKept || (phoneFab && !showMv)) {
                     // Outer edges line up with the floating nav bar below:
                     // phones replicate FloatingTabBar's frame (centred, 600 dp
                     // cap, 20 dp side insets); tablets take the measured width

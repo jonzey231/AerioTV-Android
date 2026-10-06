@@ -149,6 +149,22 @@ class AutoBrowseTree @Inject constructor(
         return loadChannels(playlist).any { it.id == mediaId && it.url.isNotBlank() }
     }
 
+    /**
+     * Multiview over Cast Connect: the active playlist's channels for [ids], in
+     * request order. An id matches exactly, or by its bare part after the
+     * first ':' (a sender may carry "disp:<uuid>" while this TV stores the
+     * bare uuid, or the reverse). Unknown or unplayable ids are dropped.
+     */
+    suspend fun channelsForIds(ids: List<String>): List<M3UChannel> {
+        val playlist = repository.activePlaylist() ?: return emptyList()
+        val channels = loadChannels(playlist).filter { it.url.isNotBlank() }
+        return ids.mapNotNull { id ->
+            val bare = id.substringAfter(':', id)
+            channels.firstOrNull { it.id == id }
+                ?: channels.firstOrNull { it.id.substringAfter(':', it.id) == bare }
+        }.distinctBy { it.id }
+    }
+
     suspend fun resolveForPlayback(mediaId: String): PlaybackInfo? {
         val playlist = repository.activePlaylist() ?: return null
         val channels = loadChannels(playlist)

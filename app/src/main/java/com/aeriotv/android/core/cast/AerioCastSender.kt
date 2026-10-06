@@ -364,6 +364,12 @@ class AerioCastSender @Inject constructor(
      *  is in flight and whenever no session is connected. */
     val receiverTarget: StateFlow<ReceiverTarget> = _receiverTarget.asStateFlow()
 
+    private val _receiverMultiview = MutableStateFlow(false)
+    /** True when the connected receiver's receiverInfo answer carried
+     *  "multiview": true (the AerioTV Android TV app). Gates "Play on <device>"
+     *  for staged Multiview. Reset with the receiver target. */
+    val receiverMultiview: StateFlow<Boolean> = _receiverMultiview.asStateFlow()
+
     /** Cast device ids that have answered the hello probe with
      *  platform=android-tv-app at least once, so the picker can list those TVs
      *  first under "AerioTV on TV". */
@@ -389,6 +395,7 @@ class AerioCastSender @Inject constructor(
      *  has started, so a single probe sent at connect can simply be dropped. */
     private fun probeReceiverTarget() {
         _receiverTarget.value = ReceiverTarget.UNKNOWN
+        _receiverMultiview.value = false
         targetProbeJob?.cancel()
         targetProbeJob = senderScope.launch {
             var waited = 0L
@@ -446,6 +453,7 @@ class AerioCastSender @Inject constructor(
         // hello reply is the one message that is always read before the plan,
         // so the measurement now rides along with it.
         noteReceiverCaps(json)
+        _receiverMultiview.value = json.optBoolean(CastControl.KEY_MULTIVIEW, false)
         when (json.optString(CastControl.KEY_PLATFORM)) {
             CastControl.VALUE_PLATFORM_ANDROID_TV ->
                 resolveReceiverTarget(ReceiverTarget.ANDROID_TV_APP)
@@ -511,7 +519,13 @@ class AerioCastSender @Inject constructor(
             val json = JSONObject(message)
             // The web receiver page spells the discriminator "type", the Android TV
             // receiver spells it "cmd" like every other frame on this namespace.
-            if (json.optString(CastControl.KEY_TYPE) == CastControl.CMD_RECEIVER_INFO) {
+            val type = json.optString(CastControl.KEY_TYPE)
+            val mvCmd = json.optString(CastControl.KEY_CMD).ifBlank { type }
+            if (mvCmd == CastControl.TYPE_MULTIVIEW_OPENED || mvCmd == CastControl.TYPE_MULTIVIEW_ERROR) {
+                Log.i(TAG, "[MV-CAST] reply <- $message")
+                return@runCatching
+            }
+            if (type == CastControl.CMD_RECEIVER_INFO) {
                 noteReceiverInfo(json)
                 return@runCatching
             }
@@ -1638,6 +1652,21 @@ class AerioCastSender @Inject constructor(
     fun seekToWall(targetWallMs: Long) =
         sendControl(CastControl.command(CastControl.CMD_SEEK_WALL) { put(CastControl.KEY_TARGET_WALL_MS, targetWallMs) })
 
+    /**
+     * Multiview over Cast Connect (Logan 2026-10-06): ask the AerioTV Android
+     * TV app to stage [channels] (capped at 9) and open Multiview with audio on
+     * [focus]. Only meaningful when [receiverTarget] is ANDROID_TV_APP; the web
+     * receiver ignores the message. The reply is logged by the control channel.
+     */
+    fun sendMultiviewOpen(channels: List<CastControl.MultiviewChannelRef>, focus: Int) {
+        val session = currentSession() ?: return
+        val capped = channels.take(CastControl.MULTIVIEW_MAX_CHANNELS)
+        val message = CastControl.multiviewOpenMessage(capped, focus.coerceIn(0, (capped.size - 1).coerceAtLeast(0)))
+        val device = runCatching { session.castDevice?.friendlyName }.getOrNull() ?: "receiver"
+        Log.i(TAG, "[MV-CAST] sent multiview.open to $device channels=${capped.size}")
+        runCatching { session.sendMessage(CastControl.NAMESPACE, message) }
+    }
+
     /** Jump the TV back to the live edge. */
     fun goLiveRemote() =
         sendControl(CastControl.command(CastControl.CMD_GO_LIVE))
@@ -1779,6 +1808,7 @@ class AerioCastSender @Inject constructor(
         targetProbeJob?.cancel()
         targetProbeJob = null
         _receiverTarget.value = ReceiverTarget.UNKNOWN
+        _receiverMultiview.value = false
         deferredTune = null
         receiverCaps = null
         loggedCaps = null

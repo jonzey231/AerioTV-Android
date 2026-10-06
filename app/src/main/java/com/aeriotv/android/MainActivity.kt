@@ -1154,6 +1154,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // Multiview over Cast Connect: the receiver already staged the
+        // channels; navigate to Multiview. No-op off Android TV.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                castReceiver.multiviewRequests.collect {
+                    deepLinkTarget.value = DeepLinkTarget.OpenMultiview
+                }
+            }
+        }
         // GH #33 companion VOD/DVR: a paired phone asked this TV to play a movie /
         // episode / recording. Route through the same deep-link navigation the
         // cast loads use; the VodPlay/RecordingPlay targets AUTOPLAY (straight to

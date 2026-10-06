@@ -1090,7 +1090,9 @@ fun GuideScreen(
         // Multiview staging banner (iOS EPGGuideView.stagingBanner), shared
         // with the List, below the header / pills and above the grid (iOS
         // placement); restored after the guide rebuild dropped it.
-        com.aeriotv.android.feature.multiview.MultiviewStagingBanner(
+        // Phones and tablets show the Multiview dock card above the nav bar
+        // instead (MainScaffold); only TV keeps this in-view banner.
+        if (isTv) com.aeriotv.android.feature.multiview.MultiviewStagingBanner(
             store = multiviewStore,
             isTv = isTv,
             onLaunchMultiview = onLaunchMultiview,

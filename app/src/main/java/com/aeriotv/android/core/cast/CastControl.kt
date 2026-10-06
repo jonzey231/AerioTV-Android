@@ -98,6 +98,57 @@ object CastControl {
     const val KEY_URL = "url"
     const val KEY_TITLE = "title"
 
+    // Multiview over Cast Connect (Logan 2026-10-06, Apple sender parity).
+    // Every frame carries "cmd" AND "type" with the same value (wire format
+    // set by the Apple sender); the receiver reads "cmd", falling back to "type".
+    //   sender -> receiver {"cmd":"multiview.open","type":"multiview.open",
+    //                       "channels":[{"channelId":"disp:<uuid>","playlistId":"<id>"}],"focus":0}
+    //   receiver -> sender {"cmd":"multiview.opened","type":"multiview.opened","count":n}
+    //                   or {"cmd":"multiview.error","type":"multiview.error","error":"<reason>"}
+    // playlistId is informational: the TV resolves in its own active playlist.
+    // The Android TV receiverInfo answer carries "multiview": true; senders
+    // offer "Play on <device>" only when it does.
+    const val TYPE_MULTIVIEW_OPEN = "multiview.open"
+    const val TYPE_MULTIVIEW_OPENED = "multiview.opened"
+    const val TYPE_MULTIVIEW_ERROR = "multiview.error"
+    const val KEY_CHANNELS = "channels"
+    const val KEY_PLAYLIST_ID = "playlistId"
+    const val KEY_FOCUS = "focus"
+    const val KEY_COUNT = "count"
+    const val KEY_ERROR = "error"
+    const val KEY_MULTIVIEW = "multiview"
+    const val MULTIVIEW_MAX_CHANNELS = 9
+
+    /** One channel in a [TYPE_MULTIVIEW_OPEN] request. */
+    data class MultiviewChannelRef(val channelId: String, val playlistId: String)
+
+    fun multiviewOpenMessage(channels: List<MultiviewChannelRef>, focus: Int): String =
+        JSONObject().apply {
+            put(KEY_CMD, TYPE_MULTIVIEW_OPEN)
+            put(KEY_TYPE, TYPE_MULTIVIEW_OPEN)
+            put(KEY_CHANNELS, JSONArray().apply {
+                channels.forEach { c ->
+                    put(JSONObject().apply {
+                        put(KEY_CHANNEL_ID, c.channelId)
+                        put(KEY_PLAYLIST_ID, c.playlistId)
+                    })
+                }
+            })
+            put(KEY_FOCUS, focus)
+        }.toString()
+
+    fun multiviewOpenedMessage(count: Int): String = JSONObject().apply {
+        put(KEY_CMD, TYPE_MULTIVIEW_OPENED)
+        put(KEY_TYPE, TYPE_MULTIVIEW_OPENED)
+        put(KEY_COUNT, count)
+    }.toString()
+
+    fun multiviewErrorMessage(reason: String): String = JSONObject().apply {
+        put(KEY_CMD, TYPE_MULTIVIEW_ERROR)
+        put(KEY_TYPE, TYPE_MULTIVIEW_ERROR)
+        put(KEY_ERROR, reason)
+    }.toString()
+
     // Command args.
     const val KEY_TRACK_ID = "id" // audio/text track id; setText with "" (or absent) = Off
     const val KEY_SPEED = "speed" // Double

@@ -76,6 +76,7 @@ class AerioCastReceiverController @Inject constructor(
     private val browseTree: AutoBrowseTree,
     private val holder: AerioExoPlayerHolder,
     private val prefs: AppPreferences,
+    private val multiviewStore: com.aeriotv.android.feature.multiview.MultiviewStore,
 ) {
 
     /** What kind of content a cast load targets. Live reuses the channel player;
@@ -112,6 +113,12 @@ class AerioCastReceiverController @Inject constructor(
     // nobody is watching), the media service down, and the UI back on Live TV.
     private val _exitRequests = Channel<Unit>(Channel.CONFLATED)
     val exitRequests: Flow<Unit> = _exitRequests.receiveAsFlow()
+
+    // Multiview over Cast Connect (Logan 2026-10-06): the sender staged channels
+    // and chose Play on <this TV>. The store is already filled when this fires;
+    // MainActivity routes it to the Multiview screen exactly like TV Play.
+    private val _multiviewRequests = Channel<Unit>(Channel.CONFLATED)
+    val multiviewRequests: Flow<Unit> = _multiviewRequests.receiveAsFlow()
 
     /** Ask the on-screen live player to re-tune to [channelId] in place. */
     fun requestCastChannel(channelId: String) {
@@ -396,6 +403,11 @@ class AerioCastReceiverController @Inject constructor(
         override fun onMessageReceived(namespace: String, senderId: String?, message: String) {
             if (namespace != CastControl.NAMESPACE) return
             val json = runCatching { JSONObject(message) }.getOrNull() ?: return
+            val mvCmd = json.optString(CastControl.KEY_CMD).ifBlank { json.optString(CastControl.KEY_TYPE) }
+            if (mvCmd == CastControl.TYPE_MULTIVIEW_OPEN) {
+                scope.launch { openMultiview(json, senderId) }
+                return
+            }
             // ExoPlayer is single-threaded (main); scope is Main.immediate.
             scope.launch {
                 // A live sender is present -> start the position tick. Done inside
@@ -421,6 +433,8 @@ class AerioCastReceiverController @Inject constructor(
                                             CastControl.KEY_PLATFORM,
                                             CastControl.VALUE_PLATFORM_ANDROID_TV,
                                         )
+                                        // This receiver opens Multiview on request.
+                                        put(CastControl.KEY_MULTIVIEW, true)
                                     },
                                 )
                             }
@@ -490,6 +504,44 @@ class AerioCastReceiverController @Inject constructor(
                 senderId?.let { replyState(it) }
             }
         }
+    }
+
+    /**
+     * multiview.open: resolve the channels against THIS TV's active playlist,
+     * stage them (cap 9, request order), set the audio focus, stop the single
+     * live player and open Multiview as if Play was pressed here. Replies
+     * multiview.opened with the staged count, or multiview.error.
+     */
+    private suspend fun openMultiview(json: JSONObject, senderId: String?) {
+        fun reply(msg: String) {
+            val sid = senderId ?: return
+            runCatching { CastReceiverContext.getInstance().sendMessage(CastControl.NAMESPACE, sid, msg) }
+            android.util.Log.i("AerioCast", "[MV-CAST] reply -> $msg")
+        }
+        val arr = json.optJSONArray(CastControl.KEY_CHANNELS)
+        val ids = (0 until (arr?.length() ?: 0)).mapNotNull { i ->
+            arr?.optJSONObject(i)?.optString(CastControl.KEY_CHANNEL_ID)?.takeIf { it.isNotBlank() }
+        }
+        android.util.Log.i("AerioCast", "[MV-CAST] received multiview.open channels=${ids.size} from=$senderId")
+        if (ids.isEmpty()) {
+            reply(CastControl.multiviewErrorMessage("no channels"))
+            return
+        }
+        val channels = runCatching { browseTree.channelsForIds(ids) }.getOrDefault(emptyList())
+            .take(CastControl.MULTIVIEW_MAX_CHANNELS)
+        if (channels.isEmpty()) {
+            reply(CastControl.multiviewErrorMessage("channels not found in the active playlist"))
+            return
+        }
+        multiviewStore.clear()
+        channels.forEach { multiviewStore.addTile(com.aeriotv.android.feature.multiview.MultiviewTile.live(it)) }
+        multiviewStore.setAudioFocus(json.optInt(CastControl.KEY_FOCUS, 0).coerceIn(0, channels.size - 1))
+        multiviewStore.setStaging(false)
+        // Multiview owns per-tile players; the single live player stops, as it
+        // does when the TV's own player hands off to Multiview.
+        runCatching { holder.stop() }
+        _multiviewRequests.trySend(Unit)
+        reply(CastControl.multiviewOpenedMessage(channels.size))
     }
 
     /** Clamp + apply a rewind seek to an absolute wall-clock target, reusing the

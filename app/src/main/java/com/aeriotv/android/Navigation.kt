@@ -385,6 +385,15 @@ fun AerioTVNavHost(
                     dlVm.requestSettingsPage(target.page)
                     onDeepLinkConsumed()
                 }
+                is DeepLinkTarget.OpenMultiview -> {
+                    // Same end state as TV Play on the staging banner, with any
+                    // live player popped first (the receiver stopped it).
+                    if (navController.currentDestination?.route != Routes.MAIN) {
+                        runCatching { navController.popBackStack(Routes.MAIN, false) }
+                    }
+                    navController.navigate(Routes.MULTIVIEW) { launchSingleTop = true }
+                    onDeepLinkConsumed()
+                }
                 is DeepLinkTarget.ExitPlayer -> {
                     // Companion X: pop the live / VOD / recording player (and
                     // any detail pushed under it) so the tab shell is on top

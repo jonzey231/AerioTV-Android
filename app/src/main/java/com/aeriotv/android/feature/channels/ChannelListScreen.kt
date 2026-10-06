@@ -600,7 +600,9 @@ fun ChannelListScreen(
         // Multiview staging banner, same placement as the guide: below the
         // header / pills, above the rows (iOS ChannelListView). Staging from a
         // row's long-press menu used to show nothing in List view.
-        com.aeriotv.android.feature.multiview.MultiviewStagingBanner(
+        // Phones and tablets show the Multiview dock card above the nav bar
+        // instead (MainScaffold); only TV keeps this in-view banner.
+        if (isTv) com.aeriotv.android.feature.multiview.MultiviewStagingBanner(
             store = multiviewStore,
             isTv = isTv,
             onLaunchMultiview = onLaunchMultiview,
