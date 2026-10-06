@@ -29,6 +29,13 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -967,6 +974,9 @@ fun MultiviewScreen(
     DisposableEffect(Unit) { onDispose { /* per-tile views own their lifecycle */ } }
 }
 
+/** Leading-edge width the Close X occupies: 14 dp inset + 44 dp circle + 8 dp gap. */
+private val CLOSE_BUTTON_CLEARANCE = 66.dp
+
 @Composable
 private fun BoxScope.CloseButton(onClose: () -> Unit) {
     Box(
@@ -1618,11 +1628,33 @@ private fun Tile(
         // D-pad navigation re-arms it) and auto-hides after 4s so the tile
         // is an unobstructed video cell at rest. AnimatedVisibility gives
         // a soft cross-fade rather than a hard pop.
+        // Tiles on the top row start at the window's top edge, under the
+        // status bar on touch devices (Onn tablet: the badge drew over the
+        // clock). Push the badge down by however much of the status-bar inset
+        // overlaps THIS tile, so lower rows keep their 6 dp corner position.
+        // A top-row tile at the leading edge also shares its corner with the
+        // screen's Close X (CloseButton: 14 dp inset, 44 dp circle), so its
+        // badge starts past the X instead of sitting on it.
+        val density = LocalDensity.current
+        val statusTopPx = WindowInsets.statusBars.union(WindowInsets.displayCutout)
+            .getTop(density)
+        var tileOriginPx by remember { mutableStateOf(Offset.Zero) }
+        val badgeTopDp = with(density) { (statusTopPx - tileOriginPx.y).coerceAtLeast(0f).toDp() }
+        val badgeStartDp = if (badgeTopDp > 0.dp) {
+            with(density) { (CLOSE_BUTTON_CLEARANCE.toPx() - tileOriginPx.x).coerceAtLeast(0f).toDp() }
+        } else {
+            0.dp
+        }
+        Box(
+            Modifier
+                .matchParentSize()
+                .onGloballyPositioned { tileOriginPx = it.positionInWindow() },
+        )
         androidx.compose.animation.AnimatedVisibility(
             visible = chromeVisible,
             enter = androidx.compose.animation.fadeIn(),
             exit = androidx.compose.animation.fadeOut(),
-            modifier = Modifier.align(Alignment.TopStart),
+            modifier = Modifier.align(Alignment.TopStart).padding(top = badgeTopDp, start = badgeStartDp),
         ) {
             Box(
                 modifier = Modifier
