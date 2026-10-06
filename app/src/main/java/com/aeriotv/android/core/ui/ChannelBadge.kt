@@ -147,6 +147,13 @@ fun channelBadgeLayout(
     widthDrivenLogo: Boolean = false,
     numberColumnWidth: Float = 0f,
     numberColumnGap: Float = 0f,
+    /**
+     * Settings > Live TV > Logo Size multiplier ([liveTvLogoScale]). Scales
+     * the logo box resolved above around its center. Growth is capped at the
+     * column width and the height the text lines leave, so a fixed cell
+     * (the guide rail) never overflows.
+     */
+    logoScale: Float = 1f,
 ): ChannelBadgeGeometry {
     if (slotWidth <= 0f || slotHeight <= 0f) return ChannelBadgeGeometry(null, null, null)
     val hasNumber = numberHeight > 0f
@@ -191,6 +198,16 @@ fun channelBadgeLayout(
     if (showLogo) {
         logoHeight = minOf(logoHeight, maxLogoHeight)
         logoWidth = minOf(logoWidth, maxLogoWidth)
+    }
+    if (showLogo && logoScale != 1f) {
+        val baseW = logoWidth
+        val baseH = logoHeight
+        logoWidth = baseW * logoScale
+        logoHeight = baseH * logoScale
+        if (logoScale > 1f) {
+            logoWidth = minOf(logoWidth, maxOf(baseW, columnWidth))
+            logoHeight = minOf(logoHeight, maxOf(baseH, roomForLogo))
+        }
     }
     val blockHeight = logoHeight + gap + textHeight
     var y = topInset + ((available - blockHeight) / 2f).coerceAtLeast(0f)
@@ -313,6 +330,8 @@ fun ChannelBadge(
      * keep the stacked layout.
      */
     numberOnLeft: Boolean = false,
+    /** Settings > Live TV > Logo Size above the default: a floor the row grows to. */
+    slotMinHeight: Dp = Dp.Unspecified,
 ) {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
@@ -351,6 +370,7 @@ fun ChannelBadge(
     Box(
         modifier = modifier
             .width(slotWidth)
+            .then(if (slotMinHeight != Dp.Unspecified) Modifier.heightIn(min = slotMinHeight) else Modifier)
             .then(
                 if (slotMaxHeight == Dp.Unspecified) Modifier.fillMaxHeight()
                 else Modifier.heightIn(max = slotMaxHeight),

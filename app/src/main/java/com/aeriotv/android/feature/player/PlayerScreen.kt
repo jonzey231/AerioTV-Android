@@ -2331,7 +2331,11 @@ private fun ChannelListOverlaySection(
     val active = channelListGroup
         ?: initialGroup.takeIf { it in overlayGroups }
         ?: com.aeriotv.android.feature.livetv.fallbackGroupToken(overlayGroups)
+    // Settings > Live TV > Logo Size scales the logos in this list too.
+    val settingsVm: SettingsViewModel = hiltViewModel()
+    val channelLogoSize by settingsVm.channelLogoSize.collectAsStateWithLifecycle(initialValue = 10)
     ChannelListOverlay(
+        logoScale = com.aeriotv.android.core.ui.liveTvLogoScale(channelLogoSize),
         groups = overlayGroups,
         activeGroup = active,
         defaultToken = defaultGroupToken,

@@ -970,6 +970,8 @@ private fun GridRow(
             widthDrivenLogo = true,
             maxLogoWidth = if (logo != null) nativeCapW else Float.MAX_VALUE,
             maxLogoHeight = if (logo != null) nativeCapH else Float.MAX_VALUE,
+            // Settings > Live TV > Logo Size, on top of everything above.
+            logoScale = rail.logoScale,
         )
         geometry.logo?.let { slot ->
             val image = logo!!

@@ -168,6 +168,19 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Settings > Live TV > Logo Size (Apple `ui.channelLogoSize`). The same
+     * ladder and default as Multiview's Logo Size: 5 to 25 in steps of 5,
+     * default 10. Read relative to the default (10 = today's size), see
+     * [com.aeriotv.android.core.ui.liveTvLogoScale].
+     */
+    val channelLogoSize: Flow<Int> = store.data.map {
+        (it[KEY_CHANNEL_LOGO_SIZE] ?: 10).coerceIn(5, 25)
+    }
+    suspend fun setChannelLogoSize(value: Int) {
+        store.edit { it[KEY_CHANNEL_LOGO_SIZE] = value.coerceIn(5, 25) }
+    }
+
+    /**
      * GH #19 (`ui.showChannelNumbers` on iOS). When off, the Live TV list and
      * Guide hide the channel number column. Default ON.
      */
@@ -2156,6 +2169,7 @@ class AppPreferences @Inject constructor(
         val KEY_APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
         val KEY_USE_CUSTOM_ACCENT = booleanPreferencesKey("use_custom_accent")
         val KEY_SHOW_CHANNEL_LOGOS = booleanPreferencesKey("ui_show_channel_logos")
+        val KEY_CHANNEL_LOGO_SIZE = intPreferencesKey("ui_channel_logo_size")
         val KEY_SHOW_CHANNEL_NUMBERS = booleanPreferencesKey("ui_show_channel_numbers")
         val KEY_SHOW_CHANNEL_NAMES = booleanPreferencesKey("ui_show_channel_names")
         val KEY_SHOW_PROGRAM_SUBTITLES = booleanPreferencesKey("ui_show_program_subtitles")

@@ -645,6 +645,7 @@ internal fun SteppedSliderRow(
     selected: Int,
     format: (Int) -> String,
     onSelect: (Int) -> Unit,
+    footer: String? = null,
 ) {
     // Snap legacy/custom persisted values (e.g. 48h from the removed
     // custom dialog) to the nearest ladder stop for display; the pref
@@ -658,6 +659,7 @@ internal fun SteppedSliderRow(
         index = idx,
         lastIndex = values.lastIndex,
         onIndexChange = { newIdx -> if (values[newIdx] != selected) onSelect(values[newIdx]) },
+        footer = footer,
     )
 }
 

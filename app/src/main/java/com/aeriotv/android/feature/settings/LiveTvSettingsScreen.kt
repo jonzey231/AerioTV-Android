@@ -89,6 +89,7 @@ fun LiveTvSettingsScreen(
     val listViewShown = !isTv || com.aeriotv.android.core.ui.TvListView.ENABLED
 
     val showChannelLogos by viewModel.showChannelLogos.collectAsStateWithLifecycle(initialValue = true)
+    val channelLogoSize by viewModel.channelLogoSize.collectAsStateWithLifecycle(initialValue = 10)
     val showChannelNumbers by viewModel.showChannelNumbers.collectAsStateWithLifecycle(initialValue = true)
     val showChannelNames by viewModel.showChannelNames.collectAsStateWithLifecycle(initialValue = true)
     val showProgramSubtitles by viewModel.showProgramSubtitles.collectAsStateWithLifecycle(initialValue = true)
@@ -149,6 +150,18 @@ fun LiveTvSettingsScreen(
                             checked = showChannelLogos,
                             onCheckedChange = viewModel::setShowChannelLogos,
                         )
+                        // Same row, ladder and labels as Settings > Multiview >
+                        // Logo Size; shown only while Show Channel Logos is on.
+                        if (showChannelLogos) {
+                            SteppedSliderRow(
+                                label = "Logo Size",
+                                values = com.aeriotv.android.core.ui.LIVE_TV_LOGO_SIZES,
+                                selected = channelLogoSize,
+                                format = { "$it%" },
+                                onSelect = viewModel::setChannelLogoSize,
+                                footer = "Size of the channel logos in the guide, the channel list and the player's channel list.",
+                            )
+                        }
                         SettingsToggleRow(
                             title = "Show Channel Numbers",
                             subtitle = if (listViewShown) {

@@ -59,7 +59,27 @@ data class EpgFlag(val label: String, val color: Color)
 val LocalShowEpgBadges = androidx.compose.runtime.compositionLocalOf { true }
 
 /** Settings > Appearance > Channel List: what the guide rail draws. */
-data class GuideRailPrefs(val logos: Boolean = true, val numbers: Boolean = true, val names: Boolean = true)
+data class GuideRailPrefs(
+    val logos: Boolean = true,
+    val numbers: Boolean = true,
+    val names: Boolean = true,
+    /** Settings > Live TV > Logo Size as a multiplier, see [liveTvLogoScale]. */
+    val logoScale: Float = 1f,
+)
+
+/**
+ * Settings > Live TV > Logo Size (Discord request 2026-10-06, identical spec on
+ * Apple). The SAME ladder, labels and default as Multiview's Logo Size, read
+ * relative to the default: 10 draws today's size, 5 half, 25 two and a half
+ * times. It multiplies the "logos grow when numbers or names are hidden"
+ * result; the guide rail caps growth at the room its cell has.
+ */
+val LIVE_TV_LOGO_SIZES = listOf(5, 10, 15, 20, 25)
+const val LIVE_TV_LOGO_SIZE_DEFAULT = 10
+fun liveTvLogoScale(percent: Int): Float {
+    val snapped = LIVE_TV_LOGO_SIZES.minByOrNull { kotlin.math.abs(it - percent) } ?: LIVE_TV_LOGO_SIZE_DEFAULT
+    return snapped.toFloat() / LIVE_TV_LOGO_SIZE_DEFAULT
+}
 val LocalGuideRailPrefs = androidx.compose.runtime.compositionLocalOf { GuideRailPrefs() }
 
 /**

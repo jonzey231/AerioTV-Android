@@ -82,6 +82,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setShowChannelLogos(value) }
     }
 
+    /** Settings > Live TV > Logo Size, 5 to 25 step 5, default 10. */
+    val channelLogoSize: StateFlow<Int> = prefs.channelLogoSize
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 10)
+    fun setChannelLogoSize(value: Int) {
+        viewModelScope.launch { prefs.setChannelLogoSize(value) }
+    }
+
     val showChannelNumbers: StateFlow<Boolean> = prefs.showChannelNumbers
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val showChannelNames: StateFlow<Boolean> = prefs.showChannelNames

@@ -152,6 +152,8 @@ fun SettingsSliderRow(
     // tint (labelSmall, textTertiary). Opt-in so other pages keep the
     // accent readout until they are matched.
     dimValue: Boolean = false,
+    /** Optional caption under the slider (Apple: labelSmall, tertiary). */
+    footer: String? = null,
 ) {
     Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -189,5 +191,13 @@ fun SettingsSliderRow(
             valueRange = 0f..lastIndex.toFloat().coerceAtLeast(1f),
             steps = (lastIndex - 1).coerceAtLeast(0),
         )
+        if (footer != null) {
+            Text(
+                text = footer,
+                style = (if (rememberIsTvDevice()) settingsFootnoteStyle()
+                else MaterialTheme.typography.labelSmall).subtext(),
+                color = settingsDimTint(),
+            )
+        }
     }
 }

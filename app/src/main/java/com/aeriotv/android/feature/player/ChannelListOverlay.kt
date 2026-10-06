@@ -72,6 +72,8 @@ internal fun ChannelListOverlay(
     onGroupChange: (String) -> Unit,
     onSelect: (M3UChannel) -> Unit,
     onDismiss: () -> Unit,
+    /** Settings > Live TV > Logo Size multiplier. */
+    logoScale: Float = 1f,
 ) {
     val entries = remember(activeGroup, channelsFor) { channelsFor(activeGroup) }
     val listFocus = remember { FocusRequester() }
@@ -205,6 +207,7 @@ internal fun ChannelListOverlay(
                             nowTitle = nowTitleFor(ch),
                             isPlaying = ch.id == currentChannelId,
                             onClick = { onSelect(ch) },
+                            logoScale = logoScale,
                             modifier = if (index == landingIndex) {
                                 Modifier.focusRequester(listFocus)
                             } else {

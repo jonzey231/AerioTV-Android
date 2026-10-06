@@ -998,6 +998,9 @@ internal fun ChannelRow(
     // Both the number column and the name are hidden: the logo takes the whole
     // row height.
     val growLogoFull = showLogo && !showNumber && !showChannelName
+    // Settings > Live TV > Logo Size: scales the logo part of the leading
+    // column; above the default the row may grow to fit the larger logo.
+    val logoScale = if (showLogo) com.aeriotv.android.core.ui.LocalGuideRailPrefs.current.logoScale else 1f
 
     // Channel-number column width. Measured from the widest number this row
     // could have to show, at the CURRENT Text Size, so the number is always one
@@ -1065,14 +1068,16 @@ internal fun ChannelRow(
     //  - number only (logos off): just the measured number, nothing wider.
     val leadColumnWidth = when {
         !showLogo -> numberColumnWidth
-        growLogoFull -> ROW_LOGO_FULL_WIDTH
+        growLogoFull -> ROW_LOGO_FULL_WIDTH * logoScale
         // TV: the number column sits BESIDE the logo rather than under it, so
         // the leading column has to carry both (the stacked phone width plus
         // the measured number column and its gap).
         isTv && showNumber ->
-            ROW_LEAD_WIDTH + numberColumnWidth + com.aeriotv.android.core.ui.CHANNEL_BADGE_NUMBER_GAP
-        else -> ROW_LEAD_WIDTH.coerceAtLeast(numberColumnWidth)
+            ROW_LEAD_WIDTH * logoScale + numberColumnWidth + com.aeriotv.android.core.ui.CHANNEL_BADGE_NUMBER_GAP
+        else -> (ROW_LEAD_WIDTH * logoScale).coerceAtLeast(numberColumnWidth)
     }
+    // Above the default: room for a 16:9 logo at the scaled logo width.
+    val leadMinHeight = if (logoScale > 1f) ROW_LEAD_WIDTH * logoScale * (9f / 16f) else androidx.compose.ui.unit.Dp.Unspecified
     // Shared by the phone menu item and the TV dialog action: record the
     // now-airing programme, or a 1-hour ad-hoc block when EPG is missing.
     val recordFromMenu = {
@@ -1197,6 +1202,7 @@ internal fun ChannelRow(
                         // IntrinsicSize.Min so the badge fills the height the
                         // text column set.
                         slotWidth = leadColumnWidth,
+                        slotMinHeight = leadMinHeight,
                         containerCorner = CHANNEL_ROW_CORNER,
                         numberStyle = numberStyle,
                         // iOS parity: numbers sit on the DIM textTertiary rung

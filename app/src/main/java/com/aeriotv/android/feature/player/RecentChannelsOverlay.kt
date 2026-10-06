@@ -155,6 +155,8 @@ internal fun ChannelPickRow(
     isPlaying: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Settings > Live TV > Logo Size multiplier (player channel list only). */
+    logoScale: Float = 1f,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -189,7 +191,7 @@ internal fun ChannelPickRow(
             val density = LocalDensity.current
             Box(
                 modifier = Modifier
-                    .size(width = 52.dp, height = 34.dp)
+                    .size(width = 52.dp * logoScale, height = 34.dp * logoScale)
                     .onSizeChanged { slotPx = it },
                 contentAlignment = Alignment.Center,
             ) {
@@ -233,7 +235,7 @@ internal fun ChannelPickRow(
                 )
             }
         } else {
-            Spacer(Modifier.size(width = 52.dp, height = 34.dp))
+            Spacer(Modifier.size(width = 52.dp * logoScale, height = 34.dp * logoScale))
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
