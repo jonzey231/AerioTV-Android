@@ -70,6 +70,13 @@ internal fun ReorderableStreamList(
     onReorder: (List<Int>) -> Unit,
     /** Touch: true while a row is being dragged by its handle, so the host sheet can drop its own drag. */
     onDragActiveChange: (Boolean) -> Unit = {},
+    /** Touch: Reorder mode is on (Apple parity: the sheet's Reorder / Finish
+     *  button). Handles show and rows drag only while true; row taps select
+     *  only while false. */
+    touchReordering: Boolean = false,
+    /** Touch: the full id order after each drop. The sheet saves it ONCE when
+     *  Reorder mode ends (Finish or dismiss), not per drop. */
+    onPendingOrder: (List<Int>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val isTv = remember(context) { context.isTelevision() }
@@ -79,8 +86,10 @@ internal fun ReorderableStreamList(
     // After every save (success or failure) show the server's refetched order,
     // but never under a finger: a refetch landing mid-drag used to reset the
     // order and the drag index, and the drag died. It applies on the drop.
-    androidx.compose.runtime.LaunchedEffect(streams, saving, dragIndex) {
-        if (!saving && dragIndex < 0) order = streams
+    // Touch Reorder mode keeps the local order until Finish saves it.
+    val holdLocal = !isTv && touchReordering
+    androidx.compose.runtime.LaunchedEffect(streams, saving, dragIndex, holdLocal) {
+        if (!saving && dragIndex < 0 && !holdLocal) order = streams
     }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var rowHeightPx by remember { mutableFloatStateOf(1f) }
@@ -88,8 +97,8 @@ internal fun ReorderableStreamList(
     // The handle's pointerInput outlives recompositions (keyed by stream id
     // only), so it reads the newest server list and callbacks through these.
     val latestStreams by rememberUpdatedState(streams)
-    val latestOnReorder by rememberUpdatedState(onReorder)
     val latestOnDragActive by rememberUpdatedState(onDragActiveChange)
+    val latestOnPendingOrder by rememberUpdatedState(onPendingOrder)
 
     fun move(from: Int, to: Int) {
         if (saving || from !in order.indices || to !in order.indices || from == to) return
@@ -226,7 +235,7 @@ internal fun ReorderableStreamList(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { onSelect(stream.id) },
+                    .clickable(enabled = !touchReordering) { onSelect(stream.id) },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(
@@ -245,7 +254,7 @@ internal fun ReorderableStreamList(
             // 48dp square hit box (the old 24dp icon was the whole target;
             // touches a few px off it fell to the row or the sheet). The drag
             // starts on the first move past touch slop, no long-press delay.
-            Box(
+            if (touchReordering) Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(48.dp)
@@ -282,7 +291,7 @@ internal fun ReorderableStreamList(
                                 dragOffset = 0f
                                 val changed = from >= 0 && to >= 0 && from != to
                                 Log.i(SWITCH_TAG, "[SwitchStream] drop id=${stream.id} from=$from to=$to save=$changed")
-                                if (changed) latestOnReorder(latestOrder.map { it.id })
+                                if (changed) latestOnPendingOrder(latestOrder.map { it.id })
                                 latestOnDragActive(false)
                             },
                             onDragCancel = {
@@ -317,6 +326,8 @@ private fun StreamMoveMenu(
     onMove: (Int) -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        // Header so the TV entry reads "Reorder" like the phone and tablet button.
+        DropdownMenuItem(text = { Text("Reorder", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }, onClick = {}, enabled = false)
         if (canMoveUp) {
             DropdownMenuItem(text = { Text("Move Up") }, onClick = { onMove(-1) })
         }

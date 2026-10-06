@@ -1598,6 +1598,42 @@ class AerioCastSender @Inject constructor(
         }
     }
 
+    /** Web receiver seekable window for the remote sheet's timeline scrub, in
+     *  receiver stream-position ms. Live: the reported live seekable range.
+     *  Buffered (VOD, catch-up, DVR): 0 to the stream duration. Null when the
+     *  receiver reports neither (plain live): the timeline stays read-only.
+     *  Cast Connect uses the position tick's window instead. Main thread. */
+    data class WebSeekWindow(val startMs: Long, val endMs: Long, val positionMs: Long, val isLive: Boolean)
+
+    fun webSeekWindow(): WebSeekWindow? {
+        if (_receiverTarget.value == ReceiverTarget.ANDROID_TV_APP) return null
+        val client = currentSession()?.remoteMediaClient ?: return null
+        return runCatching {
+            val status = client.mediaStatus ?: return@runCatching null
+            val pos = client.approximateStreamPosition
+            val range = status.liveSeekableRange
+            if (range != null) {
+                val lo = minOf(range.startTime, range.endTime)
+                val hi = maxOf(range.startTime, range.endTime)
+                if (hi - lo < 1_000L) null else WebSeekWindow(lo, hi, pos.coerceIn(lo, hi), isLive = true)
+            } else {
+                val dur = client.streamDuration
+                if (dur <= 0L) null else WebSeekWindow(0L, dur, pos.coerceIn(0L, dur), isLive = false)
+            }
+        }.getOrNull()
+    }
+
+    /** Timeline scrub release on the web receiver: the same RemoteMediaClient
+     *  seek the skip buttons send, to an absolute stream position. */
+    fun seekToStreamPosition(positionMs: Long) {
+        val client = currentSession()?.remoteMediaClient ?: return
+        val position = positionMs.coerceAtLeast(0L)
+        Log.i(TAG, "[Cast] scrub seek -> ${position}ms")
+        runCatching {
+            client.seek(MediaSeekOptions.Builder().setPosition(position).build())
+        }
+    }
+
     /** Seek the TV's live-rewind playhead to an absolute wall-clock target (scrubber). */
     fun seekToWall(targetWallMs: Long) =
         sendControl(CastControl.command(CastControl.CMD_SEEK_WALL) { put(CastControl.KEY_TARGET_WALL_MS, targetWallMs) })

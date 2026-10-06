@@ -458,6 +458,8 @@ fun CastTransportCard(
             onSeekToWall = { target ->
                 if (isCompanion) companionRemote.seekToWall(target) else castSender.seekToWall(target)
             },
+            webSeekWindow = if (isCompanion) null else ({ castSender.webSeekWindow() }),
+            onSeekToStreamPosition = { ms -> castSender.seekToStreamPosition(ms) },
             onGoLive = {
                 if (isCompanion) companionRemote.goLiveRemote() else castSender.goLiveRemote()
             },

@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -161,6 +162,12 @@ fun CastRemoteSheet(
      *  progress bar; 0 hides both. */
     programmeStartMs: Long = 0L,
     programmeEndMs: Long = 0L,
+    /** Google Cast web receiver: the seekable window (polled about once a
+     *  second while the sheet is open). Non-null turns the timeline into a
+     *  scrubber; null (plain live, or the companion) keeps it read-only. */
+    webSeekWindow: (() -> com.aeriotv.android.core.cast.AerioCastSender.WebSeekWindow?)? = null,
+    /** Seek on scrub release (web receiver): an absolute stream position. */
+    onSeekToStreamPosition: (Long) -> Unit = {},
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -272,7 +279,77 @@ fun CastRemoteSheet(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                androidx.compose.material3.LinearProgressIndicator(
+                // Web receiver scrub (Logan 2026-10-05): when the receiver
+                // reports a seekable window the timeline is a slider. Drag
+                // moves a time label only; release seeks once. The Cast
+                // Connect / companion window has its own scrubber below.
+                var webWindow by remember { mutableStateOf<com.aeriotv.android.core.cast.AerioCastSender.WebSeekWindow?>(null) }
+                androidx.compose.runtime.LaunchedEffect(webSeekWindow, position.canSeek) {
+                    if (webSeekWindow == null || position.canSeek) { webWindow = null; return@LaunchedEffect }
+                    while (true) {
+                        webWindow = webSeekWindow()
+                        kotlinx.coroutines.delay(1_000L)
+                    }
+                }
+                val win = webWindow
+                if (win != null) {
+                    val span = (win.endMs - win.startMs).coerceAtLeast(1L)
+                    var scrubFraction by remember { mutableStateOf<Float?>(null) }
+                    // Hold the released thumb until the receiver reports a
+                    // position near the target (or 6 s pass), so it does not
+                    // snap back during the re-buffer.
+                    var pendingTarget by remember { mutableStateOf<Long?>(null) }
+                    androidx.compose.runtime.LaunchedEffect(pendingTarget, win.positionMs) {
+                        val t = pendingTarget ?: return@LaunchedEffect
+                        if (kotlin.math.abs(win.positionMs - t) < 4_000L) { scrubFraction = null; pendingTarget = null }
+                    }
+                    androidx.compose.runtime.LaunchedEffect(pendingTarget) {
+                        if (pendingTarget == null) return@LaunchedEffect
+                        kotlinx.coroutines.delay(6_000L)
+                        scrubFraction = null
+                        pendingTarget = null
+                    }
+                    val liveFraction = ((win.positionMs - win.startMs).toFloat() / span).coerceIn(0f, 1f)
+                    val shown = scrubFraction ?: liveFraction
+                    val shownMs = win.startMs + (shown * span).toLong()
+                    androidx.compose.material3.Slider(
+                        value = shown,
+                        enabled = switchingTo == null,
+                        onValueChange = { scrubFraction = it },
+                        onValueChangeFinished = {
+                            scrubFraction?.let { f ->
+                                val target = win.startMs + (f * span).toLong()
+                                android.util.Log.i("CastRemoteSheet", "[Cast] timeline scrub release target=${target}ms live=${win.isLive}")
+                                onSeekToStreamPosition(target)
+                                pendingTarget = target
+                            }
+                        },
+                        // The live-edge thumb sits inside the right-edge Back
+                        // gesture zone; without the exclusion a drag from it
+                        // also closed the sheet (Nothing Phone 2026-10-05).
+                        modifier = Modifier.fillMaxWidth().height(22.dp)
+                            .systemGestureExclusion(),
+                        colors = androidx.compose.material3.SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.18f),
+                            disabledThumbColor = MaterialTheme.colorScheme.primary,
+                            disabledActiveTrackColor = MaterialTheme.colorScheme.primary,
+                            disabledInactiveTrackColor = Color.White.copy(alpha = 0.18f),
+                        ),
+                    )
+                    Text(
+                        text = if (win.isLive) {
+                            val behind = (win.endMs - shownMs).coerceAtLeast(0L)
+                            if (behind < 5_000L && scrubFraction == null) "LIVE"
+                            else "-${formatBehindLive(behind)} behind live"
+                        } else {
+                            formatBehindLive(shownMs - win.startMs) + " / " + formatBehindLive(span)
+                        },
+                        style = MaterialTheme.typography.labelMedium.subtext(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else androidx.compose.material3.LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier
                         .fillMaxWidth()

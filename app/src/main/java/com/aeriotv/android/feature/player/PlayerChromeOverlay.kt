@@ -2274,11 +2274,26 @@ fun SwitchStreamSheet(
     // Reorder mode: the sheet never drags or swipes away. A handle drag owns
     // the finger, and a quick drag on a row body (Onn 2026-10-04 23:20:45,
     // a 340 px fling 0.35 s long) used to hand its leftover to the sheet and
-    // dismiss it. Only a tap outside (scrim), Back, or Done closes it.
+    // dismiss it. Only a tap outside (scrim), Back, or Finish ends it.
     var rowDragging by remember { mutableStateOf(false) }
-    val reorderMode = canReorder && streams.size > 1
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val canReorderList = canReorder && streams.size > 1
+    // Touch Reorder mode (Apple parity: "Reorder", reading "Finish" while on).
+    var reordering by remember { mutableStateOf(false) }
+    var pendingOrder by remember { mutableStateOf<List<Int>?>(null) }
+    val reorderMode = canReorderList && reordering && !isTv
+    // Leaving Reorder mode saves the order ONCE, only when it changed.
+    val finishReorder: (String) -> Unit = { reason ->
+        val ids = pendingOrder
+        val changed = ids != null && ids != streams.map { it.id }
+        android.util.Log.i("PlayerScreen", "[SwitchStream] reorder mode off reason=$reason save=$changed")
+        if (changed) onReorder(ids!!)
+        pendingOrder = null
+        reordering = false
+    }
     val dismissFrom: (String) -> Unit = { reason ->
         android.util.Log.i("PlayerScreen", "[SwitchStream] sheet dismiss reason=$reason rowDragging=$rowDragging")
+        if (reordering) finishReorder("dismiss")
         onDismiss()
     }
     com.aeriotv.android.ui.FormFactorModal(
@@ -2305,9 +2320,18 @@ fun SwitchStreamSheet(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
-                if (reorderMode && !com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
-                    androidx.compose.material3.TextButton(onClick = { dismissFrom("done") }) {
-                        Text("Done")
+                if (canReorderList && !isTv) {
+                    androidx.compose.material3.TextButton(
+                        enabled = !saving && !rowDragging,
+                        onClick = {
+                            if (reordering) finishReorder("finish")
+                            else {
+                                android.util.Log.i("PlayerScreen", "[SwitchStream] reorder mode on")
+                                reordering = true
+                            }
+                        },
+                    ) {
+                        Text(if (reordering) "Finish" else "Reorder")
                     }
                 }
             }
@@ -2330,6 +2354,8 @@ fun SwitchStreamSheet(
                         rowDragging = it
                         android.util.Log.i("PlayerScreen", "[SwitchStream] row drag active=$it")
                     },
+                    touchReordering = reorderMode,
+                    onPendingOrder = { pendingOrder = it },
                 )
             } else {
                 streams.forEach { stream ->
@@ -2339,6 +2365,16 @@ fun SwitchStreamSheet(
                         onClick = { onSelect(stream.id) },
                     )
                 }
+            }
+            // Apple SwitchStreamView footer, phones and tablets only.
+            if (streams.isNotEmpty() && !isTv) {
+                com.aeriotv.android.ui.settings.SettingsSectionFooter(
+                    text = if (canReorderList) {
+                        "Switches the active upstream for this channel. The picture follows in a few seconds. Tap Reorder to change the stream priority."
+                    } else {
+                        "Switches the active upstream for this channel. The picture follows in a few seconds."
+                    },
+                )
             }
             Spacer(Modifier.height(12.dp))
         }

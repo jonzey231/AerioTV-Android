@@ -991,6 +991,18 @@ fun PlayerScreen(
             // retry has since reopened the source, that reopen is already on
             // the new upstream and is adopted without a kept-connection skip.
             var deferredFollowGen: Long? = null
+            // The Switch Stream radio follows the server: once an external
+            // switch is adopted, re-read status stream_id and replace the
+            // app's last pick so the sheet marks the stream actually playing.
+            suspend fun adoptServerStreamId() {
+                val sid = withContext(Dispatchers.IO) { runCatching { onLoadCurrentStreamId(uuid) }.getOrNull() }
+                    ?: return
+                if (currentChannel?.id != ch.id) return
+                if (switchedStreamIdState.value != sid) {
+                    switchedStreamIdState.value = sid
+                    android.util.Log.i("DispatcharrSwitch", "[SwitchStream] radio follows server stream_id=$sid ch=${ch.id}")
+                }
+            }
             while (isActive) {
                 delay(backoffMs)
                 if (currentChannel?.id != ch.id) break
@@ -1131,6 +1143,7 @@ fun PlayerScreen(
                             "[FOLLOW] external switch ch=${ch.id} adopted: source reopened during the retry",
                         )
                         baseline = statusUrl
+                        adoptServerStreamId()
                         continue
                     }
                     android.util.Log.w(
@@ -1147,7 +1160,10 @@ fun PlayerScreen(
                             ?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() },
                         targetStreamUrl = statusUrl,
                     )
-                    if (ran) baseline = statusUrl    // adopt new baseline only after the follow ran
+                    if (ran) {
+                        baseline = statusUrl    // adopt new baseline only after the follow ran
+                        adoptServerStreamId()
+                    }
                 }
             }
         }
@@ -3010,10 +3026,18 @@ private fun LiveRewindChromeSection(
                 // stale (it only refreshes url), so switchedStreamId is the truthful
                 // "what we last switched to". Fall back to status stream_id when we
                 // haven't switched anything this session (correct on first read).
+                // Server first: when status names a stream that the app did
+                // not pick and the follow loop has adopted an external switch,
+                // switchedStreamId already holds the server's id. Otherwise
+                // the app's own pick wins over a stale event-apply stream_id.
                 val current = onLoadCurrentStreamId(uuid)
+                val marked = switchedStreamId ?: current
+                if (current != null && marked == current) {
+                    Log.i(TAG, "[SwitchStream] radio follows server stream_id=$current")
+                }
                 switchStream = SwitchStreamState(
                     streams = streams,
-                    currentStreamId = switchedStreamId ?: current,
+                    currentStreamId = marked,
                 )
             }
         },
