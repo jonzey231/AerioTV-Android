@@ -90,6 +90,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -462,6 +464,28 @@ fun ChannelListScreen(
             if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
                 listState.animateScrollToItem(0)
             }
+        }
+        // GROUP CHANGE SCROLL (parity with Apple 072303d/59461fe): the list
+        // keeps its first visible item by key, so a group picked while
+        // scrolled deep in All could open the new, shorter group at its end.
+        // A group change starts the new group at its top once its rows land.
+        val lastListGroup = remember { arrayOf<String?>(null) }
+        LaunchedEffect(state.selectedGroup) {
+            val group = state.selectedGroup
+            val prev = lastListGroup[0]
+            lastListGroup[0] = group
+            if (prev == null || prev == group) return@LaunchedEffect
+            // filtered is recomputed off main: wait for the new group's rows.
+            kotlinx.coroutines.withTimeoutOrNull(1_000L) {
+                androidx.compose.runtime.snapshotFlow { filtered }.drop(1).first()
+            }
+            val rows = filtered
+            android.util.Log.d(
+                "GuideGroup",
+                "GuideGroup: filter group=$group raw=${state.channels.size} rows=${rows.size} first=${rows.firstOrNull()?.name ?: "none"}",
+            )
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { listState.scrollToItem(0) }
         }
         val chipsVisible by remember {
             derivedStateOf { listState.firstVisibleItemIndex == 0 }

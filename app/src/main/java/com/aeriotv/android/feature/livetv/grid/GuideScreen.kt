@@ -558,6 +558,10 @@ fun GuideScreen(
                 " focusRow=${grid.focusRow} focusChannel=${grid.focusRow.takeIf { it in 0 until rows.size }?.let { rows.channel(it).name } ?: "-"}",
         )
         if (groupChanged) {
+            android.util.Log.d(
+                "GuideGroup",
+                "GuideGroup: filter group=$toGroup raw=${state.channels.size} rows=${rows.size} first=${rows.channels.firstOrNull()?.name ?: "none"}",
+            )
             val anchorRow = restore?.let { rows.indexOfChannel(it.firstChannelId) } ?: 0
             com.aeriotv.android.ui.tv.TvFocusTrace.guide(
                 "group change from=$fromGroup to=$toGroup anchorChannel=${restore?.firstChannelId ?: rows.channels.firstOrNull()?.id ?: "-"} " +
