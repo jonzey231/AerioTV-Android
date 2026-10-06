@@ -66,6 +66,10 @@ object PhoneVodMini {
         val isDvr: Boolean,
         /** Route that reopens this playback fullscreen (fromStart / autoResume off). */
         val reopenRoute: String,
+        /** Catch-up resume identity (CatchupResumeStore key); blank when not catch-up. */
+        val catchupChannelId: String = "",
+        val catchupStartMillis: Long = 0L,
+        val catchupDurationMs: Long = 0L,
     )
 
     class Session(val player: ExoPlayer, val info: Info) {
@@ -386,6 +390,16 @@ private fun saveMiniProgress(
     s: PhoneVodMini.Session,
     context: android.content.Context,
 ) {
+    // Catch-up: the mini's own save (expand, X close) keeps the resume entry
+    // current while the full player is not mounted.
+    if (s.info.catchupChannelId.isNotBlank() && s.info.catchupDurationMs > 0L &&
+        s.player.playbackState != Player.STATE_ENDED
+    ) {
+        val pos = s.catchupOffsetMs + s.player.contentPosition.coerceAtLeast(0L)
+        com.aeriotv.android.core.playback.CatchupResumeStore.save(
+            context, s.info.catchupChannelId, s.info.catchupStartMillis, pos, s.info.catchupDurationMs,
+        )
+    }
     val id = s.info.videoId
     if (id.isNullOrBlank()) return
     val pos = s.player.contentPosition

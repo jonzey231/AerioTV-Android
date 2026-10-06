@@ -1479,6 +1479,9 @@ fun VODPlayerScreen(
             if (!isCatchup) return@LaunchedEffect
             if (catchupChannelId.isBlank() || catchupExpandHandoff) {
                 Log.i(TAG, "[CATCHUP] resume skipped (channel=${catchupChannelId.isNotBlank()} handoff=$catchupExpandHandoff)")
+                if (catchupExpandHandoff && catchupChannelId.isNotBlank()) {
+                    Log.i(TAG, "[CATCHUP] identity carried on expand id=${com.aeriotv.android.core.playback.CatchupResumeStore.key(catchupChannelId, catchupStartMillis)}")
+                }
                 catchupResumeSettled = true
                 return@LaunchedEffect
             }

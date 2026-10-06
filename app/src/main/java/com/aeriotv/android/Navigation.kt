@@ -1868,7 +1868,7 @@ fun AerioTVNavHost(
                 val recMiniToken = remember { com.aeriotv.android.feature.player.PhoneVodMiniRouteToken() }
                 var recMvOpen by remember { mutableStateOf(false) }
                 com.aeriotv.android.feature.player.PhoneVodMiniRoute(
-                    info = remember(playbackUrl, title) {
+                    info = remember(playbackUrl, title, csChannel, csStart) {
                         com.aeriotv.android.feature.player.PhoneVodMini.Info(
                             key = playbackUrl,
                             videoId = recordingProgressId(playbackUrl, recId),
@@ -1880,7 +1880,11 @@ fun AerioTVNavHost(
                                 playbackUrl, title, isDvr = isDvr,
                                 recEnd = recEnd, recChannelId = recChannelId, recId = recId,
                                 csStart = csStart, csEnd = csEnd, csTz = csTz, csUuid = csUuid,
+                                csChannel = csChannel,
                             ),
+                            catchupChannelId = csChannel,
+                            catchupStartMillis = csStart,
+                            catchupDurationMs = (csEnd - csStart).coerceAtLeast(0L),
                         )
                     },
                     token = recMiniToken,
