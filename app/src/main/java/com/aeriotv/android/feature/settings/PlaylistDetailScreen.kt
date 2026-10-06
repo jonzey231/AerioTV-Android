@@ -99,10 +99,17 @@ fun PlaylistDetailScreen(
     // emission the old fallback to the active snapshot drew the ACTIVE
     // playlist's page for a frame, then swapped (Logan, Nothing Phone
     // 2026-10-02). Null = active, as before.
-    val playlist = when (playlistId) {
-        null, state.playlist?.id -> state.playlist
-        else -> allPlaylists.firstOrNull { it.id == playlistId }
-    }
+    //
+    // The ROW drawn is always the DAO's current row once the flow has
+    // emitted, active playlist included. The UiState snapshot is the entity a
+    // save or refresh returned, written before the capability probe lands, so
+    // drawing it left the User Permissions block on "Make this playlist active
+    // to load permissions" for the active playlist after an account edit
+    // (Nothing Phone 2026-10-05). The snapshot is only the first-frame
+    // fallback for the active playlist.
+    val requestedId = playlistId ?: state.playlist?.id
+    val playlist = allPlaylists.firstOrNull { it.id == requestedId }
+        ?: if (playlistId == null || playlistId == state.playlist?.id) state.playlist else null
     // Whether the playlist ON SCREEN is the active one. The refresh/test
     // actions below are deliberately gated on this: every one of them resolves
     // `repository.activePlaylist()` and loads its result into the single
@@ -122,6 +129,13 @@ fun PlaylistDetailScreen(
     // HomeWifiSection. Action statuses reset when the screen goes away.
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(playlist?.id) { viewModel.refreshActiveRoute() }
+    // Throttled permissions re-read for the ACTIVE playlist only; an inactive
+    // playlist shows what its last probe persisted.
+    LaunchedEffect(playlist?.id, isActivePlaylist) {
+        if (isActivePlaylist && playlist?.isDispatcharrDirectConnect() == true) {
+            viewModel.refreshPermissionsForDetail()
+        }
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshActiveRoute()
@@ -305,15 +319,15 @@ fun PlaylistDetailScreen(
             // ServerDetailView.swift parity. Direct Connect only: Xtream Codes
             // rows -- including Dispatcharr's own XC emulation, which the app
             // sees as an XC source -- and M3U rows have no per-user permission
-            // model to show. Nothing here probes: an inactive playlist shows
-            // whatever its last probe persisted, and a never-probed one says so.
+            // model to show. Only the active playlist is re-read (throttled, on
+            // entry); an inactive one shows whatever its last probe persisted.
             if (playlist.isDispatcharrDirectConnect()) item {
                 val facts by viewModel.dispatcharrAccountFacts(playlist.id)
                     .collectAsStateWithLifecycle(initialValue = DispatcharrAccountFacts())
                 Section(
                     header = "Dispatcharr User Permissions",
-                    footer = "Set by your Dispatcharr admin. Use Refresh Session after your " +
-                        "admin changes them.",
+                    footer = "Set by your Dispatcharr admin. Permissions refresh when you " +
+                        "open the app or use Refresh Playlist.",
                 ) {
                     // One block, one focus stop on TV (or none on phones):
                     // per-row focus stops here would trap the D-pad in a wall

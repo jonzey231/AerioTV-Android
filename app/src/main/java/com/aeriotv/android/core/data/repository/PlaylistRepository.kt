@@ -827,11 +827,9 @@ class PlaylistRepository @Inject constructor(
             // library this account cannot see would be a lie, and one that
             // never appears hides a rebuild that is really running.
             //
-            // The snapshot this probe persists is overwritten by the fresh
-            // entity upsert further down (a new PlaylistEntity carries no
-            // snapshot fields), which is why the probe at the end of the save
-            // stays where it is: this early pass is read for the decision, that
-            // one is what the rest of the app reads.
+            // The snapshot this probe persists is carried onto the fresh
+            // entity upsert further down; the probe at the end of the save
+            // still re-reads it so the row ends on the newest answer.
             if (isDispatcharr) {
                 runCatching { probeCapabilities(playlistId, force = true) }
                     .onFailure { Log.w(TAG_CAPS, "pre-rebuild capability probe failed", it) }
@@ -892,7 +890,15 @@ class PlaylistRepository @Inject constructor(
                 10
             }
 
-        val entity = PlaylistEntity(
+        // The capability snapshot already on the row (the pre-rebuild probe's
+        // answer, or the unchanged account's last good one; a credential
+        // change cleared it in dropCachedIdentity) is carried onto the fresh
+        // entity. Building it bare reset the snapshot columns, so between this
+        // upsert and the probe below every reader saw an UNKNOWN account and
+        // the probe logged "level unknown -> 1" a second time (Nothing Phone,
+        // 2026-10-05).
+        val snapshotRow = dao.byId(playlistId)
+        val bareEntity = PlaylistEntity(
             id = playlistId,
             name = request.name?.takeIf { it.isNotBlank() } ?: deriveName(normalisedBase),
             urlString = normalisedBase,
@@ -922,8 +928,19 @@ class PlaylistRepository @Inject constructor(
             // caller did not supply one.
             customUserAgent = request.customUserAgent ?: priorRow?.customUserAgent ?: "",
         )
+        val entity = snapshotRow?.let { row ->
+            bareEntity.copy(
+                dispatcharrIsStaff = row.dispatcharrIsStaff,
+                dispatcharrIsSuperuser = row.dispatcharrIsSuperuser,
+                dispatcharrCustomProperties = row.dispatcharrCustomProperties,
+                dispatcharrCapabilitiesFetchedAt = row.dispatcharrCapabilitiesFetchedAt,
+                dispatcharrCapabilitiesSchema = row.dispatcharrCapabilitiesSchema,
+                dispatcharrCapabilitiesStale = row.dispatcharrCapabilitiesStale,
+                dispatcharrSystemCatchupEnabled = row.dispatcharrSystemCatchupEnabled,
+            )
+        } ?: bareEntity
         // New / re-loaded playlist becomes the active one. Mirrors iOS commit
-        // f72b942 — wrap "deactivate others + upsert" in a transactional DAO
+        // f72b942: wrap "deactivate others + upsert" in a transactional DAO
         // method so two concurrent server-add calls can't interleave between
         // the deactivate pass and the upsert, leaving zero or two active rows.
         // Editing the already-active row skips the deactivate step.

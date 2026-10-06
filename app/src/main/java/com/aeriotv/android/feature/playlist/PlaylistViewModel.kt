@@ -2349,6 +2349,23 @@ class PlaylistViewModel @Inject constructor(
     suspend fun saveChannelStreamOrder(channelIntPk: Int, streamIds: List<Int>): Result<Unit> =
         runCatching { repository.saveDispatcharrChannelStreamOrder(channelIntPk, streamIds) }
 
+    /**
+     * Playlist detail opened on the ACTIVE playlist: re-read its permissions
+     * at most once a minute (the same floor as a return to foreground), so
+     * the User Permissions block is never minutes stale. The block reads the
+     * DAO row, so the fresh answer lands on screen without a reload.
+     */
+    fun refreshPermissionsForDetail() {
+        viewModelScope.launch {
+            runCatching {
+                repository.probeAllCapabilities(
+                    trigger = "playlist detail",
+                    minIntervalMs = 60_000L,
+                )
+            }
+        }
+    }
+
     /** Re-read the user level now (Switch Stream open / reorder save / 403)
      *  and return the fresh Switch Stream gate; false when unknown. */
     suspend fun recheckSwitchStreamAllowed(trigger: String): Boolean =

@@ -847,6 +847,10 @@ fun AerioTVNavHost(
                 }
                 val vm: PlaylistViewModel = hiltViewModel(parent)
                 val state by vm.state.collectAsStateWithLifecycle()
+                // Capability gates read the LIVE active row: the UiState snapshot
+                // predates the probe that writes the permissions (2026-10-05).
+                val livePlaylist by vm.activePlaylistLive.collectAsStateWithLifecycle(initialValue = null)
+                val gatePlaylist = livePlaylist ?: state.playlist
                 val context = androidx.compose.ui.platform.LocalContext.current
                 // Remote Control: optional start-in-mini tune target for the
                 // Live TV tab's channel taps (Settings > Remote Control).
@@ -893,9 +897,9 @@ fun AerioTVNavHost(
                 // unmeasured account must never have affordances hidden.
                 CompositionLocalProvider(
                     LocalCapabilities provides
-                        (state.playlist?.capabilities() ?: CapabilitySet.UNKNOWN),
-                    LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: true),
-                    LocalDvrAccess provides (state.playlist?.dispatcharrEffectiveDvrAccess() ?: "manage"),
+                        (gatePlaylist?.capabilities() ?: CapabilitySet.UNKNOWN),
+                    LocalCanRecordToServer provides (gatePlaylist?.canRecordToServer() ?: true),
+                    LocalDvrAccess provides (gatePlaylist?.dispatcharrEffectiveDvrAccess() ?: "manage"),
                     // One ViewModel set for the whole main destination (Streamer
                     // 2026-09-03): the tabs' default hiltViewModel() resolved
                     // against THIS entry while the scaffold and the player use the
@@ -1181,6 +1185,10 @@ fun AerioTVNavHost(
                 }
                 val vm: PlaylistViewModel = hiltViewModel(parent)
                 val state by vm.state.collectAsStateWithLifecycle()
+                // Capability gates read the LIVE active row: the UiState snapshot
+                // predates the probe that writes the permissions (2026-10-05).
+                val livePlaylist by vm.activePlaylistLive.collectAsStateWithLifecycle(initialValue = null)
+                val gatePlaylist = livePlaylist ?: state.playlist
                 val channelId = Uri.decode(entry.arguments?.getString("channelId").orEmpty())
                 // Task #148 milestone B: catch-up context (blank/0 = live).
                 val csUrl = Uri.decode(entry.arguments?.getString("csUrl").orEmpty())
@@ -1202,11 +1210,11 @@ fun AerioTVNavHost(
                 val playableChannels = state.channels
                 CompositionLocalProvider(
                     LocalCapabilities provides
-                        (state.playlist?.capabilities() ?: CapabilitySet.UNKNOWN),
-                    LocalCanRecordToServer provides (state.playlist?.canRecordToServer() ?: true),
+                        (gatePlaylist?.capabilities() ?: CapabilitySet.UNKNOWN),
+                    LocalCanRecordToServer provides (gatePlaylist?.canRecordToServer() ?: true),
                     // Switch Stream: change_stream is still IsAdmin server-side,
                     // but the gate now runs through Capability.CanSwitchStream.
-                    LocalIsDispatcharrAdmin provides (state.playlist?.canSwitchStream() ?: false),
+                    LocalIsDispatcharrAdmin provides (gatePlaylist?.canSwitchStream() ?: false),
                 ) {
                 PlayerScreen(
                     channels = playableChannels,
