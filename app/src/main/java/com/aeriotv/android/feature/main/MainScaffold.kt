@@ -1391,6 +1391,9 @@ fun MainScaffold(
                         switchChannelStream = { uuid, streamId ->
                             viewModel.switchChannelStream(uuid, streamId).getOrThrow()
                         },
+                        recheckSwitchStreamAllowed = { trigger ->
+                            viewModel.recheckSwitchStreamAllowed(trigger)
+                        },
                     )
                     // 12 dp above the pill on tablets (iPad parity).
                     Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))

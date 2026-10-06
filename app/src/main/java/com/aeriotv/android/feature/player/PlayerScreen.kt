@@ -3352,7 +3352,7 @@ internal const val REORDER_DENIED_MESSAGE =
  * the stream (HTTP 500)." when the server sent no text, or "Couldn't switch
  * the stream: <error>" with no HTTP status.
  */
-private fun switchStreamFailureMessage(action: String, deniedMessage: String, error: Throwable): String {
+internal fun switchStreamFailureMessage(action: String, deniedMessage: String, error: Throwable): String {
     val http = error as? com.aeriotv.android.core.network.DispatcharrHttpFailure
     if (http != null) {
         if (http.status == 403) return deniedMessage

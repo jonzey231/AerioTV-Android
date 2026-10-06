@@ -49,6 +49,9 @@ object CatchupResumeStore {
             all.put(k, JSONObject().put("pos", positionMs).put("at", System.currentTimeMillis()))
             android.util.Log.i(TAG, "[CATCHUP] resume saved at ${positionMs / 1000L}s")
         } else {
+            if (durationMs > 0L && positionMs <= MIN_POSITION_MS) {
+                android.util.Log.i(TAG, "CatchupResume: save dropped pos=${positionMs / 1000L}s floor=${MIN_POSITION_MS / 1000L}s id=$k")
+            }
             val removed = all.remove(k) != null
             if (removed && durationMs > 0L && positionMs >= durationMs - END_MARGIN_MS) {
                 android.util.Log.i(TAG, "[CATCHUP] resume cleared (reached end)")

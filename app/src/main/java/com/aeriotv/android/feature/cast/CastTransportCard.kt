@@ -69,6 +69,9 @@ fun CastTransportCard(
     loadChannelStreams: suspend (Int) -> List<StreamOption>,
     loadCurrentStreamId: suspend (String) -> Int?,
     switchChannelStream: suspend (String, Int) -> Unit,
+    /** Re-reads the live Dispatcharr user level (fail closed), the same
+     *  pre-check the player's Switch Stream runs before opening. */
+    recheckSwitchStreamAllowed: suspend (String) -> Boolean,
     modifier: Modifier = Modifier,
     /** Tablets (iPad parity, Logan 2026-10-05): the card's fixed width; it
      *  then takes the tab pill's capsule and chrome. Null on phones. */
@@ -114,6 +117,8 @@ fun CastTransportCard(
     // Program handed to the shared Record sheet; null = sheet closed.
     var recordTarget by remember { mutableStateOf<com.aeriotv.android.core.data.ProgramInfoTarget?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val isDispatcharrAdmin = com.aeriotv.android.ui.LocalIsDispatcharrAdmin.current
 
     // The session ended (stop, disconnect, TV powered off): drop the sheet with
     // the card so neither outlives the transport.
@@ -330,7 +335,8 @@ fun CastTransportCard(
         // Google Cast only: the skips live in the transport row (the companion
         // transport already draws them above its rewind scrubber).
         val castCanSkip by castSender.canSkip.collectAsStateWithLifecycle()
-        val canSwitchStream = currentChannel?.dispatcharrChannelId != null &&
+        // Hidden for non-admin accounts, the same gate as the player menu.
+        val canSwitchStream = isDispatcharrAdmin && currentChannel?.dispatcharrChannelId != null &&
             currentChannel.id.startsWith("disp:")
         // The program airing now on the cast channel, in the shape the guide and
         // channel list hand to the shared Record sheet, so recording from the
@@ -415,6 +421,16 @@ fun CastTransportCard(
                 if (ch != null && chPk != null) {
                     val uuid = ch.id.removePrefix("disp:")
                     scope.launch {
+                        // Re-read the user level before opening (player parity):
+                        // the picker follows the live answer, fail closed.
+                        if (!recheckSwitchStreamAllowed("Switch Stream open")) {
+                            android.widget.Toast.makeText(
+                                context,
+                                com.aeriotv.android.feature.player.SWITCH_DENIED_MESSAGE,
+                                android.widget.Toast.LENGTH_LONG,
+                            ).show()
+                            return@launch
+                        }
                         switchCurrentId = loadCurrentStreamId(uuid)
                         switchStreams = loadChannelStreams(chPk)
                     }
@@ -467,9 +483,29 @@ fun CastTransportCard(
                 val uuid = currentChannel?.id?.removePrefix("disp:")
                 switchStreams = null
                 if (uuid != null) {
+                    // Optimistic radio mark; a failure puts the previous one
+                    // back (player and Apple SwitchStreamView parity).
+                    val previousId = switchCurrentId
+                    switchCurrentId = streamId
                     scope.launch {
-                        runCatching { switchChannelStream(uuid, streamId) }
-                        switchCurrentId = streamId
+                        val result = runCatching { switchChannelStream(uuid, streamId) }
+                        val error = result.exceptionOrNull() ?: return@launch
+                        if (switchCurrentId == streamId) switchCurrentId = previousId
+                        Log.w(TAG, "[SwitchStream] cast change_stream failed stream=$streamId: ${error.message}")
+                        android.widget.Toast.makeText(
+                            context,
+                            com.aeriotv.android.feature.player.switchStreamFailureMessage(
+                                "switch the stream",
+                                com.aeriotv.android.feature.player.SWITCH_DENIED_MESSAGE,
+                                error,
+                            ),
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        if ((error as? com.aeriotv.android.core.network.DispatcharrHttpFailure)?.status == 403) {
+                            // The server says the level changed: re-read it so
+                            // the Switch Stream gate follows.
+                            recheckSwitchStreamAllowed("403 on change_stream")
+                        }
                     }
                 }
             },
