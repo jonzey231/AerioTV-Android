@@ -1087,6 +1087,14 @@ fun GuideScreen(
             onDown = { runCatching { gridFocus.requestFocus() }.getOrDefault(false) },
             leadInset = railWidth,
         )
+        // Multiview staging banner (iOS EPGGuideView.stagingBanner), shared
+        // with the List, below the header / pills and above the grid (iOS
+        // placement); restored after the guide rebuild dropped it.
+        com.aeriotv.android.feature.multiview.MultiviewStagingBanner(
+            store = multiviewStore,
+            isTv = isTv,
+            onLaunchMultiview = onLaunchMultiview,
+        )
         // Channel Preview OFF + corner mini Active: the mini has no banner art
         // card to share a baseline with, so it gets its OWN slot here -- a
         // reserved band immediately above the time header whose measured bottom
@@ -1424,7 +1432,7 @@ fun GuideScreen(
                 if (isLive && channel.url.isNotBlank()) add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { onChannelClick(channel) })
                 else if (replayable) add(TvMenuAction("Watch from Start", Icons.Outlined.History, onClick = watchFromStart))
                 add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites", if (isFavorite) Icons.Outlined.StarOutline else Icons.Filled.Star) { favoritesVm.toggle(channel) })
-                add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", Icons.Outlined.GridView, enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
+                add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", Icons.Outlined.GridView, enabled = canAddToMultiview) { multiviewStore.stageToggle(channel) })
                 add(TvMenuAction("Add Channel to Collection", Icons.Outlined.CreateNewFolder) { collectionPickerFor = channel.id to channel.name })
                 if (!cell.isPlaceholder) {
                     add(TvMenuAction("Program Info", Icons.Outlined.Info) { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
@@ -1441,7 +1449,7 @@ fun GuideScreen(
         } else {
         val actions = buildList {
             add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites") { favoritesVm.toggle(channel) })
-            add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.toggle(channel) })
+            add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.stageToggle(channel) })
             add(TvMenuAction("Add Channel to Collection") { collectionPickerFor = channel.id to channel.name })
             // Jump To and Back to Now live on the clock cell now (tvOS parity).
             if (!cell.isPlaceholder) {

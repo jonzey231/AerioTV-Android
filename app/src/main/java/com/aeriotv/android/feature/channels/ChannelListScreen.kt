@@ -165,6 +165,8 @@ fun ChannelListScreen(
     canToggleViewMode: Boolean = false,
     onToggleViewMode: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
+    /** Play on the Multiview staging banner. */
+    onLaunchMultiview: () -> Unit = {},
     /** Catch-up (task #137): play a resolved timeshift URL in the recording
      *  player; same shape as GuideScreen's onPlayCatchup. */
     onPlayCatchup: (
@@ -595,6 +597,15 @@ fun ChannelListScreen(
             thickness = 0.5.dp,
         )
 
+        // Multiview staging banner, same placement as the guide: below the
+        // header / pills, above the rows (iOS ChannelListView). Staging from a
+        // row's long-press menu used to show nothing in List view.
+        com.aeriotv.android.feature.multiview.MultiviewStagingBanner(
+            store = multiviewStore,
+            isTv = isTv,
+            onLaunchMultiview = onLaunchMultiview,
+        )
+
         // Audit task #51 (partial): pull-to-refresh on the Live TV list.
         // Drags the spinner from the top of the LazyColumn and invokes
         // PlaylistViewModel.refreshPlaylist(), which re-fetches the channel
@@ -731,7 +742,7 @@ fun ChannelListScreen(
                         collectionsMenu = collectionsMenu,
                         inMultiview = stagedMultiview.any { it.id == channel.id },
                         onToggleMultiview = if (channel.url.isNotBlank()) {
-                            { multiviewStore.toggle(channel) }
+                            { multiviewStore.stageToggle(channel) }
                         } else {
                             null
                         },

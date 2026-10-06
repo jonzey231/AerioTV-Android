@@ -26,6 +26,9 @@ class MultiviewStoreHandleVm @Inject constructor(
     fun warningRecentlyShown(): Boolean = store.warningRecentlyShown()
     fun noteWarningShown() = store.noteWarningShown()
     fun toggle(channel: M3UChannel) = store.toggle(channel)
+    val isStaging: StateFlow<Boolean> get() = store.isStaging
+    fun setStaging(active: Boolean) = store.setStaging(active)
+    fun stageToggle(channel: M3UChannel) = store.stageToggle(channel)
     fun isSelected(channel: M3UChannel): Boolean = store.isSelected(channel)
     fun addTile(tile: MultiviewTile): Boolean = store.addTile(tile)
     fun removeTile(tileId: String) = store.removeTile(tileId)
@@ -57,6 +60,11 @@ class MultiviewStoreHandle(
     val warningRecentlyShown: () -> Boolean,
     val noteWarningShown: () -> Unit,
     val toggle: (M3UChannel) -> Unit,
+    /** Staging mode for the Live TV banner (iOS isStagingFromGuide). */
+    val isStaging: StateFlow<Boolean>,
+    val setStaging: (Boolean) -> Unit,
+    /** Live TV menu add/remove: first add starts a fresh staged pile. */
+    val stageToggle: (M3UChannel) -> Unit,
     val addTile: (MultiviewTile) -> Boolean,
     val removeTile: (String) -> Unit,
     /** Swap Stream: re-point an existing tile, keeping its slot. */
@@ -82,6 +90,9 @@ fun rememberMultiviewStoreHandle(
         warningRecentlyShown = vm::warningRecentlyShown,
         noteWarningShown = vm::noteWarningShown,
         toggle = vm::toggle,
+        isStaging = vm.isStaging,
+        setStaging = vm::setStaging,
+        stageToggle = vm::stageToggle,
         addTile = vm::addTile,
         removeTile = vm::removeTile,
         replaceTile = vm::replaceTile,

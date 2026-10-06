@@ -148,6 +148,7 @@ fun LiveTVTabContent(
                 canToggleViewMode = canToggle,
                 onToggleViewMode = toggleMode,
                 onOpenSearch = onOpenSearch,
+                onLaunchMultiview = onLaunchMultiview,
                 onPlayCatchup = onPlayCatchup,
             )
         }

@@ -127,6 +127,31 @@ class MultiviewStore @Inject constructor() {
     }
 
     /**
+     * iOS `MultiviewStore.isStagingFromGuide`: true while the user is building
+     * a pile from the Live TV Guide or List long-press menu. Drives the
+     * "N tiles staged for Multiview" banner on both Live TV views.
+     */
+    private val _isStaging = MutableStateFlow(false)
+    val isStaging: StateFlow<Boolean> = _isStaging.asStateFlow()
+
+    fun setStaging(active: Boolean) {
+        _isStaging.value = active
+    }
+
+    /**
+     * Live TV menu "Add to Multiview" (iOS handleMultiviewIntent /
+     * ChannelListView.toggleMultiview): the first add starts a fresh pile and
+     * enters staging; later calls toggle the channel in or out.
+     */
+    fun stageToggle(channel: M3UChannel) {
+        if (!_isStaging.value) {
+            clear()
+            _isStaging.value = true
+        }
+        toggle(channel)
+    }
+
+    /**
      * Remove the tile at [index]. iOS parity (MultiviewStore.remove(id:),
      * MultiviewStore.swift 625-651): if the removed tile owned audio, audio
      * auto-promotes to the NEWEST remaining tile (`tiles.last`); otherwise
