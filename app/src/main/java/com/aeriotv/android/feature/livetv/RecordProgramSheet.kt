@@ -802,7 +802,28 @@ private fun TvRecordForm(
                         SheetPill("This Device", selected = !destinationServer, onClick = { onDestinationServer(false) })
                     }
                 }
-                if (isDispatcharr && !usingRule) {
+                // Phone parity: a live recording on an account without DVR
+                // manage access lands on this device; say so with the same
+                // orange note, and hide Comskip (server-side only) entirely.
+                if (isDispatcharr && isLive && !canRecordToServer && !usingRule) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.Top) {
+                        Icon(
+                            imageVector = Icons.Outlined.Storage,
+                            contentDescription = null,
+                            tint = Color(0xFFFF9500),
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("Saving to this device", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.onSurface)
+                            Text(
+                                "Recording to the Dispatcharr server needs DVR manage access on your account. Contact your server administrator for more information.",
+                                fontSize = 10.sp.subtext(), lineHeight = 13.sp.subtext(), color = colors.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (isDispatcharr && canRecordToServer && !usingRule) {
                     val disabled = !destinationServer
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         TvSectionTitle("Remove Commercials (Comskip)", dim = disabled)
