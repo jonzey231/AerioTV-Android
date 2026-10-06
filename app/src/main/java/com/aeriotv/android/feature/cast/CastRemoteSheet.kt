@@ -168,6 +168,13 @@ fun CastRemoteSheet(
     webSeekWindow: (() -> com.aeriotv.android.core.cast.AerioCastSender.WebSeekWindow?)? = null,
     /** Seek on scrub release (web receiver): an absolute stream position. */
     onSeekToStreamPosition: (Long) -> Unit = {},
+    /** False hides Back / Forward (the composited Multiview is live only);
+     *  Play / Pause stays. */
+    showSkipButtons: Boolean = true,
+    /** Replaces the program line (the composited Multiview's channel names). */
+    programmeTitleOverride: String? = null,
+    /** Drawn above the header (the composited Multiview's grid preview). */
+    topContent: (@Composable () -> Unit)? = null,
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -193,6 +200,7 @@ fun CastRemoteSheet(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            topContent?.invoke()
             // Header: channel art (or the transport glyph), channel, then
             // "Casting to <device>" in the accent color.
             Column(
@@ -244,7 +252,7 @@ fun CastRemoteSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = programmeTitle.orEmpty(),
+                        text = (programmeTitleOverride ?: programmeTitle).orEmpty(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onBackground,
                         fontWeight = FontWeight.SemiBold,
@@ -449,21 +457,25 @@ fun CastRemoteSheet(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.Top,
             ) {
-                LabeledRemoteButton(
-                    SkipIntervals.backIcon(backSeconds),
-                    "Back ${backSeconds}s",
-                    { onSeekBy(-backSeconds * 1_000L) },
-                    skipEnabled,
-                    groupAlpha,
-                )
+                if (showSkipButtons) {
+                    LabeledRemoteButton(
+                        SkipIntervals.backIcon(backSeconds),
+                        "Back ${backSeconds}s",
+                        { onSeekBy(-backSeconds * 1_000L) },
+                        skipEnabled,
+                        groupAlpha,
+                    )
+                }
                 PlayPauseButton(isPlaying, onTogglePlayPause, enabled, groupAlpha)
-                LabeledRemoteButton(
-                    SkipIntervals.forwardIcon(forwardSeconds),
-                    "Forward ${forwardSeconds}s",
-                    { onSeekBy(forwardSeconds * 1_000L) },
-                    skipEnabled,
-                    groupAlpha,
-                )
+                if (showSkipButtons) {
+                    LabeledRemoteButton(
+                        SkipIntervals.forwardIcon(forwardSeconds),
+                        "Forward ${forwardSeconds}s",
+                        { onSeekBy(forwardSeconds * 1_000L) },
+                        skipEnabled,
+                        groupAlpha,
+                    )
+                }
             }
             WideButton(
                 icon = Icons.AutoMirrored.Filled.List,

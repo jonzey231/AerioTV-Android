@@ -146,8 +146,11 @@ private fun AccentTextControl(label: String, onClick: () -> Unit) {
  * The "Multiview" sheet behind the dock card: staged channels with logo and
  * name, swipe a row to remove it, Reorder / Finish (Switch Stream pattern)
  * with drag handles, Clear, then Play Here and, only when [receiverName] is
- * non-null (Cast Connect session to the AerioTV TV app), Play on <device>.
- * Buttons follow the play-where dialog (PlayWhereRouter.kt).
+ * non-null (Cast Connect session to the AerioTV TV app, or a Cast web
+ * receiver with 2 to 4 channels staged, which the phone composites), Play on
+ * <device>. [castNote] (web receiver with more than 4 staged) is a one-line
+ * note under the buttons. Buttons follow the play-where dialog
+ * (PlayWhereRouter.kt).
  */
 @Composable
 fun MultiviewStagedSheet(
@@ -159,6 +162,7 @@ fun MultiviewStagedSheet(
     onPlayHere: () -> Unit,
     onPlayOnReceiver: () -> Unit,
     onDismiss: () -> Unit,
+    castNote: String? = null,
 ) {
     LaunchedEffect(tiles.isEmpty()) { if (tiles.isEmpty()) onDismiss() }
     var reordering by remember { mutableStateOf(false) }
@@ -233,6 +237,16 @@ fun MultiviewStagedSheet(
                     ) {
                         Text("Play on $receiverName", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                }
+                if (castNote != null) {
+                    Text(
+                        text = castNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))

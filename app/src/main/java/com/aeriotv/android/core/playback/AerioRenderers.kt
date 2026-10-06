@@ -75,6 +75,10 @@ fun aerioRenderersFactory(
     // re-selection, no source re-load on a focus switch) while no AudioTrack
     // exists and the tile's clock runs off the wall clock like a muted tile.
     tileAudioGate: TileAudioGate? = null,
+    // Composited Multiview cast tiles only (2026-10-06): replaces the gated
+    // tile sink around the PCM tile sink (see CompositeTapAudioSink). Needs
+    // [tileAudioGate] non-null so the audio renderer stays clockless.
+    tileAudioSinkWrapper: ((AudioSink) -> AudioSink)? = null,
 ): DefaultRenderersFactory {
     val factory = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
@@ -89,6 +93,7 @@ fun aerioRenderersFactory(
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .build()
+                tileAudioSinkWrapper?.let { return it(tileSink) }
                 return GatedTileAudioSink(AudioSyncShiftSink(PtsSmoothingAudioSink(tileSink)), tileAudioGate)
             }
             if (audioPassthrough) {

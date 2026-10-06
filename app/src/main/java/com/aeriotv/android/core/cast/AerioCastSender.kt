@@ -1530,6 +1530,74 @@ class AerioCastSender @Inject constructor(
     }
 
     /**
+     * Multiview cast to the WEB receiver (Logan 2026-10-06): the phone
+     * composes the grid and [startProxy] starts the cast proxy on that local
+     * stream (CastHlsProxySession.startLocalChannel). Same contract as a
+     * channel cast on the web receiver: anything already on the receiver is
+     * unloaded and its proxy torn down first, the card shows [base] at once,
+     * and the load fires once the proxy's ready gate passes. A failure
+     * toasts [failureMessage] and calls [onFailed]. Never used for the
+     * Android TV app, which opens Multiview natively (sendMultiviewOpen).
+     */
+    fun castComposite(
+        base: Content,
+        startProxy: suspend () -> CastHlsProxySession.Started,
+        failureMessage: String,
+        onFailed: () -> Unit,
+    ) {
+        if (state.value !is State.Connected) {
+            onFailed()
+            return
+        }
+        val previous = _content.value
+        _receiverVideo.value = null
+        receiverFpsSamples.clear()
+        pending = base
+        _content.value = base
+        proxyLoadJob?.cancel()
+        val epoch = ++flipEpoch
+        Log.i(TAG, "[MV-CAST] cast composite \"${base.subtitle}\" previous=${previous?.title ?: "none"} epoch=$epoch")
+        proxyLoadJob = senderScope.launch {
+            if (previous != null) {
+                runCatching { currentSession()?.remoteMediaClient?.stop() }
+                kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { hlsProxy.stop() } }
+                lastLoadedMediaId = null
+                idleReloadAttempts = 0
+            }
+            val started = try {
+                startProxy()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.w(TAG, "[MV-CAST] composite proxy start failed: $t")
+                null
+            }
+            if (started == null) {
+                if (epoch == flipEpoch) {
+                    surfaceCastFailure(failureMessage)
+                    stopPlayback()
+                }
+                onFailed()
+                return@launch
+            }
+            if (epoch != flipEpoch) {
+                Log.i(TAG, "[MV-CAST] composite epoch=$epoch superseded by $flipEpoch; not loading")
+                return@launch
+            }
+            val ready = base.copy(
+                webCastUrl = started.demuxedPlaylistUrl,
+                webCastMime = "application/x-mpegURL",
+            )
+            pending = ready
+            _content.value = ready
+            currentSession()?.let { loadOnSession(it, ready) }
+        }
+    }
+
+    /** Toast surface for the Multiview composite's own stop reasons. */
+    fun notifyCastProblem(message: String) = surfaceCastFailure(message)
+
+    /**
      * The specific reason this channel cannot be cast (Logan: "cannot cast
      * this channel" was not detailed enough). H.264 and HEVC always have a
      * path (passthrough or the on-phone transcode), so the video arm only

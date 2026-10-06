@@ -76,6 +76,9 @@ fun CastTransportCard(
     /** Tablets (iPad parity, Logan 2026-10-05): the card's fixed width; it
      *  then takes the tab pill's capsule and chrome. Null on phones. */
     tabletWidth: androidx.compose.ui.unit.Dp? = null,
+    /** Phone-composited Multiview on a web receiver (2026-10-06): the sheet
+     *  shows its grid preview (tap a tile for its audio). */
+    multiviewCast: com.aeriotv.android.core.cast.multiview.MultiviewCastController? = null,
 ) {
     val castState by castSender.state.collectAsStateWithLifecycle()
     val castContent by castSender.content.collectAsStateWithLifecycle()
@@ -207,6 +210,10 @@ fun CastTransportCard(
         else -> castContent?.title.orEmpty()
     }
     val hasContent = title.isNotBlank()
+    // Composited Multiview: title "Multiview", the channel names under it,
+    // live only (no skips, no channel up/down).
+    val isComposite = !isCompanion &&
+        castContent?.mediaId == com.aeriotv.android.core.cast.multiview.MultiviewCastController.MEDIA_ID
     val switchingTo = if (isCompanion) null else castSwitchingTo
     // Google Cast only, and only for the channel actually on the receiver.
     val showCastVideo = !isCompanion && hasContent && switchingTo == null
@@ -293,6 +300,7 @@ fun CastTransportCard(
                 !hasContent -> "Select a Channel"
                 !isCompanion && castBuffering -> "Buffering\u2026"
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
+                isComposite -> castContent?.subtitle
                 else -> null
             },
             transportIcon = if (isCompanion) Icons.Filled.Tv else Icons.Filled.Cast,
@@ -369,8 +377,13 @@ fun CastTransportCard(
             stopLabel = if (isCompanion) "Stop" else "Stop Casting",
             // Only the companion transport can be dropped while the TV plays on.
             onDisconnect = if (isCompanion) ({ disconnectCompanionOnly() }) else null,
-            canChangeChannel = currentChannel != null,
-            showInlineSkip = !isCompanion,
+            canChangeChannel = currentChannel != null && !isComposite,
+            showInlineSkip = !isCompanion && !isComposite,
+            showSkipButtons = !isComposite,
+            programmeTitleOverride = if (isComposite) castContent?.subtitle else null,
+            topContent = if (isComposite && multiviewCast != null) {
+                { MultiviewCompositePreview(multiviewCast) }
+            } else null,
             inlineSkipEnabled = castCanSkip || position.canSeek || remoteState.canSeek,
             canSwitchStream = canSwitchStream,
             castDetailLines = castDetailLines,

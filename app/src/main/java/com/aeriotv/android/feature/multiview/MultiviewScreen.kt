@@ -2544,7 +2544,7 @@ private fun ExoTile(
 }
 
 @OptIn(UnstableApi::class)
-private fun buildTileMediaSource(
+internal fun buildTileMediaSource(
     requestedUrl: String,
     dataSourceFactory: androidx.media3.datasource.DataSource.Factory,
 ): androidx.media3.exoplayer.source.MediaSource {

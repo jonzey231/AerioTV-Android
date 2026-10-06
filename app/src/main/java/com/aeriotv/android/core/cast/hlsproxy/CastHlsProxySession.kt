@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -380,11 +381,37 @@ class CastHlsProxySession @Inject constructor(
         )
     }
 
+    /**
+     * Multiview cast (Logan 2026-10-06): serve a LOCAL MPEG-TS stream (the
+     * phone-composited Multiview grid, H.264 720p30 plus AAC-LC stereo, see
+     * core/cast/multiview) through exactly the same remuxer, segmenter,
+     * playlists and server as a channel. [source] is read like a provider
+     * socket; its end (-1) ends the ingest without any reconnect. The
+     * composite is already H.264 Main 3.1 and AAC, so the video plan is
+     * passthrough and no audio is refused.
+     */
+    suspend fun startLocalChannel(
+        source: java.io.InputStream,
+        label: String,
+    ): Started = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        server.setReceiverH264Level42(false)
+        this@CastHlsProxySession.videoPlan = CastVideoPlan.PASSTHROUGH
+        Started(
+            demuxedPlaylistUrl = startChannelBlocking(
+                "local://$label", emptyMap(), allowAc3Passthrough = false,
+                failFastOnHttpError = false, localSource = source,
+            ) + "/demuxed.m3u8",
+            audioCodec = audioCodec,
+            audioOnly = audioOnly,
+        )
+    }
+
     private suspend fun startChannelBlocking(
         rawTsUrl: String,
         headers: Map<String, String>,
         allowAc3Passthrough: Boolean,
         failFastOnHttpError: Boolean,
+        localSource: java.io.InputStream? = null,
     ): String {
         // The Chromecast fetches over the LAN; 127.0.0.1 would only ever
         // work for the phone itself.
@@ -415,7 +442,7 @@ class CastHlsProxySession @Inject constructor(
         CastHlsProxyService.start(context)
         startLinkLog()
         startNetworkWatch()
-        startIngest(rawTsUrl, headers, gen, allowAc3Passthrough, failFastOnHttpError)
+        startIngest(rawTsUrl, headers, gen, allowAc3Passthrough, failFastOnHttpError, localSource)
         val readyWaitBegan = System.currentTimeMillis()
         try {
             withTimeout(READY_TIMEOUT_MS) {
@@ -501,6 +528,7 @@ class CastHlsProxySession @Inject constructor(
         gen: Int,
         allowAc3Passthrough: Boolean,
         failFastOnHttpError: Boolean,
+        localSource: java.io.InputStream? = null,
     ) {
         var currentGen = gen
         // AUTO for the channel's first connection; pinned to FORCE or NEVER
@@ -707,7 +735,29 @@ class CastHlsProxySession @Inject constructor(
                 remuxerRef = remuxer
                 var transcodeFallback = false
                 var endedCleanly = false
+                var localEnded = false
                 try {
+                    if (localSource != null) {
+                        // Local composite: no HTTP, no reconnect policy. A
+                        // remuxer failure starts a fresh remuxer on the SAME
+                        // stream below (it re-syncs at the next key frame,
+                        // which carries PAT, PMT, SPS and PPS).
+                        if (!connected) debugLog(context, TAG, "ingest connected (local ${sanitize(url)})")
+                        connected = true
+                        val buf = ByteArray(64 * 1024)
+                        while (currentCoroutineContext().isActive) {
+                            val n = runInterruptible { localSource.read(buf) }
+                            if (n < 0) {
+                                localEnded = true
+                                break
+                            }
+                            if (n > 0) {
+                                linkIngestBytes.addAndGet(n.toLong())
+                                synchronized(remuxLock) { remuxer.feed(buf, 0, n) }
+                            }
+                        }
+                        return@launch
+                    }
                     val req = Request.Builder().url(url).apply {
                         headers.forEach { (k, v) -> header(k, v) }
                     }.build()
@@ -784,6 +834,15 @@ class CastHlsProxySession @Inject constructor(
                     synchronized(remuxLock) { remuxer.release() }
                 }
                 if (!currentCoroutineContext().isActive) break
+                if (localSource != null) {
+                    if (localEnded) {
+                        debugLog(context, TAG, "local ingest ended")
+                        return@launch
+                    }
+                    debugLogWarn(context, TAG, "local ingest remuxer restart")
+                    currentGen = server.beginGeneration()
+                    continue
+                }
                 if (transcodeFallback) {
                     currentGen = server.beginGeneration()
                     continue

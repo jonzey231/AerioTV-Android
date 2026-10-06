@@ -477,19 +477,49 @@ fun MainScaffold(
     // Gated on the receiverInfo "multiview": true flag (Apple sender parity).
     val castTarget by castSender.receiverTarget.collectAsStateWithLifecycle()
     val castMultiview by castSender.receiverMultiview.collectAsStateWithLifecycle()
-    val mvReceiverName: String? = (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
-        ?.takeIf {
-            castMultiview &&
-                castTarget == com.aeriotv.android.core.cast.AerioCastSender.ReceiverTarget.ANDROID_TV_APP
-        }
+    val castConnectedName: String? = (castState as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
         ?.let { it.deviceName?.takeIf { n -> n.isNotBlank() } ?: "TV" }
+    val mvNativeReceiver = castMultiview &&
+        castTarget == com.aeriotv.android.core.cast.AerioCastSender.ReceiverTarget.ANDROID_TV_APP
+    // Web receiver (Chromecast, Logan 2026-10-06): the phone composites 2 to 4
+    // live channels into one stream; more than 4 shows the cast-limit note.
+    val multiviewCast = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            MainScaffoldEntryPoint::class.java,
+        ).multiviewCastController()
+    }
+    val mvWebReceiver = castTarget == com.aeriotv.android.core.cast.AerioCastSender.ReceiverTarget.WEB_RECEIVER
+    val stagedForCast by multiviewStore.selected.collectAsStateWithLifecycle()
+    val stagedLiveCount = multiviewCast.castableTiles(stagedForCast).size
+    val mvReceiverName: String? = castConnectedName?.takeIf {
+        mvNativeReceiver ||
+            (mvWebReceiver && com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.canCast(stagedLiveCount))
+    }
+    val mvCastNote: String? = if (
+        castConnectedName != null && mvWebReceiver &&
+        stagedLiveCount > com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.MAX_TILES
+    ) com.aeriotv.android.core.cast.multiview.MultiviewCastController.CAST_LIMIT_NOTE else null
     val playStagedHere: () -> Unit = {
         showMultiviewSheet = false
         multiviewStore.setStaging(false)
         onLaunchMultiview()
     }
-    val playStagedOnReceiver: () -> Unit = {
+    val playStagedOnReceiver: () -> Unit = playOnReceiver@{
         showMultiviewSheet = false
+        if (!mvNativeReceiver) {
+            // Web receiver: the phone composites the grid and casts one stream.
+            val started = multiviewCast.start(
+                tiles = multiviewStore.selected.value,
+                headers = com.aeriotv.android.core.network.PlaybackHeaders.forPlaylist(state.playlist),
+                focus = multiviewStore.audioFocusedIndex.value,
+            )
+            if (started) {
+                multiviewStore.clear()
+                multiviewStore.setStaging(false)
+            }
+            return@playOnReceiver
+        }
         val playlistId = state.playlist?.id.orEmpty()
         val refs = multiviewStore.selected.value
             .filter { it.kind == com.aeriotv.android.feature.multiview.TileKind.Live }
@@ -524,6 +554,7 @@ fun MainScaffold(
             onPlayHere = playStagedHere,
             onPlayOnReceiver = playStagedOnReceiver,
             onDismiss = { showMultiviewSheet = false },
+            castNote = mvCastNote,
         )
     }
     // GH #33 companion remote: same-pattern "Controlling <TV>" indicator card +
@@ -1427,6 +1458,7 @@ fun MainScaffold(
                 if ((casting || companionTv != null) && !isTv) {
                     com.aeriotv.android.feature.cast.CastTransportCard(
                         tabletWidth = tabletCardWidth,
+                        multiviewCast = multiviewCast,
                         castSender = castSender,
                         companionRemote = companionRemote,
                         channels = state.channels,
@@ -3016,6 +3048,7 @@ interface MainScaffoldEntryPoint {
     fun castSender(): com.aeriotv.android.core.cast.AerioCastSender
     fun companionRemote(): com.aeriotv.android.core.cast.companion.CompanionRemoteController
     fun companionDiscovery(): com.aeriotv.android.core.cast.companion.CompanionDiscovery
+    fun multiviewCastController(): com.aeriotv.android.core.cast.multiview.MultiviewCastController
     fun watchProgressDao(): com.aeriotv.android.core.data.db.dao.WatchProgressDao
 }
 
