@@ -456,7 +456,11 @@ fun PhoneMiniCastGuard(
     val companionConn by entry.companionRemote().connection
         .collectAsStateWithLifecycle()
     val mode by state.mode.collectAsStateWithLifecycle()
-    val remoteActive = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected ||
+    val playHereWhileCasting by com.aeriotv.android.feature.main.PlayWhereRouter.localWhileCasting
+        .collectAsStateWithLifecycle()
+    // Play Here (cast play-where prompt) keeps the local mini alive.
+    val remoteActive = (castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected &&
+        !playHereWhileCasting) ||
         companionConn is com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
     LaunchedEffect(remoteActive, mode) {
         if (remoteActive && mode == ExoWindowState.Mode.Mini) {

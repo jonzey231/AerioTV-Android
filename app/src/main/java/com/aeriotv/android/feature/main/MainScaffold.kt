@@ -226,6 +226,11 @@ val LocalTvFullScreenOverlay =
 @Composable
 fun MainScaffold(
     onChannelClick: (M3UChannel) -> Unit,
+    /** Channel flips that already target the cast receiver (cast card
+     *  Switch / up/down, Change Cast Device handoff): no play-where prompt. */
+    onCastChannel: (M3UChannel) -> Unit = onChannelClick,
+    /** Expanding the local mini: always plays here, no prompt. */
+    onChannelResumeLocal: (M3UChannel) -> Unit = onChannelClick,
     onMovieClick: (String) -> Unit = {},
     onSeriesClick: (Int) -> Unit = {},
     onEpisodeResume: (String) -> Unit = {},
@@ -1328,7 +1333,7 @@ fun MainScaffold(
                 // Cast through onChannelClick, the same path a channel tap uses.
                 // Latest channels / click handler, not the first composition's.
                 val handoffChannels by androidx.compose.runtime.rememberUpdatedState(state.channels)
-                val handoffCast by androidx.compose.runtime.rememberUpdatedState(onChannelClick)
+                val handoffCast by androidx.compose.runtime.rememberUpdatedState(onCastChannel)
                 androidx.compose.runtime.LaunchedEffect(castSender) {
                     castSender.handoffSeed.collect { id ->
                         castSender.consumeHandoffSeed()
@@ -1371,7 +1376,7 @@ fun MainScaffold(
                         nowProgramme = { ch ->
                             state.epgByChannel[ch.guideMatchKey]?.nowPlaying()
                         },
-                        onCastChannel = onChannelClick,
+                        onCastChannel = onCastChannel,
                         loadChannelStreams = { channelIntPk ->
                             val m3uNames = viewModel.loadM3uAccountNames()
                             viewModel.loadChannelStreams(channelIntPk).map { st ->
@@ -1513,7 +1518,7 @@ fun MainScaffold(
                             isPaused = miniPaused,
                             onResume = {
                                 val resumed = miniPlayerVm.resumeChannel()
-                                if (resumed != null) onChannelClick(resumed)
+                                if (resumed != null) onChannelResumeLocal(resumed)
                             },
                             onTogglePause = {
                                 exoHolder.setPaused(!exoHolder.isPaused())
@@ -2920,6 +2925,7 @@ interface MainScaffoldEntryPoint {
     fun castSender(): com.aeriotv.android.core.cast.AerioCastSender
     fun companionRemote(): com.aeriotv.android.core.cast.companion.CompanionRemoteController
     fun companionDiscovery(): com.aeriotv.android.core.cast.companion.CompanionDiscovery
+    fun watchProgressDao(): com.aeriotv.android.core.data.db.dao.WatchProgressDao
 }
 
 /** Two-step Add Playlist flow embedded in the Settings tab. None = closed. */

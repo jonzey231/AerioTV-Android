@@ -1,6 +1,7 @@
 package com.aeriotv.android
 
 import android.net.Uri
+import com.aeriotv.android.core.data.M3UChannel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -232,6 +233,50 @@ fun AerioTVNavHost(
     val companionTvName: String? =
         (companionConnNav as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected)
             ?.name
+    // Cast play-where prompt (PlayWhereRouter) for on-demand content:
+    // catch-up, movies, episodes and recordings. The Google Cast sender has
+    // no load path for these (AerioCastSender only casts LIVE channels:
+    // tuneLiveChannel feeds the HLS proxy or the Android TV app's channel
+    // tune, and the receiver's on-demand kind is only ever produced by the
+    // Android TV app itself), so the receiver button is hidden and the
+    // prompt offers Play Here or Cancel. No prompt without a session.
+    val playWhereEntry = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            navHostContext.applicationContext,
+            com.aeriotv.android.feature.main.MainScaffoldEntryPoint::class.java,
+        )
+    }
+    val playWhereSender = remember { playWhereEntry.castSender() }
+    val playWhereScope = androidx.compose.runtime.rememberCoroutineScope()
+    com.aeriotv.android.feature.main.PlayWhereDialogHost(playWhereSender)
+    fun playOnDemandWhere(title: String, playHere: () -> Unit) {
+        com.aeriotv.android.feature.main.PlayWhereRouter.route(
+            sender = playWhereSender,
+            title = title.ifBlank { "Play" },
+            playHere = playHere,
+            playOnReceiver = null,
+        )
+    }
+    /** Same, for a movie or episode known only by its video id: the title
+     *  comes from the catalog, else from its watch-progress row. */
+    fun playVodWhere(
+        videoId: String,
+        onDemand: com.aeriotv.android.feature.ondemand.OnDemandViewModel?,
+        playHere: () -> Unit,
+    ) {
+        if (playWhereSender.state.value !is com.aeriotv.android.core.cast.AerioCastSender.State.Connected) {
+            playHere()
+            return
+        }
+        playWhereScope.launch {
+            val movie = onDemand?.movieByUuid(videoId)
+            val title = movie?.title?.takeIf { it.isNotBlank() }
+                ?: movie?.name?.takeIf { it.isNotBlank() }
+                ?: runCatching { playWhereEntry.watchProgressDao().getOnce(videoId)?.title }
+                    .getOrNull().orEmpty()
+            playOnDemandWhere(title, playHere)
+        }
+    }
     fun toastPlayingOnTv() {
         android.widget.Toast.makeText(
             navHostContext,
@@ -871,6 +916,9 @@ fun AerioTVNavHost(
                 val exoHolderNav = remember { playerEntryNav.exoPlayerHolder() }
                 val exoWindowNav = remember { playerEntryNav.exoWindowState() }
                 val miniVmNav: MiniPlayerViewModel = hiltViewModel()
+                // Catalog lookup for the play-where prompt's movie title.
+                val onDemandWhereVm: com.aeriotv.android.feature.ondemand.OnDemandViewModel =
+                    hiltViewModel(parent)
 
                 LaunchedEffect(state.phase) {
                     // Skipped onboarding stays in the (empty) app; see
@@ -908,127 +956,153 @@ fun AerioTVNavHost(
                     // "bootstrap" lines per launch, minutes of EpgWork CPU).
                     androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner provides parent,
                 ) {
+                // One channel play path. forceLocal=false is the original
+                // behavior (companion, then cast, then local); true is
+                // PlayWhereRouter's Play Here.
+                val channelPlay: (M3UChannel, Boolean) -> Unit = channelPlay@{ channel, forceLocal ->
+                    // Cast card UX rule 5 (Logan 2026-09-12): while a session
+                    // is active a channel tap CASTS it and stays on the page.
+                    // No player, no controls screen; the cast card above the
+                    // tab bar is the one control surface (tap it for the
+                    // remote sheet).
+                    // forceLocal = Play Here from PlayWhereRouter: play on
+                    // this device exactly as if no session existed.
+                    val castDevice = if (forceLocal) null else (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
+                        ?.deviceName
+                    // Casting rework P1: the URL now feeds the phone-local
+                    // HLS proxy's ingest, which must present the same
+                    // Dispatcharr identity headers the player would (same
+                    // header recipe as the mini-tune block below).
+                    val castTuneHeaders = PlaybackHeaders.forPlaylist(state.playlist)
+                    // Same rule for the companion transport (this phone
+                    // driving an AerioTV TV over the LAN).
+                    if (!forceLocal && companionTvName != null) {
+                        companionRemoteNav.setRemoteChannel(channel.id, channel.name)
+                        toastPlayingOnTv()
+                        return@channelPlay
+                    }
+                    if (castDevice != null &&
+                        castSenderNav.tuneLiveChannel(
+                            channelId = channel.id,
+                            title = channel.name,
+                            artUri = channel.tvgLogo.takeIf { it.isNotBlank() },
+                            localUrl = channel.url,
+                            headers = castTuneHeaders,
+                        )
+                    ) {
+                        android.widget.Toast.makeText(
+                            navHostContext,
+                            "Playing on $castDevice",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        return@channelPlay
+                    }
+                    // Task #226 (TiviMate flow, Logan 2026-08-06): with
+                    // "Play Channels In: Mini player" on TV, the first OK
+                    // tunes DIRECTLY into the corner mini. Routing through
+                    // the PLAYER destination just to demote it composed the
+                    // fullscreen player for ~400ms (black frame + info-card
+                    // flash over the vanished guide) and then a black mini
+                    // while the pop settled. The app-scoped holder + the
+                    // persistent window need no screen at all: prime the
+                    // stream, flip the window to Mini, activate the session
+                    // -- the guide never leaves composition and grid focus
+                    // stays put. Remote sessions (cast/companion) and
+                    // blank-URL event channels still take the route below
+                    // (PlayerScreen owns their messaging). Second OK on the
+                    // same program promotes via the guide's requestResume.
+                    // Phone floating mini (iPhone parity, Logan 2026-09-14):
+                    // while the mini window is up, a channel tap anywhere
+                    // (guide, list, favorites, home rows, Keep Recent
+                    // Channels Live dialog) re-tunes the SAME window through
+                    // this block and stays minimized; tapping the mini
+                    // expands. TV keeps its Remote Control setting gate.
+                    // An on-demand mini (PhoneVodMini.kt) counts too: the
+                    // channel replaces it in the same window.
+                    val phoneMiniUp = !isTvDevice &&
+                        exoWindowNav.mode.value ==
+                        com.aeriotv.android.feature.player.ExoWindowState.Mode.Mini &&
+                        (miniVmNav.state.value is MiniPlayerSession.State.Active ||
+                            com.aeriotv.android.feature.player.PhoneVodMini.isActive)
+                    if (((tuneStartsInMini && isTvDevice) || phoneMiniUp) &&
+                        castDevice == null && (forceLocal || companionTvName == null) &&
+                        channel.url.isNotBlank()
+                    ) {
+                        if (!isTvDevice) {
+                            com.aeriotv.android.feature.player.PhoneVodMini.close()
+                        }
+                        exoHolderNav.httpHeaders = PlaybackHeaders.forPlaylist(state.playlist)
+                        // Same fresh-tune guard as PlayerScreen's prime
+                        // effect (GH #22): re-prime on a genuine channel
+                        // change OR a holder that went idle; a tap on the
+                        // channel already decoding in the mini only
+                        // re-activates the session.
+                        if (exoHolderNav.currentChannelId != channel.id ||
+                            exoHolderNav.isIdle()
+                        ) {
+                            // Trace: the guide's select press is the
+                            // start of this tune's press->firstFrame.
+                            exoHolderNav.markTunePress(channel.name)
+                            exoHolderNav.playUrl(
+                                url = channel.url,
+                                title = channel.name,
+                                subtitle = state.epgByChannel[channel.guideMatchKey]
+                                    ?.nowPlaying()?.title.orEmpty(),
+                                artworkUri = channel.tvgLogo
+                                    .takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        runCatching { Uri.parse(it) }.getOrNull()
+                                    },
+                                drmLicenseType = channel.drmLicenseType,
+                                drmLicenseKey = channel.drmLicenseKey,
+                                channelId = channel.id,
+                            )
+                            exoHolderNav.currentChannelId = channel.id
+                            exoWindowNav.recordTune(channel.id)
+                        }
+                        exoWindowNav.requestMini()
+                        com.aeriotv.android.core.playback.AerioMediaPlaybackService
+                            .startBackground(context)
+                        tuneSettingsVm.setLastWatchedChannelId(channel.id)
+                        tuneSettingsVm.recordRecentChannel(channel.id)
+                        miniVmNav.setCurrentChannel(channel)
+                        miniVmNav.showMiniPlayer()
+                        return@channelPlay
+                    }
+                    // No remote session: play it here. (A session connecting
+                    // while this player is open mirrors the channel to the
+                    // other screen and then closes the player.)
+                    // launchSingleTop: a rapid double-tap (e.g. of a mini
+                    // controller card) can't stack two identical player
+                    // destinations on the back stack.
+                    navController.navigate(
+                        Routes.player(channel.id, mini = tuneStartsInMini),
+                    ) {
+                        launchSingleTop = true
+                    }
+                }
+                val castNameNav = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName
                 MainScaffold(
                     onChannelClick = { channel ->
-                        // Cast card UX rule 5 (Logan 2026-09-12): while a session
-                        // is active a channel tap CASTS it and stays on the page.
-                        // No player, no controls screen; the cast card above the
-                        // tab bar is the one control surface (tap it for the
-                        // remote sheet).
-                        val castDevice = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
-                            ?.deviceName
-                        // Casting rework P1: the URL now feeds the phone-local
-                        // HLS proxy's ingest, which must present the same
-                        // Dispatcharr identity headers the player would (same
-                        // header recipe as the mini-tune block below).
-                        val castTuneHeaders = PlaybackHeaders.forPlaylist(state.playlist)
-                        // Same rule for the companion transport (this phone
-                        // driving an AerioTV TV over the LAN).
-                        if (companionTvName != null) {
-                            companionRemoteNav.setRemoteChannel(channel.id, channel.name)
-                            toastPlayingOnTv()
-                            return@MainScaffold
-                        }
-                        if (castDevice != null &&
-                            castSenderNav.tuneLiveChannel(
-                                channelId = channel.id,
+                        // Cast play-where prompt: with a Google Cast session
+                        // active, ask Play Here / Play on <receiver>. The
+                        // companion link keeps its direct behavior.
+                        if (companionTvName != null || castNameNav == null) {
+                            channelPlay(channel, false)
+                        } else {
+                            com.aeriotv.android.feature.main.PlayWhereRouter.route(
+                                sender = castSenderNav,
                                 title = channel.name,
-                                artUri = channel.tvgLogo.takeIf { it.isNotBlank() },
-                                localUrl = channel.url,
-                                headers = castTuneHeaders,
+                                playHere = { channelPlay(channel, true) },
+                                playOnReceiver = { channelPlay(channel, false) },
                             )
-                        ) {
-                            android.widget.Toast.makeText(
-                                navHostContext,
-                                "Playing on $castDevice",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                            return@MainScaffold
-                        }
-                        // Task #226 (TiviMate flow, Logan 2026-08-06): with
-                        // "Play Channels In: Mini player" on TV, the first OK
-                        // tunes DIRECTLY into the corner mini. Routing through
-                        // the PLAYER destination just to demote it composed the
-                        // fullscreen player for ~400ms (black frame + info-card
-                        // flash over the vanished guide) and then a black mini
-                        // while the pop settled. The app-scoped holder + the
-                        // persistent window need no screen at all: prime the
-                        // stream, flip the window to Mini, activate the session
-                        // -- the guide never leaves composition and grid focus
-                        // stays put. Remote sessions (cast/companion) and
-                        // blank-URL event channels still take the route below
-                        // (PlayerScreen owns their messaging). Second OK on the
-                        // same program promotes via the guide's requestResume.
-                        // Phone floating mini (iPhone parity, Logan 2026-09-14):
-                        // while the mini window is up, a channel tap anywhere
-                        // (guide, list, favorites, home rows, Keep Recent
-                        // Channels Live dialog) re-tunes the SAME window through
-                        // this block and stays minimized; tapping the mini
-                        // expands. TV keeps its Remote Control setting gate.
-                        // An on-demand mini (PhoneVodMini.kt) counts too: the
-                        // channel replaces it in the same window.
-                        val phoneMiniUp = !isTvDevice &&
-                            exoWindowNav.mode.value ==
-                            com.aeriotv.android.feature.player.ExoWindowState.Mode.Mini &&
-                            (miniVmNav.state.value is MiniPlayerSession.State.Active ||
-                                com.aeriotv.android.feature.player.PhoneVodMini.isActive)
-                        if (((tuneStartsInMini && isTvDevice) || phoneMiniUp) &&
-                            castDevice == null && companionTvName == null &&
-                            channel.url.isNotBlank()
-                        ) {
-                            if (!isTvDevice) {
-                                com.aeriotv.android.feature.player.PhoneVodMini.close()
-                            }
-                            exoHolderNav.httpHeaders = PlaybackHeaders.forPlaylist(state.playlist)
-                            // Same fresh-tune guard as PlayerScreen's prime
-                            // effect (GH #22): re-prime on a genuine channel
-                            // change OR a holder that went idle; a tap on the
-                            // channel already decoding in the mini only
-                            // re-activates the session.
-                            if (exoHolderNav.currentChannelId != channel.id ||
-                                exoHolderNav.isIdle()
-                            ) {
-                                // Trace: the guide's select press is the
-                                // start of this tune's press->firstFrame.
-                                exoHolderNav.markTunePress(channel.name)
-                                exoHolderNav.playUrl(
-                                    url = channel.url,
-                                    title = channel.name,
-                                    subtitle = state.epgByChannel[channel.guideMatchKey]
-                                        ?.nowPlaying()?.title.orEmpty(),
-                                    artworkUri = channel.tvgLogo
-                                        .takeIf { it.isNotBlank() }
-                                        ?.let {
-                                            runCatching { Uri.parse(it) }.getOrNull()
-                                        },
-                                    drmLicenseType = channel.drmLicenseType,
-                                    drmLicenseKey = channel.drmLicenseKey,
-                                    channelId = channel.id,
-                                )
-                                exoHolderNav.currentChannelId = channel.id
-                                exoWindowNav.recordTune(channel.id)
-                            }
-                            exoWindowNav.requestMini()
-                            com.aeriotv.android.core.playback.AerioMediaPlaybackService
-                                .startBackground(context)
-                            tuneSettingsVm.setLastWatchedChannelId(channel.id)
-                            tuneSettingsVm.recordRecentChannel(channel.id)
-                            miniVmNav.setCurrentChannel(channel)
-                            miniVmNav.showMiniPlayer()
-                            return@MainScaffold
-                        }
-                        // No remote session: play it here. (A session connecting
-                        // while this player is open mirrors the channel to the
-                        // other screen and then closes the player.)
-                        // launchSingleTop: a rapid double-tap (e.g. of a mini
-                        // controller card) can't stack two identical player
-                        // destinations on the back stack.
-                        navController.navigate(
-                            Routes.player(channel.id, mini = tuneStartsInMini),
-                        ) {
-                            launchSingleTop = true
                         }
                     },
+                    // Cast card flips / Switch and the Change Cast Device
+                    // handoff already target the receiver: no prompt.
+                    onCastChannel = { channel -> channelPlay(channel, false) },
+                    // Expanding the local mini stays local.
+                    onChannelResumeLocal = { channel -> channelPlay(channel, true) },
                     onMovieClick = { movieUuid ->
                         navController.navigate(Routes.movieDetail(movieUuid))
                     },
@@ -1040,7 +1114,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playVod(videoId, isEpisode = true)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodEpisodePlayer(videoId))
+                            playVodWhere(videoId, null) {
+                                navController.navigate(Routes.vodEpisodePlayer(videoId))
+                            }
                         }
                     },
                     // Hero "Play from Beginning": start at 0 without deleting
@@ -1051,7 +1127,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playVod(videoId, isEpisode = true)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodEpisodePlayer(videoId, fromStart = true))
+                            playVodWhere(videoId, null) {
+                                navController.navigate(Routes.vodEpisodePlayer(videoId, fromStart = true))
+                            }
                         }
                     },
                     // #9: resume an in-progress movie from Continue Watching by
@@ -1066,7 +1144,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playVod(videoId, isEpisode = false)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodPlayer(videoId))
+                            playVodWhere(videoId, onDemandWhereVm) {
+                                navController.navigate(Routes.vodPlayer(videoId))
+                            }
                         }
                     },
                     // See onEpisodeResumeFromStart above.
@@ -1075,7 +1155,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playVod(videoId, isEpisode = false)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodPlayer(videoId, fromStart = true))
+                            playVodWhere(videoId, onDemandWhereVm) {
+                                navController.navigate(Routes.vodPlayer(videoId, fromStart = true))
+                            }
                         }
                     },
                     onPlayRecording = { playbackUrl, title, recId ->
@@ -1087,9 +1169,11 @@ fun AerioTVNavHost(
                             companionRemoteNav.playRecording(playbackUrl, title)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(
-                                Routes.recordingPlayer(playbackUrl, title, recId = recId),
-                            )
+                            playOnDemandWhere(title) {
+                                navController.navigate(
+                                    Routes.recordingPlayer(playbackUrl, title, recId = recId),
+                                )
+                            }
                         }
                     },
                     onPlayCatchup = { catchupChannelId, playbackUrl, title, progStart, progEnd, panelTz, channelUuid ->
@@ -1106,13 +1190,15 @@ fun AerioTVNavHost(
                                 ),
                             )
                         } else {
-                            navController.navigate(
-                                Routes.recordingPlayer(
-                                    playbackUrl, title,
-                                    csStart = progStart, csEnd = progEnd, csTz = panelTz,
-                                    csUuid = channelUuid, csChannel = catchupChannelId,
-                                ),
-                            )
+                            playOnDemandWhere(title) {
+                                navController.navigate(
+                                    Routes.recordingPlayer(
+                                        playbackUrl, title,
+                                        csStart = progStart, csEnd = progEnd, csTz = panelTz,
+                                        csUuid = channelUuid, csChannel = catchupChannelId,
+                                    ),
+                                )
+                            }
                         }
                     },
                     onLaunchMultiview = {
@@ -1128,7 +1214,7 @@ fun AerioTVNavHost(
                         // Audit #50 / iOS v1.6.22: watch the in-progress server
                         // recording at the LIVE EDGE via the recording player
                         // (X-API-Key headers).
-                        if (recordingUrl.isNotBlank()) {
+                        if (recordingUrl.isNotBlank()) playOnDemandWhere(recTitle) {
                             navController.navigate(
                                 Routes.recordingPlayer(
                                     recordingUrl, recTitle, isDvr = recIsDvr, fromStart = false,
@@ -1141,7 +1227,7 @@ fun AerioTVNavHost(
                         // iOS Issue #29 'Watch from Beginning' - and, with
                         // autoResume (row tap), iOS 2026-08-28 tap semantics:
                         // resume saved progress, else beginning.
-                        if (recordingUrl.isNotBlank()) {
+                        if (recordingUrl.isNotBlank()) playOnDemandWhere(recTitle) {
                             navController.navigate(
                                 Routes.recordingPlayer(
                                     recordingUrl, recTitle, isDvr = recIsDvr,
@@ -1330,7 +1416,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playVod(episode.uuid, isEpisode = true, title = episode.title)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodEpisodePlayer(episode.uuid, fromStart = fromStart))
+                            playOnDemandWhere(episode.title.orEmpty()) {
+                                navController.navigate(Routes.vodEpisodePlayer(episode.uuid, fromStart = fromStart))
+                            }
                         }
                     },
                     // Known For tile in the cast bio dialog: a PLAIN push (no
@@ -1360,7 +1448,9 @@ fun AerioTVNavHost(
                             companionRemoteNav.playVod(movieUuid, isEpisode = false)
                             toastPlayingOnTv()
                         } else {
-                            navController.navigate(Routes.vodPlayer(movieUuid, fromStart = fromStart))
+                            playVodWhere(movieUuid, onDemandVm) {
+                                navController.navigate(Routes.vodPlayer(movieUuid, fromStart = fromStart))
+                            }
                         }
                     },
                     // Same plain Known For push as SERIES_DETAIL above.

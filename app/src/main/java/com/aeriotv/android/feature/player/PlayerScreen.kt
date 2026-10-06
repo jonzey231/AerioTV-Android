@@ -204,7 +204,12 @@ fun PlayerScreen(
     val castSender = remember { playerEntry.castSender() }
     val castReceiver = remember { playerEntry.castReceiver() }
     val castState by castSender.state.collectAsStateWithLifecycle()
-    val isCasting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected
+    // Play Here from the cast play-where prompt keeps this player local for
+    // the rest of the session: no mirror to the receiver, no auto-close.
+    val playHereWhileCasting by com.aeriotv.android.feature.main.PlayWhereRouter.localWhileCasting
+        .collectAsStateWithLifecycle()
+    val isCasting = castState is com.aeriotv.android.core.cast.AerioCastSender.State.Connected &&
+        !playHereWhileCasting
     // GH #33 companion remote (second-screen): while connected to an AerioTV TV
     // over the LAN, this screen behaves EXACTLY like the cast flow -- local
     // playback is suspended, the channel is mirrored to the TV and the screen
