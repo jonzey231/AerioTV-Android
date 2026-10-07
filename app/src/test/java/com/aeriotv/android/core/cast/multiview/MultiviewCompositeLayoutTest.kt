@@ -57,6 +57,19 @@ class MultiviewCompositeLayoutTest {
     }
 
     @Test
+    fun `a running session may draw one tile full frame`() {
+        assertFalse(MultiviewCompositeLayout.canCast(1))
+        assertTrue(MultiviewCompositeLayout.canComposite(1))
+        assertFalse(MultiviewCompositeLayout.canComposite(0))
+        assertFalse(MultiviewCompositeLayout.canComposite(5))
+        val full = listOf(CompositeRect(0, 0, 1280, 720))
+        assertEquals(full, MultiviewCompositeLayout.tileRects(1))
+        // No padding even with Padding Between Tiles on.
+        assertEquals(full, MultiviewCompositeLayout.tileRects(1, padding = true))
+        assertEquals(0, MultiviewCompositeLayout.hitTestView(5f, 5f, 100f, 56f, 1))
+    }
+
+    @Test
     fun `16x9 video letterboxes into a 2-up cell`() {
         val cell = r(6, 6, 628, 708)
         // 628 / (16/9) = 353.25 -> 353 rows, centered vertically.

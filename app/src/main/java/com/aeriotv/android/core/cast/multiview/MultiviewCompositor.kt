@@ -377,6 +377,30 @@ class MultiviewCompositor(
         focused = index
     }
 
+    /** The one tile a session dropped to a single channel draws full frame;
+     *  -1 while 2 or more tiles show. */
+    @Volatile private var soloTile: Int = -1
+
+    /**
+     * Round 9 (Apple 6136daf, Logan: removing down to one tile must be
+     * seamless): keep the encoder, the pipe and the cast load running and
+     * draw tile [index] alone, full frame, with its audio. The other tiles'
+     * players are released. Main thread.
+     */
+    fun dropToSingle(index: Int) {
+        if (index !in 0 until count || soloTile >= 0) return
+        Log.i(TAG, "[MV-CAST] composite tiles changed: 1 (${state[index].source.displayName} full frame, same stream, no receiver reload)")
+        setFocus(index)
+        soloTile = index
+        state.forEach { t ->
+            if (t.index != index) {
+                val p = t.player ?: return@forEach
+                t.player = null
+                runCatching { p.release() }
+            }
+        }
+    }
+
     /** New cell per tile ([slots] tile index -> cell index). */
     fun setSlots(slots: IntArray) {
         if (slots.size != count || slots.sorted() != (0 until count).toList()) return
@@ -756,8 +780,16 @@ class MultiviewCompositor(
         val sx = w / W.toFloat()
         val sy = h / H.toFloat()
         val st = style
-        val rects = MultiviewCompositeLayout.tileRects(count, st.padding, mode = layoutMode)
-        val radius = MultiviewCompositeLayout.cornerRadius(st)
+        // Round 9 (Apple 6136daf): a session dropped to one tile draws it
+        // full frame like a single-channel cast: no padding, corner clip,
+        // logo or focus indicator. The other tiles' players are released.
+        val solo = soloTile
+        val rects = if (solo >= 0) {
+            MultiviewCompositeLayout.tileRects(1)
+        } else {
+            MultiviewCompositeLayout.tileRects(count, st.padding, mode = layoutMode)
+        }
+        val radius = if (solo >= 0) 0f else MultiviewCompositeLayout.cornerRadius(st)
         val since = System.nanoTime() - focusChangedAtNanos
         val accent = focusArgb
         GLES20.glViewport(0, 0, w, h)
@@ -767,8 +799,9 @@ class MultiviewCompositor(
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         val slots = slotOf
         for (t in state) {
-            val cell = rects.getOrNull(slots[t.index]) ?: continue
-            val isFocus = t.index == focus
+            if (solo >= 0 && t.index != solo) continue
+            val cell = rects.getOrNull(if (solo >= 0) 0 else slots[t.index]) ?: continue
+            val isFocus = t.index == focus && solo < 0
             val pic = MultiviewCompositeLayout.letterbox(cell, t.videoWidth, t.videoHeight, t.pixelRatio)
             if (t.hasFrame) {
                 val vp = videoProg ?: continue
@@ -778,7 +811,7 @@ class MultiviewCompositor(
                 setClip(vp, cell, radius, sx, sy, h)
                 quad(vp, pic, t.texMatrix, sx, sy, h)
             }
-            if (st.showLogos && t.logoTex != 0 && t.logoAspect > 0f) {
+            if (solo < 0 && st.showLogos && t.logoTex != 0 && t.logoAspect > 0f) {
                 val place = MultiviewCompositeLayout.logoPlacement(pic, t.logoAspect, st)
                 solid(place.backdrop, 4 * MultiviewCompositeLayout.DP, 0f, 0x8C000000.toInt(), sx, sy, h)
                 bitmap(t.logoTex, place.logo, 0xFFFFFFFF.toInt(), 1f, sx, sy, h)

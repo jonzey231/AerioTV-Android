@@ -375,7 +375,7 @@ class DebugLogger @Inject constructor(
             // opens in append mode and creates the file when missing, which is
             // all we need; the writer coroutine already serialises calls so
             // there's no concurrent-append race.
-            f.appendText(line + System.lineSeparator())
+            f.appendText(shapeLine(line) + System.lineSeparator())
         }.onFailure { t ->
             Log.w(TAG, "Failed to append log line: ${t.message}")
         }
@@ -404,5 +404,29 @@ class DebugLogger @Inject constructor(
         private val runtimeEnabled = AtomicBoolean(false)
 
         fun isLoggingEnabled(): Boolean = runtimeEnabled.get()
+
+        /** Longest line written to the file (Apple 6136daf round 9 parity). */
+        const val MAX_LINE_CHARS = 2048
+
+        private val DATA_URI = Regex("""data:([A-Za-z0-9.+/-]*)((?:;[A-Za-z0-9=.+-]+)*),([A-Za-z0-9+/=%._~-]*)""")
+
+        /**
+         * Apple 6136daf round 9: three watchdog lines each carried a 1.77 MB
+         * data: URI and rotated the log away. A data: URI collapses to its
+         * scheme, MIME and payload length, and any line is capped at
+         * [MAX_LINE_CHARS] with the cut noted.
+         */
+        fun shapeLine(line: String): String {
+            val collapsed = if (line.contains("data:")) {
+                DATA_URI.replace(line) { m ->
+                    val mime = m.groupValues[1].ifEmpty { "text/plain" }
+                    "data:$mime${m.groupValues[2]},<${m.groupValues[3].length} bytes>"
+                }
+            } else {
+                line
+            }
+            if (collapsed.length <= MAX_LINE_CHARS) return collapsed
+            return collapsed.take(MAX_LINE_CHARS) + " ...(${collapsed.length - MAX_LINE_CHARS} more chars cut)"
+        }
     }
 }

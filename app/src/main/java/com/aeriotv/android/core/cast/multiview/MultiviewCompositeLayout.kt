@@ -66,13 +66,26 @@ object MultiviewCompositeLayout {
     /** ...then fades out over this long. */
     const val FOCUS_FADE_NANOS = 500_000_000L
 
-    /** Whether [count] staged channels can be composited and cast. */
+    /** Whether [count] staged channels can START a composite cast (2 to 4). */
     fun canCast(count: Int): Boolean = count in MIN_TILES..MAX_TILES
+
+    /**
+     * Whether a RUNNING composite can draw [count] tiles (Apple 6136daf round
+     * 9): 1 to 4. A session removed down to one tile keeps the composite
+     * running with that tile full frame, so the receiver never reloads; only
+     * a start needs [MIN_TILES].
+     */
+    fun canComposite(count: Int): Boolean = count in 1..MAX_TILES
+
+    /** One tile left: drawn full frame like a single-channel cast (no
+     *  padding, corner clip, logo or focus indicator). */
+    fun isSingle(count: Int): Boolean = count == 1
 
     /**
      * Tile rects for [count] tiles in a [width] x [height] frame: the local
      * grid's cells (zero spacing) inset by the local tile padding when
      * [padding] is on, so neighbors sit 8 dp apart and 4 dp off the edge.
+     * One tile (a running session dropped to one) fills the whole frame.
      */
     fun tileRects(
         count: Int,
@@ -81,7 +94,8 @@ object MultiviewCompositeLayout {
         height: Int = HEIGHT,
         mode: MultiviewLayoutMode = MultiviewLayoutMode.Auto,
     ): List<CompositeRect> {
-        if (!canCast(count)) return emptyList()
+        if (!canComposite(count)) return emptyList()
+        if (isSingle(count)) return listOf(CompositeRect(0, 0, width, height))
         val pad = if (padding) PAD_PX else 0
         return MultiviewGridMath.rects(
             effectiveMode(mode, count), count, width.toFloat(), height.toFloat(), 0f,

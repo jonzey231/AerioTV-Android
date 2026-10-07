@@ -207,11 +207,17 @@ fun CastTransportCard(
         castContent?.artUri?.takeIf { it.isNotBlank() }
             ?: currentChannel?.tvgLogo?.takeIf { it.isNotBlank() }
     }
+    // A composite dropped to one tile (Apple 6136daf round 9) reads as that
+    // channel, like a normal cast, while the stream stays the composite.
+    val compositeSession = multiviewCast?.session?.collectAsState()?.value
+    val compositeSingleName = if (!isCompanion &&
+        castContent?.mediaId == com.aeriotv.android.core.cast.multiview.MultiviewCastController.MEDIA_ID
+    ) compositeSession?.singleChannelName else null
     val title = when {
         isCompanion -> companionDetails?.channelName
             ?: companionNowPlaying.takeIf { it.isNotBlank() }
             ?: ""
-        else -> castContent?.title.orEmpty()
+        else -> compositeSingleName ?: castContent?.title.orEmpty()
     }
     val hasContent = title.isNotBlank()
     // Composited Multiview: title "Multiview", the channel names under it,
@@ -235,7 +241,6 @@ fun CastTransportCard(
     }
     // Composited Multiview: the phone's composite, its container path and the
     // audio form (shared wording with Apple, round 2 2026-10-07).
-    val compositeSession = multiviewCast?.session?.collectAsState()?.value
     // Apple a4bd790: the channel line follows the composite's live tiles
     // (add, remove, swap), not the subtitle set once at load.
     val compositeNames = compositeSession?.tiles?.takeIf { it.isNotEmpty() }?.joinToString(", ") { it.displayName }
@@ -315,6 +320,7 @@ fun CastTransportCard(
                 !hasContent -> "Select a Channel"
                 !isCompanion && castBuffering -> "Buffering\u2026"
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
+                isComposite && compositeSingleName != null -> null
                 isComposite -> compositeNames ?: castContent?.subtitle
                 else -> null
             },
@@ -395,7 +401,7 @@ fun CastTransportCard(
             canChangeChannel = currentChannel != null && !isComposite,
             showInlineSkip = !isCompanion && !isComposite,
             showSkipButtons = !isComposite,
-            programmeTitleOverride = if (isComposite) compositeNames ?: castContent?.subtitle else null,
+            programmeTitleOverride = if (isComposite && compositeSingleName == null) compositeNames ?: castContent?.subtitle else null,
             topContent = if (isComposite && multiviewCast != null) {
                 {
                     // Tile menu Switch Stream (Logan 2026-10-07): the same
