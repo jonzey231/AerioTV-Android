@@ -83,6 +83,8 @@ class MultiviewCastController @Inject constructor(
     @Volatile var focusArgb: Int = 0xFFFFFFFF.toInt()
         set(value) { field = value; compositor?.focusArgb = value }
     private var keepaliveOn = false
+    /** Headers of the running composite, for a restart that adds or drops a tile. */
+    private var lastHeaders: Map<String, String> = emptyMap()
     private val lifecycleObserver = object : androidx.lifecycle.DefaultLifecycleObserver {
         override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
             compositor?.backgrounded = true
@@ -105,6 +107,7 @@ class MultiviewCastController @Inject constructor(
             return false
         }
         stop("restart")
+        lastHeaders = headers
         val focused = live.indexOfFirst { it.id == tiles.getOrNull(focus)?.id }.coerceAtLeast(0)
         // A channel kept live in the background holds a server slot the tile
         // needs (same rule as the local Multiview tile).
@@ -118,6 +121,7 @@ class MultiviewCastController @Inject constructor(
         c.style = style.value
         if (!c.start()) {
             p.close()
+            _session.value = null
             sender.notifyCastProblem("Can't cast Multiview right now")
             return false
         }
@@ -167,6 +171,33 @@ class MultiviewCastController @Inject constructor(
                 }
             }
         }
+        return true
+    }
+
+    /**
+     * Live TV "Add to Multiview" while the composite runs (Apple e1dcbd2
+     * parity): the channel joins the running pile, or leaves it when it is
+     * already a tile, instead of a fresh staged pile replacing it. The
+     * composite restarts with the new tile set (same cast session, audio
+     * focus kept on its tile). Returns false when no composite is running.
+     */
+    fun toggleTile(tile: MultiviewTile): Boolean {
+        val s = _session.value ?: return false
+        val inPile = s.tiles.any { it.id == tile.id }
+        val next = if (inPile) s.tiles.filterNot { it.id == tile.id } else s.tiles + tile
+        if (!inPile && next.size > MultiviewCompositeLayout.MAX_TILES) {
+            Log.i(TAG, "[MV-CAST] composite add ${tile.displayName} refused: ${s.tiles.size} tiles")
+            sender.notifyCastProblem(CAST_LIMIT_NOTE)
+            return true
+        }
+        if (!MultiviewCompositeLayout.canCast(next.size)) {
+            Log.i(TAG, "[MV-CAST] composite remove ${tile.displayName} refused: ${next.size} tile(s) would be left")
+            return true
+        }
+        val focusedId = s.tiles.getOrNull(s.focused)?.id
+        val focus = next.indexOfFirst { it.id == focusedId }.coerceAtLeast(0)
+        Log.i(TAG, "[MV-CAST] composite ${if (inPile) "remove" else "add"} ${tile.displayName}: ${s.tiles.size} -> ${next.size} tiles")
+        start(next, lastHeaders, focus)
         return true
     }
 
@@ -232,7 +263,9 @@ class MultiviewCastController @Inject constructor(
         c.release(reason)
         pipe?.close()
         pipe = null
-        _session.value = null
+        // A restart keeps the session so observers (the Live TV pile mirror)
+        // never see the composite end; start() sets the new one.
+        if (reason != "restart") _session.value = null
     }
 
     private fun onFatal(reason: String) {

@@ -31,6 +31,8 @@ object MultiviewBackground {
     val state: StateFlow<State?> = _state.asStateFlow()
 
     private var players: List<ExoPlayer?> = emptyList()
+    private var appContext: Context? = null
+    private var lastHeaders: Map<String, String> = emptyMap()
 
     /** Start the headless tiles. [positions] are on-demand tile positions
      *  (index -> ms) captured from the fullscreen grid. */
@@ -45,9 +47,67 @@ object MultiviewBackground {
         if (tiles.isEmpty()) return
         releasePlayers()
         val app = context.applicationContext
-        val ua = "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
+        appContext = app
+        lastHeaders = headers
         val f = focus.coerceIn(0, tiles.lastIndex)
         players = tiles.mapIndexed { i, tile ->
+            headlessPlayer(app, tile, headers, focused = i == f, positionMs = positions[i] ?: tile.resumePositionMs)
+        }
+        _state.value = State(tiles, f)
+        Log.i(TAG, "MultiviewBg: background enter tiles=${tiles.size}")
+    }
+
+    /**
+     * Live TV "Add to Multiview" while the tiles play in the background
+     * (Apple e1dcbd2 parity): the channel joins the running pile as one more
+     * headless tile, or leaves it when it is already a tile, instead of a
+     * fresh staged pile replacing it. Returns false when nothing runs here.
+     */
+    fun toggleTile(tile: MultiviewTile, maxTiles: Int): Boolean {
+        val s = _state.value ?: return false
+        val app = appContext ?: return false
+        val index = s.tiles.indexOfFirst { it.id == tile.id }
+        if (index >= 0) {
+            runCatching { players.getOrNull(index)?.release() }
+            val tiles = s.tiles.filterIndexed { i, _ -> i != index }
+            players = players.filterIndexed { i, _ -> i != index }
+            if (tiles.isEmpty()) {
+                _state.value = null
+                Log.i(TAG, "MultiviewBg: remove ${tile.displayName}: no tiles left; Multiview ended")
+                return true
+            }
+            // Audio follows the focused tile; a removed focused tile hands
+            // audio to the newest remaining tile (MultiviewStore.removeAt).
+            val focus = when {
+                index == s.focus -> tiles.lastIndex
+                index < s.focus -> s.focus - 1
+                else -> s.focus
+            }
+            players.getOrNull(focus)?.volume = 1f
+            _state.value = State(tiles, focus)
+            Log.i(TAG, "MultiviewBg: remove ${tile.displayName}: tiles=${tiles.size}")
+            return true
+        }
+        if (s.tiles.size >= maxTiles) {
+            Log.i(TAG, "MultiviewBg: add ${tile.displayName} refused: ${s.tiles.size} tiles")
+            return true
+        }
+        players = players + headlessPlayer(app, tile, lastHeaders, focused = false, positionMs = tile.resumePositionMs)
+        _state.value = State(s.tiles + tile, s.focus)
+        Log.i(TAG, "MultiviewBg: add ${tile.displayName}: tiles=${s.tiles.size + 1}")
+        return true
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun headlessPlayer(
+        app: Context,
+        tile: MultiviewTile,
+        headers: Map<String, String>,
+        focused: Boolean,
+        positionMs: Long?,
+    ): ExoPlayer? {
+        val ua = "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
+        return run {
             runCatching {
                 val h = if (tile.kind == TileKind.Live) headers else headers + tile.httpHeaders
                 val http = DefaultHttpDataSource.Factory()
@@ -64,17 +124,15 @@ object MultiviewBackground {
                         trackSelectionParameters = trackSelectionParameters.buildUpon()
                             .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
                             .build()
-                        volume = if (i == f) 1f else 0f
+                        volume = if (focused) 1f else 0f
                         setMediaSource(buildTileMediaSource(tile.resolvedUrl, DefaultDataSource.Factory(app, http)))
-                        val pos = positions[i] ?: tile.resumePositionMs
+                        val pos = positionMs
                         if (tile.kind != TileKind.Live && pos != null && pos > 0) seekTo(pos)
                         prepare()
                         playWhenReady = true
                     }
             }.onFailure { Log.w(TAG, "tile ${tile.displayName} failed to start headless", it) }.getOrNull()
         }
-        _state.value = State(tiles, f)
-        Log.i(TAG, "MultiviewBg: background enter tiles=${tiles.size}")
     }
 
     /** Card tap: stop the headless tiles and hand back the grid to restore,

@@ -490,6 +490,37 @@ fun MainScaffold(
         ).multiviewCastController()
     }
     val mvWebReceiver = castTarget == com.aeriotv.android.core.cast.AerioCastSender.ReceiverTarget.WEB_RECEIVER
+    // The Live TV "Add to Multiview" labels and tile cap read the store, so
+    // it mirrors a running pile (the composite on a receiver, or the tiles
+    // playing in the background) while nothing is being staged (Apple
+    // e1dcbd2 parity: adds join the running pile). A composite that ends
+    // takes its tiles with it, so the mirrored pile ends too; nothing keeps
+    // playing hidden.
+    val compositeSession by multiviewCast.session.collectAsStateWithLifecycle()
+    val backgroundPile by com.aeriotv.android.feature.multiview.MultiviewBackground.state
+        .collectAsStateWithLifecycle()
+    var mirroredComposite by remember { mutableStateOf(false) }
+    LaunchedEffect(compositeSession, backgroundPile) {
+        val cs = compositeSession
+        val bg = backgroundPile
+        when {
+            cs != null -> {
+                multiviewStore.setStaging(false)
+                multiviewStore.restore(cs.tiles, cs.focused)
+                mirroredComposite = true
+            }
+            bg != null -> {
+                if (!multiviewStore.isStaging.value) multiviewStore.restore(bg.tiles, bg.focus)
+            }
+            mirroredComposite -> {
+                mirroredComposite = false
+                if (!multiviewStore.isStaging.value) {
+                    android.util.Log.i("AerioCast", "[MV-CAST] composite ended: Multiview ended, no tiles left playing")
+                    multiviewStore.clear()
+                }
+            }
+        }
+    }
     val stagedForCast by multiviewStore.selected.collectAsStateWithLifecycle()
     val stagedLiveCount = multiviewCast.castableTiles(stagedForCast).size
     val mvReceiverName: String? = castConnectedName?.takeIf {
@@ -517,10 +548,8 @@ fun MainScaffold(
                 headers = com.aeriotv.android.core.network.PlaybackHeaders.forPlaylist(state.playlist),
                 focus = multiviewStore.audioFocusedIndex.value,
             )
-            if (started) {
-                multiviewStore.clear()
-                multiviewStore.setStaging(false)
-            }
+            // The store keeps the pile: it mirrors the running composite.
+            if (started) multiviewStore.setStaging(false)
             return@playOnReceiver
         }
         val playlistId = state.playlist?.id.orEmpty()
@@ -1558,7 +1587,11 @@ fun MainScaffold(
                                 title = com.aeriotv.android.feature.multiview.MULTIVIEW_BACKGROUND_TITLE,
                                 actionLabel = "Stop",
                                 onOpen = onLaunchMultiview,
-                                onPlay = { com.aeriotv.android.feature.multiview.MultiviewBackground.stop() },
+                                onPlay = {
+                                    com.aeriotv.android.feature.multiview.MultiviewBackground.stop()
+                                    // The mirrored pile ends with the tiles.
+                                    if (!multiviewStore.isStaging.value) multiviewStore.clear()
+                                },
                                 modifier = Modifier.weight(1f),
                             )
                         }

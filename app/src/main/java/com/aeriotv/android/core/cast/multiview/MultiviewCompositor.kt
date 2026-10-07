@@ -229,11 +229,35 @@ class MultiviewCompositor(
     private val audio = CompositeAudioEncoder(
         clock,
         onFrame = { adts, ticks ->
-            synchronized(muxLock) { muxer.writeAudio(adts, ticks) }
+            synchronized(muxLock) {
+                muxer.writeAudio(adts, ticks)
+                noteFirstAudio(ticks)
+            }
             if (backgrounded) bgAudioChunks++
         },
         log = { Log.i(TAG, it) },
     )
+
+    /** First video key frame and the first audio frame at or after it on
+     *  the mux timeline (muxLock): a reader joins at that key frame, so this
+     *  is the first segment's A/V alignment (Apple e1dcbd2 logged
+     *  `seg=0 vpts=0.000 apts=0.299` before muxing audio at video time). */
+    private var firstKeyTicks = -1L
+    private var firstAvLogged = false
+
+    private fun noteFirstAudio(ticks: Long) {
+        if (firstAvLogged || firstKeyTicks < 0 || ticks < firstKeyTicks) return
+        firstAvLogged = true
+        val base = CompositeClock.BASE_TICKS
+        Log.i(
+            TAG,
+            String.format(
+                java.util.Locale.US,
+                "[MV-CAST] composite first segment vpts=%.3f apts=%.3f offset=%d ms",
+                (firstKeyTicks - base) / 90_000.0, (ticks - base) / 90_000.0, (ticks - firstKeyTicks) / 90,
+            ),
+        )
+    }
 
     private val main = Handler(Looper.getMainLooper())
     private val glThread = HandlerThread("MV-CAST-gl", Process.THREAD_PRIORITY_DISPLAY)
@@ -894,7 +918,10 @@ class MultiviewCompositor(
                         encodedSinceStats++
                         if (backgrounded) bgFrames++
                         val ticks = clock.ticksForUs(info.presentationTimeUs)
-                        synchronized(muxLock) { muxer.writeVideo(bytes, ticks, key, parameterSets) }
+                        synchronized(muxLock) {
+                            muxer.writeVideo(bytes, ticks, key, parameterSets)
+                            if (key && firstKeyTicks < 0) firstKeyTicks = ticks
+                        }
                     }
                 }
                 runCatching { enc.releaseOutputBuffer(idx, false) }

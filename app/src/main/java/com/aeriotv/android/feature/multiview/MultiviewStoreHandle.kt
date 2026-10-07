@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 @HiltViewModel
 class MultiviewStoreHandleVm @Inject constructor(
     private val store: MultiviewStore,
+    private val multiviewCast: com.aeriotv.android.core.cast.multiview.MultiviewCastController,
 ) : ViewModel() {
     val selected: StateFlow<List<MultiviewTile>> get() = store.selected
     val audioFocusedIndex: StateFlow<Int> get() = store.audioFocusedIndex
@@ -28,7 +29,23 @@ class MultiviewStoreHandleVm @Inject constructor(
     fun toggle(channel: M3UChannel) = store.toggle(channel)
     val isStaging: StateFlow<Boolean> get() = store.isStaging
     fun setStaging(active: Boolean) = store.setStaging(active)
-    fun stageToggle(channel: M3UChannel) = store.stageToggle(channel)
+    /**
+     * Live TV "Add to Multiview" (Apple e1dcbd2 parity): while a Multiview
+     * runs (the phone composite on a receiver, or the tiles playing in the
+     * background) the channel joins that pile. Only with nothing running does
+     * the first add start a fresh staged pile, which used to replace the
+     * running one.
+     */
+    fun stageToggle(channel: M3UChannel) {
+        val tile = MultiviewTile.live(channel)
+        if (multiviewCast.toggleTile(tile)) return
+        if (MultiviewBackground.toggleTile(tile, store.maxTiles)) {
+            // Last background tile removed: Multiview ended, the mirror too.
+            if (MultiviewBackground.state.value == null) store.clear()
+            return
+        }
+        store.stageToggle(channel)
+    }
     fun isSelected(channel: M3UChannel): Boolean = store.isSelected(channel)
     fun addTile(tile: MultiviewTile): Boolean = store.addTile(tile)
     fun removeTile(tileId: String) = store.removeTile(tileId)
