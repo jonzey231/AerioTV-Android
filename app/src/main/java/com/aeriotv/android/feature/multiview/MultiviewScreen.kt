@@ -1867,7 +1867,7 @@ private fun TileChannelLogo(
 }
 
 /** Opaque-bounds measurement for Multiview channel logos, cached per URL. */
-private object TileLogoCrop {
+internal object TileLogoCrop {
     val cache = android.util.LruCache<String, android.graphics.Rect>(64)
 
     /** Software ARGB copy of a Coil image (hardware bitmaps cannot be read). */

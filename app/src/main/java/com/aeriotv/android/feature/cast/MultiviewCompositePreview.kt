@@ -48,6 +48,10 @@ fun MultiviewCompositePreview(controller: MultiviewCastController, modifier: Mod
     val session by controller.session.collectAsStateWithLifecycle()
     val count = session?.tiles?.size ?: 0
     val latestCount by rememberUpdatedState(count)
+    // Settings > Player > Multiview: the frame's tile rects follow Padding
+    // Between Tiles, so taps and the drop cue do too.
+    val style by controller.style.collectAsStateWithLifecycle()
+    val latestPadding by rememberUpdatedState(style.padding)
     val accent = MaterialTheme.colorScheme.primary
     SideEffect { controller.focusArgb = accent.toArgb() }
     // Drag-to-swap state: the picked-up position and the cell under the finger.
@@ -90,7 +94,7 @@ fun MultiviewCompositePreview(controller: MultiviewCastController, modifier: Mod
         // Drop-target outline while dragging (the local Multiview's drop cue).
         val target = dragTarget
         if (target >= 0 && target != dragFrom && viewW > 0 && count > 0) {
-            val cell = MultiviewCompositeLayout.tileRects(count).getOrNull(target)
+            val cell = MultiviewCompositeLayout.tileRects(count, style.padding).getOrNull(target)
             if (cell != null) {
                 val density = LocalDensity.current
                 val sx = viewW / MultiviewCompositeLayout.WIDTH.toFloat()
@@ -117,7 +121,7 @@ fun MultiviewCompositePreview(controller: MultiviewCastController, modifier: Mod
                             viewH = size.height
                             dragPos = pos
                             dragFrom = MultiviewCompositeLayout.hitTestView(
-                                pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount,
+                                pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding,
                             )
                             dragTarget = dragFrom
                         },
@@ -126,7 +130,7 @@ fun MultiviewCompositePreview(controller: MultiviewCastController, modifier: Mod
                             dragPos += amount
                             if (dragFrom >= 0) {
                                 dragTarget = MultiviewCompositeLayout.hitTestView(
-                                    dragPos.x, dragPos.y, size.width.toFloat(), size.height.toFloat(), latestCount,
+                                    dragPos.x, dragPos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding,
                                 )
                             }
                         },
@@ -145,12 +149,13 @@ fun MultiviewCompositePreview(controller: MultiviewCastController, modifier: Mod
                 }
                 .pointerInput(Unit) {
                     detectTapGestures { pos ->
+                        val tapAt = System.nanoTime()
                         val index = MultiviewCompositeLayout.hitTestView(
-                            pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount,
+                            pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding,
                         )
                         if (index >= 0) {
                             Log.i("AerioCast", "[MV-CAST] preview tap tile=$index")
-                            controller.setFocus(index)
+                            controller.setFocus(index, tapAt)
                         }
                     }
                 },

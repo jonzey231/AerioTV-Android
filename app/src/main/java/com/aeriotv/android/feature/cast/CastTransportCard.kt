@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -231,8 +232,10 @@ fun CastTransportCard(
     }
     // Composited Multiview: the phone's composite, its container path and the
     // audio form (shared wording with Apple, round 2 2026-10-07).
+    val compositeSession = multiviewCast?.session?.collectAsState()?.value
     val castDetailLines = if (isComposite) {
-        com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.STREAM_INFO_LINES
+        // Round 3: the tiles' upstream host first (Apple's SOURCE row).
+        com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.streamInfoLines(compositeSession?.sourceHost)
     } else {
         listOfNotNull(receiverLine) + transcodeNote
     }
@@ -306,6 +309,8 @@ fun CastTransportCard(
                 !hasContent -> "Select a Channel"
                 !isCompanion && castBuffering -> "Buffering\u2026"
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
+                isComposite && compositeSession?.paused == true ->
+                    com.aeriotv.android.core.cast.multiview.MultiviewCastController.PAUSED_IN_BACKGROUND
                 isComposite -> castContent?.subtitle
                 else -> null
             },

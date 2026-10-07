@@ -47,10 +47,12 @@ class CompositeAudioEncoder(
         private const val IDLE_NANOS = 300_000_000L
     }
 
-    private class Chunk(val samples: ShortArray, val startNanos: Long)
+    private class Chunk(val samples: ShortArray, val startNanos: Long, val reanchorTile: Int)
 
     private val queue = LinkedBlockingQueue<Chunk>()
     @Volatile private var running = false
+    @Volatile private var paused = false
+    @Volatile private var resetTimeline = false
     private var thread: Thread? = null
     private var codec: MediaCodec? = null
 
@@ -83,9 +85,21 @@ class CompositeAudioEncoder(
         return true
     }
 
-    /** Focused tile PCM, interleaved stereo at 48 kHz. Any thread. */
-    fun submit(samples: ShortArray, playoutNanos: Long) {
-        if (running && samples.isNotEmpty()) queue.offer(Chunk(samples, playoutNanos))
+    /** Focused tile PCM, interleaved stereo at 48 kHz. Any thread.
+     *  [reanchorTile] >= 0: that tile just resumed after a stall; the
+     *  timeline snaps to this chunk's playout stamp whatever the drift, so
+     *  lip sync does not carry the stall. */
+    fun submit(samples: ShortArray, playoutNanos: Long, reanchorTile: Int = -1) {
+        if (running && !paused && samples.isNotEmpty()) queue.offer(Chunk(samples, playoutNanos, reanchorTile))
+    }
+
+    /** Background pause: no PCM, no silence; the timeline restarts from the
+     *  first chunk (or silence) after the resume. Any thread. */
+    fun setPaused(value: Boolean) {
+        if (paused == value) return
+        paused = value
+        if (value) queue.clear() else resetTimeline = true
+        log("[MV-CAST] composite audio ${if (value) "paused" else "resumed"}")
     }
 
     fun release() {
@@ -103,8 +117,19 @@ class CompositeAudioEncoder(
             while (running) {
                 val chunk = try { queue.poll(10, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
                 val now = System.nanoTime()
+                if (resetTimeline) {
+                    resetTimeline = false
+                    blockFill = 0
+                    nextNanos = -1L
+                    lastPcmAtNanos = now
+                }
+                if (paused) {
+                    drain(c, info)
+                    continue
+                }
                 if (chunk != null) {
                     lastPcmAtNanos = now
+                    if (chunk.reanchorTile >= 0) reanchor(chunk)
                     append(c, chunk.samples, chunk.startNanos)
                 } else if (now - lastPcmAtNanos > IDLE_NANOS) {
                     fillSilence(c, now - SILENCE_TRAIL_NANOS)
@@ -114,6 +139,15 @@ class CompositeAudioEncoder(
         } catch (t: Throwable) {
             if (running) log("[MV-CAST] AAC encoder stopped: $t")
         }
+    }
+
+    /** Snap the timeline to [chunk]'s playout stamp (tile resumed after a
+     *  stall); the partial block before it is dropped. */
+    private fun reanchor(chunk: Chunk) {
+        val deltaMs = if (nextNanos >= 0) (chunk.startNanos - nextNanos) / 1_000_000 else 0L
+        log("[MV-CAST] composite audio re-anchor tile=${chunk.reanchorTile} delta=${deltaMs}ms")
+        blockFill = 0
+        nextNanos = chunk.startNanos
     }
 
     private fun fillSilence(c: MediaCodec, untilNanos: Long) {

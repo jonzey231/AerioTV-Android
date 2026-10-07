@@ -20,7 +20,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -37,6 +39,7 @@ class MultiviewCastController @Inject constructor(
     private val sender: AerioCastSender,
     private val hlsProxy: CastHlsProxySession,
     private val timeshift: com.aeriotv.android.core.timeshift.TimeshiftController,
+    private val prefs: com.aeriotv.android.core.preferences.AppPreferences,
 ) {
     companion object {
         private const val TAG = "AerioCast"
@@ -45,10 +48,27 @@ class MultiviewCastController @Inject constructor(
         const val TITLE = "Multiview"
         const val CANNOT_KEEP_UP = "Multiview casting stopped: the phone could not keep up"
         const val CAST_LIMIT_NOTE = "Up to 4 channels can be cast"
+        const val PAUSED_IN_BACKGROUND = "Paused in background"
     }
 
-    /** The composite on the receiver right now; null when none. */
-    data class Session(val tiles: List<MultiviewTile>, val focused: Int)
+    /** The composite on the receiver right now; null when none. [paused]:
+     *  stopped cleanly in the background (the cast card says so). */
+    data class Session(val tiles: List<MultiviewTile>, val focused: Int, val paused: Boolean = false) {
+        /** Upstream host of the tiles (the Dispatcharr host) for Stream Info. */
+        val sourceHost: String? get() = MultiviewCompositeLayout.sourceHost(tiles.map { it.resolvedUrl })
+    }
+
+    /** The user's Multiview look (Settings > Player > Multiview), applied
+     *  live to the composite and read by the preview's hit testing. */
+    val style: StateFlow<CompositeStyle> = combine(
+        combine(prefs.multiviewAudioFocusStyle, prefs.multiviewTilePadding, prefs.multiviewTileCornersRounded) { f, p, r -> Triple(f, p, r) },
+        combine(prefs.multiviewShowLogos, prefs.multiviewLogoPosition, prefs.multiviewLogoSize) { s, pos, size -> Triple(s, pos, size) },
+    ) { a, b ->
+        CompositeStyle(
+            focusStyle = a.first, padding = a.second, rounded = a.third,
+            showLogos = b.first, logoPosition = b.second, logoSizePercent = b.third,
+        )
+    }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, CompositeStyle())
 
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
@@ -57,6 +77,7 @@ class MultiviewCastController @Inject constructor(
     private var compositor: MultiviewCompositor? = null
     private var pipe: LocalTsPipe? = null
     private var watchJob: Job? = null
+    private var styleJob: Job? = null
     private var thermalListener: Any? = null
     /** Position -> compositor tile index; swapped from the preview. */
     private var order: List<Int> = emptyList()
@@ -65,8 +86,15 @@ class MultiviewCastController @Inject constructor(
         set(value) { field = value; compositor?.focusArgb = value }
     private var keepaliveOn = false
     private val lifecycleObserver = object : androidx.lifecycle.DefaultLifecycleObserver {
-        override fun onStop(owner: androidx.lifecycle.LifecycleOwner) = setKeepalive(true)
-        override fun onStart(owner: androidx.lifecycle.LifecycleOwner) = setKeepalive(false)
+        override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+            compositor?.backgrounded = true
+            setKeepalive(true)
+        }
+        override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+            compositor?.backgrounded = false
+            setKeepalive(false)
+            compositor?.resumeFromBackground()
+        }
     }
 
     /** Live tiles that may be composited (the first [MultiviewCompositeLayout.MAX_TILES]). */
@@ -89,7 +117,9 @@ class MultiviewCastController @Inject constructor(
             context, live, headers, focused,
             output = p::write,
             onFatal = { reason -> onFatal(reason) },
+            onBackgroundPause = { paused -> onBackgroundPause(paused) },
         )
+        c.style = style.value
         if (!c.start()) {
             p.close()
             sender.notifyCastProblem("Can't cast Multiview right now")
@@ -100,6 +130,14 @@ class MultiviewCastController @Inject constructor(
         c.focusArgb = focusArgb
         order = live.indices.toList()
         _session.value = Session(live, focused)
+        styleJob = scope.launch {
+            style.collect { st ->
+                if (compositor === c) {
+                    c.style = st
+                    Log.i(TAG, "[MV-CAST] composite style $st")
+                }
+            }
+        }
         startThermalWatch()
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         val names = live.joinToString(", ") { it.displayName }
@@ -138,10 +176,10 @@ class MultiviewCastController @Inject constructor(
 
     /** Tap on a tile in the phone preview (a position): audio and
      *  highlight follow. */
-    fun setFocus(index: Int) {
+    fun setFocus(index: Int, tapNanos: Long = System.nanoTime()) {
         val s = _session.value ?: return
         if (index !in s.tiles.indices || index == s.focused) return
-        compositor?.setFocus(order.getOrElse(index) { index })
+        compositor?.setFocus(order.getOrElse(index) { index }, tapNanos)
         _session.value = s.copy(focused = index)
     }
 
@@ -156,7 +194,14 @@ class MultiviewCastController @Inject constructor(
         val tiles = s.tiles.toMutableList().also { it[a] = s.tiles[b]; it[b] = s.tiles[a] }
         val focused = when (s.focused) { a -> b; b -> a; else -> s.focused }
         Log.i(TAG, "[MV-CAST] composite swap ${s.tiles[a].displayName} <-> ${s.tiles[b].displayName}")
-        _session.value = Session(tiles, focused)
+        _session.value = s.copy(tiles = tiles, focused = focused)
+    }
+
+    private fun onBackgroundPause(paused: Boolean) {
+        val s = _session.value ?: return
+        if (s.paused == paused) return
+        Log.i(TAG, "[MV-CAST] composite state ${if (paused) "paused in background" else "resumed"}")
+        _session.value = s.copy(paused = paused)
     }
 
     /** App to the background (or back) during a composite: the cast proxy's
@@ -186,6 +231,8 @@ class MultiviewCastController @Inject constructor(
         compositor = null
         watchJob?.cancel()
         watchJob = null
+        styleJob?.cancel()
+        styleJob = null
         stopThermalWatch()
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         if (keepaliveOn) {

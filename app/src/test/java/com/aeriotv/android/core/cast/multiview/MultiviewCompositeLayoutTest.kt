@@ -10,26 +10,23 @@ class MultiviewCompositeLayoutTest {
     private fun r(l: Int, t: Int, w: Int, h: Int) = CompositeRect(l, t, w, h)
 
     @Test
-    fun `two tiles side by side, full height, 4 px gap`() {
+    fun `two tiles side by side, padding is the local 4 dp per side`() {
+        // 4 dp at 1.5 px per dp = 6 px each side: 12 px between, 6 px margin.
         assertEquals(
-            listOf(r(0, 0, 638, 720), r(642, 0, 638, 720)),
+            listOf(r(6, 6, 628, 708), r(646, 6, 628, 708)),
             MultiviewCompositeLayout.tileRects(2),
         )
-    }
-
-    @Test
-    fun `three tiles big left, two stacked right`() {
         assertEquals(
-            listOf(r(0, 0, 851, 720), r(855, 0, 425, 358), r(855, 362, 425, 358)),
-            MultiviewCompositeLayout.tileRects(3),
+            listOf(r(0, 0, 640, 720), r(640, 0, 640, 720)),
+            MultiviewCompositeLayout.tileRects(2, padding = false),
         )
     }
 
     @Test
     fun `four tiles in a 2x2`() {
         assertEquals(
-            listOf(r(0, 0, 638, 358), r(642, 0, 638, 358), r(0, 362, 638, 358), r(642, 362, 638, 358)),
-            MultiviewCompositeLayout.tileRects(4),
+            listOf(r(0, 0, 640, 360), r(640, 0, 640, 360), r(0, 360, 640, 360), r(640, 360, 640, 360)),
+            MultiviewCompositeLayout.tileRects(4, padding = false),
         )
     }
 
@@ -61,20 +58,18 @@ class MultiviewCompositeLayoutTest {
 
     @Test
     fun `16x9 video letterboxes into a 2-up cell`() {
-        val area = MultiviewCompositeLayout.pictureArea(r(0, 0, 638, 720), focused = false)
-        assertEquals(r(2, 2, 634, 716), area)
-        // 634 / (16/9) = 356.6 -> 357 rows, centered vertically.
-        assertEquals(r(2, 181, 634, 357), MultiviewCompositeLayout.letterbox(area, 1920, 1080))
+        val cell = r(6, 6, 628, 708)
+        // 628 / (16/9) = 353.25 -> 353 rows, centered vertically.
+        assertEquals(r(6, 183, 628, 353), MultiviewCompositeLayout.letterbox(cell, 1920, 1080))
     }
 
     @Test
-    fun `4x3 video pillarboxes into a 2x2 cell and the focus border is thicker`() {
-        val area = MultiviewCompositeLayout.pictureArea(r(0, 0, 638, 358), focused = true)
-        assertEquals(r(4, 4, 630, 350), area)
-        // 350 * 4/3 = 466.7 -> 467 wide, centered horizontally.
-        assertEquals(r(85, 4, 467, 350), MultiviewCompositeLayout.letterbox(area, 720, 540))
-        // Anamorphic 720x576 at 64:45 pixels is 16:9: 350 * 16/9 = 622 wide.
-        assertEquals(r(8, 4, 622, 350), MultiviewCompositeLayout.letterbox(area, 720, 576, 64f / 45f))
+    fun `4x3 and anamorphic video in a 2x2 cell`() {
+        val cell = r(0, 0, 640, 360)
+        // 360 * 4/3 = 480 wide, centered horizontally.
+        assertEquals(r(80, 0, 480, 360), MultiviewCompositeLayout.letterbox(cell, 720, 540))
+        // Anamorphic 720x576 at 64:45 pixels is 16:9: fills the cell.
+        assertEquals(r(0, 0, 640, 360), MultiviewCompositeLayout.letterbox(cell, 720, 576, 64f / 45f))
     }
 
     @Test
@@ -83,6 +78,7 @@ class MultiviewCompositeLayoutTest {
         assertEquals(0, MultiviewCompositeLayout.hitTestView(100f, 100f, 640f, 360f, 4))
         assertEquals(3, MultiviewCompositeLayout.hitTestView(600f, 300f, 640f, 360f, 4))
         assertEquals(-1, MultiviewCompositeLayout.hitTestView(320f, 100f, 640f, 360f, 4)) // the gap
+        assertEquals(0, MultiviewCompositeLayout.hitTestView(319f, 100f, 640f, 360f, 4, padding = false))
         assertEquals(1, MultiviewCompositeLayout.hitTestView(500f, 50f, 640f, 360f, 3))
         assertEquals(2, MultiviewCompositeLayout.hitTestView(500f, 300f, 640f, 360f, 3))
     }
@@ -109,9 +105,56 @@ class MultiviewCompositeLayoutTest {
     }
 
     @Test
-    fun `borders are 2 px gray, 4 px focus, 4 px gaps`() {
-        assertEquals(2, MultiviewCompositeLayout.BORDER)
-        assertEquals(4, MultiviewCompositeLayout.FOCUS_BORDER)
-        assertEquals(4, MultiviewCompositeLayout.GAP)
+    fun `stream info leads with the source host`() {
+        assertEquals(
+            listOf("Source: tv.example.net", "Multiview composite 1280x720@30", "Container: MPEG-TS to fMP4", "Audio: AAC-LC stereo 48 kHz"),
+            MultiviewCompositeLayout.streamInfoLines(
+                MultiviewCompositeLayout.sourceHost(
+                    listOf("http://tv.example.net:9191/proxy/ts/stream/1", "http://user:pw@tv.example.net/live/2.ts"),
+                ),
+            ),
+        )
+        assertEquals(MultiviewCompositeLayout.STREAM_INFO_LINES, MultiviewCompositeLayout.streamInfoLines(null))
+        assertEquals("a.net, [::1]", MultiviewCompositeLayout.sourceHost(listOf("https://a.net/x", "http://[::1]:80/y", "bad")))
+    }
+
+    @Test
+    fun `fading indicator holds 2 s then fades over 0_5 s`() {
+        assertEquals(1f, MultiviewCompositeLayout.fadingAlpha(0L), 0f)
+        assertEquals(1f, MultiviewCompositeLayout.fadingAlpha(1_999_000_000L), 0f)
+        assertEquals(0.5f, MultiviewCompositeLayout.fadingAlpha(2_250_000_000L), 0.001f)
+        assertEquals(0f, MultiviewCompositeLayout.fadingAlpha(2_500_000_000L), 0f)
+    }
+
+    @Test
+    fun `focus indicator follows the user's style`() {
+        val accent = 0xFF3399FF.toInt()
+        val fading = CompositeStyle(focusStyle = "themeFading")
+        assertEquals(accent, MultiviewCompositeLayout.focusBorderArgb(fading, accent, 0L))
+        assertEquals(null, MultiviewCompositeLayout.focusBorderArgb(fading, accent, 3_000_000_000L))
+        val gray = CompositeStyle(focusStyle = "grayPersistent")
+        assertEquals(0x80FFFFFF.toInt(), MultiviewCompositeLayout.focusBorderArgb(gray, accent, 60_000_000_000L))
+        val icon = CompositeStyle(focusStyle = "centerIcon")
+        assertEquals(null, MultiviewCompositeLayout.focusBorderArgb(icon, accent, 0L))
+        assertEquals(0.85f, MultiviewCompositeLayout.iconAlpha(icon, 0L), 0.001f)
+        assertEquals(0f, MultiviewCompositeLayout.iconAlpha(icon, 3_000_000_000L), 0f)
+        assertEquals(0f, MultiviewCompositeLayout.iconAlpha(gray, 0L), 0f)
+        assertEquals(12f, MultiviewCompositeLayout.cornerRadius(CompositeStyle(rounded = true)), 0f)
+        assertEquals(0f, MultiviewCompositeLayout.cornerRadius(CompositeStyle(rounded = false)), 0f)
+    }
+
+    @Test
+    fun `logo follows the local size and corner math`() {
+        val video = r(0, 0, 640, 360)
+        // 10 percent: h = 36 - 12 = 24; a 3:1 logo is 72x24 inside a 4 dp (6 px) backdrop, 8 dp (12 px) in.
+        val tl = MultiviewCompositeLayout.logoPlacement(video, 3f, CompositeStyle(logoSizePercent = 10))
+        assertEquals(r(12, 12, 84, 36), tl.backdrop)
+        assertEquals(r(18, 18, 72, 24), tl.logo)
+        // Square logo: height 24 * sqrt(3) = 41.6, bottom right.
+        val br = MultiviewCompositeLayout.logoPlacement(video, 1f, CompositeStyle(logoPosition = "bottom_right"))
+        assertEquals(r(574, 294, 54, 54), br.backdrop)
+        // Very wide logo caps at 4h.
+        val wide = MultiviewCompositeLayout.logoPlacement(video, 10f, CompositeStyle())
+        assertEquals(96, wide.logo.width)
     }
 }

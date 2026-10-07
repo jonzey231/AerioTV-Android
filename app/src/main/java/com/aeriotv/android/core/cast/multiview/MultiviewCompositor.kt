@@ -40,8 +40,8 @@ import java.util.concurrent.TimeUnit
  * 2026-10-06): 2 to 4 live tiles, each decoded by its own ExoPlayer into an
  * off-screen SurfaceTexture, drawn with OpenGL ES into one 1280x720 frame at
  * 30 fps ([MultiviewCompositeLayout]: the local Multiview's grid shapes,
- * letterboxed tiles, 2 px gray borders, a 4 px accent border on the audio-focused
- * tile), encoded with the platform H.264 encoder (MediaCodec, input
+ * letterboxed tiles, and the user's Multiview look from [style]: padding,
+ * corners, audio focus indicator and channel logos), encoded with the platform H.264 encoder (MediaCodec, input
  * Surface), and muxed with the focused tile's audio (AAC-LC, MediaCodec)
  * into an MPEG-TS stream for the cast proxy ([MultiviewTsMuxer] ->
  * [output]).
@@ -62,6 +62,8 @@ class MultiviewCompositor(
     initialFocus: Int,
     private val output: (ByteArray) -> Unit,
     private val onFatal: (reason: String) -> Unit,
+    /** Paused (true) or resumed (false) in the background; main thread. */
+    private val onBackgroundPause: (paused: Boolean) -> Unit = {},
 ) : CompositeAudioTap {
 
     companion object {
@@ -78,6 +80,9 @@ class MultiviewCompositor(
         private const val STATS_NANOS = 10_000_000_000L
         private const val MAX_TILE_RETRIES = 10
         private const val TILE_RETRY_MS = 3_000L
+        /** Backgrounded and no encoder output for this long: the encoder
+         *  surface is gone; pause instead of freezing the picture. */
+        private const val BG_STALL_NANOS = 1_500_000_000L
         private const val EGL_RECORDABLE_ANDROID = 0x3142
 
         private const val VS = """
@@ -87,13 +92,68 @@ class MultiviewCompositor(
             varying vec2 vTex;
             void main() { gl_Position = aPos; vTex = (uTex * aTex).xy; }
         """
-        private const val FS = """
-            #extension GL_OES_EGL_image_external : require
+        /** Rounded-rect coverage of the current fragment: uClip is
+         *  (left, bottom, right, top) in window pixels, uRadius the corner. */
+        private const val SDF = """
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
             precision mediump float;
+            #endif
+            float cover(vec4 r, float rad) {
+                vec2 c = (r.xy + r.zw) * 0.5;
+                vec2 hs = (r.zw - r.xy) * 0.5;
+                rad = min(rad, min(hs.x, hs.y));
+                vec2 q = abs(gl_FragCoord.xy - c) - hs + vec2(rad);
+                float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
+                return clamp(0.5 - d, 0.0, 1.0);
+            }
+        """
+        /** Tile video, clipped to the tile's (rounded) shape. */
+        private const val FS_VIDEO = """
+            #extension GL_OES_EGL_image_external : require
+        """ + SDF + """
             varying vec2 vTex;
             uniform samplerExternalOES sTex;
-            void main() { gl_FragColor = texture2D(sTex, vTex); }
+            uniform vec4 uClip;
+            uniform float uRadius;
+            void main() { gl_FragColor = texture2D(sTex, vTex) * cover(uClip, uRadius); }
         """
+        /** Solid (premultiplied) color in a rounded rect; uStroke > 0 draws
+         *  only a ring of that width inside the rect (a border). */
+        private const val FS_SOLID = SDF + """
+            uniform vec4 uClip;
+            uniform float uRadius;
+            uniform float uStroke;
+            uniform vec4 uColor;
+            void main() {
+                float a = cover(uClip, uRadius);
+                if (uStroke > 0.0) {
+                    vec4 inner = uClip + vec4(uStroke, uStroke, -uStroke, -uStroke);
+                    a = a * (1.0 - cover(inner, max(uRadius - uStroke, 0.0)));
+                }
+                gl_FragColor = uColor * a;
+            }
+        """
+        /** A bitmap (premultiplied) times a premultiplied tint. */
+        private const val FS_BITMAP = """
+            precision mediump float;
+            varying vec2 vTex;
+            uniform sampler2D sTex;
+            uniform vec4 uColor;
+            void main() { gl_FragColor = texture2D(sTex, vTex) * uColor; }
+        """
+        private val IDENTITY = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
+        /** Bitmaps are top-down; GL samples bottom-up. */
+        private val FLIP_Y = FloatArray(16).also {
+            android.opengl.Matrix.setIdentityM(it, 0)
+            it[5] = -1f
+            it[13] = 1f
+        }
+        /** Material "volume_up" (24 dp viewport), the local speaker icon. */
+        private const val VOLUME_UP_PATH =
+            "M3,9v6h4l5,5V4L7,9H3zM16.5,12c0,-1.77 -1.02,-3.29 -2.5,-4.03v8.05c1.48,-0.73 2.5,-2.25 2.5,-4.02z" +
+                "M14,3.23v2.06c2.89,0.86 5,3.54 5,6.71s-2.11,5.85 -5,6.71v2.06c4.01,-0.91 7,-4.49 7,-8.77s-2.99,-7.86 -7,-8.77z"
     }
 
     private class Tile(val index: Int, val source: MultiviewTile) {
@@ -108,14 +168,44 @@ class MultiviewCompositor(
         @Volatile var pixelRatio = 1f
         var player: ExoPlayer? = null
         var retries = 0
+        /** Reached READY once; a later BUFFERING is a stall. */
+        var wasReady = false
+        var stalled = false
+        /** Channel logo texture (GL thread) and its opaque aspect. */
+        var logoTex = 0
+        @Volatile var logoAspect = 0f
+        @Volatile var logoBitmap: android.graphics.Bitmap? = null
+        var logoRequested = false
     }
 
     private val count = tiles.size.coerceAtMost(MultiviewCompositeLayout.MAX_TILES)
     private val state = tiles.take(count).mapIndexed { i, t -> Tile(i, t) }
-    private val rects = MultiviewCompositeLayout.tileRects(count)
 
     @Volatile var focused: Int = initialFocus.coerceIn(0, count - 1)
         private set
+
+    /** The user's Multiview look; read on every frame, so a Settings change
+     *  shows on the next one. Logos load when first turned on. */
+    @Volatile var style: CompositeStyle = CompositeStyle()
+        set(value) {
+            field = value
+            if (value.showLogos && running) main.post { loadLogos() }
+        }
+
+    /** When the focus last changed (the fading indicator's start). */
+    @Volatile private var focusChangedAtNanos = System.nanoTime()
+    /** Tap time of a focus change not yet on a composed frame; 0 when none. */
+    @Volatile private var pendingFocusTapNanos = 0L
+    @Volatile private var pendingFocusIndex = -1
+    /** Tile whose next PCM re-anchors the composite audio; -1 when none. */
+    @Volatile private var reanchorTile = -1
+
+    /** App in the background (set by the controller). */
+    @Volatile var backgrounded = false
+    /** Paused because the encoder stopped in the background. */
+    @Volatile var backgroundPaused = false
+        private set
+    private var pausedAtNanos = 0L
 
     /** Cell of each tile (tile index -> cell index); swapped live from the
      *  cast sheet's preview, no encoder or session restart. */
@@ -147,10 +237,19 @@ class MultiviewCompositor(
     private var encoderEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var previewEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var previewSurface: Surface? = null
-    private var program = 0
-    private var aPos = 0
-    private var aTex = 0
-    private var uTex = 0
+    private class Prog(val id: Int) {
+        val aPos = GLES20.glGetAttribLocation(id, "aPos")
+        val aTex = GLES20.glGetAttribLocation(id, "aTex")
+        val uTex = GLES20.glGetUniformLocation(id, "uTex")
+        val uClip = GLES20.glGetUniformLocation(id, "uClip")
+        val uRadius = GLES20.glGetUniformLocation(id, "uRadius")
+        val uStroke = GLES20.glGetUniformLocation(id, "uStroke")
+        val uColor = GLES20.glGetUniformLocation(id, "uColor")
+    }
+    private var videoProg: Prog? = null
+    private var solidProg: Prog? = null
+    private var bitmapProg: Prog? = null
+    private var iconTex = 0
     private val quadPos: FloatBuffer = floatBuffer(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
     private val quadTex: FloatBuffer = floatBuffer(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)
 
@@ -208,10 +307,58 @@ class MultiviewCompositor(
     }
 
     /** Audio focus and the highlight move to [index]; no restart. */
-    fun setFocus(index: Int) {
+    fun setFocus(index: Int, tapNanos: Long = System.nanoTime()) {
         if (index !in 0 until count || index == focused) return
         Log.i(TAG, "[MV-CAST] composite focus ${state[focused].source.displayName} -> ${state[index].source.displayName}")
+        pendingFocusIndex = index
+        pendingFocusTapNanos = tapNanos
+        focusChangedAtNanos = System.nanoTime()
         focused = index
+    }
+
+    /** App backgrounded and the encoder stopped delivering (its surface is
+     *  gone): stop the render tick, the tiles and the audio cleanly so the
+     *  receiver never sees a frozen picture with live audio. Any thread. */
+    private fun pauseForBackground(reason: String) {
+        if (backgroundPaused || !running) return
+        backgroundPaused = true
+        pausedAtNanos = System.nanoTime()
+        Log.i(TAG, "[MV-CAST] composite paused in background reason=$reason")
+        audio.setPaused(true)
+        gl.removeCallbacks(tick)
+        main.post {
+            state.forEach { it.player?.playWhenReady = false }
+            onBackgroundPause(true)
+        }
+    }
+
+    /** Back in the foreground after [pauseForBackground]: tiles rejoin
+     *  live, the encoder gets a key frame, the tick restarts. If the encoder
+     *  still delivers nothing the behind watchdog stops the cast as before.
+     *  Main thread. */
+    fun resumeFromBackground() {
+        if (!backgroundPaused || !running) return
+        val pausedMs = (System.nanoTime() - pausedAtNanos) / 1_000_000
+        state.forEach { t ->
+            t.player?.let { p ->
+                p.seekToDefaultPosition()
+                p.playWhenReady = true
+            }
+        }
+        gl.post {
+            val now = System.nanoTime()
+            submitted.clear()
+            lastOutputNanos = now
+            lastTickNanos = 0L
+            nextTickNanos = now
+            nextKeyNanos = now
+            focusChangedAtNanos = now
+            audio.setPaused(false)
+            backgroundPaused = false
+            gl.post(tick)
+            Log.i(TAG, "[MV-CAST] composite resumed from background after ${pausedMs}ms")
+        }
+        onBackgroundPause(false)
     }
 
     /** New cell per tile ([slots] tile index -> cell index). */
@@ -280,7 +427,9 @@ class MultiviewCompositor(
             }
             normalizer.convert(bytes, sampleRate, channels, pcmEncoding)
         }
-        audio.submit(samples, playoutNanos)
+        val reanchor = reanchorTile == tile
+        if (reanchor) reanchorTile = -1
+        audio.submit(samples, playoutNanos, if (reanchor) tile else -1)
     }
 
     // ---- players (main thread) ----
@@ -327,7 +476,25 @@ class MultiviewCompositor(
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) t.retries = 0
+                when (playbackState) {
+                    Player.STATE_READY -> {
+                        t.retries = 0
+                        if (t.stalled) {
+                            t.stalled = false
+                            // The tile's clock restarts where it stopped; the
+                            // composite audio re-anchors to it on the next PCM
+                            // so lip sync does not carry the stall.
+                            Log.i(TAG, "[MV-CAST] composite tile ${t.index} resumed after stall")
+                            reanchorTile = t.index
+                        }
+                        t.wasReady = true
+                    }
+                    Player.STATE_BUFFERING -> if (t.wasReady && !backgroundPaused) {
+                        t.stalled = true
+                        Log.i(TAG, "[MV-CAST] composite tile ${t.index} stalled (rebuffering)")
+                    }
+                    else -> Unit
+                }
             }
         })
         player.setMediaSource(
@@ -337,6 +504,33 @@ class MultiviewCompositor(
         player.prepare()
         t.player = player
         Log.i(TAG, "[MV-CAST] composite tile ${t.index} loading ${t.source.displayName}")
+        if (style.showLogos) loadLogo(t)
+    }
+
+    private fun loadLogos() = state.forEach { loadLogo(it) }
+
+    /** Fetch the tile's channel logo through the app's Coil loader (same
+     *  cache as the guide and the local tiles), crop it to its opaque bounds
+     *  exactly as the local tile does, and hand it to the GL thread. */
+    private fun loadLogo(t: Tile) {
+        val url = t.source.logoUrl
+        if (!running || t.logoRequested || url.isBlank()) return
+        t.logoRequested = true
+        Thread({
+            runCatching {
+                val loader = coil3.SingletonImageLoader.get(context)
+                val req = coil3.request.ImageRequest.Builder(context).data(url).build()
+                val image = kotlinx.coroutines.runBlocking { loader.execute(req) }.image ?: return@runCatching
+                val bmp = com.aeriotv.android.feature.multiview.TileLogoCrop.softwareBitmap(image) ?: return@runCatching
+                val crop = com.aeriotv.android.feature.multiview.TileLogoCrop.cache.get(url)
+                    ?: com.aeriotv.android.feature.multiview.TileLogoCrop.opaqueBounds(bmp)
+                        .also { com.aeriotv.android.feature.multiview.TileLogoCrop.cache.put(url, it) }
+                if (crop.width() <= 0 || crop.height() <= 0) return@runCatching
+                val cut = android.graphics.Bitmap.createBitmap(bmp, crop.left, crop.top, crop.width(), crop.height())
+                t.logoAspect = crop.width().toFloat() / crop.height()
+                t.logoBitmap = cut
+            }.onFailure { Log.w(TAG, "[MV-CAST] composite logo ${t.index} failed: $it") }
+        }, "MV-CAST-logo").start()
     }
 
     // ---- GL thread ----
@@ -369,10 +563,10 @@ class MultiviewCompositor(
         )
         check(encoderEglSurface != EGL14.EGL_NO_SURFACE) { "encoder window surface" }
         check(EGL14.eglMakeCurrent(eglDisplay, encoderEglSurface, encoderEglSurface, eglContext)) { "eglMakeCurrent" }
-        program = buildProgram()
-        aPos = GLES20.glGetAttribLocation(program, "aPos")
-        aTex = GLES20.glGetAttribLocation(program, "aTex")
-        uTex = GLES20.glGetUniformLocation(program, "uTex")
+        videoProg = Prog(buildProgram(FS_VIDEO))
+        solidProg = Prog(buildProgram(FS_SOLID))
+        bitmapProg = Prog(buildProgram(FS_BITMAP))
+        iconTex = uploadBitmap(speakerIcon())
 
         for (t in state) {
             val ids = IntArray(1)
@@ -428,12 +622,12 @@ class MultiviewCompositor(
 
     private val tick: Runnable = object : Runnable {
         override fun run() {
-            if (!running) return
+            if (!running || backgroundPaused) return
             val now = System.nanoTime()
             lastTickNanos = now
             runCatching { renderFrame(now) }.onFailure {
                 Log.w(TAG, "[MV-CAST] composite render failed: $it")
-                fatal("render failed")
+                if (backgrounded) pauseForBackground("render failed") else fatal("render failed")
                 return
             }
             nextTickNanos += FRAME_NANOS
@@ -443,7 +637,7 @@ class MultiviewCompositor(
                 droppedTicks += missed
                 nextTickNanos += missed * FRAME_NANOS
             }
-            gl.postDelayed(this, ((nextTickNanos - after) / 1_000_000L).coerceAtLeast(0L))
+            if (!backgroundPaused) gl.postDelayed(this, ((nextTickNanos - after) / 1_000_000L).coerceAtLeast(0L))
         }
     }
 
@@ -456,6 +650,11 @@ class MultiviewCompositor(
                     st.getTransformMatrix(t.texMatrix)
                     t.hasFrame = true
                 }
+            }
+            t.logoBitmap?.let { bmp ->
+                t.logoBitmap = null
+                if (t.logoTex != 0) GLES20.glDeleteTextures(1, intArrayOf(t.logoTex), 0)
+                t.logoTex = uploadBitmap(bmp)
             }
         }
         val focus = focused
@@ -486,71 +685,145 @@ class MultiviewCompositor(
         submitted[elapsed / 1000] = now
         submittedFrames++
         EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)
+        val tapAt = pendingFocusTapNanos
+        if (tapAt > 0L && focus == pendingFocusIndex) {
+            pendingFocusTapNanos = 0L
+            Log.i(TAG, "[MV-CAST] focus applied in ${(System.nanoTime() - tapAt) / 1_000_000}ms")
+        }
     }
 
-    /** One composite frame into the current surface of [w] x [h]. */
+    /** One composite frame into the current surface of [w] x [h]: per
+     *  tile, its picture clipped to the tile shape, the channel logo, the
+     *  speaker icon and the audio-focus border, as the local tile stacks
+     *  them for the user's [style]. */
     private fun draw(w: Int, h: Int, focus: Int) {
         if (w <= 0 || h <= 0) return
         val sx = w / W.toFloat()
         val sy = h / H.toFloat()
+        val st = style
+        val rects = MultiviewCompositeLayout.tileRects(count, st.padding)
+        val radius = MultiviewCompositeLayout.cornerRadius(st)
+        val since = System.nanoTime() - focusChangedAtNanos
+        val accent = focusArgb
         GLES20.glViewport(0, 0, w, h)
-        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         val slots = slotOf
-        val accent = focusArgb
         for (t in state) {
             val cell = rects.getOrNull(slots[t.index]) ?: continue
             val isFocus = t.index == focus
-            if (isFocus) {
-                GLES20.glClearColor(
-                    ((accent shr 16) and 0xFF) / 255f,
-                    ((accent shr 8) and 0xFF) / 255f,
-                    (accent and 0xFF) / 255f,
-                    1f,
-                )
-            } else {
-                GLES20.glClearColor(0.5f, 0.5f, 0.5f, 1f)
+            val pic = MultiviewCompositeLayout.letterbox(cell, t.videoWidth, t.videoHeight, t.pixelRatio)
+            if (t.hasFrame) {
+                val vp = videoProg ?: continue
+                GLES20.glUseProgram(vp.id)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.texId)
+                setClip(vp, cell, radius, sx, sy, h)
+                quad(vp, pic, t.texMatrix, sx, sy, h)
             }
-            scissor(cell, sx, sy, h)
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-            GLES20.glClearColor(0f, 0f, 0f, 1f)
-            scissor(MultiviewCompositeLayout.pictureArea(cell, isFocus), sx, sy, h)
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            if (st.showLogos && t.logoTex != 0 && t.logoAspect > 0f) {
+                val place = MultiviewCompositeLayout.logoPlacement(pic, t.logoAspect, st)
+                solid(place.backdrop, 4 * MultiviewCompositeLayout.DP, 0f, 0x8C000000.toInt(), sx, sy, h)
+                bitmap(t.logoTex, place.logo, 0xFFFFFFFF.toInt(), 1f, sx, sy, h)
+            }
+            if (isFocus) {
+                val iconAlpha = MultiviewCompositeLayout.iconAlpha(st, since)
+                if (iconAlpha > 0f && iconTex != 0) {
+                    val size = MultiviewCompositeLayout.ICON_PX
+                    val icon = CompositeRect(
+                        cell.left + (cell.width - size) / 2, cell.top + (cell.height - size) / 2, size, size,
+                    )
+                    bitmap(iconTex, icon, accent, iconAlpha, sx, sy, h)
+                }
+                MultiviewCompositeLayout.focusBorderArgb(st, accent, since)?.let { argb ->
+                    solid(cell, radius, MultiviewCompositeLayout.FOCUS_BORDER_PX, argb, sx, sy, h)
+                }
+            }
         }
-        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
-        GLES20.glUseProgram(program)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 0, quadPos)
-        GLES20.glEnableVertexAttribArray(aTex)
-        GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, quadTex)
-        for (t in state) {
-            if (!t.hasFrame) continue
-            val cell = rects.getOrNull(slots[t.index]) ?: continue
-            val area = MultiviewCompositeLayout.pictureArea(cell, t.index == focus)
-            val pic = MultiviewCompositeLayout.letterbox(area, t.videoWidth, t.videoHeight, t.pixelRatio)
-            val vx = (pic.left * sx).toInt()
-            val vw = (pic.width * sx).toInt()
-            val vh = (pic.height * sy).toInt()
-            val vy = h - (pic.top * sy).toInt() - vh
-            GLES20.glViewport(vx, vy, vw, vh)
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.texId)
-            GLES20.glUniformMatrix4fv(uTex, 1, false, t.texMatrix, 0)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-        }
+        GLES20.glDisable(GLES20.GL_BLEND)
     }
 
-    private fun scissor(r: CompositeRect, sx: Float, sy: Float, h: Int) {
-        val x = (r.left * sx).toInt()
-        val w = (r.right * sx).toInt() - x
+    /** Window-pixel (bottom-left origin) clip rect for [r]. */
+    private fun setClip(p: Prog, r: CompositeRect, radius: Float, sx: Float, sy: Float, h: Int) {
+        GLES20.glUniform4f(p.uClip, r.left * sx, h - r.bottom * sy, r.right * sx, h - r.top * sy)
+        GLES20.glUniform1f(p.uRadius, radius * sx)
+    }
+
+    /** Draw the current program's quad over [r] with texture matrix [m]. */
+    private fun quad(p: Prog, r: CompositeRect, m: FloatArray, sx: Float, sy: Float, h: Int) {
+        val vx = (r.left * sx).toInt()
+        val vw = (r.right * sx).toInt() - vx
         val top = (r.top * sy).toInt()
-        val rh = (r.bottom * sy).toInt() - top
-        GLES20.glScissor(x, h - top - rh, w, rh)
+        val vh = (r.bottom * sy).toInt() - top
+        if (vw <= 0 || vh <= 0) return
+        GLES20.glViewport(vx, h - top - vh, vw, vh)
+        GLES20.glEnableVertexAttribArray(p.aPos)
+        GLES20.glVertexAttribPointer(p.aPos, 2, GLES20.GL_FLOAT, false, 0, quadPos)
+        GLES20.glEnableVertexAttribArray(p.aTex)
+        GLES20.glVertexAttribPointer(p.aTex, 2, GLES20.GL_FLOAT, false, 0, quadTex)
+        GLES20.glUniformMatrix4fv(p.uTex, 1, false, m, 0)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
-    private fun buildProgram(): Int {
+    /** A rounded rect fill ([stroke] 0) or ring of [argb]. */
+    private fun solid(r: CompositeRect, radius: Float, stroke: Float, argb: Int, sx: Float, sy: Float, h: Int) {
+        val p = solidProg ?: return
+        GLES20.glUseProgram(p.id)
+        setClip(p, r, radius, sx, sy, h)
+        GLES20.glUniform1f(p.uStroke, stroke * sx)
+        setColor(p, argb, 1f)
+        quad(p, r, IDENTITY, sx, sy, h)
+    }
+
+    /** Bitmap texture [tex] over [r], tinted by [argb] at [alpha]. */
+    private fun bitmap(tex: Int, r: CompositeRect, argb: Int, alpha: Float, sx: Float, sy: Float, h: Int) {
+        val p = bitmapProg ?: return
+        GLES20.glUseProgram(p.id)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
+        setColor(p, argb, alpha)
+        quad(p, r, FLIP_Y, sx, sy, h)
+    }
+
+    /** Premultiplied [argb] at an extra [alpha]. */
+    private fun setColor(p: Prog, argb: Int, alpha: Float) {
+        val a = ((argb ushr 24) and 0xFF) / 255f * alpha
+        GLES20.glUniform4f(
+            p.uColor,
+            ((argb shr 16) and 0xFF) / 255f * a,
+            ((argb shr 8) and 0xFF) / 255f * a,
+            (argb and 0xFF) / 255f * a,
+            a,
+        )
+    }
+
+    private fun uploadBitmap(bmp: android.graphics.Bitmap): Int {
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        // GLUtils uploads premultiplied, which the blend func expects.
+        android.opengl.GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+        return ids[0]
+    }
+
+    /** The local speaker icon in white at its 48 dp size; tinted per frame. */
+    private fun speakerIcon(): android.graphics.Bitmap {
+        val size = MultiviewCompositeLayout.ICON_PX
+        val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bmp)
+        canvas.scale(size / 24f, size / 24f)
+        val path = androidx.core.graphics.PathParser.createPathFromPathData(VOLUME_UP_PATH)
+        canvas.drawPath(path, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE })
+        return bmp
+    }
+
+    private fun buildProgram(fs: String): Int {
         fun shader(type: Int, src: String): Int {
             val s = GLES20.glCreateShader(type)
             GLES20.glShaderSource(s, src)
@@ -562,7 +835,7 @@ class MultiviewCompositor(
         }
         val p = GLES20.glCreateProgram()
         GLES20.glAttachShader(p, shader(GLES20.GL_VERTEX_SHADER, VS))
-        GLES20.glAttachShader(p, shader(GLES20.GL_FRAGMENT_SHADER, FS))
+        GLES20.glAttachShader(p, shader(GLES20.GL_FRAGMENT_SHADER, fs))
         GLES20.glLinkProgram(p)
         val ok = IntArray(1)
         GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0)
@@ -618,6 +891,14 @@ class MultiviewCompositor(
         val info = MediaCodec.BufferInfo()
         var statsAt = System.nanoTime()
         while (running) {
+            if (backgroundPaused) {
+                // Nothing is submitted while paused; keep the codec drained.
+                runCatching { encoder?.let { e -> e.dequeueOutputBuffer(info, 50_000).let { if (it >= 0) e.releaseOutputBuffer(it, false) } } }
+                if (!running) break
+                lastOutputNanos = System.nanoTime()
+                statsAt = lastOutputNanos
+                continue
+            }
             val enc = encoder ?: break
             val idx = try {
                 enc.dequeueOutputBuffer(info, 10_000)
@@ -663,6 +944,13 @@ class MultiviewCompositor(
             // oldest frame still inside the encoder is older than that, or
             // the render tick itself has stalled that long.
             val oldest = submitted.values.minOrNull()
+            // Backgrounded: the encoder's input surface can be torn down with
+            // the app's UI (MediaCodec stops returning frames while the tick
+            // keeps submitting). Pause cleanly rather than freeze the picture.
+            if (backgrounded && oldest != null && now - lastOutputNanos > BG_STALL_NANOS) {
+                pauseForBackground("encoder stopped delivering")
+                continue
+            }
             val behind = (oldest != null && now - oldest > MAX_BEHIND_NANOS && now - lastOutputNanos > MAX_BEHIND_NANOS) ||
                 (lastTickNanos > 0 && now - lastTickNanos > MAX_BEHIND_NANOS)
             if (behind) {

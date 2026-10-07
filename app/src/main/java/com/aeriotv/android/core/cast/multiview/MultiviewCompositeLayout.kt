@@ -3,6 +3,7 @@ package com.aeriotv.android.core.cast.multiview
 import com.aeriotv.android.feature.multiview.MultiviewGridMath
 import com.aeriotv.android.feature.multiview.MultiviewLayoutMode
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /** An integer pixel rect in the composite frame, top-left origin. */
 data class CompositeRect(val left: Int, val top: Int, val width: Int, val height: Int) {
@@ -14,12 +15,34 @@ data class CompositeRect(val left: Int, val top: Int, val width: Int, val height
 }
 
 /**
+ * The user's Multiview look (Settings > Player > Multiview), the same values
+ * the local grid reads (MultiviewScreen): audio focus indicator, padding
+ * between tiles, tile corners, channel logos with corner and size.
+ */
+data class CompositeStyle(
+    /** "centerIcon", "grayPersistent" or "themeFading" (AppPreferences). */
+    val focusStyle: String = "centerIcon",
+    val padding: Boolean = true,
+    val rounded: Boolean = false,
+    val showLogos: Boolean = false,
+    /** "top_left", "top_right", "bottom_left" or "bottom_right". */
+    val logoPosition: String = "top_left",
+    /** Logo height as a percent of the picture height, 5 to 25. */
+    val logoSizePercent: Int = 10,
+)
+
+/** Where a channel logo lands: its backdrop and the logo inside it. */
+data class CompositeLogoPlacement(val backdrop: CompositeRect, val logo: CompositeRect)
+
+/**
  * Geometry of the phone-composited Multiview cast (Logan 2026-10-06): one
  * 1280x720 frame holding 2 to 4 tiles in the SAME shapes the local Multiview
- * draws for that count ([MultiviewGridMath], Default layout, landscape), with
- * a small gap, a thin border per tile and a thicker highlight on the
- * audio-focused tile. Pure: the GL compositor and the phone preview's
- * tap-to-focus both read it, and the JUnit tests pin the numbers.
+ * draws for that count ([MultiviewGridMath], Default layout, landscape).
+ * Round 3 (2026-10-07): the look follows [CompositeStyle] exactly as the
+ * local grid draws it, with local dp mapped at [DP] frame pixels per dp
+ * (the frame reads as an 853x480 dp screen). Pure: the GL compositor and
+ * the phone preview's tap-to-focus both read it, and the JUnit tests pin
+ * the numbers.
  */
 object MultiviewCompositeLayout {
     const val WIDTH = 1280
@@ -27,31 +50,74 @@ object MultiviewCompositeLayout {
     const val FPS = 30
     const val MIN_TILES = 2
     const val MAX_TILES = 4
-    /** Gap between tiles, px of the 1280x720 frame. */
-    const val GAP = 4
-    /** Border of an unfocused tile. */
-    const val BORDER = 2
-    /** Border of the audio-focused tile. */
-    const val FOCUS_BORDER = 4
+    /** Frame pixels per local dp. */
+    const val DP = 1.5f
+    /** Local tile padding (4 dp per side when Padding Between Tiles is on). */
+    val PAD_PX: Int = (4 * DP).roundToInt()
+    /** Local rounded tile corner (8 dp). */
+    val CORNER_PX: Float = 8 * DP
+    /** Local audio-focus border (2 dp, Gray Outline and Accent Outline). */
+    val FOCUS_BORDER_PX: Float = 2 * DP
+    /** Local speaker icon (48 dp) for the Speaker Icon style. */
+    val ICON_PX: Int = (48 * DP).roundToInt()
+
+    /** The fading indicator holds this long after a focus change... */
+    const val FOCUS_HOLD_NANOS = 2_000_000_000L
+    /** ...then fades out over this long. */
+    const val FOCUS_FADE_NANOS = 500_000_000L
 
     /** Whether [count] staged channels can be composited and cast. */
     fun canCast(count: Int): Boolean = count in MIN_TILES..MAX_TILES
 
-    /** Tile cells for [count] tiles in a [width] x [height] frame. */
-    fun tileRects(count: Int, width: Int = WIDTH, height: Int = HEIGHT, gap: Int = GAP): List<CompositeRect> {
+    /**
+     * Tile rects for [count] tiles in a [width] x [height] frame: the local
+     * grid's cells (zero spacing) inset by the local tile padding when
+     * [padding] is on, so neighbors sit 8 dp apart and 4 dp off the edge.
+     */
+    fun tileRects(count: Int, padding: Boolean = true, width: Int = WIDTH, height: Int = HEIGHT): List<CompositeRect> {
         if (!canCast(count)) return emptyList()
+        val pad = if (padding) PAD_PX else 0
         return MultiviewGridMath.rects(
-            MultiviewLayoutMode.Auto, count, width.toFloat(), height.toFloat(), gap.toFloat(),
+            MultiviewLayoutMode.Auto, count, width.toFloat(), height.toFloat(), 0f,
         ).map { r ->
             val l = r.left.roundToInt()
             val t = r.top.roundToInt()
-            CompositeRect(l, t, r.right.roundToInt() - l, r.bottom.roundToInt() - t)
+            CompositeRect(l, t, r.right.roundToInt() - l, r.bottom.roundToInt() - t).inset(pad)
         }
     }
 
-    /** The picture area inside a cell: the cell minus its border. */
-    fun pictureArea(cell: CompositeRect, focused: Boolean): CompositeRect =
-        cell.inset(if (focused) FOCUS_BORDER else BORDER)
+    /** Corner radius of a tile in frame pixels. */
+    fun cornerRadius(style: CompositeStyle): Float = if (style.rounded) CORNER_PX else 0f
+
+    /**
+     * Opacity of the fading indicator (Accent Outline, Speaker Icon)
+     * [sinceFocusNanos] after the last focus change: full for 2 s, then a
+     * linear fade to zero over 0.5 s.
+     */
+    fun fadingAlpha(sinceFocusNanos: Long): Float = when {
+        sinceFocusNanos < FOCUS_HOLD_NANOS -> 1f
+        sinceFocusNanos >= FOCUS_HOLD_NANOS + FOCUS_FADE_NANOS -> 0f
+        else -> 1f - (sinceFocusNanos - FOCUS_HOLD_NANOS).toFloat() / FOCUS_FADE_NANOS
+    }
+
+    /** The audio-focus border (ARGB, alpha applied) or null for none. */
+    fun focusBorderArgb(style: CompositeStyle, accentArgb: Int, sinceFocusNanos: Long): Int? = when (style.focusStyle) {
+        "grayPersistent" -> 0x80FFFFFF.toInt()
+        "themeFading" -> {
+            val a = fadingAlpha(sinceFocusNanos)
+            if (a <= 0f) null else withAlpha(accentArgb, a)
+        }
+        else -> null
+    }
+
+    /** The speaker icon's opacity (Speaker Icon style), 0 when hidden. */
+    fun iconAlpha(style: CompositeStyle, sinceFocusNanos: Long): Float =
+        if (style.focusStyle == "centerIcon") 0.85f * fadingAlpha(sinceFocusNanos) else 0f
+
+    private fun withAlpha(argb: Int, alpha: Float): Int {
+        val a = ((argb ushr 24) * alpha).roundToInt().coerceIn(0, 255)
+        return (a shl 24) or (argb and 0x00FFFFFF)
+    }
 
     /**
      * Letterbox (or pillarbox) a [videoWidth] x [videoHeight] picture with
@@ -71,14 +137,46 @@ object MultiviewCompositeLayout {
         }
     }
 
+    /**
+     * The local TileChannelLogo math in frame pixels: inside the picture
+     * [video], 8 dp off the chosen corner, a 4 dp black backdrop around a
+     * logo of opaque aspect [logoAspect] (3:1 until known). With
+     * h = picture height x size percent minus 8 dp: height =
+     * h x clamp(sqrt(3 / a), 1, 2), width = height x a, width capped at 4h and
+     * at half the picture width minus 8 dp. No name badge is drawn on the
+     * composite, so a top-left logo is never shifted.
+     */
+    fun logoPlacement(video: CompositeRect, logoAspect: Float, style: CompositeStyle): CompositeLogoPlacement {
+        val a = if (logoAspect > 0f) logoAspect else 3f
+        val h = (video.height * (style.logoSizePercent.coerceIn(5, 25) / 100f) - 8 * DP).coerceAtLeast(1f)
+        var logoH = h * sqrt(3f / a).coerceIn(1f, 2f)
+        var logoW = logoH * a
+        val maxW = minOf(h * 4f, video.width * 0.5f - 8 * DP)
+        if (logoW > maxW) {
+            logoW = maxW
+            logoH = maxW / a
+        }
+        val inset = 8 * DP
+        val pad = 4 * DP
+        val bw = logoW + 2 * pad
+        val bh = logoH + 2 * pad
+        val right = style.logoPosition == "top_right" || style.logoPosition == "bottom_right"
+        val bottom = style.logoPosition == "bottom_left" || style.logoPosition == "bottom_right"
+        val bx = if (right) video.right - inset - bw else video.left + inset
+        val by = if (bottom) video.bottom - inset - bh else video.top + inset
+        val backdrop = CompositeRect(bx.roundToInt(), by.roundToInt(), bw.roundToInt(), bh.roundToInt())
+        val logo = CompositeRect((bx + pad).roundToInt(), (by + pad).roundToInt(), logoW.roundToInt(), logoH.roundToInt())
+        return CompositeLogoPlacement(backdrop, logo)
+    }
+
     /** Tile index under a point in frame coordinates, or -1 (a gap). */
     fun hitTest(x: Float, y: Float, rects: List<CompositeRect>): Int = rects.indexOfFirst { it.contains(x, y) }
 
     /** Tile index under a tap on a preview of [viewWidth] x [viewHeight]
      *  showing the whole frame. */
-    fun hitTestView(x: Float, y: Float, viewWidth: Float, viewHeight: Float, count: Int): Int {
+    fun hitTestView(x: Float, y: Float, viewWidth: Float, viewHeight: Float, count: Int, padding: Boolean = true): Int {
         if (viewWidth <= 0f || viewHeight <= 0f) return -1
-        return hitTest(x * WIDTH / viewWidth, y * HEIGHT / viewHeight, tileRects(count))
+        return hitTest(x * WIDTH / viewWidth, y * HEIGHT / viewHeight, tileRects(count, padding))
     }
 
     /** Cast Stream Info lines for a composite (shared wording with Apple). */
@@ -87,6 +185,22 @@ object MultiviewCompositeLayout {
         "Container: MPEG-TS to fMP4",
         "Audio: AAC-LC stereo 48 kHz",
     )
+
+    /** Stream Info with the tiles' upstream host first (round 3, Apple's
+     *  SOURCE row), then the three composite lines. */
+    fun streamInfoLines(sourceHost: String?): List<String> =
+        listOfNotNull(sourceHost?.takeIf { it.isNotBlank() }?.let { "Source: $it" }) + STREAM_INFO_LINES
+
+    /** Distinct upstream hosts of [urls], comma separated; null when none. */
+    fun sourceHost(urls: List<String>): String? =
+        urls.mapNotNull { hostOf(it) }.distinct().takeIf { it.isNotEmpty() }?.joinToString(", ")
+
+    private fun hostOf(url: String): String? {
+        val afterScheme = url.substringAfter("://", missingDelimiterValue = "").ifEmpty { return null }
+        val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
+        val host = if (authority.startsWith("[")) authority.substringBefore(']') + "]" else authority.substringBefore(':')
+        return host.ifBlank { null }
+    }
 
     /** [order] (position -> tile index) with positions [a] and [b] swapped;
      *  unchanged when either is out of range or they are equal. */
