@@ -545,6 +545,21 @@
       return compositeProfile ? COMPOSITE_LIVE_BEHIND_SECONDS :
         LIVE_START_BEHIND_SECONDS;
     }
+    // Composite buffering goals (measured 2026-10-07 on the Ultra: Shaka's
+    // defaults buffered 9.2 s before first play and 3.5 s after an edge
+    // seek, leaving the TV about 8 s behind). With 1 s segments one second
+    // of media is enough to start or resume and three seconds ahead is
+    // enough to ride out a late segment. inaccurateManifestTolerance 0
+    // because the 1 s cuts are exact. Single-channel loads keep the context
+    // streaming config untouched.
+    const COMPOSITE_STREAMING = {
+      rebufferingGoal: 1,
+      bufferingGoal: 3,
+      segmentPrefetchLimit: 1,
+      inaccurateManifestTolerance: 0,
+    };
+    // Stall guard band for the composite: TARGETDURATION 1 plus one segment.
+    const COMPOSITE_TARGET_DURATION_SECONDS = 2;
     function isCompositeLoad(media) {
       const cd = media && media.customData;
       return !!(cd && cd.aerio && cd.aerio.composite === true);
@@ -555,6 +570,10 @@
     // guard band around the live seek range end: a playhead within one
     // target duration of the end is at the edge by design, not stuck.
     const TARGET_DURATION_SECONDS = 6;
+    function edgeGuardSeconds() {
+      return compositeProfile ? COMPOSITE_TARGET_DURATION_SECONDS :
+        TARGET_DURATION_SECONDS;
+    }
 
     // The watchdog below may not act more than once per this interval. On the
     // 2026-09-12 17:13 session it fired every ~4 s for 97 s straight (each
@@ -1137,6 +1156,15 @@
         light: lightMode,
         // Live profile of the current load: 'composite' or 'single'.
         profile: compositeProfile ? 'composite' : 'single',
+        // Shaka buffering goals of the current load (null = context default).
+        goals: compositeProfile ? {
+          rebuf: COMPOSITE_STREAMING.rebufferingGoal,
+          buf: COMPOSITE_STREAMING.bufferingGoal,
+          prefetch: COMPOSITE_STREAMING.segmentPrefetchLimit,
+          behind: COMPOSITE_LIVE_BEHIND_SECONDS,
+          guard: COMPOSITE_TARGET_DURATION_SECONDS,
+        } : { rebuf: null, buf: null, prefetch: null,
+          behind: LIVE_START_BEHIND_SECONDS, guard: TARGET_DURATION_SECONDS },
         // Why the last programmatic seek was issued, clamped or skipped.
         seekWhy: typeof lastSeekNote === 'string' ?
           lastSeekNote.slice(0, 120) : null,
@@ -1271,7 +1299,7 @@
       const tail = ranges[ranges.length - 1][1];
       const range = seekRange();
       if (range && range[1] !== null &&
-          video.currentTime >= range[1] - TARGET_DURATION_SECONDS) {
+          video.currentTime >= range[1] - edgeGuardSeconds()) {
         // At the live edge by design.
         return;
       }
@@ -1673,10 +1701,21 @@
               defaultPresentationDelay: composite ?
                 COMPOSITE_LIVE_BEHIND_SECONDS : LIVE_START_BEHIND_SECONDS,
             }),
+            // Composite gets the small goals; every other load gets the
+            // context's own streaming object back, unchanged.
+            streaming: composite ?
+              Object.assign({}, config.shakaConfig.streaming, COMPOSITE_STREAMING) :
+              config.shakaConfig.streaming,
           });
           if (composite) {
             console.log('AerioTV: composite profile presentation delay ' +
-              COMPOSITE_LIVE_BEHIND_SECONDS + ' s');
+              COMPOSITE_LIVE_BEHIND_SECONDS + ' s, rebufferingGoal ' +
+              COMPOSITE_STREAMING.rebufferingGoal + ' s, bufferingGoal ' +
+              COMPOSITE_STREAMING.bufferingGoal + ' s, segmentPrefetchLimit ' +
+              COMPOSITE_STREAMING.segmentPrefetchLimit +
+              ', inaccurateManifestTolerance ' +
+              COMPOSITE_STREAMING.inaccurateManifestTolerance +
+              ', edge guard ' + COMPOSITE_TARGET_DURATION_SECONDS + ' s');
           }
           return out;
         } catch (e) {
@@ -1721,7 +1760,10 @@
         compositeProfile = isCompositeLoad(media);
         if (compositeProfile) {
           console.log('AerioTV: composite profile applied (live behind ' +
-            COMPOSITE_LIVE_BEHIND_SECONDS + ' s, SEEK kept)');
+            COMPOSITE_LIVE_BEHIND_SECONDS + ' s, rebuf ' +
+            COMPOSITE_STREAMING.rebufferingGoal + ' s, buf ' +
+            COMPOSITE_STREAMING.bufferingGoal + ' s, guard ' +
+            COMPOSITE_TARGET_DURATION_SECONDS + ' s, SEEK kept)');
           lastSeekNote = 'profile composite behind' +
             COMPOSITE_LIVE_BEHIND_SECONDS;
         }
