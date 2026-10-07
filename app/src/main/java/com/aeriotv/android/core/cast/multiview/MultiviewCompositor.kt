@@ -175,6 +175,11 @@ class MultiviewCompositor(
         /** Reached READY once; a later BUFFERING is a stall. */
         var wasReady = false
         var stalled = false
+        /** Health counters (Apple a4bd790 parity): ingest bytes, picture
+         *  updates and stalls since the composite started. */
+        @Volatile var ingestBytes = 0L
+        @Volatile var framesRendered = 0L
+        @Volatile var stalls = 0
         /** Channel logo texture (GL thread) and its opaque aspect. */
         var logoTex = 0
         @Volatile var logoAspect = 0f
@@ -248,6 +253,7 @@ class MultiviewCompositor(
                 noteFirstAudio(ticks)
             }
             if (backgrounded) bgAudioChunks++
+            audioChunksTotal++
         },
         log = { Log.i(TAG, it) },
     )
@@ -318,6 +324,9 @@ class MultiviewCompositor(
     @Volatile private var lastOutputNanos = 0L
     @Volatile private var droppedTicks = 0
     @Volatile private var submittedFrames = 0L
+    /** Health line totals (read on the main thread every 10 s). */
+    @Volatile private var encodedTotal = 0L
+    @Volatile private var audioChunksTotal = 0L
     private var encodedSinceStats = 0
     private var encLatencySumNanos = 0L
     private var encLatencyCount = 0
@@ -353,6 +362,7 @@ class MultiviewCompositor(
         lastForcedKeyElapsed = -1L
         gl.post(tick)
         main.post { state.forEach { startPlayer(it) } }
+        main.postDelayed(health, STATS_NANOS / 1_000_000)
         Log.i(TAG, "[MV-CAST] composite start tiles=$count ${W}x$H@$FPS")
         return true
     }
@@ -403,6 +413,7 @@ class MultiviewCompositor(
     fun release(reason: String) {
         if (!running && drainThread == null) return
         running = false
+        main.removeCallbacks(health)
         Log.i(TAG, "[MV-CAST] composite stop reason=$reason")
         val playersDone = CountDownLatch(1)
         val releasePlayers = Runnable {
@@ -453,6 +464,14 @@ class MultiviewCompositor(
             .setReadTimeoutMs(30_000)
             .setUserAgent(headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: ua)
         if (headers.isNotEmpty()) http.setDefaultRequestProperties(headers)
+        http.setTransferListener(object : androidx.media3.datasource.TransferListener {
+            override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+            override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+            override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+                t.ingestBytes += bytesTransferred
+            }
+            override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        })
         val renderers = com.aeriotv.android.core.playback.aerioRenderersFactory(
             context,
             audioPassthrough = false,
@@ -500,6 +519,7 @@ class MultiviewCompositor(
                     }
                     Player.STATE_BUFFERING -> if (t.wasReady) {
                         t.stalled = true
+                        t.stalls++
                         Log.i(TAG, "[MV-CAST] composite tile ${t.index} stalled (rebuffering)")
                     }
                     else -> Unit
@@ -682,6 +702,7 @@ class MultiviewCompositor(
                     st.updateTexImage()
                     st.getTransformMatrix(t.texMatrix)
                     t.hasFrame = true
+                    t.framesRendered++
                 }
             }
             t.logoBitmap?.let { bmp ->
@@ -960,6 +981,7 @@ class MultiviewCompositor(
                         }
                         lastOutputNanos = now
                         encodedSinceStats++
+                        encodedTotal++
                         if (backgrounded) bgFrames++
                         val ticks = clock.ticksForUs(info.presentationTimeUs)
                         synchronized(muxLock) {
@@ -1012,6 +1034,47 @@ class MultiviewCompositor(
                 encLatencyCount = 0
                 statsAt = now
             }
+        }
+    }
+
+    // ---- health line (Apple a4bd790 parity), main thread, every 10 s ----
+
+    private var healthAt = 0L
+    private var healthEncoded = 0L
+    private var healthDropped = 0
+    private var healthAudio = 0L
+    private val healthBytes = LongArray(MultiviewCompositeLayout.MAX_TILES)
+    private val healthFrames = LongArray(MultiviewCompositeLayout.MAX_TILES)
+
+    private val health = object : Runnable {
+        override fun run() {
+            if (!running) return
+            val now = System.nanoTime()
+            if (healthAt == 0L) healthAt = now - STATS_NANOS
+            val seconds = ((now - healthAt) / 1e9).coerceAtLeast(0.001)
+            val tiles = state.joinToString(" ") { t ->
+                val bytes = t.ingestBytes
+                val frames = t.framesRendered
+                val bps = ((bytes - healthBytes[t.index]) / seconds).toLong()
+                val fr = frames - healthFrames[t.index]
+                healthBytes[t.index] = bytes
+                healthFrames[t.index] = frames
+                val buffered = runCatching { t.player?.totalBufferedDuration ?: -1L }.getOrDefault(-1L)
+                "t${t.index}[in=${bps}B/s frames=$fr stalls=${t.stalls}${if (t.stalled) "(now)" else ""} buf=${buffered}ms]"
+            }
+            val enc = encodedTotal
+            val dropped = droppedTicks
+            val audioChunks = audioChunksTotal
+            Log.i(
+                TAG,
+                "[MV-CAST] health $tiles enc fps=${"%.1f".format(java.util.Locale.US, (enc - healthEncoded) / seconds)} " +
+                    "dropped=${dropped - healthDropped} queue=${submitted.size} audioChunks=${audioChunks - healthAudio}",
+            )
+            healthEncoded = enc
+            healthDropped = dropped
+            healthAudio = audioChunks
+            healthAt = now
+            main.postDelayed(this, STATS_NANOS / 1_000_000)
         }
     }
 

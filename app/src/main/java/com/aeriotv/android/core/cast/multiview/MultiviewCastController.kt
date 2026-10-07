@@ -50,18 +50,16 @@ class MultiviewCastController @Inject constructor(
         const val CANNOT_KEEP_UP = "Multiview casting stopped: the phone could not keep up"
         const val CAST_LIMIT_NOTE = "Up to 4 channels can be cast"
         /** A web receiver further than this behind its live seek end is
-         *  seeked there (Apple f33f645 round 7). Deliberately above the
-         *  receiver's measured settle point after a seek (it re-buffers about
-         *  3.5 s and lands about 4.4 s behind), so a tap does not re-seek
-         *  back to the same place every time. */
-        const val NUDGE_THRESHOLD_MS = 6_000L
+         *  seeked there. Apple a4bd790 round 8: the receiver sat 3.7 to 4 s
+         *  behind and the former 6 s threshold never fired, so it is 2 s. */
+        const val NUDGE_THRESHOLD_MS = 2_000L
         /** The composite playlists' HOLD-BACK: three targets of the composite
          *  profile's TARGETDURATION of 1. */
         const val COMPOSITE_HOLD_BACK_S = 3.0
         /** Where the nudge result is read, after the nudge's re-buffer. */
         const val NUDGE_RESULT_DELAY_MS = 6_000L
         /** Where the nudge aims: just inside the live seek end. */
-        const val NUDGE_MARGIN_MS = 250L
+        const val NUDGE_MARGIN_MS = 500L
     }
 
     /** The composite on the receiver right now; null when none. */
