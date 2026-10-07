@@ -757,6 +757,13 @@ fun PlayerScreen(
     // chrome is visible so the auto-hide timer re-arms instead of firing
     // mid-traversal. Phase 172.
     var lastInteractionAt by remember { mutableStateOf(0L) }
+    // Why chromeVisible last flipped (the info card rides on it on phones);
+    // read once per toggle by the PlayerChrome log below.
+    var chromeReason by remember { mutableStateOf("tap") }
+    LaunchedEffect(chromeVisible) {
+        android.util.Log.d("PlayerChrome", "PlayerChrome: visible=$chromeVisible reason=$chromeReason")
+        chromeReason = "tap"
+    }
     // THE single "the user just did something" entry point. Advancing this
     // restarts the auto-hide LaunchedEffect (it is one of its keys), which
     // cancels the running countdown and starts a fresh one, so there is only
@@ -934,11 +941,21 @@ fun PlayerScreen(
         // Remote Control A2: every successful tune also feeds the
         // session-scoped last-channel zap memory.
         currentChannel?.id?.let { exoWindowState.recordTune(it) }
+        // Phones/tablets (2026-10-07): the info card and the controls are one
+        // visibility state, so a channel change wakes the chrome itself
+        // (restarting its timer) instead of a card-only hint window.
+        if (!isTvForm && currentChannel != null) {
+            if (!chromeVisible) chromeReason = "channel change"
+            chromeVisible = true
+            lastInteractionAt = android.os.SystemClock.uptimeMillis()
+        }
         launchHintActive = true
         kotlinx.coroutines.delay(LAUNCH_HINT_MS)
         launchHintActive = false
     }
-    val pillVisible = chromeVisible || launchHintActive
+    // TV keeps the card-only tune-in hint (D-pad flips need the chrome hidden);
+    // phones/tablets show the card only with the chrome.
+    val pillVisible = if (isTvForm) chromeVisible || launchHintActive else chromeVisible
     val audioOnlyState = remember { mutableStateOf(false) }
     var audioOnly by audioOnlyState
     val recordTargetState = remember { mutableStateOf<ProgramInfoTarget?>(null) }
@@ -2057,6 +2074,7 @@ fun PlayerScreen(
         // Retry control the user needs, so it must stay put during an outage.
         if (chromeVisible && !interactionLocked && !streamUnavailable) {
             delay(PLAYER_CHROME_HIDE_MS)
+            chromeReason = "timer"
             chromeVisible = false
         }
     }
