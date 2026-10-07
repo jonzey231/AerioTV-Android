@@ -309,8 +309,6 @@ fun CastTransportCard(
                 !hasContent -> "Select a Channel"
                 !isCompanion && castBuffering -> "Buffering\u2026"
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
-                isComposite && compositeSession?.paused == true ->
-                    com.aeriotv.android.core.cast.multiview.MultiviewCastController.PAUSED_IN_BACKGROUND
                 isComposite -> castContent?.subtitle
                 else -> null
             },

@@ -48,12 +48,10 @@ class MultiviewCastController @Inject constructor(
         const val TITLE = "Multiview"
         const val CANNOT_KEEP_UP = "Multiview casting stopped: the phone could not keep up"
         const val CAST_LIMIT_NOTE = "Up to 4 channels can be cast"
-        const val PAUSED_IN_BACKGROUND = "Paused in background"
     }
 
-    /** The composite on the receiver right now; null when none. [paused]:
-     *  stopped cleanly in the background (the cast card says so). */
-    data class Session(val tiles: List<MultiviewTile>, val focused: Int, val paused: Boolean = false) {
+    /** The composite on the receiver right now; null when none. */
+    data class Session(val tiles: List<MultiviewTile>, val focused: Int) {
         /** Upstream host of the tiles (the Dispatcharr host) for Stream Info. */
         val sourceHost: String? get() = MultiviewCompositeLayout.sourceHost(tiles.map { it.resolvedUrl })
     }
@@ -93,7 +91,6 @@ class MultiviewCastController @Inject constructor(
         override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
             compositor?.backgrounded = false
             setKeepalive(false)
-            compositor?.resumeFromBackground()
         }
     }
 
@@ -117,7 +114,6 @@ class MultiviewCastController @Inject constructor(
             context, live, headers, focused,
             output = p::write,
             onFatal = { reason -> onFatal(reason) },
-            onBackgroundPause = { paused -> onBackgroundPause(paused) },
         )
         c.style = style.value
         if (!c.start()) {
@@ -197,13 +193,6 @@ class MultiviewCastController @Inject constructor(
         _session.value = s.copy(tiles = tiles, focused = focused)
     }
 
-    private fun onBackgroundPause(paused: Boolean) {
-        val s = _session.value ?: return
-        if (s.paused == paused) return
-        Log.i(TAG, "[MV-CAST] composite state ${if (paused) "paused in background" else "resumed"}")
-        _session.value = s.copy(paused = paused)
-    }
-
     /** App to the background (or back) during a composite: the cast proxy's
      *  foreground service (partial wake lock + Wi-Fi lock) keeps the process,
      *  the encoder thread, the tile players and the proxy running. Started
@@ -217,7 +206,7 @@ class MultiviewCastController @Inject constructor(
         }
         Log.i(
             TAG,
-            "[MV-CAST] background keepalive ${if (on) "on" else "off"} " +
+            "[MV-BG] background keepalive ${if (on) "on" else "off"} " +
                 "fgs=${if (com.aeriotv.android.core.cast.hlsproxy.CastHlsProxyService.running) "running" else "starting"}",
         )
     }

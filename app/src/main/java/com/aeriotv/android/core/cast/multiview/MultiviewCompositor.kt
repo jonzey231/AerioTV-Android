@@ -62,8 +62,6 @@ class MultiviewCompositor(
     initialFocus: Int,
     private val output: (ByteArray) -> Unit,
     private val onFatal: (reason: String) -> Unit,
-    /** Paused (true) or resumed (false) in the background; main thread. */
-    private val onBackgroundPause: (paused: Boolean) -> Unit = {},
 ) : CompositeAudioTap {
 
     companion object {
@@ -80,9 +78,8 @@ class MultiviewCompositor(
         private const val STATS_NANOS = 10_000_000_000L
         private const val MAX_TILE_RETRIES = 10
         private const val TILE_RETRY_MS = 3_000L
-        /** Backgrounded and no encoder output for this long: the encoder
-         *  surface is gone; pause instead of freezing the picture. */
-        private const val BG_STALL_NANOS = 1_500_000_000L
+        /** Background proof-of-life log cadence ([MV-BG]). */
+        private const val BG_STATS_NANOS = 60_000_000_000L
         private const val EGL_RECORDABLE_ANDROID = 0x3142
 
         private const val VS = """
@@ -200,12 +197,23 @@ class MultiviewCompositor(
     /** Tile whose next PCM re-anchors the composite audio; -1 when none. */
     @Volatile private var reanchorTile = -1
 
-    /** App in the background (set by the controller). */
+    /** App in the background (set by the controller). The composite keeps
+     *  rendering, encoding and muxing exactly as in the foreground (the cast
+     *  proxy's foreground service keeps the process alive); only the phone
+     *  preview is skipped, since its window surface has no consumer while
+     *  the UI is stopped and a swap into it could block the GL thread. */
     @Volatile var backgrounded = false
-    /** Paused because the encoder stopped in the background. */
-    @Volatile var backgroundPaused = false
-        private set
-    private var pausedAtNanos = 0L
+        set(value) {
+            if (field == value) return
+            field = value
+            bgSinceNanos = System.nanoTime()
+            bgFrames = 0
+            bgAudioChunks = 0
+            Log.i(TAG, "[MV-BG] composite ${if (value) "backgrounded, still rendering" else "foregrounded"}")
+        }
+    @Volatile private var bgSinceNanos = 0L
+    @Volatile private var bgFrames = 0L
+    @Volatile private var bgAudioChunks = 0L
 
     /** Cell of each tile (tile index -> cell index); swapped live from the
      *  cast sheet's preview, no encoder or session restart. */
@@ -220,7 +228,10 @@ class MultiviewCompositor(
     private val normalizer = CompositePcmNormalizer()
     private val audio = CompositeAudioEncoder(
         clock,
-        onFrame = { adts, ticks -> synchronized(muxLock) { muxer.writeAudio(adts, ticks) } },
+        onFrame = { adts, ticks ->
+            synchronized(muxLock) { muxer.writeAudio(adts, ticks) }
+            if (backgrounded) bgAudioChunks++
+        },
         log = { Log.i(TAG, it) },
     )
 
@@ -314,51 +325,6 @@ class MultiviewCompositor(
         pendingFocusTapNanos = tapNanos
         focusChangedAtNanos = System.nanoTime()
         focused = index
-    }
-
-    /** App backgrounded and the encoder stopped delivering (its surface is
-     *  gone): stop the render tick, the tiles and the audio cleanly so the
-     *  receiver never sees a frozen picture with live audio. Any thread. */
-    private fun pauseForBackground(reason: String) {
-        if (backgroundPaused || !running) return
-        backgroundPaused = true
-        pausedAtNanos = System.nanoTime()
-        Log.i(TAG, "[MV-CAST] composite paused in background reason=$reason")
-        audio.setPaused(true)
-        gl.removeCallbacks(tick)
-        main.post {
-            state.forEach { it.player?.playWhenReady = false }
-            onBackgroundPause(true)
-        }
-    }
-
-    /** Back in the foreground after [pauseForBackground]: tiles rejoin
-     *  live, the encoder gets a key frame, the tick restarts. If the encoder
-     *  still delivers nothing the behind watchdog stops the cast as before.
-     *  Main thread. */
-    fun resumeFromBackground() {
-        if (!backgroundPaused || !running) return
-        val pausedMs = (System.nanoTime() - pausedAtNanos) / 1_000_000
-        state.forEach { t ->
-            t.player?.let { p ->
-                p.seekToDefaultPosition()
-                p.playWhenReady = true
-            }
-        }
-        gl.post {
-            val now = System.nanoTime()
-            submitted.clear()
-            lastOutputNanos = now
-            lastTickNanos = 0L
-            nextTickNanos = now
-            nextKeyNanos = now
-            focusChangedAtNanos = now
-            audio.setPaused(false)
-            backgroundPaused = false
-            gl.post(tick)
-            Log.i(TAG, "[MV-CAST] composite resumed from background after ${pausedMs}ms")
-        }
-        onBackgroundPause(false)
     }
 
     /** New cell per tile ([slots] tile index -> cell index). */
@@ -489,7 +455,7 @@ class MultiviewCompositor(
                         }
                         t.wasReady = true
                     }
-                    Player.STATE_BUFFERING -> if (t.wasReady && !backgroundPaused) {
+                    Player.STATE_BUFFERING -> if (t.wasReady) {
                         t.stalled = true
                         Log.i(TAG, "[MV-CAST] composite tile ${t.index} stalled (rebuffering)")
                     }
@@ -622,12 +588,12 @@ class MultiviewCompositor(
 
     private val tick: Runnable = object : Runnable {
         override fun run() {
-            if (!running || backgroundPaused) return
+            if (!running) return
             val now = System.nanoTime()
             lastTickNanos = now
             runCatching { renderFrame(now) }.onFailure {
                 Log.w(TAG, "[MV-CAST] composite render failed: $it")
-                if (backgrounded) pauseForBackground("render failed") else fatal("render failed")
+                fatal("render failed")
                 return
             }
             nextTickNanos += FRAME_NANOS
@@ -637,7 +603,7 @@ class MultiviewCompositor(
                 droppedTicks += missed
                 nextTickNanos += missed * FRAME_NANOS
             }
-            if (!backgroundPaused) gl.postDelayed(this, ((nextTickNanos - after) / 1_000_000L).coerceAtLeast(0L))
+            gl.postDelayed(this, ((nextTickNanos - after) / 1_000_000L).coerceAtLeast(0L))
         }
     }
 
@@ -660,7 +626,7 @@ class MultiviewCompositor(
         val focus = focused
         // Preview first so the encoder swap (which can block on a full
         // encoder queue) never delays the phone's own grid.
-        if (previewEglSurface != EGL14.EGL_NO_SURFACE) {
+        if (previewEglSurface != EGL14.EGL_NO_SURFACE && !backgrounded) {
             if (EGL14.eglMakeCurrent(eglDisplay, previewEglSurface, previewEglSurface, eglContext)) {
                 EGL14.eglSwapInterval(eglDisplay, 0)
                 val w = IntArray(1)
@@ -891,14 +857,6 @@ class MultiviewCompositor(
         val info = MediaCodec.BufferInfo()
         var statsAt = System.nanoTime()
         while (running) {
-            if (backgroundPaused) {
-                // Nothing is submitted while paused; keep the codec drained.
-                runCatching { encoder?.let { e -> e.dequeueOutputBuffer(info, 50_000).let { if (it >= 0) e.releaseOutputBuffer(it, false) } } }
-                if (!running) break
-                lastOutputNanos = System.nanoTime()
-                statsAt = lastOutputNanos
-                continue
-            }
             val enc = encoder ?: break
             val idx = try {
                 enc.dequeueOutputBuffer(info, 10_000)
@@ -934,6 +892,7 @@ class MultiviewCompositor(
                         }
                         lastOutputNanos = now
                         encodedSinceStats++
+                        if (backgrounded) bgFrames++
                         val ticks = clock.ticksForUs(info.presentationTimeUs)
                         synchronized(muxLock) { muxer.writeVideo(bytes, ticks, key, parameterSets) }
                     }
@@ -944,13 +903,6 @@ class MultiviewCompositor(
             // oldest frame still inside the encoder is older than that, or
             // the render tick itself has stalled that long.
             val oldest = submitted.values.minOrNull()
-            // Backgrounded: the encoder's input surface can be torn down with
-            // the app's UI (MediaCodec stops returning frames while the tick
-            // keeps submitting). Pause cleanly rather than freeze the picture.
-            if (backgrounded && oldest != null && now - lastOutputNanos > BG_STALL_NANOS) {
-                pauseForBackground("encoder stopped delivering")
-                continue
-            }
             val behind = (oldest != null && now - oldest > MAX_BEHIND_NANOS && now - lastOutputNanos > MAX_BEHIND_NANOS) ||
                 (lastTickNanos > 0 && now - lastTickNanos > MAX_BEHIND_NANOS)
             if (behind) {
@@ -962,6 +914,16 @@ class MultiviewCompositor(
             // them so they do not read as "behind" forever.
             if (oldest != null && now - oldest > MAX_BEHIND_NANOS) {
                 submitted.entries.removeAll { now - it.value > MAX_BEHIND_NANOS }
+            }
+            if (backgrounded && now - bgSinceNanos >= BG_STATS_NANOS) {
+                Log.i(
+                    TAG,
+                    "[MV-BG] composite still casting in background: frames=$bgFrames " +
+                        "audioChunks=$bgAudioChunks lastMin (${(now - lastOutputNanos) / 1_000_000}ms since last frame)",
+                )
+                bgSinceNanos = now
+                bgFrames = 0
+                bgAudioChunks = 0
             }
             if (now - statsAt >= STATS_NANOS) {
                 val seconds = (now - statsAt) / 1e9
