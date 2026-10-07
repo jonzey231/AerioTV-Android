@@ -537,12 +537,22 @@
     // round 6): the proxy cuts every second, TARGETDURATION 1 and HOLD-BACK
     // 3, and the sender seeks to the seekable end on every audio-focus
     // change when more than 2 s behind. For that media only the receiver
-    // starts and resyncs HOLD-BACK behind the edge and keeps SEEK supported.
+    // starts and resyncs just below the seek range end and keeps SEEK.
     // Single-channel loads keep LIVE_START_BEHIND_SECONDS and drop SEEK.
-    const COMPOSITE_LIVE_BEHIND_SECONDS = 3;
+    //
+    // Measured 2026-10-07 on the Ultra: the seek range end already sits
+    // about 3.6 s behind the newest segment end (Shaka's HLS parser takes
+    // the playlist HOLD-BACK of 3 s as its presentation delay when
+    // defaultPresentationDelay is 0, plus one segment). Aiming another 3 s
+    // below that counted the delay twice and left the TV about 7 s behind.
+    // So the composite leaves defaultPresentationDelay at 0 (HOLD-BACK
+    // applies once, inside Shaka) and aims only a small margin below the
+    // seek end.
+    const COMPOSITE_EDGE_MARGIN_SECONDS = 0.5;
+    const COMPOSITE_PRESENTATION_DELAY_SECONDS = 0;
     let compositeProfile = false;
     function liveBehindSeconds() {
-      return compositeProfile ? COMPOSITE_LIVE_BEHIND_SECONDS :
+      return compositeProfile ? COMPOSITE_EDGE_MARGIN_SECONDS :
         LIVE_START_BEHIND_SECONDS;
     }
     // Composite buffering goals (measured 2026-10-07 on the Ultra: Shaka's
@@ -1161,10 +1171,12 @@
           rebuf: COMPOSITE_STREAMING.rebufferingGoal,
           buf: COMPOSITE_STREAMING.bufferingGoal,
           prefetch: COMPOSITE_STREAMING.segmentPrefetchLimit,
-          behind: COMPOSITE_LIVE_BEHIND_SECONDS,
+          behind: COMPOSITE_EDGE_MARGIN_SECONDS,
+          delay: COMPOSITE_PRESENTATION_DELAY_SECONDS,
           guard: COMPOSITE_TARGET_DURATION_SECONDS,
         } : { rebuf: null, buf: null, prefetch: null,
-          behind: LIVE_START_BEHIND_SECONDS, guard: TARGET_DURATION_SECONDS },
+          behind: LIVE_START_BEHIND_SECONDS, delay: LIVE_START_BEHIND_SECONDS,
+          guard: TARGET_DURATION_SECONDS },
         // Why the last programmatic seek was issued, clamped or skipped.
         seekWhy: typeof lastSeekNote === 'string' ?
           lastSeekNote.slice(0, 120) : null,
@@ -1408,7 +1420,8 @@
         return skipSeek(ev, 'narrow' + roundTo(bufEnd - bufStart, 3));
       }
 
-      // Aim LIVE_START_BEHIND_SECONDS behind the live edge, but never past
+      // Aim liveBehindSeconds() behind the seek range end (composite: a
+      // 0.5 s margin, single: LIVE_START_BEHIND_SECONDS), but never past
       // the media we have, and never at the very front of it. Both bounds are
       // hard: the target must sit STRICTLY inside [bufStart + 0.1,
       // bufEnd - 1.5], which is what the Ultra's runaway seeks violated.
@@ -1686,8 +1699,8 @@
       console.warn('AerioTV: PAUSE/PLAY interceptors not registered', e);
     }
 
-    // Per-load presentation delay: the composite starts HOLD-BACK behind the
-    // edge, everything else exactly as the context config above. Shaka is
+    // Per-load presentation delay: the composite passes 0 so Shaka applies
+    // the playlist HOLD-BACK once by itself, everything else exactly as the context config above. Shaka is
     // configured per load from what this returns, so both branches set the
     // value explicitly and the context's own config object is not mutated.
     if (playbackConfig && playerManager.setMediaPlaybackInfoHandler) {
@@ -1699,7 +1712,7 @@
           out.shakaConfig = Object.assign({}, config.shakaConfig, {
             manifest: Object.assign({}, config.shakaConfig.manifest, {
               defaultPresentationDelay: composite ?
-                COMPOSITE_LIVE_BEHIND_SECONDS : LIVE_START_BEHIND_SECONDS,
+                COMPOSITE_PRESENTATION_DELAY_SECONDS : LIVE_START_BEHIND_SECONDS,
             }),
             // Composite gets the small goals; every other load gets the
             // context's own streaming object back, unchanged.
@@ -1709,7 +1722,9 @@
           });
           if (composite) {
             console.log('AerioTV: composite profile presentation delay ' +
-              COMPOSITE_LIVE_BEHIND_SECONDS + ' s, rebufferingGoal ' +
+              COMPOSITE_PRESENTATION_DELAY_SECONDS +
+              ' s (playlist HOLD-BACK applies), edge margin ' +
+              COMPOSITE_EDGE_MARGIN_SECONDS + ' s, rebufferingGoal ' +
               COMPOSITE_STREAMING.rebufferingGoal + ' s, bufferingGoal ' +
               COMPOSITE_STREAMING.bufferingGoal + ' s, segmentPrefetchLimit ' +
               COMPOSITE_STREAMING.segmentPrefetchLimit +
@@ -1759,13 +1774,15 @@
         const media = loadRequestData.media;
         compositeProfile = isCompositeLoad(media);
         if (compositeProfile) {
-          console.log('AerioTV: composite profile applied (live behind ' +
-            COMPOSITE_LIVE_BEHIND_SECONDS + ' s, rebuf ' +
+          console.log('AerioTV: composite profile applied (seek end minus ' +
+            COMPOSITE_EDGE_MARGIN_SECONDS + ' s, delay ' +
+            COMPOSITE_PRESENTATION_DELAY_SECONDS + ' = HOLD-BACK, rebuf ' +
             COMPOSITE_STREAMING.rebufferingGoal + ' s, buf ' +
             COMPOSITE_STREAMING.bufferingGoal + ' s, guard ' +
             COMPOSITE_TARGET_DURATION_SECONDS + ' s, SEEK kept)');
-          lastSeekNote = 'profile composite behind' +
-            COMPOSITE_LIVE_BEHIND_SECONDS;
+          lastSeekNote = 'profile composite margin' +
+            COMPOSITE_EDGE_MARGIN_SECONDS + ' delay' +
+            COMPOSITE_PRESENTATION_DELAY_SECONDS;
         }
         if (media) {
           media.contentType = media.contentType || 'video/mp4';
