@@ -8,6 +8,7 @@ import android.view.Surface
 import com.aeriotv.android.core.cast.AerioCastReceiverController
 import com.aeriotv.android.core.cast.AerioCastSender
 import com.aeriotv.android.core.cast.hlsproxy.CastHlsProxySession
+import com.aeriotv.android.feature.multiview.MultiviewLayoutMode
 import com.aeriotv.android.feature.multiview.MultiviewTile
 import com.aeriotv.android.feature.multiview.TileKind
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -48,10 +49,22 @@ class MultiviewCastController @Inject constructor(
         const val TITLE = "Multiview"
         const val CANNOT_KEEP_UP = "Multiview casting stopped: the phone could not keep up"
         const val CAST_LIMIT_NOTE = "Up to 4 channels can be cast"
+        /** A web receiver further than this behind its live seekable end is
+         *  seeked there on a composite focus change. */
+        const val NUDGE_THRESHOLD_MS = 2_000L
+        /** Where the nudge aims: just inside the live seekable end. */
+        const val NUDGE_MARGIN_MS = 250L
     }
 
     /** The composite on the receiver right now; null when none. */
-    data class Session(val tiles: List<MultiviewTile>, val focused: Int) {
+    data class Session(
+        val tiles: List<MultiviewTile>,
+        val focused: Int,
+        /** The composite's grid layout (the cast sheet's Layout row); kept
+         *  across a tile add or remove, seeded from Settings > Player >
+         *  Multiview at a fresh start. */
+        val layoutMode: MultiviewLayoutMode = MultiviewLayoutMode.Auto,
+    ) {
         /** Upstream host of the tiles (the Dispatcharr host) for Stream Info. */
         val sourceHost: String? get() = MultiviewCompositeLayout.sourceHost(tiles.map { it.resolvedUrl })
     }
@@ -67,6 +80,10 @@ class MultiviewCastController @Inject constructor(
             showLogos = b.first, logoPosition = b.second, logoSizePercent = b.third,
         )
     }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, CompositeStyle())
+
+    /** Settings > Player > Multiview layout, the initial composite layout. */
+    private val prefLayoutMode: StateFlow<String> = prefs.multiviewLayoutMode
+        .stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, "auto")
 
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
@@ -106,8 +123,15 @@ class MultiviewCastController @Inject constructor(
             Log.w(TAG, "[MV-CAST] composite refused: ${live.size} live tiles")
             return false
         }
+        val keptLayout = _session.value?.layoutMode
         stop("restart")
         lastHeaders = headers
+        val layout = MultiviewCompositeLayout.effectiveMode(
+            keptLayout ?: MultiviewLayoutMode.from(prefLayoutMode.value).let {
+                if (it == MultiviewLayoutMode.Spotlight) MultiviewLayoutMode.Auto else it
+            },
+            live.size,
+        )
         val focused = live.indexOfFirst { it.id == tiles.getOrNull(focus)?.id }.coerceAtLeast(0)
         // A channel kept live in the background holds a server slot the tile
         // needs (same rule as the local Multiview tile).
@@ -119,6 +143,7 @@ class MultiviewCastController @Inject constructor(
             onFatal = { reason -> onFatal(reason) },
         )
         c.style = style.value
+        c.layoutMode = layout
         if (!c.start()) {
             p.close()
             _session.value = null
@@ -129,7 +154,7 @@ class MultiviewCastController @Inject constructor(
         compositor = c
         c.focusArgb = focusArgb
         order = live.indices.toList()
-        _session.value = Session(live, focused)
+        _session.value = Session(live, focused, layout)
         styleJob = scope.launch {
             style.collect { st ->
                 if (compositor === c) {
@@ -208,6 +233,95 @@ class MultiviewCastController @Inject constructor(
         if (index !in s.tiles.indices || index == s.focused) return
         compositor?.setFocus(order.getOrElse(index) { index }, tapNanos)
         _session.value = s.copy(focused = index)
+        compositeFocusChanged(s.tiles[index].displayName)
+    }
+
+    /** Composite focus change while cast (iOS 3515e92, round 6): the TV
+     *  shows a focus change only when the receiver's playhead reaches the
+     *  frames drawn after it, and the receiver page never moves its playhead
+     *  forward on its own (iPhone log 2026-10-07 15:11:37: 13.6 s behind,
+     *  about 20 s from tap to TV). Logs the receiver's position, seekable end
+     *  and lag behind the composite live point; a web receiver more than
+     *  [NUDGE_THRESHOLD_MS] behind its seekable end is seeked to just inside
+     *  it, and a result line follows 4 s later. */
+    private fun compositeFocusChanged(tileName: String) {
+        if (compositor == null) return
+        val snap = sender.receiverLiveSnapshot() ?: return
+        val target = sender.receiverTarget.value
+        val pos = snap.positionMs / 1000.0
+        val end = snap.seekableEndMs?.let { it / 1000.0 }
+        val behind = end?.let { it - pos }
+        Log.i(
+            TAG,
+            "[Cast] composite focus $tileName: receiver t=${fmt3(pos)} seekable end=${end?.let { fmt3(it) } ?: "none"} " +
+                "behind seekable end=${behind?.let { String.format(java.util.Locale.US, "%.1f s", it) } ?: "n/a"}; ${lagLine(pos)}",
+        )
+        if (target != AerioCastSender.ReceiverTarget.WEB_RECEIVER || end == null || behind == null ||
+            !end.isFinite() || behind * 1000 <= NUDGE_THRESHOLD_MS
+        ) return
+        val aim = maxOf(pos, end - NUDGE_MARGIN_MS / 1000.0)
+        Log.i(
+            TAG,
+            String.format(
+                java.util.Locale.US,
+                "[Cast] composite nudge: seek t=%.3f -> %.3f (live seekable end %.3f, %.1f s behind > %.1f s)",
+                pos, aim, end, behind, NUDGE_THRESHOLD_MS / 1000.0,
+            ),
+        )
+        sender.seekToStreamPosition((aim * 1000).toLong())
+        nudgeCheck?.cancel()
+        nudgeCheck = scope.launch {
+            kotlinx.coroutines.delay(4_000L)
+            if (compositor == null) return@launch
+            val after = sender.receiverLiveSnapshot() ?: return@launch
+            val p = after.positionMs / 1000.0
+            Log.i(
+                TAG,
+                "[Cast] composite nudge result: receiver t=${fmt3(p)} playerState=${after.playerState} " +
+                    "seekable end=${after.seekableEndMs?.let { fmt3(it / 1000.0) } ?: "none"} " +
+                    "(moved ${String.format(java.util.Locale.US, "%+.1f", p - pos)} s in 4 s wall); ${lagLine(p)}",
+            )
+        }
+    }
+
+    private var nudgeCheck: Job? = null
+
+    private fun fmt3(v: Double) = String.format(java.util.Locale.US, "%.3f", v)
+
+    /** "lag behind the composite live point" for a receiver position, or
+     *  why it cannot be stated (the receiver's t is on the media timeline of
+     *  the generation it was loaded on). */
+    private fun lagLine(positionS: Double): String {
+        val edge = hlsProxy.liveEdgeEstimate() ?: return "composite live point unknown"
+        val loaded = hlsProxy.loadedGeneration
+        if (edge.first != loaded) {
+            return "composite live point t=${fmt3(edge.second)} on gen ${edge.first}, receiver loaded gen $loaded: lag n/a"
+        }
+        return String.format(
+            java.util.Locale.US,
+            "composite live point t=%.3f (last cut %.1f s ago): receiver lag %.1f s",
+            edge.second, edge.third, edge.second - positionS,
+        )
+    }
+
+    /** Cast sheet Layout row: the composite re-lays out on its next frame
+     *  (encoder, players and the cast session keep running) and the preview
+     *  follows. Kept for this composite session only. */
+    fun setLayoutMode(mode: MultiviewLayoutMode) {
+        val s = _session.value ?: return
+        val m = MultiviewCompositeLayout.effectiveMode(mode, s.tiles.size)
+        if (m == s.layoutMode) return
+        compositor?.layoutMode = m
+        Log.i(TAG, "[MV-CAST] composite layout ${s.layoutMode.displayName} -> ${m.displayName}")
+        _session.value = s.copy(layoutMode = m)
+    }
+
+    /** Preview tile menu Remove from Multiview: the tile at position
+     *  [index] leaves the running pile (the composite restarts with the
+     *  rest, same cast session). Refused below two tiles. */
+    fun removeAt(index: Int): Boolean {
+        val tile = _session.value?.tiles?.getOrNull(index) ?: return false
+        return toggleTile(tile)
     }
 
     /** Long-press-drag in the preview: the tiles at positions [a] and [b]

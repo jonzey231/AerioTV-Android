@@ -71,8 +71,15 @@ class MultiviewCompositor(
         private const val FPS = MultiviewCompositeLayout.FPS
         private const val FRAME_NANOS = 1_000_000_000L / FPS
         private const val BITRATE = 4_000_000
-        private const val ENCODER_KEY_INTERVAL_S = 2
-        private const val FORCED_KEY_NANOS = 3_000_000_000L
+        /** Encoder GOP, matched to the composite's 1 s segment target
+         *  (CastSegmentProfile.COMPOSITE, iOS 3515e92 round 6): with 3 s cuts
+         *  a missed key frame made 4 s segments, TARGETDURATION 5 and a 15 s
+         *  HOLD-BACK, and the receiver sat 13.6 s behind the composite. */
+        internal const val ENCODER_KEY_INTERVAL_S = 1
+        /** Forced segment key frames, spaced at least this far (on the
+         *  frame PTS) from the previous one, never on a fixed grid, so every
+         *  forced key frame is at or after the remuxer's 1 s cut target. */
+        internal const val FORCED_KEY_NANOS = 1_000_000_000L
         /** Encoder (or render) behind by more than this stops the cast. */
         const val MAX_BEHIND_NANOS = 3_000_000_000L
         private const val STATS_NANOS = 10_000_000_000L
@@ -188,6 +195,10 @@ class MultiviewCompositor(
             field = value
             if (value.showLogos && running) main.post { loadLogos() }
         }
+    /** Grid layout of the composite (the cast sheet's Layout row); invalid
+     *  modes for the tile count draw Default. Read on every frame. */
+    @Volatile var layoutMode: com.aeriotv.android.feature.multiview.MultiviewLayoutMode =
+        com.aeriotv.android.feature.multiview.MultiviewLayoutMode.Auto
 
     /** When the focus last changed (the fading indicator's start). */
     @Volatile private var focusChangedAtNanos = System.nanoTime()
@@ -295,7 +306,9 @@ class MultiviewCompositor(
     @Volatile private var parameterSets: ByteArray? = null
     private val submitted = ConcurrentHashMap<Long, Long>() // ptsUs -> submit nanos
     private var nextTickNanos = 0L
-    private var nextKeyNanos = 0L
+    /** Frame PTS (ns) of the last forced segment key frame; -1 forces the
+     *  first frame. */
+    private var lastForcedKeyElapsed = -1L
 
     // Stats (written on GL / drain threads, read by the drain thread)
     @Volatile private var lastTickNanos = 0L
@@ -334,7 +347,7 @@ class MultiviewCompositor(
             it.start()
         }
         nextTickNanos = System.nanoTime()
-        nextKeyNanos = nextTickNanos
+        lastForcedKeyElapsed = -1L
         gl.post(tick)
         main.post { state.forEach { startPlayer(it) } }
         Log.i(TAG, "[MV-CAST] composite start tiles=$count ${W}x$H@$FPS")
@@ -664,12 +677,13 @@ class MultiviewCompositor(
         EGL14.eglMakeCurrent(eglDisplay, encoderEglSurface, encoderEglSurface, eglContext)
         draw(W, H, focus)
         val elapsed = now - clock.t0Nanos
-        if (now >= nextKeyNanos) {
+        if (lastForcedKeyElapsed < 0L || elapsed < lastForcedKeyElapsed ||
+            elapsed - lastForcedKeyElapsed >= FORCED_KEY_NANOS
+        ) {
             runCatching {
                 encoder?.setParameters(android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
             }
-            nextKeyNanos += FORCED_KEY_NANOS
-            if (nextKeyNanos < now) nextKeyNanos = now + FORCED_KEY_NANOS
+            lastForcedKeyElapsed = elapsed
         }
         EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, elapsed)
         submitted[elapsed / 1000] = now
@@ -691,7 +705,7 @@ class MultiviewCompositor(
         val sx = w / W.toFloat()
         val sy = h / H.toFloat()
         val st = style
-        val rects = MultiviewCompositeLayout.tileRects(count, st.padding)
+        val rects = MultiviewCompositeLayout.tileRects(count, st.padding, mode = layoutMode)
         val radius = MultiviewCompositeLayout.cornerRadius(st)
         val since = System.nanoTime() - focusChangedAtNanos
         val accent = focusArgb

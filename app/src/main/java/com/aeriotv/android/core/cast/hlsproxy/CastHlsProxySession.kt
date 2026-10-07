@@ -373,6 +373,7 @@ class CastHlsProxySession @Inject constructor(
         // address walk below are not Main-thread work.
         server.setReceiverH264Level42(h264Level42Supported)
         this@CastHlsProxySession.videoPlan = videoPlan
+        segmentProfile = CastSegmentProfile.STANDARD
         Started(
             demuxedPlaylistUrl = startChannelBlocking(rawTsUrl, headers, allowAc3Passthrough, false) +
                 "/demuxed.m3u8",
@@ -396,6 +397,8 @@ class CastHlsProxySession @Inject constructor(
     ): Started = kotlinx.coroutines.withContext(Dispatchers.IO) {
         server.setReceiverH264Level42(false)
         this@CastHlsProxySession.videoPlan = CastVideoPlan.PASSTHROUGH
+        // 1 s cuts and a nearest-second TARGETDURATION (iOS 3515e92).
+        segmentProfile = CastSegmentProfile.COMPOSITE
         Started(
             demuxedPlaylistUrl = startChannelBlocking(
                 "local://$label", emptyMap(), allowAc3Passthrough = false,
@@ -405,6 +408,20 @@ class CastHlsProxySession @Inject constructor(
             audioOnly = audioOnly,
         )
     }
+
+    /** Segment cadence of the current channel ([CastSegmentProfile.COMPOSITE]
+     *  for the phone-composited Multiview). */
+    @Volatile private var segmentProfile = CastSegmentProfile.STANDARD
+
+    /** Generation the receiver was loaded on (the one [startChannel] or
+     *  [startLocalChannel] began); its reported position is on this
+     *  generation's media timeline. */
+    @Volatile var loadedGeneration: Int = -1
+        private set
+
+    /** The proxy's live point: (generation, seconds on that generation's
+     *  media timeline, seconds since the last cut), or null. */
+    fun liveEdgeEstimate(): Triple<Int, Double, Double>? = server.liveEdgeEstimate()
 
     private suspend fun startChannelBlocking(
         rawTsUrl: String,
@@ -430,10 +447,12 @@ class CastHlsProxySession @Inject constructor(
         // fetchable until the ring evicts them, and the new generation
         // splices in behind a discontinuity with no sequence gap.
         val gen = server.beginGeneration()
+        loadedGeneration = gen
         debugLog(
             context, TAG,
             "server on $lanIp:$port; ${if (isChannelChange) "channel change" else "session start"} " +
-                "gen=$gen ac3Passthrough=$allowAc3Passthrough ingest=${sanitize(rawTsUrl)}",
+                "gen=$gen ac3Passthrough=$allowAc3Passthrough ingest=${sanitize(rawTsUrl)}" +
+                if (segmentProfile == CastSegmentProfile.COMPOSITE) " profile=composite (1 s cuts, nearest TARGETDURATION)" else "",
         )
         // The proxy must outlive the app's foreground time: casting users
         // pocket the phone. See CastHlsProxyService - the FGS is the only
@@ -562,6 +581,8 @@ class CastHlsProxySession @Inject constructor(
                     plan = plan.copy(disabledReason = "transcode failed earlier this session: $reason")
                 }
                 var remuxerRef: TsToFmp4Remuxer? = null
+                val profile = segmentProfile
+                server.setProfile(currentGen, profile)
                 val remuxer = TsToFmp4Remuxer(object : TsToFmp4Remuxer.Listener {
                     private var segmentsLogged = 0
                     private var rollupBytes = 0L
@@ -720,6 +741,7 @@ class CastHlsProxySession @Inject constructor(
                         videoTranscodeDisabledReason = reason
                     }
                 },
+                    targetSegmentTicks = profile.targetSegmentTicks,
                     log = { msg -> debugLog(context, TAG, msg) },
                     allowAc3Passthrough = allowAc3Passthrough,
                     videoPlan = plan,

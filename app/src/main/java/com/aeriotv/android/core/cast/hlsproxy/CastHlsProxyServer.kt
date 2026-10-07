@@ -55,6 +55,25 @@ import kotlinx.coroutines.flow.asStateFlow
  * generation at the same URL. Sequence numbers are claimed only at
  * publish time, so a splice can never leave a numbering gap.
  */
+/**
+ * Segment cadence of a proxy generation (iOS 3515e92, round 6).
+ *
+ * [STANDARD] is every single-channel cast: cuts at the first key frame at or
+ * after 3 s, TARGETDURATION rounded UP, the hold-back rule in
+ * [CastHlsProxyServer.refreshHoldBackLocked]. Unchanged.
+ *
+ * [COMPOSITE] is the phone-composited Multiview. Its encoder is on the
+ * phone, so key frames come every second and the remuxer cuts on each. Its
+ * playlists round TARGETDURATION to the NEAREST second (RFC 8216 4.3.3.1),
+ * list only the trailing run of composite segments, and state HOLD-BACK at
+ * exactly three targets with no 8 s floor, so a receiver sits about 3 s
+ * behind the composite instead of 13 s (iPhone log 2026-10-07 15:10).
+ */
+enum class CastSegmentProfile(val targetSegmentTicks: Long) {
+    STANDARD(3 * TsToFmp4Remuxer.TICKS_PER_SECOND),
+    COMPOSITE(TsToFmp4Remuxer.TICKS_PER_SECOND),
+}
+
 class CastHlsProxyServer(
     private val log: (String) -> Unit,
 ) {
@@ -72,6 +91,20 @@ class CastHlsProxyServer(
          *  advertised. A 16 Mbps feed is ~6 MB per ~3 s cut, ~115 MB
          *  worst case. */
         internal const val RING_SIZE = WINDOW_SIZE + 3
+
+        /** The composite's window and ring in 1 s segments: about 30 s of
+         *  media, as the standard window holds at its 2 to 3 s cuts. */
+        internal const val COMPOSITE_WINDOW_SIZE = 30
+        internal const val COMPOSITE_RING_SIZE = COMPOSITE_WINDOW_SIZE + 3
+
+        /** EXT-X-TARGETDURATION for segment spans in 90 kHz ticks: rounded
+         *  UP (standard) or to the NEAREST second (composite), at least 1;
+         *  4 for an empty window. */
+        internal fun targetDurationSeconds(spans: List<Long>, nearest: Boolean): Int =
+            spans.maxOfOrNull {
+                val s = it / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+                (if (nearest) kotlin.math.floor(s + 0.5) else ceil(s)).toInt()
+            }?.coerceAtLeast(1) ?: 4
 
         /** Hold-back floor and ceiling in seconds (iOS 20413d8 formula). */
         internal const val HOLD_BACK_FLOOR_S = 8.0
@@ -139,6 +172,8 @@ class CastHlsProxyServer(
         /** The audio rendition's own EXTINF; within one audio frame of
          *  [durationTicks]. */
         val audioDurationTicks: Long,
+        /** Cut by a [CastSegmentProfile.COMPOSITE] generation. */
+        val composite: Boolean = false,
     )
 
     /** Guards the store; also the monitor held segment fetches wait on
@@ -151,6 +186,8 @@ class CastHlsProxyServer(
      *  references them. */
     private val videoInits = HashMap<Int, ByteArray>()
     private val audioInits = HashMap<Int, ByteArray>()
+    /** Generations cut with [CastSegmentProfile.COMPOSITE]. */
+    private val compositeGenerations = HashSet<Int>()
     private var nextSeq = 0
     private var generation = 0
     /** First segment committed after [beginGeneration] gets the
@@ -256,6 +293,7 @@ class CastHlsProxyServer(
             ring.clear()
             videoInits.clear()
             audioInits.clear()
+            compositeGenerations.clear()
             _segmentsInGeneration.value = 0
             _mediaTicksInGeneration.value = 0
             storeOpen = false
@@ -328,6 +366,30 @@ class CastHlsProxyServer(
         if (audio != null) audioInits[gen] = audio else audioInits.remove(gen)
     }
 
+    /** Marks [gen] as cut with [profile]; set by the session before the
+     *  generation's first segment. */
+    fun setProfile(gen: Int, profile: CastSegmentProfile) = synchronized(lock) {
+        if (profile == CastSegmentProfile.COMPOSITE) compositeGenerations.add(gen) else compositeGenerations.remove(gen)
+    }
+
+    private fun currentCompositeLocked(): Boolean = generation in compositeGenerations
+
+    /** Newest published segment: its generation, its end on the
+     *  generation's media timeline (seconds) and its wall publish time. */
+    private var lastPublishedGen = -1
+    private var lastPublishedEndS = 0.0
+    private var lastPublishedAtMs = 0L
+
+    /** The live point of what the proxy produces on the current
+     *  generation's media timeline: the newest segment's end plus the wall
+     *  time since it was published. null before the first segment. Returns
+     *  (generation, seconds, seconds since the last cut). */
+    fun liveEdgeEstimate(): Triple<Int, Double, Double>? = synchronized(lock) {
+        if (lastPublishedGen != generation || lastPublishedAtMs == 0L) return@synchronized null
+        val since = maxOf(0.0, (System.currentTimeMillis() - lastPublishedAtMs) / 1000.0)
+        Triple(generation, lastPublishedEndS + since, since)
+    }
+
     /** Generations whose video track is re-encoded on the phone, set by the
      *  session at init time. */
     private val videoTranscodedGenerations = HashSet<Int>()
@@ -360,10 +422,12 @@ class CastHlsProxyServer(
                 videoData = videoData,
                 audioData = audioData,
                 audioDurationTicks = audioDurationTicks,
+                composite = gen in compositeGenerations,
             )
             pendingDiscontinuity = false
             ring.addLast(entry)
-            while (ring.size > RING_SIZE) {
+            val ringLimit = if (currentCompositeLocked()) COMPOSITE_RING_SIZE else RING_SIZE
+            while (ring.size > ringLimit) {
                 val evicted = ring.removeFirst()
                 if (evicted.discontinuity) discontinuitySequence++
                 // Drop init segments no ring entry references any more.
@@ -372,10 +436,17 @@ class CastHlsProxyServer(
                 ) {
                     videoInits.remove(evicted.generation)
                     audioInits.remove(evicted.generation)
+                    compositeGenerations.remove(evicted.generation)
                 }
             }
             _segmentsInGeneration.value += 1
             _mediaTicksInGeneration.value += durationTicks
+            if (lastPublishedGen != gen) {
+                lastPublishedGen = gen
+                lastPublishedEndS = 0.0
+            }
+            lastPublishedEndS += durationTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
+            lastPublishedAtMs = System.currentTimeMillis()
             val nowMs = System.currentTimeMillis()
             val durS = durationTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
             if (lastPublishWallMs > 0L) {
@@ -400,6 +471,10 @@ class CastHlsProxyServer(
      * it grows. Caller holds [lock].
      */
     private fun refreshHoldBackLocked(nowMs: Long) {
+        // The composite states exactly 3 x target in its playlists (see
+        // playlistText); the session-monotonic standard rule stays untouched
+        // for single-channel generations.
+        if (currentCompositeLocked()) return
         while (recentStarvations.isNotEmpty() && nowMs - recentStarvations.first().first > 60_000L) {
             recentStarvations.removeFirst()
         }
@@ -446,13 +521,8 @@ class CastHlsProxyServer(
         return if (secs > 0) (bytes * 8 / secs / 1000).toInt() else 0
     }
 
-    private fun targetSecondsLocked(window: List<SegmentEntry>): Int =
-        window.maxOfOrNull {
-            ceil(
-                maxOf(it.durationTicks, it.audioDurationTicks) /
-                    TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble(),
-            ).toInt()
-        }?.coerceAtLeast(1) ?: 4
+    private fun targetSecondsLocked(window: List<SegmentEntry>, nearest: Boolean = false): Int =
+        targetDurationSeconds(window.map { maxOf(it.durationTicks, it.audioDurationTicks) }, nearest)
 
     /** Init segment for [gen], or null when no longer retained. */
     internal fun videoInitSegment(gen: Int): ByteArray? = synchronized(lock) { videoInits[gen] }
@@ -658,25 +728,45 @@ class CastHlsProxyServer(
     private fun playlistText(rendition: Rendition): String = synchronized(lock) {
         val initPrefix = if (rendition == Rendition.VIDEO) "vinit" else "ainit"
         val segPrefix = if (rendition == Rendition.VIDEO) "vseg" else "aseg"
-        val window = ring.takeLast(WINDOW_SIZE)
+        val composite = currentCompositeLocked()
+        var window = ring.takeLast(if (composite) COMPOSITE_WINDOW_SIZE else WINDOW_SIZE)
+        // Composite: only the trailing run of composite segments is listed
+        // (the sender always re-loads the receiver when the composite
+        // starts), so a leftover 4 s channel segment cannot hold the target
+        // at 5 and the HOLD-BACK at 15. Trimmed flagged segments count into
+        // DISCONTINUITY-SEQUENCE.
+        var trimmedDiscontinuities = 0
+        if (composite) {
+            val lastStandard = window.indexOfLast { !it.composite }
+            if (lastStandard >= 0) {
+                trimmedDiscontinuities = window.subList(0, lastStandard + 1).count { it.discontinuity }
+                window = window.subList(lastStandard + 1, window.size)
+            }
+        }
         val sb = StringBuilder(512)
         sb.append("#EXTM3U\n")
         sb.append("#EXT-X-VERSION:7\n")
         // Deliberately the max over BOTH renditions' spans, so the two
         // demuxed playlists advertise the SAME target duration even though
         // their EXTINF values differ by up to an audio frame.
-        val targetSeconds = targetSecondsLocked(window)
+        val targetSeconds = targetSecondsLocked(window, nearest = composite)
         sb.append("#EXT-X-TARGETDURATION:").append(targetSeconds).append('\n')
         sb.append("#EXT-X-MEDIA-SEQUENCE:").append(window.firstOrNull()?.seq ?: nextSeq).append('\n')
-        if (discontinuitySequence > 0) {
-            sb.append("#EXT-X-DISCONTINUITY-SEQUENCE:").append(discontinuitySequence).append('\n')
+        val discSeq = discontinuitySequence + trimmedDiscontinuities
+        if (discSeq > 0) {
+            sb.append("#EXT-X-DISCONTINUITY-SEQUENCE:").append(discSeq).append('\n')
         }
         // Stated hold-back (iOS incident 2026-09-25): never deeper than the
         // window minus one target, so the join point stays inside what is
         // advertised. Shaka takes HOLD-BACK as the presentation delay and
         // EXT-X-START as the start offset unless the receiver page configures
         // its own; both are harmless to a player that ignores them.
-        if (holdBackSeconds > 0 && window.isNotEmpty()) {
+        if (composite && window.isNotEmpty()) {
+            // Composite: exactly three targets, no 8 s floor, no growth.
+            val hb = 3.0 * targetSeconds
+            sb.append(String.format(java.util.Locale.US, "#EXT-X-SERVER-CONTROL:HOLD-BACK=%.3f\n", hb))
+            sb.append(String.format(java.util.Locale.US, "#EXT-X-START:TIME-OFFSET=-%.3f,PRECISE=NO\n", hb))
+        } else if (holdBackSeconds > 0 && window.isNotEmpty()) {
             val room = window.sumOf { it.durationTicks } / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble() -
                 targetSeconds
             val hb = minOf(holdBackSeconds, maxOf(3.0 * targetSeconds, room))

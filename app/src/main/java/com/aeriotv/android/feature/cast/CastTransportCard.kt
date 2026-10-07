@@ -115,6 +115,9 @@ fun CastTransportCard(
     var pickerOpen by remember { mutableStateOf(false) }
     var switchStreams by remember { mutableStateOf<List<StreamOption>?>(null) }
     var switchCurrentId by remember { mutableStateOf<Int?>(null) }
+    /** The channel the open Switch Stream sheet acts on: the cast channel,
+     *  or a composite tile's channel (preview tile menu). */
+    var switchChannel by remember { mutableStateOf<M3UChannel?>(null) }
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
     // Published once per second so the Options row can show the countdown.
     var sleepRemainingMs by remember { mutableStateOf<Long?>(null) }
@@ -391,7 +394,38 @@ fun CastTransportCard(
             showSkipButtons = !isComposite,
             programmeTitleOverride = if (isComposite) castContent?.subtitle else null,
             topContent = if (isComposite && multiviewCast != null) {
-                { MultiviewCompositePreview(multiviewCast) }
+                {
+                    // Tile menu Switch Stream (Logan 2026-10-07): the same
+                    // admin gate and server-side change_stream as the cast
+                    // channel. Dispatcharr switches the tile's upstream in
+                    // place, so the composite and its other tiles keep running.
+                    fun tileChannel(tileId: String): M3UChannel? =
+                        channels.firstOrNull { it.id == tileId }
+                            ?.takeIf { it.id.startsWith("disp:") && it.dispatcharrChannelId != null }
+                    MultiviewCompositePreview(
+                        multiviewCast,
+                        canSwitchStream = { id -> isDispatcharrAdmin && tileChannel(id) != null },
+                        onSwitchStream = { id ->
+                            val ch = tileChannel(id)
+                            val chPk = ch?.dispatcharrChannelId
+                            if (ch != null && chPk != null) {
+                                switchChannel = ch
+                                scope.launch {
+                                    if (!recheckSwitchStreamAllowed("Switch Stream open (Multiview tile)")) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            com.aeriotv.android.feature.player.SWITCH_DENIED_MESSAGE,
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                        return@launch
+                                    }
+                                    switchCurrentId = loadCurrentStreamId(ch.id.removePrefix("disp:"))
+                                    switchStreams = loadChannelStreams(chPk)
+                                }
+                            }
+                        },
+                    )
+                }
             } else null,
             inlineSkipEnabled = castCanSkip || position.canSeek || remoteState.canSeek,
             canSwitchStream = canSwitchStream,
@@ -439,6 +473,7 @@ fun CastTransportCard(
                 // Server-side change_stream: works the same whether the stream is
                 // playing here or on the other screen.
                 val ch = currentChannel
+                switchChannel = ch
                 val chPk = ch?.dispatcharrChannelId
                 if (ch != null && chPk != null) {
                     val uuid = ch.id.removePrefix("disp:")
@@ -504,7 +539,7 @@ fun CastTransportCard(
             streams = streams,
             currentStreamId = switchCurrentId,
             onSelect = { streamId ->
-                val uuid = currentChannel?.id?.removePrefix("disp:")
+                val uuid = switchChannel?.id?.removePrefix("disp:")
                 switchStreams = null
                 if (uuid != null) {
                     // Optimistic radio mark; a failure puts the previous one

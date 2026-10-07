@@ -74,17 +74,34 @@ object MultiviewCompositeLayout {
      * grid's cells (zero spacing) inset by the local tile padding when
      * [padding] is on, so neighbors sit 8 dp apart and 4 dp off the edge.
      */
-    fun tileRects(count: Int, padding: Boolean = true, width: Int = WIDTH, height: Int = HEIGHT): List<CompositeRect> {
+    fun tileRects(
+        count: Int,
+        padding: Boolean = true,
+        width: Int = WIDTH,
+        height: Int = HEIGHT,
+        mode: MultiviewLayoutMode = MultiviewLayoutMode.Auto,
+    ): List<CompositeRect> {
         if (!canCast(count)) return emptyList()
         val pad = if (padding) PAD_PX else 0
         return MultiviewGridMath.rects(
-            MultiviewLayoutMode.Auto, count, width.toFloat(), height.toFloat(), 0f,
+            effectiveMode(mode, count), count, width.toFloat(), height.toFloat(), 0f,
         ).map { r ->
             val l = r.left.roundToInt()
             val t = r.top.roundToInt()
             CompositeRect(l, t, r.right.roundToInt() - l, r.bottom.roundToInt() - t).inset(pad)
         }
     }
+
+    /** The layouts the composite offers for [count] tiles: the same list
+     *  Settings > Player > Multiview offers ([MultiviewLayoutMode.available]),
+     *  Default first; just Default when the count has no alternative. */
+    fun layoutOptions(count: Int): List<MultiviewLayoutMode> =
+        MultiviewLayoutMode.available(count).ifEmpty { listOf(MultiviewLayoutMode.Auto) }
+
+    /** [mode] when it is valid for [count] tiles, otherwise Default (the
+     *  local grid's fallback). */
+    fun effectiveMode(mode: MultiviewLayoutMode, count: Int): MultiviewLayoutMode =
+        if (mode in layoutOptions(count)) mode else MultiviewLayoutMode.Auto
 
     /** Corner radius of a tile in frame pixels. */
     fun cornerRadius(style: CompositeStyle): Float = if (style.rounded) CORNER_PX else 0f
@@ -174,9 +191,17 @@ object MultiviewCompositeLayout {
 
     /** Tile index under a tap on a preview of [viewWidth] x [viewHeight]
      *  showing the whole frame. */
-    fun hitTestView(x: Float, y: Float, viewWidth: Float, viewHeight: Float, count: Int, padding: Boolean = true): Int {
+    fun hitTestView(
+        x: Float,
+        y: Float,
+        viewWidth: Float,
+        viewHeight: Float,
+        count: Int,
+        padding: Boolean = true,
+        mode: MultiviewLayoutMode = MultiviewLayoutMode.Auto,
+    ): Int {
         if (viewWidth <= 0f || viewHeight <= 0f) return -1
-        return hitTest(x * WIDTH / viewWidth, y * HEIGHT / viewHeight, tileRects(count, padding))
+        return hitTest(x * WIDTH / viewWidth, y * HEIGHT / viewHeight, tileRects(count, padding, mode = mode))
     }
 
     /** Cast Stream Info lines for a composite (shared wording with Apple). */

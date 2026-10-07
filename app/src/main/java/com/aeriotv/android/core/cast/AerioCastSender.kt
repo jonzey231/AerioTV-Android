@@ -1705,6 +1705,24 @@ class AerioCastSender @Inject constructor(
         }.getOrNull()
     }
 
+    /** Receiver position and live seekable end (ms), and its player state,
+     *  for the composite focus-change lag line. Null with no media client.
+     *  Main thread. */
+    data class ReceiverLiveSnapshot(val positionMs: Long, val seekableEndMs: Long?, val playerState: Int)
+
+    fun receiverLiveSnapshot(): ReceiverLiveSnapshot? {
+        val client = currentSession()?.remoteMediaClient ?: return null
+        return runCatching {
+            val status = client.mediaStatus
+            val range = status?.liveSeekableRange
+            ReceiverLiveSnapshot(
+                positionMs = client.approximateStreamPosition,
+                seekableEndMs = range?.let { maxOf(it.startTime, it.endTime) },
+                playerState = status?.playerState ?: -1,
+            )
+        }.getOrNull()
+    }
+
     /** Timeline scrub release on the web receiver: the same RemoteMediaClient
      *  seek the skip buttons send, to an absolute stream position. */
     fun seekToStreamPosition(positionMs: Long) {
@@ -1956,6 +1974,11 @@ class AerioCastSender @Inject constructor(
                 if (isVod) AerioCastReceiverController.VALUE_KIND_VOD
                 else AerioCastReceiverController.VALUE_KIND_LIVE,
             )
+            // The receiver page starts the composite 3 s behind live and
+            // keeps SEEK for it (gh-pages 9a92dcc8).
+            if (content.mediaId == com.aeriotv.android.core.cast.multiview.MultiviewCastController.MEDIA_ID) {
+                put("aerio", JSONObject().put("composite", true))
+            }
         }
         // Cast Connect load handoff (GH #33). WargLoadHandler owns EVERY load on
         // the Android-TV receiver: with a valid MediaInfo.entity it deep-links
