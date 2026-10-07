@@ -49,10 +49,18 @@ class MultiviewCastController @Inject constructor(
         const val TITLE = "Multiview"
         const val CANNOT_KEEP_UP = "Multiview casting stopped: the phone could not keep up"
         const val CAST_LIMIT_NOTE = "Up to 4 channels can be cast"
-        /** A web receiver further than this behind its live seekable end is
-         *  seeked there on a composite focus change. */
-        const val NUDGE_THRESHOLD_MS = 2_000L
-        /** Where the nudge aims: just inside the live seekable end. */
+        /** A web receiver further than this behind its live seek end is
+         *  seeked there (Apple f33f645 round 7). Deliberately above the
+         *  receiver's measured settle point after a seek (it re-buffers about
+         *  3.5 s and lands about 4.4 s behind), so a tap does not re-seek
+         *  back to the same place every time. */
+        const val NUDGE_THRESHOLD_MS = 6_000L
+        /** The composite playlists' HOLD-BACK: three targets of the composite
+         *  profile's TARGETDURATION of 1. */
+        const val COMPOSITE_HOLD_BACK_S = 3.0
+        /** Where the nudge result is read, after the nudge's re-buffer. */
+        const val NUDGE_RESULT_DELAY_MS = 6_000L
+        /** Where the nudge aims: just inside the live seek end. */
         const val NUDGE_MARGIN_MS = 250L
     }
 
@@ -178,6 +186,11 @@ class MultiviewCastController @Inject constructor(
             failureMessage = "Can't cast Multiview right now",
             onFailed = { stop("proxy failed") },
         )
+        // Round 7 (Apple f33f645): the first PLAYING tick after this load
+        // runs a one-time catch-up (the receiver's startup buffering is
+        // where it fell about 9 s behind and never moved forward again).
+        startupCatchUpPending = true
+        sender.receiverTickListener = { j -> noteReceiverTick(j) }
         // The composite ends with the cast content: Stop Casting, a channel
         // cast over it, a session end or a disconnect.
         watchJob = scope.launch {
@@ -215,6 +228,16 @@ class MultiviewCastController @Inject constructor(
             sender.notifyCastProblem(CAST_LIMIT_NOTE)
             return true
         }
+        if (next.size == 1) {
+            handOffSingleTile(next[0])
+            return true
+        }
+        if (next.isEmpty()) {
+            Log.i(TAG, "[MV-CAST] composite: no tiles left, stopping")
+            stop("no tiles left")
+            if (sender.content.value?.mediaId == MEDIA_ID) sender.stopPlayback()
+            return true
+        }
         if (!MultiviewCompositeLayout.canCast(next.size)) {
             Log.i(TAG, "[MV-CAST] composite remove ${tile.displayName} refused: ${next.size} tile(s) would be left")
             return true
@@ -224,6 +247,26 @@ class MultiviewCastController @Inject constructor(
         Log.i(TAG, "[MV-CAST] composite ${if (inPile) "remove" else "add"} ${tile.displayName}: ${s.tiles.size} -> ${next.size} tiles")
         start(next, lastHeaders, focus)
         return true
+    }
+
+    /** One tile left (Apple f33f645 round 7: the composite kept running as a
+     *  one-tile picture). The remaining channel goes to the receiver as a
+     *  normal single-channel cast through the shared tune path; the new
+     *  cast content stops this composite through the content watch. When the
+     *  channel cannot be cast, the composite ends like Stop. */
+    private fun handOffSingleTile(tile: MultiviewTile) {
+        Log.i(TAG, "[MV-CAST] composite: one tile left (${tile.displayName}); the receiver plays it as a single channel (cast)")
+        val tuned = sender.tuneLiveChannel(
+            channelId = tile.id,
+            title = tile.displayName,
+            artUri = tile.logoUrl.takeIf { it.isNotBlank() },
+            localUrl = tile.resolvedUrl,
+            headers = lastHeaders,
+        )
+        if (!tuned && compositor != null) {
+            stop("one tile left, not castable")
+            if (sender.content.value?.mediaId == MEDIA_ID) sender.stopPlayback()
+        }
     }
 
     /** Tap on a tile in the phone preview (a position): audio and
@@ -236,50 +279,79 @@ class MultiviewCastController @Inject constructor(
         compositeFocusChanged(s.tiles[index].displayName)
     }
 
-    /** Composite focus change while cast (iOS 3515e92, round 6): the TV
-     *  shows a focus change only when the receiver's playhead reaches the
-     *  frames drawn after it, and the receiver page never moves its playhead
-     *  forward on its own (iPhone log 2026-10-07 15:11:37: 13.6 s behind,
-     *  about 20 s from tap to TV). Logs the receiver's position, seekable end
-     *  and lag behind the composite live point; a web receiver more than
-     *  [NUDGE_THRESHOLD_MS] behind its seekable end is seeked to just inside
-     *  it, and a result line follows 4 s later. */
-    private fun compositeFocusChanged(tileName: String) {
+    private fun compositeFocusChanged(tileName: String) = compositeCatchUp("focus $tileName")
+
+    /** Set at each composite load; the first PLAYING tick clears it and runs
+     *  the startup catch-up. */
+    private var startupCatchUpPending = false
+
+    /** Receiver status tick (debug namespace, main thread). */
+    private fun noteReceiverTick(j: org.json.JSONObject) {
+        if (!startupCatchUpPending || compositor == null) return
+        if (sender.content.value?.mediaId != MEDIA_ID) return
+        if (j.optString("state") != "PLAYING") return
+        if (j.optDouble("rate", 0.0) != 1.0) return
+        if (j.optInt("elPaused", 0) != 0) return
+        startupCatchUpPending = false
+        scope.launch {
+            // Let the SDK's media status catch up with the play.
+            kotlinx.coroutines.delay(1_000L)
+            compositeCatchUp("startup")
+        }
+    }
+
+    /**
+     * Composite catch-up (Apple f33f645 round 7): a focus or layout change is
+     * on the composite within a frame, but the TV shows it only when the
+     * receiver's playhead reaches it, and the receiver page never moves
+     * forward on its own. The lag is judged from the proxy itself: the
+     * newest published composite segment's end minus the composite
+     * HOLD-BACK, the point the receiver's player clamps to. The Cast SDK's
+     * cached live seekable range was stale on Apple (seekable end 7.363 at
+     * t=30.4 and t=58.0), so it is logged only. A web receiver more than
+     * [NUDGE_THRESHOLD_MS] behind is seeked to just inside the seek end, and
+     * a result line follows [NUDGE_RESULT_DELAY_MS] later.
+     */
+    private fun compositeCatchUp(reason: String) {
         if (compositor == null) return
         val snap = sender.receiverLiveSnapshot() ?: return
         val target = sender.receiverTarget.value
         val pos = snap.positionMs / 1000.0
-        val end = snap.seekableEndMs?.let { it / 1000.0 }
-        val behind = end?.let { it - pos }
+        val cachedEnd = snap.seekableEndMs?.let { it / 1000.0 }
+        // Only stated when the receiver plays the proxy's current generation.
+        val seekEnd = hlsProxy.liveEdgeEstimate()?.let { e ->
+            if (e.first == hlsProxy.loadedGeneration) e.second - e.third - COMPOSITE_HOLD_BACK_S else null
+        }
+        val behind = seekEnd?.let { it - pos }
         Log.i(
             TAG,
-            "[Cast] composite focus $tileName: receiver t=${fmt3(pos)} seekable end=${end?.let { fmt3(it) } ?: "none"} " +
-                "behind seekable end=${behind?.let { String.format(java.util.Locale.US, "%.1f s", it) } ?: "n/a"}; ${lagLine(pos)}",
+            "[Cast] composite $reason: receiver t=${fmt3(pos)} live seek end=${seekEnd?.let { fmt3(it) } ?: "n/a"} " +
+                "(newest segment end - HOLD-BACK $COMPOSITE_HOLD_BACK_S s; SDK cached ${cachedEnd?.let { fmt3(it) } ?: "none"}) " +
+                "behind=${behind?.let { String.format(java.util.Locale.US, "%.1f s", it) } ?: "n/a"}; ${lagLine(pos)}",
         )
-        if (target != AerioCastSender.ReceiverTarget.WEB_RECEIVER || end == null || behind == null ||
-            !end.isFinite() || behind * 1000 <= NUDGE_THRESHOLD_MS
+        if (target != AerioCastSender.ReceiverTarget.WEB_RECEIVER || seekEnd == null || behind == null ||
+            !seekEnd.isFinite() || behind * 1000 <= NUDGE_THRESHOLD_MS
         ) return
-        val aim = maxOf(pos, end - NUDGE_MARGIN_MS / 1000.0)
+        val aim = maxOf(pos, seekEnd - NUDGE_MARGIN_MS / 1000.0)
         Log.i(
             TAG,
             String.format(
                 java.util.Locale.US,
-                "[Cast] composite nudge: seek t=%.3f -> %.3f (live seekable end %.3f, %.1f s behind > %.1f s)",
-                pos, aim, end, behind, NUDGE_THRESHOLD_MS / 1000.0,
+                "[Cast] composite nudge (%s): seek t=%.3f -> %.3f (live seek end %.3f, %.1f s behind > %.1f s)",
+                reason, pos, aim, seekEnd, behind, NUDGE_THRESHOLD_MS / 1000.0,
             ),
         )
         sender.seekToStreamPosition((aim * 1000).toLong())
         nudgeCheck?.cancel()
         nudgeCheck = scope.launch {
-            kotlinx.coroutines.delay(4_000L)
+            kotlinx.coroutines.delay(NUDGE_RESULT_DELAY_MS)
             if (compositor == null) return@launch
             val after = sender.receiverLiveSnapshot() ?: return@launch
             val p = after.positionMs / 1000.0
             Log.i(
                 TAG,
-                "[Cast] composite nudge result: receiver t=${fmt3(p)} playerState=${after.playerState} " +
-                    "seekable end=${after.seekableEndMs?.let { fmt3(it / 1000.0) } ?: "none"} " +
-                    "(moved ${String.format(java.util.Locale.US, "%+.1f", p - pos)} s in 4 s wall); ${lagLine(p)}",
+                "[Cast] composite nudge result ($reason): receiver t=${fmt3(p)} playerState=${after.playerState} " +
+                    "(moved ${String.format(java.util.Locale.US, "%+.1f", p - pos)} s in ${NUDGE_RESULT_DELAY_MS / 1000} s wall); ${lagLine(p)}",
             )
         }
     }
@@ -314,11 +386,15 @@ class MultiviewCastController @Inject constructor(
         compositor?.layoutMode = m
         Log.i(TAG, "[MV-CAST] composite layout ${s.layoutMode.displayName} -> ${m.displayName}")
         _session.value = s.copy(layoutMode = m)
+        // The new layout reaches the TV only when the receiver's playhead
+        // does, so a receiver far behind is caught up here too.
+        compositeCatchUp("layout ${m.displayName}")
     }
 
     /** Preview tile menu Remove from Multiview: the tile at position
      *  [index] leaves the running pile (the composite restarts with the
-     *  rest, same cast session). Refused below two tiles. */
+     *  rest, same cast session). With one tile left the receiver plays
+     *  that channel as a normal single-channel cast. */
     fun removeAt(index: Int): Boolean {
         val tile = _session.value?.tiles?.getOrNull(index) ?: return false
         return toggleTile(tile)
@@ -374,6 +450,10 @@ class MultiviewCastController @Inject constructor(
             Log.i(TAG, "[MV-CAST] background keepalive off reason=$reason")
         }
         order = emptyList()
+        startupCatchUpPending = false
+        nudgeCheck?.cancel()
+        nudgeCheck = null
+        sender.receiverTickListener = null
         c.release(reason)
         pipe?.close()
         pipe = null

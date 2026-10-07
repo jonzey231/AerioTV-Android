@@ -83,6 +83,8 @@ fun MultiviewCompositePreview(
     val menuGuard = rememberTvMenuGuard()
     // A long-press release also ends as a tap; that tap is ignored.
     val pressTimes = remember { longArrayOf(0L, 0L) } // [touch down, long-press start]
+    /** The current touch already became a long-press (tile menu or drag). */
+    val longPressFired = remember { booleanArrayOf(false) }
     // Settings > Player > Multiview: the frame's tile rects follow Padding
     // Between Tiles, so taps and the drop cue do too.
     val style by controller.style.collectAsStateWithLifecycle()
@@ -156,6 +158,7 @@ fun MultiviewCompositePreview(
                         onDragStart = { pos ->
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             pressTimes[1] = System.nanoTime()
+                            longPressFired[0] = true
                             viewW = size.width
                             viewH = size.height
                             dragPos = pos
@@ -196,9 +199,20 @@ fun MultiviewCompositePreview(
                     )
                 }
                 .pointerInput(Unit) {
-                    detectTapGestures(onPress = { pressTimes[0] = System.nanoTime() }) { pos ->
+                    detectTapGestures(onPress = {
+                        // A new touch.
+                        pressTimes[0] = System.nanoTime()
+                        longPressFired[0] = false
+                    }) { pos ->
                         val tapAt = System.nanoTime()
-                        if (pressTimes[1] > pressTimes[0]) return@detectTapGestures
+                        // Apple f33f645 round 7: the release of the
+                        // long-press that opens the tile menu must not also
+                        // count as a focus tap (it moved the audio focus
+                        // before Remove was picked). Either guard stops it.
+                        if (longPressFired[0] || pressTimes[1] > pressTimes[0]) {
+                            longPressFired[0] = false
+                            return@detectTapGestures
+                        }
                         val index = MultiviewCompositeLayout.hitTestView(
                             pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding, latestMode,
                         )

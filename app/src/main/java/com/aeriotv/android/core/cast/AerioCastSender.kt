@@ -562,6 +562,10 @@ class AerioCastSender @Inject constructor(
      * A field the receiver did not send prints "?"; the callback never throws,
      * and logs nothing but this one line.
      */
+    /** Receiver status ticks (debug namespace, main thread) for the
+     *  Multiview composite's startup catch-up (Apple f33f645). */
+    @Volatile var receiverTickListener: ((JSONObject) -> Unit)? = null
+
     private val receiverDebugChannel = Cast.MessageReceivedCallback { _, ns, message ->
         if (ns != CastControl.DEBUG_NAMESPACE) return@MessageReceivedCallback
         runCatching {
@@ -571,6 +575,7 @@ class AerioCastSender @Inject constructor(
             // handled above and must not print a row of "?" fields.
             if (j.optString("type") == "caps") return@runCatching
             noteReceiverVideo(j)
+            receiverTickListener?.invoke(j)
             fun str(key: String): String = if (j.has(key) && !j.isNull(key)) j.optString(key) else "?"
             fun num(key: String, decimals: Int): String =
                 if (j.has(key) && !j.isNull(key)) {

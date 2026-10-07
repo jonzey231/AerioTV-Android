@@ -196,7 +196,10 @@ class MultiviewCompositor(
             if (value.showLogos && running) main.post { loadLogos() }
         }
     /** Grid layout of the composite (the cast sheet's Layout row); invalid
-     *  modes for the tile count draw Default. Read on every frame. */
+     *  modes for the tile count draw Default. Read on every frame. A layout
+     *  change does NOT re-show the audio-focus indicator (Apple f33f645:
+     *  picking Default flashed it on the audio tile); a focus change and a
+     *  tile rearrange do. */
     @Volatile var layoutMode: com.aeriotv.android.feature.multiview.MultiviewLayoutMode =
         com.aeriotv.android.feature.multiview.MultiviewLayoutMode.Auto
 
@@ -368,6 +371,9 @@ class MultiviewCompositor(
     fun setSlots(slots: IntArray) {
         if (slots.size != count || slots.sorted() != (0 until count).toList()) return
         slotOf = slots.copyOf()
+        // A rearrange shows the audio-focus indicator again (Apple parity);
+        // a layout change ([layoutMode]) does not.
+        focusChangedAtNanos = System.nanoTime()
     }
 
     /** Mirror the composite onto a phone preview surface (the remote
@@ -475,7 +481,7 @@ class MultiviewCompositor(
                 Log.w(TAG, "[MV-CAST] composite tile ${t.source.displayName} error ${error.errorCodeName}")
                 if (!running || t.retries >= MAX_TILE_RETRIES) return
                 t.retries++
-                main.postDelayed({ if (running && t.player === player) player.prepare() }, TILE_RETRY_MS)
+                main.postDelayed({ if (running && t.player === player) restartSource(t, player, http) }, TILE_RETRY_MS)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -508,6 +514,30 @@ class MultiviewCompositor(
         t.player = player
         Log.i(TAG, "[MV-CAST] composite tile ${t.index} loading ${t.source.displayName}")
         if (style.showLogos) loadLogo(t)
+    }
+
+    /**
+     * A tile's ingest reconnects on a new connection (Apple f33f645 round 7,
+     * iPhone log 2026-10-07 15:52 to 15:54: a Dispatcharr client restart
+     * starts the new connection BEHIND the newest picture the tile already
+     * held, and the old demux and decoder state then discarded every new
+     * byte as old, so the tile froze on the TV). A plain prepare() would
+     * reuse the old source; this one builds a fresh media source, so the
+     * TS demux (and its timestamp anchor) and the video decoder start over
+     * on the new connection, and the composite audio re-anchors to the
+     * tile's restarted clock on its next PCM.
+     */
+    private fun restartSource(t: Tile, player: ExoPlayer, http: DefaultHttpDataSource.Factory) {
+        Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${t.source.displayName}: ingest restarted on a new connection, decoder and demux reset (retry ${t.retries})")
+        t.wasReady = false
+        t.stalled = false
+        reanchorTile = t.index
+        player.stop()
+        player.setMediaSource(
+            com.aeriotv.android.feature.multiview.buildTileMediaSource(t.source.resolvedUrl, http),
+        )
+        player.playWhenReady = true
+        player.prepare()
     }
 
     private fun loadLogos() = state.forEach { loadLogo(it) }
