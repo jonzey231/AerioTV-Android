@@ -533,6 +533,23 @@
     // sent) and the two have to move together.
     const LIVE_START_BEHIND_SECONDS = 10;
 
+    // Phone-composited Multiview (sender customData aerio.composite, Apple
+    // round 6): the proxy cuts every second, TARGETDURATION 1 and HOLD-BACK
+    // 3, and the sender seeks to the seekable end on every audio-focus
+    // change when more than 2 s behind. For that media only the receiver
+    // starts and resyncs HOLD-BACK behind the edge and keeps SEEK supported.
+    // Single-channel loads keep LIVE_START_BEHIND_SECONDS and drop SEEK.
+    const COMPOSITE_LIVE_BEHIND_SECONDS = 3;
+    let compositeProfile = false;
+    function liveBehindSeconds() {
+      return compositeProfile ? COMPOSITE_LIVE_BEHIND_SECONDS :
+        LIVE_START_BEHIND_SECONDS;
+    }
+    function isCompositeLoad(media) {
+      const cd = media && media.customData;
+      return !!(cd && cd.aerio && cd.aerio.composite === true);
+    }
+
     // EXT-X-TARGETDURATION the proxy publishes is the longest segment in the
     // window (our cuts land on keyframes, measured 3 to 6 s). Used as the
     // guard band around the live seek range end: a playhead within one
@@ -1118,6 +1135,8 @@
         // Light mode, so the sender's debug channel can see that this page
         // deliberately slowed its own reporting down.
         light: lightMode,
+        // Live profile of the current load: 'composite' or 'single'.
+        profile: compositeProfile ? 'composite' : 'single',
         // Why the last programmatic seek was issued, clamped or skipped.
         seekWhy: typeof lastSeekNote === 'string' ?
           lastSeekNote.slice(0, 120) : null,
@@ -1366,7 +1385,7 @@
       // hard: the target must sit STRICTLY inside [bufStart + 0.1,
       // bufEnd - 1.5], which is what the Ultra's runaway seeks violated.
       let target = range && range[1] !== null ?
-        range[1] - LIVE_START_BEHIND_SECONDS : hi;
+        range[1] - liveBehindSeconds() : hi;
       const wanted = target;
       target = Math.min(target, hi);
       target = Math.max(target, lo);
@@ -1639,6 +1658,34 @@
       console.warn('AerioTV: PAUSE/PLAY interceptors not registered', e);
     }
 
+    // Per-load presentation delay: the composite starts HOLD-BACK behind the
+    // edge, everything else exactly as the context config above. Shaka is
+    // configured per load from what this returns, so both branches set the
+    // value explicitly and the context's own config object is not mutated.
+    if (playbackConfig && playerManager.setMediaPlaybackInfoHandler) {
+      playerManager.setMediaPlaybackInfoHandler((loadRequestData, config) => {
+        try {
+          if (!config || !config.shakaConfig) return config;
+          const composite = isCompositeLoad(loadRequestData && loadRequestData.media);
+          const out = Object.assign(new cast.framework.PlaybackConfig(), config);
+          out.shakaConfig = Object.assign({}, config.shakaConfig, {
+            manifest: Object.assign({}, config.shakaConfig.manifest, {
+              defaultPresentationDelay: composite ?
+                COMPOSITE_LIVE_BEHIND_SECONDS : LIVE_START_BEHIND_SECONDS,
+            }),
+          });
+          if (composite) {
+            console.log('AerioTV: composite profile presentation delay ' +
+              COMPOSITE_LIVE_BEHIND_SECONDS + ' s');
+          }
+          return out;
+        } catch (e) {
+          console.warn('AerioTV: playback info handler failed', e);
+          return config;
+        }
+      });
+    }
+
     // Normalize each LOAD. Keep the sender's streamType (VOD casting later);
     // for LIVE, duration -1 is the documented contract ("the player instances
     // are responsible for calculating it when the content is LIVE") and it
@@ -1671,6 +1718,13 @@
         measureRefreshRate();
         showLoading();
         const media = loadRequestData.media;
+        compositeProfile = isCompositeLoad(media);
+        if (compositeProfile) {
+          console.log('AerioTV: composite profile applied (live behind ' +
+            COMPOSITE_LIVE_BEHIND_SECONDS + ' s, SEEK kept)');
+          lastSeekNote = 'profile composite behind' +
+            COMPOSITE_LIVE_BEHIND_SECONDS;
+        }
         if (media) {
           media.contentType = media.contentType || 'video/mp4';
           if (media.streamType === cast.framework.messages.StreamType.LIVE) {
@@ -1699,7 +1753,10 @@
         // proxy's ~25 s window is not worth seeking anyway. Done AFTER load
         // completes: mutating supported commands mid-load killed the session
         // when tried live.
-        if (info && info.streamType === cast.framework.messages.StreamType.LIVE) {
+        // The Multiview composite keeps SEEK: the sender's live-edge nudge
+        // on a focus change is a SEEK and must be honored.
+        if (info && info.streamType === cast.framework.messages.StreamType.LIVE &&
+            !compositeProfile) {
           const C = cast.framework.messages.Command;
           playerManager.removeSupportedMediaCommands(
             C.SEEK | C.QUEUE_NEXT | C.QUEUE_PREV, true);
