@@ -86,4 +86,32 @@ class MultiviewCompositeLayoutTest {
         assertEquals(1, MultiviewCompositeLayout.hitTestView(500f, 50f, 640f, 360f, 3))
         assertEquals(2, MultiviewCompositeLayout.hitTestView(500f, 300f, 640f, 360f, 3))
     }
+
+    @Test
+    fun `swap exchanges two positions and the compositor slots follow`() {
+        val order = MultiviewCompositeLayout.swapOrder(listOf(0, 1, 2, 3), 0, 3)
+        assertEquals(listOf(3, 1, 2, 0), order)
+        // Tile 3 now draws in cell 0 and tile 0 in cell 3.
+        assertEquals(listOf(3, 1, 2, 0), MultiviewCompositeLayout.slotsFor(order).toList())
+        val again = MultiviewCompositeLayout.swapOrder(order, 1, 3)
+        assertEquals(listOf(3, 0, 2, 1), again)
+        assertEquals(listOf(1, 3, 2, 0), MultiviewCompositeLayout.slotsFor(again).toList())
+        assertEquals(order, MultiviewCompositeLayout.swapOrder(order, 2, 2))
+        assertEquals(order, MultiviewCompositeLayout.swapOrder(order, 0, 9))
+    }
+
+    @Test
+    fun `stream info names the composite, container and audio`() {
+        assertEquals(
+            listOf("Multiview composite 1280x720@30", "Container: MPEG-TS to fMP4", "Audio: AAC-LC stereo 48 kHz"),
+            MultiviewCompositeLayout.STREAM_INFO_LINES,
+        )
+    }
+
+    @Test
+    fun `borders are 2 px gray, 4 px focus, 4 px gaps`() {
+        assertEquals(2, MultiviewCompositeLayout.BORDER)
+        assertEquals(4, MultiviewCompositeLayout.FOCUS_BORDER)
+        assertEquals(4, MultiviewCompositeLayout.GAP)
+    }
 }

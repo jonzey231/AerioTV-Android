@@ -58,6 +58,16 @@ class MultiviewCastController @Inject constructor(
     private var pipe: LocalTsPipe? = null
     private var watchJob: Job? = null
     private var thermalListener: Any? = null
+    /** Position -> compositor tile index; swapped from the preview. */
+    private var order: List<Int> = emptyList()
+    /** Accent ARGB for the focused tile's border, set by the UI. */
+    @Volatile var focusArgb: Int = 0xFFFFFFFF.toInt()
+        set(value) { field = value; compositor?.focusArgb = value }
+    private var keepaliveOn = false
+    private val lifecycleObserver = object : androidx.lifecycle.DefaultLifecycleObserver {
+        override fun onStop(owner: androidx.lifecycle.LifecycleOwner) = setKeepalive(true)
+        override fun onStart(owner: androidx.lifecycle.LifecycleOwner) = setKeepalive(false)
+    }
 
     /** Live tiles that may be composited (the first [MultiviewCompositeLayout.MAX_TILES]). */
     fun castableTiles(tiles: List<MultiviewTile>): List<MultiviewTile> = tiles.filter { it.kind == TileKind.Live }
@@ -87,8 +97,11 @@ class MultiviewCastController @Inject constructor(
         }
         pipe = p
         compositor = c
+        c.focusArgb = focusArgb
+        order = live.indices.toList()
         _session.value = Session(live, focused)
         startThermalWatch()
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         val names = live.joinToString(", ") { it.displayName }
         sender.castComposite(
             base = AerioCastSender.Content(
@@ -123,12 +136,45 @@ class MultiviewCastController @Inject constructor(
         return true
     }
 
-    /** Tap on a tile in the phone preview: audio and highlight follow. */
+    /** Tap on a tile in the phone preview (a position): audio and
+     *  highlight follow. */
     fun setFocus(index: Int) {
         val s = _session.value ?: return
         if (index !in s.tiles.indices || index == s.focused) return
-        compositor?.setFocus(index)
+        compositor?.setFocus(order.getOrElse(index) { index })
         _session.value = s.copy(focused = index)
+    }
+
+    /** Long-press-drag in the preview: the tiles at positions [a] and [b]
+     *  trade cells. The compositor re-lays out on its next frame; the
+     *  encoder, the players and the cast session keep running. */
+    fun swap(a: Int, b: Int) {
+        val s = _session.value ?: return
+        if (a == b || a !in s.tiles.indices || b !in s.tiles.indices) return
+        order = MultiviewCompositeLayout.swapOrder(order, a, b)
+        compositor?.setSlots(MultiviewCompositeLayout.slotsFor(order))
+        val tiles = s.tiles.toMutableList().also { it[a] = s.tiles[b]; it[b] = s.tiles[a] }
+        val focused = when (s.focused) { a -> b; b -> a; else -> s.focused }
+        Log.i(TAG, "[MV-CAST] composite swap ${s.tiles[a].displayName} <-> ${s.tiles[b].displayName}")
+        _session.value = Session(tiles, focused)
+    }
+
+    /** App to the background (or back) during a composite: the cast proxy's
+     *  foreground service (partial wake lock + Wi-Fi lock) keeps the process,
+     *  the encoder thread, the tile players and the proxy running. Started
+     *  again here in case it is not up yet. Thermal and encoder-behind stops
+     *  still apply. */
+    private fun setKeepalive(on: Boolean) {
+        if (compositor == null || on == keepaliveOn) return
+        keepaliveOn = on
+        if (on && !com.aeriotv.android.core.cast.hlsproxy.CastHlsProxyService.running) {
+            com.aeriotv.android.core.cast.hlsproxy.CastHlsProxyService.start(context)
+        }
+        Log.i(
+            TAG,
+            "[MV-CAST] background keepalive ${if (on) "on" else "off"} " +
+                "fgs=${if (com.aeriotv.android.core.cast.hlsproxy.CastHlsProxyService.running) "running" else "starting"}",
+        )
     }
 
     fun attachPreview(surface: Surface) { compositor?.attachPreview(surface) }
@@ -141,6 +187,12 @@ class MultiviewCastController @Inject constructor(
         watchJob?.cancel()
         watchJob = null
         stopThermalWatch()
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
+        if (keepaliveOn) {
+            keepaliveOn = false
+            Log.i(TAG, "[MV-CAST] background keepalive off reason=$reason")
+        }
+        order = emptyList()
         c.release(reason)
         pipe?.close()
         pipe = null

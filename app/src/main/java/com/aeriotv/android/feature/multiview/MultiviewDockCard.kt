@@ -55,6 +55,9 @@ import com.aeriotv.android.ui.theme.textAccent
 
 private const val MV_TAG = "AerioCast"
 
+/** Background Multiview dock card title (shared wording with Apple). */
+const val MULTIVIEW_BACKGROUND_TITLE = "Multiview playing in background"
+
 /** "1 channel staged for Multiview" / "N channels staged for Multiview". */
 fun multiviewStagedTitle(count: Int): String =
     if (count == 1) "1 channel staged for Multiview" else "$count channels staged for Multiview"
@@ -75,6 +78,10 @@ fun MultiviewDockCard(
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Background Multiview card (round 2): "Multiview playing in background". */
+    title: String = multiviewStagedTitle(tiles.size),
+    /** Trailing accent control: "Play" (staging) or "Stop" (background). */
+    actionLabel: String = "Play",
 ) {
     if (tiles.isEmpty()) return
     val capsule = RoundedCornerShape(percent = 50)
@@ -103,7 +110,7 @@ fun MultiviewDockCard(
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = multiviewStagedTitle(tiles.size),
+                text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.SemiBold,
@@ -122,7 +129,7 @@ fun MultiviewDockCard(
             modifier = Modifier.heightIn(min = RetainedCardControlHeight),
             contentAlignment = Alignment.Center,
         ) {
-            AccentTextControl(label = "Play", onClick = onPlay)
+            AccentTextControl(label = actionLabel, onClick = onPlay)
         }
     }
 }

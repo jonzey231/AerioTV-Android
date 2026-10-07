@@ -229,7 +229,13 @@ fun CastTransportCard(
     } else {
         emptyList()
     }
-    val castDetailLines = listOfNotNull(receiverLine) + transcodeNote
+    // Composited Multiview: the phone's composite, its container path and the
+    // audio form (shared wording with Apple, round 2 2026-10-07).
+    val castDetailLines = if (isComposite) {
+        com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.STREAM_INFO_LINES
+    } else {
+        listOfNotNull(receiverLine) + transcodeNote
+    }
 
     fun flipChannel(delta: Int) {
         val idx = channels.indexOfFirst { it.id == currentChannel?.id }

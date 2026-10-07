@@ -80,4 +80,25 @@ object MultiviewCompositeLayout {
         if (viewWidth <= 0f || viewHeight <= 0f) return -1
         return hitTest(x * WIDTH / viewWidth, y * HEIGHT / viewHeight, tileRects(count))
     }
+
+    /** Cast Stream Info lines for a composite (shared wording with Apple). */
+    val STREAM_INFO_LINES: List<String> = listOf(
+        "Multiview composite ${WIDTH}x$HEIGHT@$FPS",
+        "Container: MPEG-TS to fMP4",
+        "Audio: AAC-LC stereo 48 kHz",
+    )
+
+    /** [order] (position -> tile index) with positions [a] and [b] swapped;
+     *  unchanged when either is out of range or they are equal. */
+    fun swapOrder(order: List<Int>, a: Int, b: Int): List<Int> {
+        if (a == b || a !in order.indices || b !in order.indices) return order
+        return order.toMutableList().also { it[a] = order[b]; it[b] = order[a] }
+    }
+
+    /** The compositor's tile -> cell map for [order] (position -> tile). */
+    fun slotsFor(order: List<Int>): IntArray {
+        val slots = IntArray(order.size)
+        order.forEachIndexed { pos, tile -> if (tile in slots.indices) slots[tile] = pos }
+        return slots
+    }
 }

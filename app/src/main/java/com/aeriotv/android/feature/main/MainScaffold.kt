@@ -501,12 +501,15 @@ fun MainScaffold(
         stagedLiveCount > com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.MAX_TILES
     ) com.aeriotv.android.core.cast.multiview.MultiviewCastController.CAST_LIMIT_NOTE else null
     val playStagedHere: () -> Unit = {
+        // A fresh grid replaces a Multiview playing in the background.
+        com.aeriotv.android.feature.multiview.MultiviewBackground.stop()
         showMultiviewSheet = false
         multiviewStore.setStaging(false)
         onLaunchMultiview()
     }
     val playStagedOnReceiver: () -> Unit = playOnReceiver@{
         showMultiviewSheet = false
+        com.aeriotv.android.feature.multiview.MultiviewBackground.stop()
         if (!mvNativeReceiver) {
             // Web receiver: the phone composites the grid and casts one stream.
             val started = multiviewCast.start(
@@ -1540,6 +1543,27 @@ fun MainScaffold(
                     Modifier.width(tabletCardWidth)
                 } else {
                     Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
+                }
+                // Multiview playing in the background (round 2, 2026-10-07):
+                // the cast card's shape, stacked with the other dock cards.
+                val mvBg by com.aeriotv.android.feature.multiview.MultiviewBackground.state
+                    .collectAsStateWithLifecycle()
+                val mvBgState = mvBg
+                if (mvBgState != null && !isTv) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
+                            com.aeriotv.android.feature.multiview.MultiviewDockCard(
+                                tiles = mvBgState.tiles,
+                                tablet = tabletNav,
+                                title = com.aeriotv.android.feature.multiview.MULTIVIEW_BACKGROUND_TITLE,
+                                actionLabel = "Stop",
+                                onOpen = onLaunchMultiview,
+                                onPlay = { com.aeriotv.android.feature.multiview.MultiviewBackground.stop() },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
                 }
                 if (showMv) {
                     val mvFab = phoneFab && !showKept

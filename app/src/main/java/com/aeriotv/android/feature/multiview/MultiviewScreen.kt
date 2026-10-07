@@ -73,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.asImageBitmap
 import coil3.toBitmap
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -177,6 +178,16 @@ fun MultiviewScreen(
         LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK
         ) == Configuration.UI_MODE_TYPE_TELEVISION
 
+    // Back from the background dock card (round 2, 2026-10-07): stop the
+    // headless tiles BEFORE any tile player starts (server slots), and put
+    // the grid back exactly as it was.
+    remember {
+        MultiviewBackground.takeForReturn()?.let { bg ->
+            storeHandle.setStaging(false)
+            storeHandle.restore(bg.tiles, bg.focus)
+        }
+        Unit
+    }
     val selected by storeHandle.selected.collectAsState()
     val focused by storeHandle.audioFocusedIndex.collectAsState()
     val bufferSize by settingsVm.streamBufferSize.collectAsState(initial = "default")
@@ -238,6 +249,33 @@ fun MultiviewScreen(
     // instance keeps its index for life). Registered by ExoTile's factory,
     // unregistered in onRelease.
     val tilePlayers = remember { mutableStateMapOf<Int, ExoPlayer>() }
+    // Pinch in (phones and tablets): leave to the browse screens with the
+    // tiles playing headless (MultiviewBackground). The headless players
+    // start after this screen and its tile players are disposed.
+    val mvContext = LocalContext.current
+    val backgroundRequest = remember { mutableStateOf<MultiviewBackground.State?>(null) }
+    val backgroundPositions = remember { mutableMapOf<Int, Long>() }
+    val latestHeaders by rememberUpdatedState(httpHeaders)
+    DisposableEffect(Unit) {
+        onDispose {
+            val req = backgroundRequest.value ?: return@onDispose
+            val positions = backgroundPositions.toMap()
+            val headers = latestHeaders
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                MultiviewBackground.enter(mvContext, req.tiles, req.focus, headers, positions)
+            }
+        }
+    }
+    val enterBackground: () -> Unit = {
+        if (!isTvDevice && selected.isNotEmpty() && backgroundRequest.value == null) {
+            backgroundPositions.clear()
+            selected.forEachIndexed { i, t ->
+                if (t.kind != TileKind.Live) tilePlayers[i]?.let { backgroundPositions[i] = it.currentPosition }
+            }
+            backgroundRequest.value = MultiviewBackground.State(selected, focused)
+            onClose()
+        }
+    }
     // VOD tiles that have reached end-of-file (Phase 3 Finished overlay). Keyed
     // by tile POSITION (same as tilePlayers). The overlay renders the checkmark
     // + title + Replay/Remove only on a Vod tile in this set. iOS parity:
@@ -412,6 +450,27 @@ fun MultiviewScreen(
                     }
                 }
                 true
+            }
+            // Pinch in = Multiview to the background (the single player's
+            // minimize pinch, 0.85 threshold). Initial pass so the tiles' own
+            // tap and drag detectors never see the two-finger gesture.
+            .pointerInput(isTvDevice) {
+                if (isTvDevice) return@pointerInput
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    var start = 0f
+                    var ratio = 1f
+                    do {
+                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                        val down = ev.changes.filter { it.pressed }
+                        if (down.size >= 2) {
+                            val span = (down[0].position - down[1].position).getDistance()
+                            if (start <= 0f) start = span else if (start > 0f) ratio = span / start
+                            ev.changes.forEach { it.consume() }
+                        }
+                    } while (ev.changes.any { it.pressed })
+                    if (start > 0f && ratio < 0.85f) enterBackground()
+                }
             }
             .clickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },

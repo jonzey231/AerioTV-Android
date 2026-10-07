@@ -1275,6 +1275,8 @@ fun AerioTVNavHost(
                     navArgument("mini") { type = NavType.BoolType; defaultValue = false },
                 ),
             ) { entry ->
+                // Another player takes over: a Multiview in the background ends.
+                remember { com.aeriotv.android.feature.multiview.MultiviewBackground.stop() }
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
@@ -1476,6 +1478,8 @@ fun AerioTVNavHost(
                     navArgument("fromStart") { type = NavType.BoolType; defaultValue = false },
                 ),
             ) { entry ->
+                // Another player takes over: a Multiview in the background ends.
+                remember { com.aeriotv.android.feature.multiview.MultiviewBackground.stop() }
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
@@ -1745,6 +1749,8 @@ fun AerioTVNavHost(
                     navArgument("fromStart") { type = NavType.BoolType; defaultValue = false },
                 ),
             ) { entry ->
+                // Another player takes over: a Multiview in the background ends.
+                remember { com.aeriotv.android.feature.multiview.MultiviewBackground.stop() }
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
@@ -1891,6 +1897,8 @@ fun AerioTVNavHost(
                     navArgument("csChannel") { type = NavType.StringType; defaultValue = "" },
                 ),
             ) { entry ->
+                // Another player takes over: a Multiview in the background ends.
+                remember { com.aeriotv.android.feature.multiview.MultiviewBackground.stop() }
                 val playbackUrl = Uri.decode(entry.arguments?.getString("playbackUrl").orEmpty())
                 val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
                 val isDvr = entry.arguments?.getBoolean("isDvr") ?: false

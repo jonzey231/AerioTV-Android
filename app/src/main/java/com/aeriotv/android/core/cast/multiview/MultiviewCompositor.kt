@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
  * 2026-10-06): 2 to 4 live tiles, each decoded by its own ExoPlayer into an
  * off-screen SurfaceTexture, drawn with OpenGL ES into one 1280x720 frame at
  * 30 fps ([MultiviewCompositeLayout]: the local Multiview's grid shapes,
- * letterboxed tiles, thin borders, white highlight on the audio-focused
+ * letterboxed tiles, 2 px gray borders, a 4 px accent border on the audio-focused
  * tile), encoded with the platform H.264 encoder (MediaCodec, input
  * Surface), and muxed with the focused tile's audio (AAC-LC, MediaCodec)
  * into an MPEG-TS stream for the cast proxy ([MultiviewTsMuxer] ->
@@ -116,6 +116,13 @@ class MultiviewCompositor(
 
     @Volatile var focused: Int = initialFocus.coerceIn(0, count - 1)
         private set
+
+    /** Cell of each tile (tile index -> cell index); swapped live from the
+     *  cast sheet's preview, no encoder or session restart. */
+    @Volatile private var slotOf: IntArray = IntArray(count) { it }
+
+    /** ARGB of the focused tile's border: the app's accent color. */
+    @Volatile var focusArgb: Int = 0xFFFFFFFF.toInt()
 
     private val clock = CompositeClock(System.nanoTime())
     private val muxLock = Any()
@@ -205,6 +212,12 @@ class MultiviewCompositor(
         if (index !in 0 until count || index == focused) return
         Log.i(TAG, "[MV-CAST] composite focus ${state[focused].source.displayName} -> ${state[index].source.displayName}")
         focused = index
+    }
+
+    /** New cell per tile ([slots] tile index -> cell index). */
+    fun setSlots(slots: IntArray) {
+        if (slots.size != count || slots.sorted() != (0 until count).toList()) return
+        slotOf = slots.copyOf()
     }
 
     /** Mirror the composite onto a phone preview surface (the remote
@@ -485,10 +498,21 @@ class MultiviewCompositor(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+        val slots = slotOf
+        val accent = focusArgb
         for (t in state) {
-            val cell = rects.getOrNull(t.index) ?: continue
+            val cell = rects.getOrNull(slots[t.index]) ?: continue
             val isFocus = t.index == focus
-            if (isFocus) GLES20.glClearColor(1f, 1f, 1f, 1f) else GLES20.glClearColor(0.25f, 0.25f, 0.25f, 1f)
+            if (isFocus) {
+                GLES20.glClearColor(
+                    ((accent shr 16) and 0xFF) / 255f,
+                    ((accent shr 8) and 0xFF) / 255f,
+                    (accent and 0xFF) / 255f,
+                    1f,
+                )
+            } else {
+                GLES20.glClearColor(0.5f, 0.5f, 0.5f, 1f)
+            }
             scissor(cell, sx, sy, h)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -503,7 +527,7 @@ class MultiviewCompositor(
         GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, quadTex)
         for (t in state) {
             if (!t.hasFrame) continue
-            val cell = rects.getOrNull(t.index) ?: continue
+            val cell = rects.getOrNull(slots[t.index]) ?: continue
             val area = MultiviewCompositeLayout.pictureArea(cell, t.index == focus)
             val pic = MultiviewCompositeLayout.letterbox(area, t.videoWidth, t.videoHeight, t.pixelRatio)
             val vx = (pic.left * sx).toInt()
