@@ -138,8 +138,11 @@ class CastNotificationController @Inject constructor(
             val single = composite.singleChannelName
             return Details(
                 title = single ?: com.aeriotv.android.core.cast.multiview.MultiviewCastController.TITLE,
-                subtitle = if (single != null) program else focused?.displayName,
-                program = if (single != null) null else program,
+                // The shade's media player draws only title and artist, so the
+                // focused channel and its program share the subtitle line.
+                subtitle = if (single != null) program else
+                    listOfNotNull(focused?.displayName, program).joinToString(" \u00b7 ").ifBlank { null },
+                program = null,
                 artUrl = focused?.logoUrl?.takeIf { it.isNotBlank() },
                 deviceName = device,
                 key = "mv:${focused?.id}",
@@ -193,14 +196,16 @@ class CastNotificationController @Inject constructor(
      *  the cast card and the composite tiles use). */
     private suspend fun artwork(url: String?): android.graphics.Bitmap? {
         if (url.isNullOrBlank()) return null
-        if (url == artCacheUrl) return artCacheBitmap
+        if (url == artCacheUrl && artCacheBitmap != null) return artCacheBitmap
         val bmp = runCatching {
             val loader = coil3.SingletonImageLoader.get(context)
             val req = coil3.request.ImageRequest.Builder(context).data(url).build()
             loader.execute(req).image?.let {
                 com.aeriotv.android.feature.multiview.TileLogoCrop.softwareBitmap(it)
             }
-        }.getOrNull()
+        }.onFailure { android.util.Log.w("CastNotif", "[Cast] notification art failed url=$url", it) }
+            .getOrNull()
+        android.util.Log.i("CastNotif", "[Cast] notification art url=$url bitmap=${bmp?.let { "${it.width}x${it.height}" }}")
         artCacheUrl = url
         artCacheBitmap = bmp
         return bmp
@@ -218,6 +223,12 @@ class CastNotificationController @Inject constructor(
                 override fun onPlay() = castSender.play()
                 override fun onPause() = castSender.pause()
                 override fun onStop() = castSender.stopPlayback()
+                // The Android 13+ shade media player draws buttons from the
+                // PlaybackState (not the notification actions), so Stop rides
+                // there as a custom action.
+                override fun onCustomAction(action: String?, extras: android.os.Bundle?) {
+                    if (action == CUSTOM_STOP) castSender.stopPlayback()
+                }
             })
             setSessionActivity(launchIntent())
         }
@@ -290,6 +301,7 @@ class CastNotificationController @Inject constructor(
     private suspend fun post(details: Details, input: Inputs) {
         ensureActionReceiver()
         val art = artwork(details.artUrl)
+        android.util.Log.i("CastNotif", "[Cast] notification post title=${details.title} sub=${details.subtitle} program=${details.program} art=${art != null} artUrl=${details.artUrl} playing=${input.playing}")
         val session = session()
         session.setMetadata(
             MediaMetadataCompat.Builder()
@@ -317,6 +329,11 @@ class CastNotificationController @Inject constructor(
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
                         PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP,
+                )
+                .addCustomAction(
+                    PlaybackStateCompat.CustomAction.Builder(
+                        CUSTOM_STOP, "Stop", android.R.drawable.ic_menu_close_clear_cancel,
+                    ).build(),
                 )
                 .setState(
                     if (input.playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
@@ -448,6 +465,7 @@ class CastNotificationController @Inject constructor(
 
         private const val ACTION_PLAY = "com.aeriotv.android.cast.PLAY"
         private const val ACTION_PAUSE = "com.aeriotv.android.cast.PAUSE"
+        private const val CUSTOM_STOP = "com.aeriotv.android.cast.CUSTOM_STOP"
         private const val ACTION_STOP = "com.aeriotv.android.cast.STOP"
         private const val CHANNEL_ID = "aeriotv_casting"
         private const val ALERT_CHANNEL_ID = "aeriotv_cast_alerts"
