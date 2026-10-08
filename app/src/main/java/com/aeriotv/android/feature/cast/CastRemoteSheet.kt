@@ -197,7 +197,7 @@ fun CastRemoteSheet(
     // current thereafter, and re-opening Options re-pulls after a channel change.
     androidx.compose.runtime.LaunchedEffect(Unit) { onRefreshState() }
 
-    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
+    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss, sheetContainerColor = REMOTE_SHEET_BG) {
         // iOS RemoteSessionSheet.playingContent, top to bottom (Logan
         // 2026-09-27, "Cast card doesn't match iOS"): header, program block,
         // Channel Down / Channel Up, Back / Play-Pause / Forward, Options,
@@ -517,7 +517,8 @@ fun CastRemoteSheet(
                 icon = Icons.Filled.Stop,
                 label = stopLabel,
                 contentColor = STOP_RED,
-                background = STOP_RED.copy(alpha = 0.15f),
+                // 22% on the black sheet reads as iOS's dark red pill.
+                background = STOP_RED.copy(alpha = 0.22f),
                 onClick = onStopCasting,
             )
             // Under Stop, as on iOS (Logan 2026-09-27: the resolution lines
@@ -541,7 +542,7 @@ fun CastRemoteSheet(
     }
 
     if (optionsOpen) {
-        com.aeriotv.android.ui.FormFactorModal(onDismiss = { optionsOpen = false }) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { optionsOpen = false }, sheetContainerColor = REMOTE_SHEET_BG) {
             Column(
                 modifier = Modifier
                     .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -613,7 +614,7 @@ fun CastRemoteSheet(
     }
 
     if (sleepOpen) {
-        com.aeriotv.android.ui.FormFactorModal(onDismiss = { sleepOpen = false }) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { sleepOpen = false }, sheetContainerColor = REMOTE_SHEET_BG) {
             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
                 Text(
                     text = "Sleep Timer",
@@ -643,7 +644,7 @@ fun CastRemoteSheet(
     }
 
     if (infoOpen) {
-        com.aeriotv.android.ui.FormFactorModal(onDismiss = { infoOpen = false }) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { infoOpen = false }, sheetContainerColor = REMOTE_SHEET_BG) {
             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
                 Text(
                     text = "Stream Info",
@@ -747,7 +748,7 @@ fun CastIdleSheet(
 ) {
     // iOS RemoteSessionSheet.idleContent: glyph, device name, accent status,
     // one wide "Change Cast Device" button, 14 dp apart.
-    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss) {
+    com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss, sheetContainerColor = REMOTE_SHEET_BG) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -798,6 +799,13 @@ private fun speedLabel(speed: Float): String =
 
 /** iOS's system red in dark mode, for Stop and the LIVE pill. */
 private val STOP_RED = Color(0xFFFF453A)
+
+/**
+ * Touch background of the remote-session sheets (Cast, AirPlay, Remote,
+ * Multiview composite) and their Options / Sleep / Stream Info sheets:
+ * black, as iOS (Logan 2026-10-08). TV keeps its dialog surface.
+ */
+internal val REMOTE_SHEET_BG = Color.Black
 
 /** The shared column width of the transport rows (iOS buttonColumnWidth):
  *  "Forward 60s" is wider than "Back 5s", and unequal columns pulled the
@@ -1040,7 +1048,7 @@ private fun StreamInfoRowsCard(rows: List<Pair<String, String>>) {
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                Color.White.copy(alpha = 0.12f),
                 androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),

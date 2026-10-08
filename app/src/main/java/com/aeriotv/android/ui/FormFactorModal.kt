@@ -85,6 +85,12 @@ fun FormFactorModal(
     sheetExpandable: Boolean = false,
     /** Name for the TV focus trace ([SETTINGS] sheet open / close). */
     traceName: String = "modal",
+    /**
+     * Touch sheets only: overrides the sheet's container color. The
+     * remote-session sheets pass black to match iOS (Logan 2026-10-08).
+     * Unspecified keeps the theme background. Ignored on TV.
+     */
+    sheetContainerColor: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Unspecified,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val isTv = rememberIsTvDevice()
@@ -134,7 +140,11 @@ fun FormFactorModal(
             onDismissRequest = onDismiss,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = !sheetExpandable),
             sheetGesturesEnabled = sheetGesturesEnabled,
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = if (sheetContainerColor != androidx.compose.ui.graphics.Color.Unspecified) {
+                sheetContainerColor
+            } else {
+                MaterialTheme.colorScheme.background
+            },
             // Bottom inset only for BOTH paths. With the default insets the
             // non-expandable sheet got the same offset-dependent top padding:
             // once its content was tall enough to sit near the status bar

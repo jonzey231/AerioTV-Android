@@ -96,12 +96,12 @@ fun MultiviewCompositePreview(
     // Between Tiles, so taps and the drop cue do too.
     val style by controller.style.collectAsStateWithLifecycle()
     val accent = MaterialTheme.colorScheme.primary
-    // Tile gaps show the sheet surface (FormFactorModal's container), as
-    // iOS, instead of black; only the phone preview, never the cast frame.
+    // Tile gaps show the sheet's own color (black on touch, as iOS; the
+    // TV dialog surface on TV); only the phone preview, never the cast frame.
     val sheetBg = if (rememberIsTvDevice()) {
         com.aeriotv.android.ui.tv.TvChrome.dialogSurface()
     } else {
-        MaterialTheme.colorScheme.background
+        REMOTE_SHEET_BG
     }
     SideEffect {
         controller.focusArgb = accent.toArgb()
