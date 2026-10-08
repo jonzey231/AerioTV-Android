@@ -40,7 +40,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -89,7 +96,17 @@ fun MultiviewCompositePreview(
     // Between Tiles, so taps and the drop cue do too.
     val style by controller.style.collectAsStateWithLifecycle()
     val accent = MaterialTheme.colorScheme.primary
-    SideEffect { controller.focusArgb = accent.toArgb() }
+    // Tile gaps show the sheet surface (FormFactorModal's container), as
+    // iOS, instead of black; only the phone preview, never the cast frame.
+    val sheetBg = if (rememberIsTvDevice()) {
+        com.aeriotv.android.ui.tv.TvChrome.dialogSurface()
+    } else {
+        MaterialTheme.colorScheme.background
+    }
+    SideEffect {
+        controller.focusArgb = accent.toArgb()
+        controller.previewBackgroundArgb = sheetBg.toArgb()
+    }
     // Drag-to-swap state: the picked-up position and the cell under the finger.
     var dragFrom by remember { mutableIntStateOf(-1) }
     var dragTarget by remember { mutableIntStateOf(-1) }
@@ -300,21 +317,62 @@ fun MultiviewCompositePreview(
     // tile count; the composite re-lays out live and the preview follows.
     val options = MultiviewCompositeLayout.layoutOptions(count)
     if (count > 0 && options.size > 1) {
+        // iOS MultiviewCompositeLayoutRow: "Layout" left, the current value
+        // right with an up/down chevron opening a menu. Android's native
+        // equivalent is a DropdownMenu anchored to the value.
+        var layoutMenuOpen by remember { mutableStateOf(false) }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 14.dp, start = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Layout", style = MaterialTheme.typography.bodyMedium)
-            options.forEach { mode ->
-                FilterChip(
-                    selected = mode == layoutMode,
-                    onClick = {
-                        movingFrom = -1
-                        controller.setLayoutMode(mode)
-                    },
-                    label = { Text(mode.displayName) },
-                )
+            Text(
+                "Layout",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            Box {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { layoutMenuOpen = true }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        layoutMode.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Icon(
+                        Icons.Filled.UnfoldMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = layoutMenuOpen,
+                    onDismissRequest = { layoutMenuOpen = false },
+                ) {
+                    options.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.displayName) },
+                            trailingIcon = if (mode == layoutMode) {
+                                { Icon(Icons.Filled.Check, contentDescription = "Selected") }
+                            } else {
+                                null
+                            },
+                            onClick = {
+                                layoutMenuOpen = false
+                                movingFrom = -1
+                                Log.i("AerioCast", "[MV-CAST] preview layout menu: ${mode.displayName}")
+                                controller.setLayoutMode(mode)
+                            },
+                        )
+                    }
+                }
             }
         }
     }

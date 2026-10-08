@@ -178,8 +178,13 @@ fun CastRemoteSheet(
     showSkipButtons: Boolean = true,
     /** Replaces the program line (the composited Multiview's channel names). */
     programmeTitleOverride: String? = null,
-    /** Drawn above the header (the composited Multiview's grid preview). */
+    /** Drawn under the header, above the program block (the composited
+     *  Multiview's grid preview and Layout row), as iOS playingContent. */
     topContent: (@Composable () -> Unit)? = null,
+    /** False keeps the plain progress bar even when the web receiver
+     *  reports a seekable window (the composited Multiview is live only,
+     *  so iOS shows no scrubber and no LIVE caption there). */
+    allowWebScrub: Boolean = true,
 ) {
     var optionsOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
@@ -205,7 +210,6 @@ fun CastRemoteSheet(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            topContent?.invoke()
             // Header: channel art (or the transport glyph), channel, then
             // "Casting to <device>" in the accent color.
             Column(
@@ -243,6 +247,9 @@ fun CastRemoteSheet(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+
+            // Composited Multiview: preview grid, then the Layout row.
+            topContent?.invoke()
 
             // Program block: title left, LIVE pill right, time range under it,
             // then a full-width progress bar (an empty track when unknown,
@@ -297,8 +304,8 @@ fun CastRemoteSheet(
                 // moves a time label only; release seeks once. The Cast
                 // Connect / companion window has its own scrubber below.
                 var webWindow by remember { mutableStateOf<com.aeriotv.android.core.cast.AerioCastSender.WebSeekWindow?>(null) }
-                androidx.compose.runtime.LaunchedEffect(webSeekWindow, position.canSeek) {
-                    if (webSeekWindow == null || position.canSeek) { webWindow = null; return@LaunchedEffect }
+                androidx.compose.runtime.LaunchedEffect(webSeekWindow, position.canSeek, allowWebScrub) {
+                    if (webSeekWindow == null || position.canSeek || !allowWebScrub) { webWindow = null; return@LaunchedEffect }
                     while (true) {
                         webWindow = webSeekWindow()
                         kotlinx.coroutines.delay(1_000L)

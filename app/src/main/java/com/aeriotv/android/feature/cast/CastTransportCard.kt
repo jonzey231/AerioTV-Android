@@ -416,6 +416,7 @@ fun CastTransportCard(
             showInlineSkip = !isCompanion && !isComposite,
             showSkipButtons = !isComposite,
             programmeTitleOverride = if (isComposite && compositeSingleName == null) compositeNames ?: castContent?.subtitle else null,
+            allowWebScrub = !isComposite,
             topContent = if (isComposite && multiviewCast != null) {
                 {
                     // Tile menu Switch Stream (Logan 2026-10-07): the same

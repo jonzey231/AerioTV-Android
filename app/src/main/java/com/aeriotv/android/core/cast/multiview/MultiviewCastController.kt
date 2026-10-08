@@ -123,6 +123,10 @@ class MultiviewCastController @Inject constructor(
     /** Accent ARGB for the focused tile's border, set by the UI. */
     @Volatile var focusArgb: Int = 0xFFFFFFFF.toInt()
         set(value) { field = value; compositor?.focusArgb = value }
+
+    /** Sheet surface ARGB drawn behind the preview's tiles. */
+    @Volatile var previewBackgroundArgb: Int = 0xFF000000.toInt()
+        set(value) { field = value; compositor?.previewBackgroundArgb = value }
     private var keepaliveOn = false
     /** Headers of the running composite, for a restart that adds or drops a tile. */
     private var lastHeaders: Map<String, String> = emptyMap()
@@ -183,6 +187,7 @@ class MultiviewCastController @Inject constructor(
         pipe = p
         compositor = c
         c.focusArgb = focusArgb
+        c.previewBackgroundArgb = previewBackgroundArgb
         order = live.indices.toList()
         slotNotices = emptyMap()
         publishNotices()

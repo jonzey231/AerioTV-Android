@@ -286,6 +286,10 @@ class MultiviewCompositor(
     /** ARGB of the focused tile's border: the app's accent color. */
     @Volatile var focusArgb: Int = 0xFFFFFFFF.toInt()
 
+    /** ARGB behind the tiles on the phone preview only (the sheet surface,
+     *  so tile gaps read as the sheet, as iOS). The cast frame stays black. */
+    @Volatile var previewBackgroundArgb: Int = 0xFF000000.toInt()
+
     private val clock = CompositeClock(System.nanoTime())
     private val muxLock = Any()
     private val muxer = MultiviewTsMuxer(output)
@@ -901,7 +905,7 @@ class MultiviewCompositor(
                     previewLoggedH = h[0]
                     Log.i(TAG, "[MV-CAST] preview surface ${w[0]}x${h[0]}")
                 }
-                draw(w[0], h[0], focus)
+                draw(w[0], h[0], focus, previewBackgroundArgb)
                 EGL14.eglSwapBuffers(eglDisplay, previewEglSurface)
             }
         }
@@ -931,7 +935,7 @@ class MultiviewCompositor(
      *  tile, its picture clipped to the tile shape, the channel logo, the
      *  speaker icon and the audio-focus border, as the local tile stacks
      *  them for the user's [style]. */
-    private fun draw(w: Int, h: Int, focus: Int) {
+    private fun draw(w: Int, h: Int, focus: Int, backgroundArgb: Int = 0xFF000000.toInt()) {
         if (w <= 0 || h <= 0) return
         val sx = w / W.toFloat()
         val sy = h / H.toFloat()
@@ -950,7 +954,12 @@ class MultiviewCompositor(
         val since = System.nanoTime() - focusChangedAtNanos
         val accent = focusArgb
         GLES20.glViewport(0, 0, w, h)
-        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClearColor(
+            ((backgroundArgb shr 16) and 0xFF) / 255f,
+            ((backgroundArgb shr 8) and 0xFF) / 255f,
+            (backgroundArgb and 0xFF) / 255f,
+            1f,
+        )
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
