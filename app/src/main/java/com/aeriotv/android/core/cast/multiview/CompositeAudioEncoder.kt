@@ -26,10 +26,11 @@ class CompositeClock(val t0Nanos: Long) {
  * The timeline is sample-continuous. Chunk stamps come from the focused
  * tile's picture clock (the frames the compositor draws), so the timeline
  * follows the picture: a [Reanchor] (focus switch, stall resume, restart,
- * picture timestamp jump) snaps it to the chunk's stamp; otherwise a chunk
- * more than [REANCHOR_NANOS] later than expected jumps forward (a short
- * gap) and one more than that earlier has its stale head trimmed, so the
- * audio never trails the picture. While no PCM arrives
+ * picture timestamp jump) aligns the next chunk exactly to its stamp;
+ * otherwise a chunk more than [REANCHOR_NANOS] later than expected is
+ * preceded by silence and one more than that earlier has its stale head
+ * trimmed. The timeline never jumps: the Cast receiver appends in MSE
+ * sequence mode, which closes gaps by moving all later audio earlier. While no PCM arrives
  * (focused tile still starting, stalled, or silent) silence is generated so
  * the audio rendition never starves the receiver.
  */
@@ -179,9 +180,18 @@ class CompositeAudioEncoder(
             "[MV-CAST] composite audio re-anchor tile=${r.tile} reason=${r.reason} " +
                 "video=${r.videoMs}ms audio=${r.audioMs}ms delta=${deltaMs}ms",
         )
-        blockFill = 0
-        nextNanos = chunk.startNanos
+        // The timeline never jumps: the receiver appends audio in MSE
+        // sequence mode, which closes any gap by pulling every later
+        // sample earlier (a 470 to 500 ms startup gap put the audio that
+        // far ahead of the picture for the rest of the cast). The next
+        // append aligns exactly instead: silence fills a lead, a lag is
+        // trimmed from the chunk's head.
+        alignExactly = true
     }
+
+    /** Set by [reanchor]: the next chunk is aligned to its stamp with no
+     *  tolerance. Encoder thread. */
+    private var alignExactly = false
 
     private fun fillSilence(c: MediaCodec, untilNanos: Long) {
         if (nextNanos < 0) {
@@ -200,7 +210,9 @@ class CompositeAudioEncoder(
     private fun append(c: MediaCodec, samples: ShortArray, startNanos: Long) {
         if (nextNanos >= 0) {
             val drift = startNanos - nextNanos
-            if (drift < -REANCHOR_NANOS) {
+            val tolerance = if (alignExactly) framesToNanos(1) else REANCHOR_NANOS
+            alignExactly = false
+            if (drift < -tolerance) {
                 // Late: the head of the chunk belongs to pictures already
                 // drawn. Trim it so the rest lands where it belongs.
                 val skipSamples = ((-drift) * RATE / 1_000_000_000L).toInt() * CHANNELS
@@ -211,13 +223,27 @@ class CompositeAudioEncoder(
                 trimmedSamples += skipSamples / CHANNELS
                 return append(c, samples.copyOfRange(skipSamples, samples.size), nextNanos)
             }
-            if (drift > REANCHOR_NANOS) {
-                blockFill = 0
-                nextNanos = startNanos
+            if (drift > tolerance) {
+                // Early: pad with silence up to the chunk's stamp so the
+                // timeline stays sample-continuous (no gap for sequence
+                // mode to collapse).
+                val padFrames = (drift * RATE / 1_000_000_000L).toInt()
+                if (padFrames > 0) {
+                    gapFillFrames += padFrames
+                    appendSamples(c, ShortArray(padFrames * CHANNELS))
+                }
             }
         } else {
             nextNanos = startNanos
         }
+        appendSamples(c, samples)
+    }
+
+    /** Frames of silence inserted to keep the timeline gap-free. */
+    @Volatile var gapFillFrames = 0L
+        private set
+
+    private fun appendSamples(c: MediaCodec, samples: ShortArray) {
         var i = 0
         while (i < samples.size) {
             if (blockFill == 0) blockStartNanos = nextNanos
@@ -233,11 +259,21 @@ class CompositeAudioEncoder(
         }
     }
 
+    private val queueInfo = MediaCodec.BufferInfo()
+
     private fun queueBlock(c: MediaCodec) {
         val us = clock.usForNanos(blockStartNanos)
         // Before the composite started (the first silence anchor): no slot.
         if (us < 0) return
-        val idx = c.dequeueInputBuffer(20_000)
+        // A dropped block is a hole the receiver's sequence-mode append
+        // would close, so wait for an input buffer, draining output in
+        // between (a burst of silence padding fills every input slot).
+        var idx = c.dequeueInputBuffer(5_000)
+        var tries = 0
+        while (idx < 0 && tries++ < 40) {
+            drain(c, queueInfo)
+            idx = c.dequeueInputBuffer(5_000)
+        }
         if (idx < 0) {
             droppedChunks++
             return

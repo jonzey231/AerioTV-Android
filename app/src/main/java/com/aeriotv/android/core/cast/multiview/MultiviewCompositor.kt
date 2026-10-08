@@ -1349,7 +1349,7 @@ class MultiviewCompositor(
                 TAG,
                 "[MV-CAST] audio focused=$focused tap=$pcmTile pcm=${pcmFmt.ifEmpty { "none" }} rms=${rmsDb}dBFS " +
                     "aac=${"%.1f".format(java.util.Locale.US, (audioChunks - healthAudio) / seconds)}/s " +
-                    "silenceBlocks=${silence - healthSilence} dropped=${audio.droppedChunks} csd0=${audio.csd0Hex.ifEmpty { "none" }}",
+                    "silenceBlocks=${silence - healthSilence} gapFill=${audio.gapFillFrames * 1000 / 48_000}ms dropped=${audio.droppedChunks} csd0=${audio.csd0Hex.ifEmpty { "none" }}",
             )
             healthSilence = silence
             // Lip sync of the focused tile: the audio's media time at the
