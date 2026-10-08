@@ -1499,54 +1499,6 @@ fun MainScaffold(
                         minOf(620.dp, (screenW - 32.dp).coerceAtLeast(0.dp))
                     }
                 } else null
-                if ((casting || companionTv != null) && !isTv) {
-                    // Switch Stream gate: LocalIsDispatcharrAdmin is only
-                    // provided inside the player route, so out here (the cast
-                    // card and sheet, composite tile menu) it read its false
-                    // default (device pass cc2c37c7: tile menu had no Switch
-                    // Stream on a switch=allowed account). Provide it from the
-                    // live active playlist row, the same row the player uses.
-                    androidx.compose.runtime.CompositionLocalProvider(
-                        com.aeriotv.android.ui.LocalIsDispatcharrAdmin provides
-                            (capsPlaylist?.canSwitchStream() ?: false),
-                    ) {
-                    com.aeriotv.android.feature.cast.CastTransportCard(
-                        tabletWidth = tabletCardWidth,
-                        multiviewCast = multiviewCast,
-                        castSender = castSender,
-                        companionRemote = companionRemote,
-                        channels = state.channels,
-                        nowProgramme = { ch ->
-                            state.epgByChannel[ch.guideMatchKey]?.nowPlaying()
-                        },
-                        onCastChannel = onCastChannel,
-                        loadChannelStreams = { channelIntPk ->
-                            val m3uNames = viewModel.loadM3uAccountNames()
-                            viewModel.loadChannelStreams(channelIntPk).map { st ->
-                                com.aeriotv.android.feature.player.StreamOption(
-                                    id = st.id,
-                                    name = st.name.orEmpty(),
-                                    resolution = st.resolution,
-                                    fps = st.sourceFps,
-                                    bitrateKbps = st.outputBitrateKbps,
-                                    videoCodec = st.videoCodec,
-                                    audioCodec = st.audioCodec,
-                                    sourceName = st.m3uAccount?.let { m3uNames[it] },
-                                )
-                            }
-                        },
-                        loadCurrentStreamId = { uuid -> viewModel.loadCurrentStreamId(uuid) },
-                        switchChannelStream = { uuid, streamId ->
-                            viewModel.switchChannelStream(uuid, streamId).getOrThrow()
-                        },
-                        recheckSwitchStreamAllowed = { trigger ->
-                            viewModel.recheckSwitchStreamAllowed(trigger)
-                        },
-                    )
-                    }
-                    // 12 dp above the pill on tablets (iPad parity).
-                    Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
-                }
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
                 // is discovered on the LAN OR a Google Cast route exists, so the
@@ -1601,93 +1553,160 @@ fun MainScaffold(
                 val mvBg by com.aeriotv.android.feature.multiview.MultiviewBackground.state
                     .collectAsStateWithLifecycle()
                 val mvBgState = mvBg
-                if (mvBgState != null && !isTv) {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
-                            com.aeriotv.android.feature.multiview.MultiviewDockCard(
-                                tiles = mvBgState.tiles,
-                                tablet = tabletNav,
-                                title = com.aeriotv.android.feature.multiview.MULTIVIEW_BACKGROUND_TITLE,
-                                actionLabel = "Stop",
-                                onOpen = onLaunchMultiview,
-                                onPlay = {
-                                    com.aeriotv.android.feature.multiview.MultiviewBackground.stop()
-                                    // The mirrored pile ends with the tiles.
-                                    if (!multiviewStore.isStaging.value) multiviewStore.clear()
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
+                // Dock stack (Apple parity, HomeView.swift dock VStack). Every
+                // card takes the nav bar's measured frame.
+                // Phones, top to bottom: cast card, background Multiview,
+                // staging Multiview, Kept Live directly above the tab bar. The
+                // Control a TV button rides the LOWEST card row at that card's
+                // height (the card narrows), or its own row with no cards.
+                // Tablets, top to bottom: staging Multiview, background
+                // Multiview, Kept Live, cast card at the bottom; no circle
+                // beside them (the tablet button lives on the pill row).
+                val showMvBg = mvBgState != null && !isTv
+                val fabRow = when {
+                    !phoneFab -> 0
+                    showKept -> 1
+                    showMv -> 2
+                    showMvBg -> 3
+                    else -> 4
                 }
-                if (showMv) {
-                    val mvFab = phoneFab && !showKept
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
-                            com.aeriotv.android.feature.multiview.MultiviewDockCard(
-                                tiles = mvTiles,
-                                tablet = tabletNav,
-                                onOpen = { showMultiviewSheet = true },
-                                onPlay = playStagedMultiview,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (mvFab) {
-                                Spacer(Modifier.width(12.dp))
-                                CompanionControlFab(
-                                    onClick = { showCompanionPicker = true },
-                                    diameter = com.aeriotv.android.feature.livetv.RetainedCardHeight,
+                @Composable
+                fun DockFab() {
+                    Spacer(Modifier.width(12.dp))
+                    CompanionControlFab(
+                        onClick = { showCompanionPicker = true },
+                        diameter = com.aeriotv.android.feature.livetv.RetainedCardHeight,
+                    )
+                }
+                fun gapAfter(row: Int) = if (tabletNav) 12.dp else if (fabRow == row) 10.dp else 8.dp
+                @Composable
+                fun DockKept() {
+                    if (showKept) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
+                                com.aeriotv.android.feature.livetv.RetainedChannelsPill(
+                                    retained = keptRowList,
+                                    onTune = tuneRetained,
+                                    onOpenList = { showRetainedDialog = true },
+                                    onStop = retainedVm::stop,
+                                    onStopAll = retainedVm::stopAll,
+                                    capsule = tabletNav,
+                                    modifier = Modifier.weight(1f),
                                 )
+                                if (fabRow == 1) DockFab()
                             }
                         }
+                        Spacer(Modifier.height(gapAfter(1)))
                     }
-                    Spacer(Modifier.height(if (tabletNav) 12.dp else if (mvFab) 10.dp else 8.dp))
                 }
-                if (showKept || (phoneFab && !showMv)) {
-                    // Outer edges line up with the floating nav bar below:
-                    // phones replicate FloatingTabBar's frame (centred, 600 dp
-                    // cap, 20 dp side insets); tablets take the measured width
-                    // of the centred wrap-content capsule. The gap between
-                    // pill and button matches the bar's 12 dp inner padding.
-                    // Tablets: the cast card's width rule so the two stack as
-                    // matching capsules (Logan 2026-10-05).
-                    val rowFrame = if (tabletCardWidth != null) {
-                        Modifier.width(tabletCardWidth)
-                    } else {
-                        Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
-                    }
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Row(
-                        rowFrame,
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        if (showKept) {
-                            com.aeriotv.android.feature.livetv.RetainedChannelsPill(
-                                retained = keptRowList,
-                                onTune = tuneRetained,
-                                onOpenList = { showRetainedDialog = true },
-                                onStop = retainedVm::stop,
-                                onStopAll = retainedVm::stopAll,
-                                capsule = tabletNav,
-                                // Always the cast card's shape; beside
-                                // Control a TV it only gets narrower (Logan
-                                // 2026-10-05).
-                                modifier = Modifier.weight(1f),
-                            )
+                @Composable
+                fun DockMvStaging() {
+                    if (showMv) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
+                                com.aeriotv.android.feature.multiview.MultiviewDockCard(
+                                    tiles = mvTiles,
+                                    tablet = tabletNav,
+                                    onOpen = { showMultiviewSheet = true },
+                                    onPlay = playStagedMultiview,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (fabRow == 2) DockFab()
+                            }
                         }
-                        if (phoneFab) {
-                            if (showKept) Spacer(Modifier.width(12.dp))
-                            CompanionControlFab(
-                                onClick = { showCompanionPicker = true },
-                                // Beside the Kept Live card: a circle of the
-                                // card's height.
-                                diameter = if (showKept) com.aeriotv.android.feature.livetv.RetainedCardHeight else null,
-                            )
+                        Spacer(Modifier.height(gapAfter(2)))
+                    }
+                }
+                @Composable
+                fun DockMvBg() {
+                    if (showMvBg && mvBgState != null) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
+                                com.aeriotv.android.feature.multiview.MultiviewDockCard(
+                                    tiles = mvBgState.tiles,
+                                    tablet = tabletNav,
+                                    title = com.aeriotv.android.feature.multiview.MULTIVIEW_BACKGROUND_TITLE,
+                                    actionLabel = "Stop",
+                                    onOpen = onLaunchMultiview,
+                                    onPlay = {
+                                        com.aeriotv.android.feature.multiview.MultiviewBackground.stop()
+                                        // The mirrored pile ends with the tiles.
+                                        if (!multiviewStore.isStaging.value) multiviewStore.clear()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (fabRow == 3) DockFab()
+                            }
                         }
+                        Spacer(Modifier.height(gapAfter(3)))
                     }
+                }
+                @Composable
+                fun DockFabOnly() {
+                    if (fabRow == 4) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Row(mvRowFrame, horizontalArrangement = Arrangement.End) {
+                                CompanionControlFab(onClick = { showCompanionPicker = true })
+                            }
+                        }
+                        Spacer(Modifier.height(gapAfter(4)))
                     }
-                    Spacer(Modifier.height(if (tabletNav) 12.dp else if (phoneFab) 10.dp else 8.dp))
+                }
+                @Composable
+                fun DockCast() {
+                    if ((casting || companionTv != null) && !isTv) {
+                        // Switch Stream gate: LocalIsDispatcharrAdmin is only
+                        // provided inside the player route, so out here (the cast
+                        // card and sheet, composite tile menu) it read its false
+                        // default (device pass cc2c37c7: tile menu had no Switch
+                        // Stream on a switch=allowed account). Provide it from the
+                        // live active playlist row, the same row the player uses.
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            com.aeriotv.android.ui.LocalIsDispatcharrAdmin provides
+                                (capsPlaylist?.canSwitchStream() ?: false),
+                        ) {
+                        com.aeriotv.android.feature.cast.CastTransportCard(
+                            tabletWidth = tabletCardWidth,
+                            multiviewCast = multiviewCast,
+                            castSender = castSender,
+                            companionRemote = companionRemote,
+                            channels = state.channels,
+                            nowProgramme = { ch ->
+                                state.epgByChannel[ch.guideMatchKey]?.nowPlaying()
+                            },
+                            onCastChannel = onCastChannel,
+                            loadChannelStreams = { channelIntPk ->
+                                val m3uNames = viewModel.loadM3uAccountNames()
+                                viewModel.loadChannelStreams(channelIntPk).map { st ->
+                                    com.aeriotv.android.feature.player.StreamOption(
+                                        id = st.id,
+                                        name = st.name.orEmpty(),
+                                        resolution = st.resolution,
+                                        fps = st.sourceFps,
+                                        bitrateKbps = st.outputBitrateKbps,
+                                        videoCodec = st.videoCodec,
+                                        audioCodec = st.audioCodec,
+                                        sourceName = st.m3uAccount?.let { m3uNames[it] },
+                                    )
+                                }
+                            },
+                            loadCurrentStreamId = { uuid -> viewModel.loadCurrentStreamId(uuid) },
+                            switchChannelStream = { uuid, streamId ->
+                                viewModel.switchChannelStream(uuid, streamId).getOrThrow()
+                            },
+                            recheckSwitchStreamAllowed = { trigger ->
+                                viewModel.recheckSwitchStreamAllowed(trigger)
+                            },
+                        )
+                        }
+                        // 12 dp above the pill on tablets (iPad parity).
+                        Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
+                    }
+                }
+                if (tabletNav) {
+                    DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockCast()
+                } else {
+                    DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly()
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right
