@@ -15,7 +15,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import com.aeriotv.android.core.data.guideMatchKey
+import com.aeriotv.android.feature.playlist.nowPlaying
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,6 +43,8 @@ import javax.inject.Singleton
 class CastNotificationController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val castSender: AerioCastSender,
+    private val multiviewCast: com.aeriotv.android.core.cast.multiview.MultiviewCastController,
+    private val repository: com.aeriotv.android.core.data.repository.PlaylistRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var started = false
@@ -62,45 +70,307 @@ class CastNotificationController @Inject constructor(
             castSender.involuntaryEnd.collect { end -> postDisconnected(end) }
         }
         scope.launch {
-            combine(castSender.state, castSender.content) { s, c -> s to c }
-                .collect { (state, content) ->
-                    val casting = state is AerioCastSender.State.Connected && content != null
+            // Inputs of the one casting notification: the cast state and
+            // content, the receiver's play state, the composite session (audio
+            // focus and tiles), whether the relay FGS owns the notification
+            // id, and a minute tick so the program line rolls over.
+            val minuteTick = kotlinx.coroutines.flow.flow {
+                while (true) {
+                    emit(System.currentTimeMillis() / 60_000L)
+                    kotlinx.coroutines.delay(60_000L - System.currentTimeMillis() % 60_000L)
+                }
+            }
+            combine(
+                combine(castSender.state, castSender.content, castSender.isPlaying) { s, c, p -> Triple(s, c, p) },
+                multiviewCast.session,
+                com.aeriotv.android.core.cast.hlsproxy.CastHlsProxyService.foreground,
+                minuteTick,
+            ) { (state, content, playing), composite, fgs, _ -> Inputs(state, content, playing, composite, fgs) }
+                .collectLatest { input ->
+                    val casting = input.state is AerioCastSender.State.Connected && input.content != null
                     if (casting) {
                         // Entering a cast: the phone stops local playback, so the
                         // media FGS notification is stale/invalid -- retire it so
                         // this standalone chip is the single casting indicator.
                         if (!wasCasting) runCatching { AerioMediaPlaybackService.stop(context) }
-                        post(
-                            deviceName = (state as AerioCastSender.State.Connected).deviceName,
-                            content = content!!,
-                        )
+                        wasCasting = true
+                        val details = resolveDetails(input)
+                        post(details, input)
                     } else if (wasCasting) {
+                        wasCasting = false
                         clear()
                     }
-                    wasCasting = casting
                 }
         }
     }
 
-    private fun post(deviceName: String?, content: AerioCastSender.Content) {
-        val launchPi = PendingIntent.getActivity(
+    private data class Inputs(
+        val state: AerioCastSender.State,
+        val content: AerioCastSender.Content?,
+        val playing: Boolean,
+        val composite: com.aeriotv.android.core.cast.multiview.MultiviewCastController.Session?,
+        val proxyForeground: Boolean,
+    )
+
+    /** What the casting card shows. Single channel: the channel, its current
+     *  program, its logo. Composited Multiview (Logan 2026-10-08): "Multiview",
+     *  the audio-focused tile's channel, that channel's current program, that
+     *  channel's logo. A composite dropped to one tile reads as that channel,
+     *  like the in-app cast card. */
+    private data class Details(
+        val title: String,
+        val subtitle: String?,
+        val program: String?,
+        val artUrl: String?,
+        val deviceName: String?,
+        val key: String,
+    )
+
+    private suspend fun resolveDetails(input: Inputs): Details {
+        val content = input.content!!
+        val device = (input.state as? AerioCastSender.State.Connected)?.deviceName
+        val composite = input.composite.takeIf {
+            content.mediaId == com.aeriotv.android.core.cast.multiview.MultiviewCastController.MEDIA_ID
+        }
+        if (composite != null) {
+            val focused = composite.tiles.getOrNull(composite.focused) ?: composite.tiles.firstOrNull()
+            val program = focused?.let { programTitle(it.id) }
+            val single = composite.singleChannelName
+            return Details(
+                title = single ?: com.aeriotv.android.core.cast.multiview.MultiviewCastController.TITLE,
+                subtitle = if (single != null) program else focused?.displayName,
+                program = if (single != null) null else program,
+                artUrl = focused?.logoUrl?.takeIf { it.isNotBlank() },
+                deviceName = device,
+                key = "mv:${focused?.id}",
+            )
+        }
+        val channel = channelFor(content.mediaId)
+        val program = if (content.kind == AerioCastReceiverController.Kind.LIVE) {
+            programTitle(content.mediaId) ?: content.subtitle
+        } else content.subtitle
+        return Details(
+            title = content.title.ifBlank { "Now casting" },
+            subtitle = program?.takeIf { it.isNotBlank() },
+            program = null,
+            artUrl = content.artUri?.takeIf { it.isNotBlank() } ?: channel?.tvgLogo?.takeIf { it.isNotBlank() },
+            deviceName = device,
+            key = "ch:${content.mediaId}",
+        )
+    }
+
+    // ---- guide and logo lookups (cached; the card re-resolves each minute) ----
+
+    private var channelsPlaylistId: String? = null
+    private var channelsById: Map<String, com.aeriotv.android.core.data.M3UChannel> = emptyMap()
+
+    private suspend fun channelFor(id: String): com.aeriotv.android.core.data.M3UChannel? = runCatching {
+        val playlist = repository.activePlaylist() ?: return@runCatching null
+        if (playlist.id != channelsPlaylistId) {
+            channelsById = repository.loadCachedChannels(playlist.id).associateBy { it.id }
+            channelsPlaylistId = playlist.id
+        }
+        channelsById[id] ?: channelsById[id.substringAfter(':', id)]
+    }.getOrNull()
+
+    /** The channel's currently airing program title from the cached guide
+     *  (same rows and canonical key the guide and the cast card read). */
+    private suspend fun programTitle(channelId: String): String? = runCatching {
+        val playlist = repository.activePlaylist() ?: return@runCatching null
+        val channel = channelFor(channelId) ?: return@runCatching null
+        val now = System.currentTimeMillis()
+        val key = channel.guideMatchKey
+        repository.loadCachedEpg(playlist.id, now, now)
+            .filter { it.channelId == key }
+            .nowPlaying(now)
+            ?.title?.trim()?.takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
+    private var artCacheUrl: String? = null
+    private var artCacheBitmap: android.graphics.Bitmap? = null
+
+    /** The channel logo through the app's Coil loader (the cache the guide,
+     *  the cast card and the composite tiles use). */
+    private suspend fun artwork(url: String?): android.graphics.Bitmap? {
+        if (url.isNullOrBlank()) return null
+        if (url == artCacheUrl) return artCacheBitmap
+        val bmp = runCatching {
+            val loader = coil3.SingletonImageLoader.get(context)
+            val req = coil3.request.ImageRequest.Builder(context).data(url).build()
+            loader.execute(req).image?.let {
+                com.aeriotv.android.feature.multiview.TileLogoCrop.softwareBitmap(it)
+            }
+        }.getOrNull()
+        artCacheUrl = url
+        artCacheBitmap = bmp
+        return bmp
+    }
+
+    // ---- media session ----
+
+    private var mediaSession: MediaSessionCompat? = null
+    private var volumeProvider: androidx.media.VolumeProviderCompat? = null
+
+    private fun session(): MediaSessionCompat {
+        mediaSession?.let { return it }
+        val s = MediaSessionCompat(context, "AerioTVCast").apply {
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() = castSender.play()
+                override fun onPause() = castSender.pause()
+                override fun onStop() = castSender.stopPlayback()
+            })
+            setSessionActivity(launchIntent())
+        }
+        // Remote playback: the card's volume drives the TV, as the system's
+        // own cast card did.
+        val vp = object : androidx.media.VolumeProviderCompat(
+            VOLUME_CONTROL_ABSOLUTE, 100,
+            ((castSender.deviceVolume() ?: 0.5) * 100).toInt(),
+        ) {
+            override fun onSetVolumeTo(volume: Int) {
+                castSender.setDeviceVolume(volume / 100.0)
+                currentVolume = volume
+            }
+            override fun onAdjustVolume(direction: Int) {
+                val next = (currentVolume + direction * 5).coerceIn(0, 100)
+                castSender.setDeviceVolume(next / 100.0)
+                currentVolume = next
+            }
+        }
+        s.setPlaybackToRemote(vp)
+        volumeProvider = vp
+        mediaSession = s
+        return s
+    }
+
+    private fun releaseSession() {
+        mediaSession?.let { runCatching { it.isActive = false; it.release() } }
+        mediaSession = null
+        volumeProvider = null
+    }
+
+    private fun launchIntent(): PendingIntent = PendingIntent.getActivity(
+        context,
+        REQ_CODE,
+        Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+        },
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    private var actionReceiverRegistered = false
+
+    private fun ensureActionReceiver() {
+        if (actionReceiverRegistered) return
+        actionReceiverRegistered = true
+        val filter = android.content.IntentFilter().apply {
+            addAction(ACTION_PLAY); addAction(ACTION_PAUSE); addAction(ACTION_STOP)
+        }
+        androidx.core.content.ContextCompat.registerReceiver(
             context,
-            REQ_CODE,
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context, intent: Intent) {
+                    when (intent.action) {
+                        ACTION_PLAY -> castSender.play()
+                        ACTION_PAUSE -> castSender.pause()
+                        ACTION_STOP -> castSender.stopPlayback()
+                    }
+                }
             },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    private fun actionIntent(action: String, req: Int): PendingIntent = PendingIntent.getBroadcast(
+        context, req, Intent(action).setPackage(context.packageName),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    private suspend fun post(details: Details, input: Inputs) {
+        ensureActionReceiver()
+        val art = artwork(details.artUrl)
+        val session = session()
+        session.setMetadata(
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, details.key)
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, details.title)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, details.title)
+                .apply {
+                    details.subtitle?.let {
+                        putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it)
+                        putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, it)
+                    }
+                    details.program?.let {
+                        putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it)
+                        putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, it)
+                    }
+                    art?.let {
+                        putBitmap(MediaMetadataCompat.METADATA_KEY_ART, it)
+                        putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, it)
+                    }
+                }
+                .build(),
+        )
+        session.setPlaybackState(
+            PlaybackStateCompat.Builder()
+                .setActions(
+                    PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP,
+                )
+                .setState(
+                    if (input.playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                    PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN,
+                    1f,
+                )
+                .build(),
+        )
+        castSender.deviceVolume()?.let { v -> volumeProvider?.currentVolume = (v * 100).toInt() }
+        if (!session.isActive) session.isActive = true
+
+        val casting = if (!details.deviceName.isNullOrBlank()) "Casting to ${details.deviceName}" else "Casting"
+        val lines = listOfNotNull(details.subtitle, details.program, casting)
+        val playPause = if (input.playing) {
+            NotificationCompat.Action(android.R.drawable.ic_media_pause, "Pause", actionIntent(ACTION_PAUSE, REQ_CODE + 1))
+        } else {
+            NotificationCompat.Action(android.R.drawable.ic_media_play, "Play", actionIntent(ACTION_PLAY, REQ_CODE + 2))
+        }
+        val stop = NotificationCompat.Action(
+            android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent(ACTION_STOP, REQ_CODE + 3),
         )
         val notif = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(content.title.ifBlank { "Now casting" })
-            .setContentText(if (!deviceName.isNullOrBlank()) "Casting to $deviceName" else "Casting")
-            .setContentIntent(launchPi)
+            .setContentTitle(details.title)
+            .setContentText(lines.first())
+            .setSubText(casting.takeIf { lines.size > 1 })
+            .apply { art?.let { setLargeIcon(it) } }
+            .addAction(playPause)
+            .addAction(stop)
+            .setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setMediaSession(session.sessionToken)
+                    .setShowActionsInCompactView(0, 1),
+            )
+            .setContentIntent(launchIntent())
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(NOTIF_ID, notif) }
+        latestNotification = notif
+        val mgr = NotificationManagerCompat.from(context)
+        // One AerioTV notification (Logan 2026-10-08): while the relay service
+        // is foreground its required notification id carries this card and
+        // the standalone chip is withdrawn; otherwise (Cast Connect to the
+        // Android TV app, no relay) the chip id carries it.
+        runCatching {
+            if (input.proxyForeground) {
+                mgr.cancel(NOTIF_ID)
+                mgr.notify(com.aeriotv.android.core.cast.hlsproxy.CastHlsProxyService.NOTIF_ID, notif)
+            } else {
+                mgr.notify(NOTIF_ID, notif)
+            }
+        }
     }
 
     private fun postDisconnected(end: AerioCastSender.InvoluntaryEnd) {
@@ -141,7 +411,9 @@ class CastNotificationController @Inject constructor(
     }
 
     private fun clear() {
+        latestNotification = null
         runCatching { NotificationManagerCompat.from(context).cancel(NOTIF_ID) }
+        releaseSession()
     }
 
     private fun ensureChannel() {
@@ -168,10 +440,18 @@ class CastNotificationController @Inject constructor(
         }
     }
 
-    private companion object {
-        const val CHANNEL_ID = "aeriotv_casting"
-        const val ALERT_CHANNEL_ID = "aeriotv_cast_alerts"
-        const val NOTIF_ID = 0xC5
+    companion object {
+        /** The casting card last built; the relay service starts foreground
+         *  with it so its required notification is this card, not a second one. */
+        @Volatile var latestNotification: android.app.Notification? = null
+            private set
+
+        private const val ACTION_PLAY = "com.aeriotv.android.cast.PLAY"
+        private const val ACTION_PAUSE = "com.aeriotv.android.cast.PAUSE"
+        private const val ACTION_STOP = "com.aeriotv.android.cast.STOP"
+        private const val CHANNEL_ID = "aeriotv_casting"
+        private const val ALERT_CHANNEL_ID = "aeriotv_cast_alerts"
+        private const val NOTIF_ID = 0xC5
 
         // Notification ids in use across the app, so the next addition does not
         // collide the way this one did: 0xAD/0xAE LocalRecordingService,
@@ -185,7 +465,7 @@ class CastNotificationController @Inject constructor(
         // Z Fold 5 against a live cast to a Google TV Streamer: the alert was
         // posted and gone within the same teardown, leaving the user with
         // nothing, which is the exact bug this is meant to fix.
-        const val ALERT_NOTIF_ID = 0x0C7A
-        const val REQ_CODE = 0xC5
+        private const val ALERT_NOTIF_ID = 0x0C7A
+        private const val REQ_CODE = 0xC5
     }
 }

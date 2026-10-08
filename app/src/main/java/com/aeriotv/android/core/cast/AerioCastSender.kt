@@ -1288,6 +1288,14 @@ class AerioCastSender @Inject constructor(
 
     fun pause() { runCatching { currentSession()?.remoteMediaClient?.pause() } }
 
+    /** Receiver device volume 0..1 (the casting notification's volume
+     *  provider); null with no session. */
+    fun deviceVolume(): Double? = runCatching { currentSession()?.volume }.getOrNull()
+
+    fun setDeviceVolume(value: Double) {
+        runCatching { currentSession()?.volume = value.coerceIn(0.0, 1.0) }
+    }
+
     fun togglePlayPause() {
         val rmc = currentSession()?.remoteMediaClient ?: return
         // Drive off the receiver's reported player state, not rmc.isPlaying

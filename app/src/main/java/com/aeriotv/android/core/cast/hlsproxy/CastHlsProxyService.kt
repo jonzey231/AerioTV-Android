@@ -12,6 +12,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.aeriotv.android.MainActivity
 import com.aeriotv.android.R
+import com.aeriotv.android.core.cast.CastNotificationController
 
 /**
  * Minimal foreground service scoped to an active cast HLS proxy session
@@ -74,6 +75,7 @@ class CastHlsProxyService : Service() {
 
     override fun onDestroy() {
         running = false
+        _foreground.value = false
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         runCatching { unregisterReceiver(screenReceiver) }
         releaseLocks()
@@ -139,20 +141,29 @@ class CastHlsProxyService : Service() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("Streaming to Cast device")
-            .setContentText("AerioTV is relaying this channel to your TV")
-            .setContentIntent(launchPi)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .build()
+        // One AerioTV notification while casting (Logan 2026-10-08): this
+        // service's required FGS notification IS the media-style casting
+        // card CastNotificationController builds (title, channel, program,
+        // logo, "Casting to <TV>"). The controller re-posts it on this id
+        // while the service is up and keeps its own chip (0xC5) cancelled.
+        // The plain fallback covers only a start before the controller has
+        // built anything.
+        val notification = CastNotificationController.latestNotification
+            ?: NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle("Casting")
+                .setContentText("AerioTV is relaying this channel to your TV")
+                .setContentIntent(launchPi)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
             startForeground(NOTIF_ID, notification)
         }
+        _foreground.value = true
         return START_NOT_STICKY // proxy state lives in the session singleton; no restart value
     }
 
@@ -171,12 +182,17 @@ class CastHlsProxyService : Service() {
         /** Same channel as CastNotificationController's chip so the user
          *  sees one "Casting" group in notification settings. */
         private const val CHANNEL_ID = "aeriotv_casting"
-        private const val NOTIF_ID = 0xC6
+        const val NOTIF_ID = 0xC6
         private const val REQ_CODE = 0xC6
 
         /** True between onCreate and onDestroy, for the session's log lines. */
         @Volatile var running: Boolean = false
             private set
+
+        private val _foreground = kotlinx.coroutines.flow.MutableStateFlow(false)
+        /** True once startForeground ran, until onDestroy: while true the
+         *  casting notification lives on [NOTIF_ID] (this service's). */
+        val foreground: kotlinx.coroutines.flow.StateFlow<Boolean> = _foreground
 
         /** Proxy counters for the keepalive log lines, set by the session. */
         @Volatile var stats: (() -> String)? = null
