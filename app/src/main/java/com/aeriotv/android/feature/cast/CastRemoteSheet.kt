@@ -202,10 +202,13 @@ fun CastRemoteSheet(
         // 2026-09-27, "Cast card doesn't match iOS"): header, program block,
         // Channel Down / Channel Up, Back / Play-Pause / Forward, Options,
         // Stop, then the receiver footnotes. 14 dp between blocks, as iOS's
-        // VStack(spacing: 14).
+        // VStack(spacing: 14). The column scrolls: on a landscape tablet the
+        // composited Multiview preview pushed Stop Casting and the receiver
+        // lines below the sheet with no way to reach them (Onn 11" 2026-10-08).
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),

@@ -84,11 +84,15 @@ class MultiviewCompositor(
         const val MAX_BEHIND_NANOS = 3_000_000_000L
         private const val STATS_NANOS = 10_000_000_000L
         private const val MAX_TILE_RETRIES = 10
-        /** Composite tile buffering (see startPlayer). */
+        /** Composite tile buffering (see startPlayer). Start and resume on
+         *  10 s (Onn 11" 2026-10-08: a tile that started on 6 s fell to 1.4 s
+         *  within 10 s and stalled at 21 s, then sat at 8 to 14 s once
+         *  refilled), so one full 8 to 9.5 s burst gap from Dispatcharr is
+         *  covered before the first frame and after every stall. */
         private const val TILE_MIN_BUFFER_MS = 10_000
         private const val TILE_MAX_BUFFER_MS = 30_000
-        private const val TILE_START_BUFFER_MS = 6_000
-        private const val TILE_REBUFFER_MS = 8_000
+        private const val TILE_START_BUFFER_MS = 10_000
+        private const val TILE_REBUFFER_MS = 10_000
         /** Preview notice on a tile that is retrying, and on one that gave up. */
         const val NOTICE_RECONNECTING = "Reconnecting"
         const val NOTICE_UNAVAILABLE = "Unavailable"
@@ -653,8 +657,8 @@ class MultiviewCompositor(
                 // tiles started on 1 s and resumed on 3 s, then stalled again
                 // with buf=380 ms to 2.2 s against Dispatcharr's 8 to 9.5 s
                 // burst cadence). Every stall here freezes a tile on the TV
-                // and gaps the composite audio, so a tile starts on 6 s,
-                // resumes on 8 s and keeps 10 to 30 s; the progressive TS
+                // and gaps the composite audio, so a tile starts on 10 s,
+                // resumes on 10 s and keeps 10 to 30 s; the progressive TS
                 // source has no live-offset target to pull it back to the
                 // edge. The local Multiview and the single player are
                 // unchanged.
