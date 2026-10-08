@@ -331,6 +331,7 @@ class MultiviewCompositor(
      *  is the first segment's A/V alignment (Apple e1dcbd2 logged
      *  `seg=0 vpts=0.000 apts=0.299` before muxing audio at video time). */
     private var firstKeyTicks = -1L
+    private var firstVideoOutLogged = false
     private var firstAvLogged = false
 
     private fun noteFirstAudio(ticks: Long) {
@@ -1223,6 +1224,14 @@ class MultiviewCompositor(
                     } else {
                         val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                         submitted.remove(info.presentationTimeUs)?.let { at ->
+                            if (!firstVideoOutLogged) {
+                                firstVideoOutLogged = true
+                                Log.i(
+                                    TAG,
+                                    "[MV-CAST] composite first video output pts=${info.presentationTimeUs / 1000}ms " +
+                                        "(stamped at draw) encoder latency=${(now - at) / 1_000_000}ms key=$key",
+                                )
+                            }
                             encLatencySumNanos += now - at
                             encLatencyCount++
                         }

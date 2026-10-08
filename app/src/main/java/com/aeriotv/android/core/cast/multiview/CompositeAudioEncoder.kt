@@ -126,8 +126,23 @@ class CompositeAudioEncoder(
         codec = null
     }
 
+    /** Output-stamp compensation from [AacDelayProbe], microseconds: how
+     *  far after its stamp an input sample lands in the decoded output of a
+     *  decoder that does not trim priming (no edit list is muxed, so the
+     *  receiver does not trim). Output stamps move by it. Encoder thread. */
+    private var compUs = 0L
+    private var firstInUs = Long.MIN_VALUE
+    private var firstOutLogged = false
+
     private fun loop(c: MediaCodec) {
         val info = MediaCodec.BufferInfo()
+        val probe = AacDelayProbe.measure(RATE, CHANNELS, BITRATE, FRAMES_PER_BLOCK)
+        if (probe.delayUs != null && kotlin.math.abs(probe.delayUs) <= AacDelayProbe.MAX_COMP_US) {
+            compUs = probe.delayUs
+            log("[MV-CAST] av comp=${compUs / 1000}ms reason=aac-codec-delay ${probe.detail}")
+        } else {
+            log("[MV-CAST] av comp=0ms reason=aac-probe-unusable ${probe.detail}")
+        }
         try {
             while (running) {
                 val chunk = try { queue.poll(10, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
@@ -232,6 +247,7 @@ class CompositeAudioEncoder(
         val bb = java.nio.ByteBuffer.allocate(block.size * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
         bb.asShortBuffer().put(block)
         buf.put(bb.array())
+        if (firstInUs == Long.MIN_VALUE) firstInUs = us
         c.queueInputBuffer(idx, 0, block.size * 2, us, 0)
     }
 
@@ -251,9 +267,165 @@ class CompositeAudioEncoder(
                 val raw = ByteArray(info.size)
                 out.position(info.offset)
                 out.get(raw)
-                onFrame(Adts.wrap(raw, RATE, CHANNELS), clock.ticksForUs(info.presentationTimeUs))
+                if (!firstOutLogged) {
+                    firstOutLogged = true
+                    log(
+                        "[MV-CAST] composite first AAC output pts=${info.presentationTimeUs / 1000}ms " +
+                            "first input pts=${firstInUs / 1000}ms stamp shift=${(info.presentationTimeUs - firstInUs) / 1000}ms " +
+                            "muxed at ${(info.presentationTimeUs - compUs) / 1000}ms (comp ${compUs / 1000}ms)",
+                    )
+                }
+                onFrame(Adts.wrap(raw, RATE, CHANNELS), clock.ticksForUs(info.presentationTimeUs - compUs))
             }
             c.releaseOutputBuffer(idx, false)
+        }
+    }
+}
+
+/**
+ * Measures the platform AAC encoder's effective delay on this device
+ * (2026-10-08, Nothing Phone: audio led the picture on the Chromecast while
+ * the phone-side mux offset was about -35 ms). A tone starting at a known
+ * input time is encoded with the same settings as the composite and decoded
+ * with the platform AAC decoder, which, like the receiver (no edit list is
+ * muxed), plays the priming instead of trimming it. The tone's onset in the
+ * decoded output, measured against the output frame stamps, minus its input
+ * time is the delay: positive means audio lands late relative to its stamp,
+ * negative (the encoder already stamping its output earlier than its
+ * content) means it lands early, which is an audio lead on the TV.
+ */
+object AacDelayProbe {
+    class Result(val delayUs: Long?, val detail: String)
+
+    /** A larger value is not a codec delay; it is not applied. */
+    const val MAX_COMP_US = 200_000L
+    private const val ONSET_FRAMES = 4_800 // 100 ms at 48 kHz
+    private const val TOTAL_BLOCKS = 24
+    private const val AMPLITUDE = 12_000
+    private const val THRESHOLD = AMPLITUDE / 4
+    private const val TIMEOUT_NANOS = 2_000_000_000L
+
+    fun measure(rate: Int, channels: Int, bitrate: Int, framesPerBlock: Int): Result {
+        var enc: MediaCodec? = null
+        var dec: MediaCodec? = null
+        try {
+            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, channels).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, framesPerBlock * channels * 2)
+            }
+            val e = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            enc = e
+            e.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            e.start()
+            val encName = e.name
+            val info = MediaCodec.BufferInfo()
+            val frames = ArrayList<Pair<ByteArray, Long>>()
+            var csd: ByteArray? = null
+            var fed = 0
+            var encDone = false
+            val deadline = System.nanoTime() + TIMEOUT_NANOS
+            while (!encDone && System.nanoTime() < deadline) {
+                if (fed <= TOTAL_BLOCKS) {
+                    val idx = e.dequeueInputBuffer(5_000)
+                    if (idx >= 0) {
+                        val buf = e.getInputBuffer(idx)!!
+                        buf.clear()
+                        if (fed == TOTAL_BLOCKS) {
+                            e.queueInputBuffer(idx, 0, 0, fed.toLong() * framesPerBlock * 1_000_000L / rate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        } else {
+                            val bb = java.nio.ByteBuffer.allocate(framesPerBlock * channels * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            for (f in 0 until framesPerBlock) {
+                                val n = fed * framesPerBlock + f
+                                val v = if (n < ONSET_FRAMES) 0 else
+                                    (AMPLITUDE * Math.sin(2 * Math.PI * 1000.0 * (n - ONSET_FRAMES) / rate + Math.PI / 2)).toInt()
+                                repeat(channels) { bb.putShort(v.toShort()) }
+                            }
+                            buf.put(bb.array())
+                            e.queueInputBuffer(idx, 0, bb.capacity(), fed.toLong() * framesPerBlock * 1_000_000L / rate, 0)
+                        }
+                        fed++
+                    }
+                }
+                while (true) {
+                    val o = e.dequeueOutputBuffer(info, 5_000)
+                    if (o < 0) break
+                    val out = e.getOutputBuffer(o)
+                    if (out != null && info.size > 0) {
+                        val b = ByteArray(info.size)
+                        out.position(info.offset)
+                        out.get(b)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) csd = b else frames += b to info.presentationTimeUs
+                    }
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) encDone = true
+                    e.releaseOutputBuffer(o, false)
+                }
+            }
+            if (csd == null || frames.isEmpty()) return Result(null, "encoder=$encName frames=${frames.size} csd=${csd != null}")
+            val firstStamp = frames.first().second
+
+            val dfmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, channels).apply {
+                setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(csd))
+            }
+            val d = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            dec = d
+            d.configure(dfmt, null, null, 0)
+            d.start()
+            val decName = d.name
+            var next = 0
+            var decDone = false
+            var onsetUs: Long? = null
+            var outChannels = channels
+            var outRate = rate
+            while (!decDone && onsetUs == null && System.nanoTime() < deadline) {
+                if (next <= frames.size) {
+                    val idx = d.dequeueInputBuffer(5_000)
+                    if (idx >= 0) {
+                        val buf = d.getInputBuffer(idx)!!
+                        buf.clear()
+                        if (next == frames.size) {
+                            d.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        } else {
+                            val (b, ts) = frames[next]
+                            buf.put(b)
+                            d.queueInputBuffer(idx, 0, b.size, ts, 0)
+                        }
+                        next++
+                    }
+                }
+                while (onsetUs == null) {
+                    val o = d.dequeueOutputBuffer(info, 5_000)
+                    if (o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        outChannels = d.outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        outRate = d.outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        continue
+                    }
+                    if (o < 0) break
+                    val out = d.getOutputBuffer(o)
+                    if (out != null && info.size > 0) {
+                        out.position(info.offset)
+                        val sb = out.slice().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+                        val n = info.size / 2 / outChannels
+                        for (f in 0 until n) {
+                            if (kotlin.math.abs(sb.get(f * outChannels).toInt()) >= THRESHOLD) {
+                                onsetUs = info.presentationTimeUs + f * 1_000_000L / outRate
+                                break
+                            }
+                        }
+                    }
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) decDone = true
+                    d.releaseOutputBuffer(o, false)
+                }
+            }
+            val inputOnsetUs = ONSET_FRAMES * 1_000_000L / rate
+            val detail = "encoder=$encName decoder=$decName first stamp=${firstStamp}us " +
+                "tone in=${inputOnsetUs}us out=${onsetUs?.let { "${it}us" } ?: "none"}"
+            return Result(onsetUs?.let { it - inputOnsetUs }, detail)
+        } catch (t: Throwable) {
+            return Result(null, "failed: $t")
+        } finally {
+            enc?.let { runCatching { it.stop() }; runCatching { it.release() } }
+            dec?.let { runCatching { it.stop() }; runCatching { it.release() } }
         }
     }
 }

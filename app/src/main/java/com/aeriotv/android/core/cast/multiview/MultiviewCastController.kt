@@ -53,6 +53,12 @@ class MultiviewCastController @Inject constructor(
          *  seeked there. Apple a4bd790 round 8: the receiver sat 3.7 to 4 s
          *  behind and the former 6 s threshold never fired, so it is 2 s. */
         const val NUDGE_THRESHOLD_MS = 2_000L
+        /** Focus and layout changes nudge only past this. The 3 s HOLD-BACK
+         *  plus one 1 s segment is the receiver's normal distance, and the
+         *  seek is a rebuffer that briefly freezes every tile on the TV
+         *  (Nothing Phone 2026-10-08: focus seeks at 2.4 and 3.1 s behind).
+         *  Apple's rule: startup nudges at [NUDGE_THRESHOLD_MS], changes at 4 s. */
+        const val CHANGE_NUDGE_THRESHOLD_MS = 4_000L
         /** The composite playlists' HOLD-BACK: three targets of the composite
          *  profile's TARGETDURATION of 1. */
         const val COMPOSITE_HOLD_BACK_S = 3.0
@@ -354,7 +360,8 @@ class MultiviewCastController @Inject constructor(
      * HOLD-BACK, the point the receiver's player clamps to. The Cast SDK's
      * cached live seekable range was stale on Apple (seekable end 7.363 at
      * t=30.4 and t=58.0), so it is logged only. A web receiver more than
-     * [NUDGE_THRESHOLD_MS] behind is seeked to just inside the seek end, and
+     * [NUDGE_THRESHOLD_MS] (startup) or [CHANGE_NUDGE_THRESHOLD_MS] (focus,
+     * layout, tile count) behind is seeked to just inside the seek end, and
      * a result line follows [NUDGE_RESULT_DELAY_MS] later.
      */
     private fun compositeCatchUp(reason: String) {
@@ -368,6 +375,7 @@ class MultiviewCastController @Inject constructor(
             if (e.first == hlsProxy.loadedGeneration) e.second - e.third - COMPOSITE_HOLD_BACK_S else null
         }
         val behind = seekEnd?.let { it - pos }
+        val threshold = if (reason == "startup") NUDGE_THRESHOLD_MS else CHANGE_NUDGE_THRESHOLD_MS
         Log.i(
             TAG,
             "[Cast] composite $reason: receiver t=${fmt3(pos)} live seek end=${seekEnd?.let { fmt3(it) } ?: "n/a"} " +
@@ -375,7 +383,7 @@ class MultiviewCastController @Inject constructor(
                 "behind=${behind?.let { String.format(java.util.Locale.US, "%.1f s", it) } ?: "n/a"}; ${lagLine(pos)}",
         )
         if (target != AerioCastSender.ReceiverTarget.WEB_RECEIVER || seekEnd == null || behind == null ||
-            !seekEnd.isFinite() || behind * 1000 <= NUDGE_THRESHOLD_MS
+            !seekEnd.isFinite() || behind * 1000 <= threshold
         ) return
         val aim = maxOf(pos, seekEnd - NUDGE_MARGIN_MS / 1000.0)
         Log.i(
@@ -383,7 +391,7 @@ class MultiviewCastController @Inject constructor(
             String.format(
                 java.util.Locale.US,
                 "[Cast] composite nudge (%s): seek t=%.3f -> %.3f (live seek end %.3f, %.1f s behind > %.1f s)",
-                reason, pos, aim, seekEnd, behind, NUDGE_THRESHOLD_MS / 1000.0,
+                reason, pos, aim, seekEnd, behind, threshold / 1000.0,
             ),
         )
         sender.seekToStreamPosition((aim * 1000).toLong())
