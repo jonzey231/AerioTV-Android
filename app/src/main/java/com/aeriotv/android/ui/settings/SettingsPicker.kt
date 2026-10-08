@@ -105,18 +105,24 @@ fun <T> ColumnScope.SettingsPickerRow(
     tvChoiceSheet: Boolean = false,
 ) {
     if (tvChoiceSheet && rememberIsTvDevice()) {
+        // The sheet opens with focus on the CURRENT value (a long list such
+        // as Catch-Up Time Offset opened on its first option, -180).
+        val selectedFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+        val hasSelected = options.any { it.value == selected }
         SettingsTvOptionsSheetRow(
             title = title,
             summary = options.firstOrNull { it.value == selected }?.label.orEmpty(),
             leadingIcon = leadingIcon,
             footer = footer,
             modifier = modifier,
+            initialFocus = if (hasSelected) selectedFocus else null,
         ) { close ->
             options.forEach { option ->
                 SettingsSelectionRow(
                     label = option.label,
                     subtitle = option.subtitle,
                     leadingIcon = option.icon,
+                    modifier = if (option.value == selected) Modifier.focusRequester(selectedFocus) else Modifier,
                     selected = option.value == selected,
                     onClick = {
                         onSelect(option.value)
@@ -250,6 +256,7 @@ private fun SettingsTvOptionsSheetRow(
     leadingIcon: androidx.compose.ui.graphics.vector.ImageVector?,
     footer: String?,
     modifier: Modifier,
+    initialFocus: androidx.compose.ui.focus.FocusRequester? = null,
     content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
 ) {
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
@@ -340,7 +347,11 @@ private fun SettingsTvOptionsSheetRow(
                 }
             }
             androidx.compose.runtime.LaunchedEffect(Unit) {
-                com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("sheetFirst:$title", "sheet open", firstFocus)
+                if (initialFocus != null) {
+                    com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("sheetSelected:$title", "sheet open", initialFocus)
+                } else {
+                    com.aeriotv.android.ui.tv.TvFocusTrace.settingsRequest("sheetFirst:$title", "sheet open", firstFocus)
+                }
             }
         }
     }

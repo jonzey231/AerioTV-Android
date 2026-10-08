@@ -340,9 +340,13 @@ class GuideGridState(
      * cell on the row changes, and only to a cell that is on screen. Returns
      * (ended, airing) when it moved, else null.
      */
-    fun boundaryRetarget(nowMs: Long): Pair<EPGProgramme, EPGProgramme>? {
+    fun boundaryRetarget(nowMs: Long, previousTickMs: Long): Pair<EPGProgramme, EPGProgramme>? {
         val cur = focusedCell() ?: return null
         if (cur.endMillis > nowMs) return null
+        // Only a program that ENDED since the previous clock tick moves on. A
+        // program that was already over (the user stepped back onto an aired
+        // airing to play its catch-up) keeps focus, or OK would tune live.
+        if (cur.endMillis <= previousTickMs) return null
         val next = rows.cellAt(focusRow, nowMs) ?: return null
         if (next.startMillis == cur.startMillis) return null
         if (next.startMillis >= viewportEndMs || next.endMillis <= viewportStartMs) return null

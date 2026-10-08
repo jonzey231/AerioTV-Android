@@ -775,13 +775,16 @@ fun GuideScreen(
     // untouched). Skipped after a recent key, with any sheet or menu up, and
     // whenever the grid does not hold focus.
     if (isTv) {
+        val previousTick = remember { longArrayOf(nowMs) }
         LaunchedEffect(nowMs) {
+            val prevTickMs = previousTick[0]
+            previousTick[0] = nowMs
             if (!tabActive || !gridHasFocus || rows.isEmpty) return@LaunchedEffect
             if (System.currentTimeMillis() - lastGuideKeyAt[0] < 5_000L) return@LaunchedEffect
             if (groupSidebarOpen || showManageGroups || showJumpSheet || searchActive || menuFor != null ||
                 programInfoTarget != null || recordTarget != null || collectionPickerFor != null) return@LaunchedEffect
             val row = grid.focusRow
-            val moved = grid.boundaryRetarget(nowMs) ?: return@LaunchedEffect
+            val moved = grid.boundaryRetarget(nowMs, prevTickMs) ?: return@LaunchedEffect
             com.aeriotv.android.ui.tv.TvFocusTrace.guide("boundary refocus row=$row from=${moved.first.title} to=${moved.second.title}")
         }
     }
