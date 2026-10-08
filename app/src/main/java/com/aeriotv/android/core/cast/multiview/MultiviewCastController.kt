@@ -99,6 +99,19 @@ class MultiviewCastController @Inject constructor(
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
 
+    /** Compositor slot -> notice, as last reported (main thread). */
+    private var slotNotices: Map<Int, String> = emptyMap()
+    private val _tileNotices = MutableStateFlow<Map<Int, String>>(emptyMap())
+    /** Display position -> preview notice ("Reconnecting" while a tile's
+     *  ingest retries, "Unavailable" once it gave up). */
+    val tileNotices: StateFlow<Map<Int, String>> = _tileNotices.asStateFlow()
+
+    private fun publishNotices() {
+        _tileNotices.value = slotNotices.mapNotNull { (slot, text) ->
+            order.indexOf(slot).takeIf { it >= 0 }?.let { it to text }
+        }.toMap()
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var compositor: MultiviewCompositor? = null
     private var pipe: LocalTsPipe? = null
@@ -155,6 +168,12 @@ class MultiviewCastController @Inject constructor(
         )
         c.style = style.value
         c.layoutMode = layout
+        c.onTileNotices = { n ->
+            if (compositor === c) {
+                slotNotices = n
+                publishNotices()
+            }
+        }
         if (!c.start()) {
             p.close()
             _session.value = null
@@ -165,6 +184,8 @@ class MultiviewCastController @Inject constructor(
         compositor = c
         c.focusArgb = focusArgb
         order = live.indices.toList()
+        slotNotices = emptyMap()
+        publishNotices()
         _session.value = Session(live, focused, layout)
         styleJob = scope.launch {
             style.collect { st ->
@@ -280,6 +301,7 @@ class MultiviewCastController @Inject constructor(
             "[MV-CAST] composite ${if (isTile) "remove" else "add"} ${tile.displayName}: ${s.tiles.size} -> ${next.size} tiles " +
                 "in place (same stream, no receiver reload${if (next.size == 1) ", ${next[0].displayName} full frame" else ""})",
         )
+        publishNotices()
         _session.value = s.copy(tiles = next, focused = focus, layoutMode = layout)
         // The new grid reaches the TV when the receiver's playhead does, so a
         // receiver far behind is caught up (same as a layout change).
@@ -425,6 +447,7 @@ class MultiviewCastController @Inject constructor(
         if (a == b || a !in s.tiles.indices || b !in s.tiles.indices) return
         order = MultiviewCompositeLayout.swapOrder(order, a, b)
         compositor?.setOrder(order)
+        publishNotices()
         val tiles = s.tiles.toMutableList().also { it[a] = s.tiles[b]; it[b] = s.tiles[a] }
         val focused = when (s.focused) { a -> b; b -> a; else -> s.focused }
         Log.i(TAG, "[MV-CAST] composite swap ${s.tiles[a].displayName} <-> ${s.tiles[b].displayName}")
@@ -450,6 +473,23 @@ class MultiviewCastController @Inject constructor(
     }
 
     fun attachPreview(surface: Surface) { compositor?.attachPreview(surface) }
+
+    /**
+     * Display position under a touch at ([x], [y]) on a preview of [viewWidth]
+     * x [viewHeight] showing the whole frame, or -1 for a gap. Resolved by the
+     * compositor from the geometry it draws (shown order, layout, padding),
+     * so a tap always lands on the tile drawn under the finger; the session's
+     * copy is the fallback when no compositor runs.
+     */
+    fun hitTestPreview(x: Float, y: Float, viewWidth: Float, viewHeight: Float): Int {
+        if (viewWidth <= 0f || viewHeight <= 0f) return -1
+        val s = _session.value ?: return -1
+        val pos = compositor?.hitTestFrame(
+            x * MultiviewCompositeLayout.WIDTH / viewWidth,
+            y * MultiviewCompositeLayout.HEIGHT / viewHeight,
+        ) ?: MultiviewCompositeLayout.hitTestView(x, y, viewWidth, viewHeight, s.tiles.size, style.value.padding, s.layoutMode)
+        return pos.takeIf { it in s.tiles.indices } ?: -1
+    }
     fun detachPreview(surface: Surface) { compositor?.detachPreview(surface) }
 
     /** Main thread. Idempotent. */
@@ -467,6 +507,8 @@ class MultiviewCastController @Inject constructor(
             Log.i(TAG, "[MV-CAST] background keepalive off reason=$reason")
         }
         order = emptyList()
+        slotNotices = emptyMap()
+        publishNotices()
         startupCatchUpPending = false
         nudgeCheck?.cancel()
         nudgeCheck = null

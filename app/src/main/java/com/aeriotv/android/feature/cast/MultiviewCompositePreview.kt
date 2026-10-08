@@ -5,8 +5,14 @@ import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +32,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
@@ -73,22 +78,16 @@ fun MultiviewCompositePreview(
 ) {
     val session by controller.session.collectAsStateWithLifecycle()
     val count = session?.tiles?.size ?: 0
-    val latestCount by rememberUpdatedState(count)
+    val notices by controller.tileNotices.collectAsStateWithLifecycle()
     val layoutMode = MultiviewCompositeLayout.effectiveMode(session?.layoutMode ?: MultiviewLayoutMode.Auto, count)
-    val latestMode by rememberUpdatedState(layoutMode)
     val haptics = LocalHapticFeedback.current
     // Tile menu (position) and the Move Tile armed position, -1 for none.
     var menuIndex by remember { mutableIntStateOf(-1) }
     var movingFrom by remember { mutableIntStateOf(-1) }
     val menuGuard = rememberTvMenuGuard()
-    // A long-press release also ends as a tap; that tap is ignored.
-    val pressTimes = remember { longArrayOf(0L, 0L) } // [touch down, long-press start]
-    /** The current touch already became a long-press (tile menu or drag). */
-    val longPressFired = remember { booleanArrayOf(false) }
     // Settings > Player > Multiview: the frame's tile rects follow Padding
     // Between Tiles, so taps and the drop cue do too.
     val style by controller.style.collectAsStateWithLifecycle()
-    val latestPadding by rememberUpdatedState(style.padding)
     val accent = MaterialTheme.colorScheme.primary
     SideEffect { controller.focusArgb = accent.toArgb() }
     // Drag-to-swap state: the picked-up position and the cell under the finger.
@@ -115,7 +114,14 @@ fun MultiviewCompositePreview(
                             surface = s
                             controller.attachPreview(s)
                         }
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) = Unit
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {
+                            // A fresh EGL surface at the new size, so the
+                            // frame always fills the view the taps map onto.
+                            surface?.let {
+                                controller.detachPreview(it)
+                                controller.attachPreview(it)
+                            }
+                        }
                         override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
                             surface?.let {
                                 controller.detachPreview(it)
@@ -148,83 +154,143 @@ fun MultiviewCompositePreview(
                 }
             }
         }
-        // Taps and drags on a transparent layer above the TextureView (the
-        // view would otherwise see them first).
+        // A tile whose ingest is retrying (or gave up) says so over its cell.
+        if (viewW > 0 && count > 0 && notices.isNotEmpty()) {
+            val rects = MultiviewCompositeLayout.tileRects(count, style.padding, mode = layoutMode)
+            val density = LocalDensity.current
+            val sx = viewW / MultiviewCompositeLayout.WIDTH.toFloat()
+            val sy = viewH / MultiviewCompositeLayout.HEIGHT.toFloat()
+            notices.forEach { (pos, text) ->
+                val cell = rects.getOrNull(pos) ?: return@forEach
+                with(density) {
+                    Box(
+                        Modifier
+                            .offset { IntOffset((cell.left * sx).toInt(), (cell.top * sy).toInt()) }
+                            .size((cell.width * sx).toDp(), (cell.height * sy).toDp()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White,
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+        // One gesture detector on a transparent layer above the TextureView
+        // (the view would otherwise see the touches first). Nothing Phone
+        // 2026-10-08: with separate tap and long-press-drag detectors the tap
+        // detector (inner, so first in the Main pass) consumed the release of
+        // a still long-press, the drag detector then saw a consumed up and
+        // cancelled, and the tile menu never opened unless the finger had
+        // wobbled. Here: a release before the long-press timeout is a tap
+        // (audio focus); a press held still for the timeout is a long-press,
+        // released on the same tile it opens the tile menu, dragged onto
+        // another tile it swaps them. Moving past the touch slop first
+        // leaves the touch to the sheet (scroll).
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .pointerInput(Unit) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { pos ->
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            pressTimes[1] = System.nanoTime()
-                            longPressFired[0] = true
-                            viewW = size.width
-                            viewH = size.height
-                            dragPos = pos
-                            dragFrom = MultiviewCompositeLayout.hitTestView(
-                                pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding, latestMode,
-                            )
-                            dragTarget = dragFrom
-                        },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dragPos += amount
-                            if (dragFrom >= 0) {
-                                dragTarget = MultiviewCompositeLayout.hitTestView(
-                                    dragPos.x, dragPos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding, latestMode,
-                                )
-                            }
-                        },
-                        onDragEnd = {
-                            val from = dragFrom
-                            val to = dragTarget
-                            if (from >= 0 && to >= 0 && from != to) {
-                                movingFrom = -1
-                                controller.swap(from, to)
-                            } else if (from >= 0 && to == from) {
-                                // Released on the same tile: the tile menu.
-                                Log.i("AerioCast", "[MV-CAST] preview long-press tile=$from: tile menu")
-                                movingFrom = -1
-                                menuGuard.arm()
-                                menuIndex = from
-                            }
-                            dragFrom = -1
-                            dragTarget = -1
-                        },
-                        onDragCancel = {
-                            dragFrom = -1
-                            dragTarget = -1
-                        },
-                    )
+                .onSizeChanged {
+                    viewW = it.width
+                    viewH = it.height
                 }
                 .pointerInput(Unit) {
-                    detectTapGestures(onPress = {
-                        // A new touch.
-                        pressTimes[0] = System.nanoTime()
-                        longPressFired[0] = false
-                    }) { pos ->
-                        val tapAt = System.nanoTime()
-                        // Apple f33f645 round 7: the release of the
-                        // long-press that opens the tile menu must not also
-                        // count as a focus tap (it moved the audio focus
-                        // before Remove was picked). Either guard stops it.
-                        if (longPressFired[0] || pressTimes[1] > pressTimes[0]) {
-                            longPressFired[0] = false
-                            return@detectTapGestures
-                        }
-                        val index = MultiviewCompositeLayout.hitTestView(
-                            pos.x, pos.y, size.width.toFloat(), size.height.toFloat(), latestCount, latestPadding, latestMode,
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val w = size.width.toFloat()
+                        val h = size.height.toFloat()
+                        viewW = size.width
+                        viewH = size.height
+                        val downTile = controller.hitTestPreview(down.position.x, down.position.y, w, h)
+                        Log.i(
+                            "AerioCast",
+                            "[MV-CAST] preview gesture down x=${down.position.x.toInt()} y=${down.position.y.toInt()} " +
+                                "view=${size.width}x${size.height} tile=$downTile",
                         )
-                        val armed = movingFrom
-                        if (armed >= 0) {
-                            // Move Tile: a tap on another tile swaps, a tap on
-                            // the armed tile (or a gap) cancels.
+                        val slop = viewConfiguration.touchSlop
+                        var released: PointerInputChange? = null
+                        val outcome = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                            var result = "cancel"
+                            while (true) {
+                                val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                                if (c.changedToUpIgnoreConsumed()) {
+                                    if (!c.isConsumed) {
+                                        released = c
+                                        result = "tap"
+                                    }
+                                    break
+                                }
+                                if (c.isConsumed || (c.position - down.position).getDistance() > slop) break
+                            }
+                            result
+                        }
+                        if (outcome == "tap") {
+                            val up = released ?: return@awaitEachGesture
+                            up.consume()
+                            val index = controller.hitTestPreview(up.position.x, up.position.y, w, h)
+                            Log.i("AerioCast", "[MV-CAST] preview gesture tap tile=$index")
+                            val armed = movingFrom
+                            if (armed >= 0) {
+                                // Move Tile: a tap on another tile swaps, a tap
+                                // on the armed tile (or a gap) cancels.
+                                movingFrom = -1
+                                if (index >= 0 && index != armed) controller.swap(armed, index)
+                            } else if (index >= 0) {
+                                Log.i("AerioCast", "[MV-CAST] preview tap tile=$index")
+                                controller.setFocus(index, System.nanoTime())
+                            }
+                            return@awaitEachGesture
+                        }
+                        if (outcome != null) {
+                            // Moved past the slop or taken by the sheet.
+                            Log.i("AerioCast", "[MV-CAST] preview gesture cancel (moved or taken by the sheet)")
+                            return@awaitEachGesture
+                        }
+                        // Held still for the long-press timeout.
+                        Log.i("AerioCast", "[MV-CAST] preview gesture longpress tile=$downTile")
+                        if (downTile < 0) return@awaitEachGesture
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        dragFrom = downTile
+                        dragTarget = downTile
+                        dragPos = down.position
+                        var lifted = false
+                        while (true) {
+                            val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                            if (c.changedToUpIgnoreConsumed()) {
+                                c.consume()
+                                lifted = true
+                                break
+                            }
+                            if (c.positionChange() != Offset.Zero) {
+                                c.consume()
+                                dragPos = c.position
+                                val t = controller.hitTestPreview(c.position.x, c.position.y, w, h)
+                                if (t != dragTarget) {
+                                    Log.i("AerioCast", "[MV-CAST] preview gesture drag tile=$dragFrom over=$t")
+                                    dragTarget = t
+                                }
+                            }
+                        }
+                        val from = dragFrom
+                        val to = dragTarget
+                        dragFrom = -1
+                        dragTarget = -1
+                        if (!lifted) return@awaitEachGesture
+                        if (to >= 0 && to != from) {
+                            Log.i("AerioCast", "[MV-CAST] preview gesture drag tile=$from dropped on $to: swap")
                             movingFrom = -1
-                            if (index >= 0 && index != armed) controller.swap(armed, index)
-                        } else if (index >= 0) {
-                            Log.i("AerioCast", "[MV-CAST] preview tap tile=$index")
-                            controller.setFocus(index, tapAt)
+                            controller.swap(from, to)
+                        } else if (to == from) {
+                            // Released on the same tile: the tile menu.
+                            Log.i("AerioCast", "[MV-CAST] preview long-press tile=$from: tile menu")
+                            movingFrom = -1
+                            menuGuard.arm()
+                            menuIndex = from
                         }
                     }
                 },

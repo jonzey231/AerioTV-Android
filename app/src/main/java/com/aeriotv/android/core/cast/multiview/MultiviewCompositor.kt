@@ -84,7 +84,9 @@ class MultiviewCompositor(
         const val MAX_BEHIND_NANOS = 3_000_000_000L
         private const val STATS_NANOS = 10_000_000_000L
         private const val MAX_TILE_RETRIES = 10
-        private const val TILE_RETRY_MS = 3_000L
+        /** Preview notice on a tile that is retrying, and on one that gave up. */
+        const val NOTICE_RECONNECTING = "Reconnecting"
+        const val NOTICE_UNAVAILABLE = "Unavailable"
         /** Background proof-of-life log cadence ([MV-BG]). */
         private const val BG_STATS_NANOS = 60_000_000_000L
         private const val EGL_RECORDABLE_ANDROID = 0x3142
@@ -208,6 +210,34 @@ class MultiviewCompositor(
     /** Slot indices showing, in position order. */
     val shownSlots: List<Int> get() = shown.toList()
 
+    /**
+     * Display position under a point in frame pixels, from the same geometry
+     * [draw] uses for the next frame (shown order, [layoutMode], padding,
+     * full frame for one tile), or -1 for a gap. The preview's taps resolve
+     * through this so they always match the picture under the finger.
+     */
+    fun hitTestFrame(fx: Float, fy: Float): Int {
+        val n = shown.size
+        val rects = if (n == 1) {
+            MultiviewCompositeLayout.tileRects(1)
+        } else {
+            MultiviewCompositeLayout.tileRects(n, style.padding, mode = layoutMode)
+        }
+        return MultiviewCompositeLayout.hitTest(fx, fy, rects)
+    }
+
+    /** Slot -> preview notice ([NOTICE_RECONNECTING], [NOTICE_UNAVAILABLE]);
+     *  main thread. Each change is handed to [onTileNotices]. */
+    private val notices = HashMap<Int, String>()
+    /** Main thread: the slot notices changed (the controller maps them to
+     *  display positions for the preview). */
+    var onTileNotices: ((Map<Int, String>) -> Unit)? = null
+
+    private fun setNotice(slot: Int, text: String?) {
+        val changed = if (text == null) notices.remove(slot) != null else notices.put(slot, text) != text
+        if (changed) onTileNotices?.invoke(notices.toMap())
+    }
+
     @Volatile var focused: Int = initialFocus.coerceIn(0, (initialCount - 1).coerceAtLeast(0))
         private set
 
@@ -307,6 +337,9 @@ class MultiviewCompositor(
     private var encoderEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var previewEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var previewSurface: Surface? = null
+    /** Preview surface size last logged (GL thread). */
+    private var previewLoggedW = 0
+    private var previewLoggedH = 0
     private class Prog(val id: Int) {
         val aPos = GLES20.glGetAttribLocation(id, "aPos")
         val aTex = GLES20.glGetAttribLocation(id, "aTex")
@@ -412,6 +445,7 @@ class MultiviewCompositor(
         t.retries = 0
         t.wasReady = false
         t.stalled = false
+        setNotice(t.index, null)
         // A new tile starts its health counters from zero: the slot's old
         // totals (and the health window baselines) belonged to the channel
         // that left it (device pass cc2c37c7: stalls survived remove + add).
@@ -452,6 +486,7 @@ class MultiviewCompositor(
         t.source = null
         t.hasFrame = false
         t.dropLogo = true
+        setNotice(slot, null)
         focusChangedAtNanos = System.nanoTime()
         Log.i(
             TAG,
@@ -582,16 +617,38 @@ class MultiviewCompositor(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Log.w(TAG, "[MV-CAST] composite tile ${t.source?.displayName} error ${error.errorCodeName}")
-                if (!running || t.retries >= MAX_TILE_RETRIES) return
+                // The HTTP status and the start of the server's answer, so a
+                // 503 (no free upstream, or a stop still settling on the
+                // server) reads apart from a 4xx in the log.
+                val bad = generateSequence(error.cause) { it.cause }
+                    .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+                    .firstOrNull()
+                val status = bad?.let { e ->
+                    val body = runCatching { String(e.responseBody, Charsets.UTF_8) }.getOrDefault("")
+                        .replace(Regex("\\s+"), " ").trim().take(160)
+                    " http=${e.responseCode}${e.responseMessage?.let { " $it" } ?: ""}" +
+                        (if (body.isNotEmpty()) " body=\"$body\"" else "")
+                } ?: ""
+                Log.w(TAG, "[MV-CAST] composite tile ${t.index} ${t.source?.displayName} error ${error.errorCodeName}$status")
+                if (!running || t.player !== player) return
+                if (t.retries >= MAX_TILE_RETRIES) {
+                    Log.w(TAG, "[MV-CAST] composite tile ${t.index} ${t.source?.displayName}: giving up after $MAX_TILE_RETRIES retries")
+                    setNotice(t.index, NOTICE_UNAVAILABLE)
+                    return
+                }
                 t.retries++
-                main.postDelayed({ if (running && t.player === player) restartSource(t, player, http) }, TILE_RETRY_MS)
+                val delay = MultiviewCompositeLayout.tileRetryDelayMs(t.retries)
+                Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${t.source?.displayName}: retry ${t.retries}/$MAX_TILE_RETRIES in ${delay / 1000} s")
+                setNotice(t.index, NOTICE_RECONNECTING)
+                main.postDelayed({ if (running && t.player === player) restartSource(t, player, http) }, delay)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_READY -> {
+                        if (t.retries > 0) Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${t.source?.displayName}: playing after ${t.retries} retries")
                         t.retries = 0
+                        setNotice(t.index, null)
                         if (t.stalled) {
                             t.stalled = false
                             // The tile's clock restarts where it stopped; the
@@ -815,6 +872,11 @@ class MultiviewCompositor(
                 val h = IntArray(1)
                 EGL14.eglQuerySurface(eglDisplay, previewEglSurface, EGL14.EGL_WIDTH, w, 0)
                 EGL14.eglQuerySurface(eglDisplay, previewEglSurface, EGL14.EGL_HEIGHT, h, 0)
+                if (w[0] != previewLoggedW || h[0] != previewLoggedH) {
+                    previewLoggedW = w[0]
+                    previewLoggedH = h[0]
+                    Log.i(TAG, "[MV-CAST] preview surface ${w[0]}x${h[0]}")
+                }
                 draw(w[0], h[0], focus)
                 EGL14.eglSwapBuffers(eglDisplay, previewEglSurface)
             }

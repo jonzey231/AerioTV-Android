@@ -170,4 +170,46 @@ class MultiviewCompositeLayoutTest {
         val wide = MultiviewCompositeLayout.logoPlacement(video, 10f, CompositeStyle())
         assertEquals(96, wide.logo.width)
     }
+
+    @Test
+    fun `a tap on the center of every drawn tile resolves to that tile, every layout and count`() {
+        // The phone preview at a typical portrait sheet width (not 16:9 exact).
+        val vw = 1032f
+        val vh = 580f
+        for (count in 1..MultiviewCompositeLayout.MAX_TILES) {
+            for (mode in MultiviewCompositeLayout.layoutOptions(count)) {
+                for (padding in listOf(true, false)) {
+                    val rects = MultiviewCompositeLayout.tileRects(count, padding, mode = mode)
+                    assertEquals(count, rects.size)
+                    rects.forEachIndexed { pos, cell ->
+                        val x = (cell.left + cell.width / 2f) * vw / MultiviewCompositeLayout.WIDTH
+                        val y = (cell.top + cell.height / 2f) * vh / MultiviewCompositeLayout.HEIGHT
+                        assertEquals(
+                            "count=$count mode=$mode padding=$padding pos=$pos",
+                            pos,
+                            MultiviewCompositeLayout.hitTestView(x, y, vw, vh, count, padding, mode),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `three-up Default puts the second and third tiles in the right column`() {
+        val vw = 1000f
+        val vh = 562.5f
+        val hit = { x: Float, y: Float -> MultiviewCompositeLayout.hitTestView(x, y, vw, vh, 3) }
+        assertEquals(0, hit(300f, 280f))
+        assertEquals(1, hit(850f, 120f))
+        assertEquals(2, hit(850f, 440f))
+    }
+
+    @Test
+    fun `tile retries back off to 30 s`() {
+        assertEquals(
+            listOf(3_000L, 6_000L, 12_000L, 24_000L, 30_000L, 30_000L, 30_000L),
+            (1..7).map { MultiviewCompositeLayout.tileRetryDelayMs(it) },
+        )
+    }
 }

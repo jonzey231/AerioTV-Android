@@ -200,6 +200,16 @@ object MultiviewCompositeLayout {
         return CompositeLogoPlacement(backdrop, logo)
     }
 
+    /** First composite tile retry delay; each later one doubles up to
+     *  [TILE_RETRY_MAX_MS] (Nothing Phone 2026-10-08: a tile answered 503 for
+     *  38 s and a fixed 3 s retry hit the server every 6 s). */
+    const val TILE_RETRY_MS = 3_000L
+    const val TILE_RETRY_MAX_MS = 30_000L
+
+    /** Delay before tile retry number [retry] (1-based): 3, 6, 12, 24, then 30 s. */
+    fun tileRetryDelayMs(retry: Int): Long =
+        (TILE_RETRY_MS shl (retry - 1).coerceIn(0, 4)).coerceAtMost(TILE_RETRY_MAX_MS)
+
     /** Tile index under a point in frame coordinates, or -1 (a gap). */
     fun hitTest(x: Float, y: Float, rects: List<CompositeRect>): Int = rects.indexOfFirst { it.contains(x, y) }
 
