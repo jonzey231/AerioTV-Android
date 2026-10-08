@@ -95,6 +95,7 @@ fun CastTransportCard(
     // presenting: the "Receiver" stat and the transcode note.
     val castVideoPath by castSender.videoPath.collectAsStateWithLifecycle()
     val castReceiverVideo by castSender.receiverVideo.collectAsStateWithLifecycle()
+    val castProxyStats by castSender.proxyStats.collectAsStateWithLifecycle()
     val isTabletDevice = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp >= 600
     val companionConn by companionRemote.connection.collectAsStateWithLifecycle()
     val companionIsPlaying by companionRemote.isPlaying.collectAsStateWithLifecycle()
@@ -251,6 +252,17 @@ fun CastTransportCard(
     val compositeInfoRows = if (isComposite) {
         com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.streamInfoRows(compositeSession?.sourceHost) +
             listOfNotNull(deviceName?.let { "TV" to it })
+    } else if (!isCompanion && hasContent) {
+        // Single-channel cast (Apple CastStreamInfoCard rows): the same
+        // labeled card as the composite instead of plain lines.
+        singleCastInfoRows(
+            stats = castProxyStats,
+            path = castVideoPath,
+            tvName = deviceName,
+            receiverVideo = castReceiverVideo?.takeIf { showCastVideo }?.let {
+                com.aeriotv.android.core.cast.hlsproxy.CastVideoPlan.receiverPlayingText(it.resolution, it.fps)
+            },
+        )
     } else emptyList()
 
     fun flipChannel(delta: Int) {
@@ -583,4 +595,42 @@ fun CastTransportCard(
             onDismiss = { switchStreams = null },
         )
     }
+}
+
+/** Apple CastStreamInfoCard single-channel rows: SOURCE, VIDEO, AUDIO, SEGS,
+ *  RATE, PROXY, TV, RECEIVER. Empty until the proxy has a channel. */
+private fun singleCastInfoRows(
+    stats: com.aeriotv.android.core.cast.hlsproxy.CastProxyStats?,
+    path: com.aeriotv.android.core.cast.hlsproxy.CastVideoPathInfo?,
+    tvName: String?,
+    receiverVideo: String?,
+): List<Pair<String, String>> {
+    if (stats == null) return emptyList()
+    val video = path?.let { p ->
+        val src = p.source
+        val codec = if (src.codec == com.aeriotv.android.core.cast.hlsproxy.CastVideoOutputSpec.Codec.HEVC) "HEVC" else "H.264"
+        val fps = src.fps?.let { f ->
+            val r = Math.round(f)
+            if (kotlin.math.abs(r - f) < 0.01) " ${r}fps" else " ${"%.2f".format(java.util.Locale.US, f)}fps"
+        }.orEmpty()
+        val base = "$codec ${src.width}x${src.height}$fps"
+        val out = p.output
+        if (out == null) base else {
+            val outCodec = if (out.codec == com.aeriotv.android.core.cast.hlsproxy.CastVideoOutputSpec.Codec.HEVC) "HEVC" else "H.264"
+            "$base to $outCodec ${out.width}x${out.height}"
+        }
+    } ?: "detecting"
+    val rate = stats.rollupKbps?.let { kbps ->
+        "$kbps kbps" + (stats.rollupAvgSegmentSeconds?.let { "  avg seg ${"%.2f".format(java.util.Locale.US, it)}s" }.orEmpty())
+    } ?: "measuring"
+    return listOf(
+        "SOURCE" to (stats.ingestHost ?: "-"),
+        "VIDEO" to video,
+        "AUDIO" to (stats.audioPath ?: "detecting"),
+        "SEGS" to "${stats.segmentsProduced} produced  gen ${stats.generation}",
+        "RATE" to rate,
+        "PROXY" to "HLS on port ${stats.port}",
+        "TV" to (tvName ?: "-"),
+        "RECEIVER" to (receiverVideo ?: "waiting"),
+    )
 }

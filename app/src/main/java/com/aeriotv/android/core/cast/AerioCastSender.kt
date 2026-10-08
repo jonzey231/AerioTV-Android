@@ -254,6 +254,8 @@ class AerioCastSender @Inject constructor(
      *  spec or passthrough), straight from the proxy session's flow. The
      *  cast card builds its transcode note from it. */
     val videoPath: StateFlow<com.aeriotv.android.core.cast.hlsproxy.CastVideoPathInfo?> = hlsProxy.videoPath
+    /** The single-channel proxy's numbers for the Stream Info card. */
+    val proxyStats: StateFlow<com.aeriotv.android.core.cast.hlsproxy.CastProxyStats?> = hlsProxy.stats
 
     /** What the web receiver reports it is actually presenting, from the
      *  debug channel telemetry (`res`, `fps`). */

@@ -858,14 +858,33 @@ fun PlayerChromeOverlay(
     // surface, shown whenever chrome OR the launch hint is up. On phone the
     // card lives inline in the top bar above, so this standalone copy only
     // covers the brief launch hint while the full chrome is hidden.
+    // Compact phone widths drop the inline top-bar card (see the top bar), so
+    // with the controls up the card shows here, under the top bar, instead.
+    // Apple parity and the Settings help text: the card always appears with
+    // the player controls, whatever Pop Up Info Card on Channel Change says
+    // (device pass cc2c37c7: portrait tap showed controls with no card).
+    val compactCardUnderBar = !isTv && chromeVisible &&
+        LocalConfiguration.current.screenWidthDp < 500
     AnimatedVisibility(
-        visible = if (isTv) (pillVisible && !inPip) else (pillVisible && !chromeVisible && !inPip),
+        visible = if (isTv) (pillVisible && !inPip)
+        else (pillVisible && (!chromeVisible || compactCardUnderBar) && !inPip),
         enter = fadeIn(),
         exit = fadeOut(),
         modifier = Modifier
             .align(Alignment.TopStart)
             .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
-            .padding(top = if (isTv) 24.dp else 14.dp, start = if (isTv) 28.dp else 70.dp),
+            .padding(
+                top = when {
+                    isTv -> 24.dp
+                    compactCardUnderBar -> 76.dp
+                    else -> 14.dp
+                },
+                start = when {
+                    isTv -> 28.dp
+                    compactCardUnderBar -> 12.dp
+                    else -> 70.dp
+                },
+            ),
     ) {
         channel?.let {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

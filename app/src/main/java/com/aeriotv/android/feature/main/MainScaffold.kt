@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.main
 
+import com.aeriotv.android.core.data.db.entity.canSwitchStream
 import com.aeriotv.android.ui.theme.textAccent
 import kotlinx.coroutines.launch
 import com.aeriotv.android.core.data.db.entity.dispatcharrCanViewDvr
@@ -500,6 +501,7 @@ fun MainScaffold(
     val backgroundPile by com.aeriotv.android.feature.multiview.MultiviewBackground.state
         .collectAsStateWithLifecycle()
     var mirroredComposite by remember { mutableStateOf(false) }
+    var mirroredBackground by remember { mutableStateOf(false) }
     LaunchedEffect(compositeSession, backgroundPile) {
         val cs = compositeSession
         val bg = backgroundPile
@@ -510,12 +512,22 @@ fun MainScaffold(
                 mirroredComposite = true
             }
             bg != null -> {
-                if (!multiviewStore.isStaging.value) multiviewStore.restore(bg.tiles, bg.focus)
-            }
-            mirroredComposite -> {
-                mirroredComposite = false
                 if (!multiviewStore.isStaging.value) {
-                    android.util.Log.i("AerioCast", "[MV-CAST] composite ended: Multiview ended, no tiles left playing")
+                    multiviewStore.restore(bg.tiles, bg.focus)
+                    mirroredBackground = true
+                }
+            }
+            mirroredComposite || mirroredBackground -> {
+                val reason = if (mirroredComposite) "composite ended" else "background Multiview ended"
+                val returnedToGrid = !mirroredComposite &&
+                    com.aeriotv.android.feature.multiview.MultiviewBackground.endedByReturn
+                mirroredComposite = false
+                mirroredBackground = false
+                if (!returnedToGrid && !multiviewStore.isStaging.value) {
+                    if (reason == "composite ended") {
+                        android.util.Log.i("AerioCast", "[MV-CAST] composite ended: Multiview ended, no tiles left playing")
+                    }
+                    android.util.Log.i("AerioMV", "[MV] mirror cleared: $reason")
                     multiviewStore.clear()
                 }
             }
@@ -1488,6 +1500,16 @@ fun MainScaffold(
                     }
                 } else null
                 if ((casting || companionTv != null) && !isTv) {
+                    // Switch Stream gate: LocalIsDispatcharrAdmin is only
+                    // provided inside the player route, so out here (the cast
+                    // card and sheet, composite tile menu) it read its false
+                    // default (device pass cc2c37c7: tile menu had no Switch
+                    // Stream on a switch=allowed account). Provide it from the
+                    // live active playlist row, the same row the player uses.
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        com.aeriotv.android.ui.LocalIsDispatcharrAdmin provides
+                            (capsPlaylist?.canSwitchStream() ?: false),
+                    ) {
                     com.aeriotv.android.feature.cast.CastTransportCard(
                         tabletWidth = tabletCardWidth,
                         multiviewCast = multiviewCast,
@@ -1521,6 +1543,7 @@ fun MainScaffold(
                             viewModel.recheckSwitchStreamAllowed(trigger)
                         },
                     )
+                    }
                     // 12 dp above the pill on tablets (iPad parity).
                     Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
                 }

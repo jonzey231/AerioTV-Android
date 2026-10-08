@@ -314,6 +314,12 @@ class CastHlsProxySession @Inject constructor(
      *  it, so the note goes away with the transcode. */
     val videoPath: StateFlow<CastVideoPathInfo?> = _videoPath.asStateFlow()
 
+    /** The proxy's own numbers for the cast sheet's single-channel Stream
+     *  Info card (Apple CastStreamInfoCard parity: SOURCE, VIDEO, AUDIO,
+     *  SEGS, RATE, PROXY). Updated per media segment; null with no channel. */
+    private val _stats = MutableStateFlow<CastProxyStats?>(null)
+    val stats: StateFlow<CastProxyStats?> = _stats.asStateFlow()
+
     /**
      * Outcome of a successful [startChannel]: the playlist URL to hand to
      * MediaInfo.contentUrl, plus what the sender needs for its load log
@@ -442,6 +448,10 @@ class CastHlsProxySession @Inject constructor(
         audioCodec = ""
         audioOnly = false
         _videoPath.value = null
+        _stats.value = CastProxyStats(
+            ingestHost = hostOf(rawTsUrl),
+            port = port,
+        )
         // Channel change keeps the ring: the receiver's cached playlist
         // still promises the old channel's last segments, so they stay
         // fetchable until the ring evicts them, and the new generation
@@ -523,6 +533,7 @@ class CastHlsProxySession @Inject constructor(
         stopIngest()
         videoTranscodeDisabledReason = null
         _videoPath.value = null
+        _stats.value = null
         stopLinkLog()
         stopNetworkWatch()
         server.stop()
@@ -714,9 +725,18 @@ class CastHlsProxySession @Inject constructor(
                         }
                         rollupBytes += video.size + (audio?.size ?: 0)
                         rollupTicks += videoDurationTicks
+                        _stats.value = _stats.value?.copy(
+                            segmentsProduced = segmentsLogged,
+                            generation = currentGen,
+                            audioPath = audioCodec.ifBlank { null },
+                        )
                         if (segmentsLogged % LOG_EVERY_SEGMENTS == 0) {
                             val seconds = rollupTicks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
                             val kbps = if (seconds > 0) (rollupBytes * 8 / seconds / 1000).toInt() else 0
+                            _stats.value = _stats.value?.copy(
+                                rollupKbps = kbps,
+                                rollupAvgSegmentSeconds = seconds / LOG_EVERY_SEGMENTS,
+                            )
                             debugLog(
                                 context, TAG,
                                 "segments=$segmentsLogged last$LOG_EVERY_SEGMENTS: " +
@@ -987,4 +1007,23 @@ class CastHlsProxySession @Inject constructor(
             "${u.scheme}://${u.host}$port${u.path}"
         }.getOrDefault(base)
     }
+}
+
+/** Snapshot of the single-channel cast proxy for the Stream Info card. */
+data class CastProxyStats(
+    val ingestHost: String?,
+    val port: Int,
+    val segmentsProduced: Int = 0,
+    val generation: Int = 0,
+    val audioPath: String? = null,
+    /** Latest per-[LOG_EVERY_SEGMENTS] rollup; null until the first lands. */
+    val rollupKbps: Int? = null,
+    val rollupAvgSegmentSeconds: Double? = null,
+)
+
+private fun hostOf(url: String): String? {
+    val afterScheme = url.substringAfter("://", missingDelimiterValue = "").ifEmpty { return null }
+    val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
+    val host = if (authority.startsWith("[")) authority.substringBefore(']') + "]" else authority.substringBefore(':')
+    return host.ifBlank { null }
 }

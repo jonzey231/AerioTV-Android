@@ -180,7 +180,7 @@ class MultiviewCompositor(
         var wasReady = false
         var stalled = false
         /** Health counters (Apple a4bd790 parity): ingest bytes, picture
-         *  updates and stalls since the composite started. */
+         *  updates and stalls since the tile joined its slot. */
         @Volatile var ingestBytes = 0L
         @Volatile var framesRendered = 0L
         @Volatile var stalls = 0
@@ -412,6 +412,15 @@ class MultiviewCompositor(
         t.retries = 0
         t.wasReady = false
         t.stalled = false
+        // A new tile starts its health counters from zero: the slot's old
+        // totals (and the health window baselines) belonged to the channel
+        // that left it (device pass cc2c37c7: stalls survived remove + add).
+        t.ingestBytes = 0L
+        t.framesRendered = 0L
+        t.stalls = 0
+        healthBytes[t.index] = 0L
+        healthFrames[t.index] = 0L
+        healthStalls[t.index] = 0
         t.logoRequested = false
         t.logoAspect = 0f
         t.dropLogo = true
@@ -1139,6 +1148,7 @@ class MultiviewCompositor(
     private var healthAudio = 0L
     private val healthBytes = LongArray(MultiviewCompositeLayout.MAX_TILES)
     private val healthFrames = LongArray(MultiviewCompositeLayout.MAX_TILES)
+    private val healthStalls = IntArray(MultiviewCompositeLayout.MAX_TILES)
 
     private val health = object : Runnable {
         override fun run() {
@@ -1151,10 +1161,14 @@ class MultiviewCompositor(
                 val frames = t.framesRendered
                 val bps = ((bytes - healthBytes[t.index]) / seconds).toLong()
                 val fr = frames - healthFrames[t.index]
+                // Stalls per window, like every other number on this line.
+                val stallsTotal = t.stalls
+                val st = stallsTotal - healthStalls[t.index]
                 healthBytes[t.index] = bytes
                 healthFrames[t.index] = frames
+                healthStalls[t.index] = stallsTotal
                 val buffered = runCatching { t.player?.totalBufferedDuration ?: -1L }.getOrDefault(-1L)
-                "t${t.index}[in=${bps}B/s frames=$fr stalls=${t.stalls}${if (t.stalled) "(now)" else ""} buf=${buffered}ms]"
+                "t${t.index}[in=${bps}B/s frames=$fr stalls=$st${if (t.stalled) "(now)" else ""} buf=${buffered}ms]"
             }
             val enc = encodedTotal
             val dropped = droppedTicks

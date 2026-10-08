@@ -238,9 +238,6 @@ fun MultiviewScreen(
     // Exit Multiview defers the store clear to disposal (see the menu
     // action) so the grid never shows the empty placeholder mid-pop.
     val exitClearRequested = remember { mutableStateOf(false) }
-    DisposableEffect(Unit) {
-        onDispose { if (exitClearRequested.value) storeHandle.clear() }
-    }
 
     val tileMenuGuard = rememberTvMenuGuard()
     // Per-tile track sheets (indices into `selected`). Set from the tile menu;
@@ -261,7 +258,21 @@ fun MultiviewScreen(
     val latestHeaders by rememberUpdatedState(httpHeaders)
     DisposableEffect(Unit) {
         onDispose {
-            val req = backgroundRequest.value ?: return@onDispose
+            val req = backgroundRequest.value
+            if (req == null) {
+                // Any exit that does not hand the tiles to the background
+                // (Back, Exit Multiview, last tile removed) ends Multiview, so
+                // the Live TV mirror of the running set clears with it and the
+                // menus return to "Add to Multiview" (device pass cc2c37c7:
+                // Back left every channel marked "in Multiview" with no card).
+                android.util.Log.i(
+                    "AerioMV",
+                    "[MV] mirror cleared: local Multiview exited" +
+                        if (exitClearRequested.value) " (Exit Multiview)" else "",
+                )
+                storeHandle.clear()
+                return@onDispose
+            }
             val positions = backgroundPositions.toMap()
             val headers = latestHeaders
             android.os.Handler(android.os.Looper.getMainLooper()).post {

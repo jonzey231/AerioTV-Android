@@ -976,8 +976,8 @@ fun AerioTVNavHost(
                     // remote sheet).
                     // forceLocal = Play Here from PlayWhereRouter: play on
                     // this device exactly as if no session existed.
-                    val castDevice = if (forceLocal) null else (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
-                        ?.deviceName
+                    val castDevice = if (forceLocal) null else (castSenderNav.state.value as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)
+                        ?.let { it.deviceName?.takeIf { n -> n.isNotBlank() } ?: "TV" }
                     // Casting rework P1: the URL now feeds the phone-local
                     // HLS proxy's ingest, which must present the same
                     // Dispatcharr identity headers the player would (same
@@ -1090,13 +1090,26 @@ fun AerioTVNavHost(
                         launchSingleTop = true
                     }
                 }
-                val castNameNav = (castStateNav as? com.aeriotv.android.core.cast.AerioCastSender.State.Connected)?.deviceName
                 MainScaffold(
                     onChannelClick = { channel ->
                         // Cast play-where prompt: with a Google Cast session
                         // active, ask Play Here / Play on <receiver>. The
                         // companion link keeps its direct behavior.
-                        if (companionTvName != null || castNameNav == null) {
+                        // Read the session LIVE at tap time, not the
+                        // composition-time castNameNav: a row's memoized tap
+                        // lambda could hold a pre-session (or null-name)
+                        // value, so a plain tap went straight to the local
+                        // path, which closes itself while casting, while the
+                        // freshly built menu Watch prompted (device pass
+                        // cc2c37c7). A Connected session with no device name
+                        // still prompts (the router names it "TV").
+                        val liveCast = castSenderNav.state.value as?
+                            com.aeriotv.android.core.cast.AerioCastSender.State.Connected
+                        android.util.Log.i(
+                            "AerioCast",
+                            "CastPlayWhere: channel tap ${channel.name} session=${liveCast != null} companion=${companionTvName != null}",
+                        )
+                        if (companionTvName != null || liveCast == null) {
                             channelPlay(channel, false)
                         } else {
                             com.aeriotv.android.feature.main.PlayWhereRouter.route(

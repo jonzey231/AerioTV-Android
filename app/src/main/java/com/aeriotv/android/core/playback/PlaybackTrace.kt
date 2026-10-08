@@ -143,8 +143,17 @@ class PlaybackTracer {
      * press->firstFrame is measured end to end, exactly like tvOS.
      */
     fun markPress(name: String?) {
-        pressAtMs = now()
-        channelName = name?.takeIf { it.isNotBlank() } ?: "?"
+        val n = now()
+        val nm = name?.takeIf { it.isNotBlank() } ?: "?"
+        // One tune, two stamps: a zap / swipe / digit press stamps here, then
+        // PlayerScreen's channel-switch effect (the generic tune entry for
+        // list picks and deep links) stamps the SAME channel ~20 ms later.
+        // Only one playUrl follows (device pass cc2c37c7), so the second
+        // stamp is not a second tune; ignore it so the log shows one press
+        // and press->firstFrame keeps the real (earlier) press time.
+        if (pressAtMs != 0L && nm == channelName && n - pressAtMs < PRESS_DEDUPE_MS) return
+        pressAtMs = n
+        channelName = nm
         Log.i(TAG, "[TUNE] press ch=$channelName")
     }
 
@@ -785,6 +794,8 @@ class PlaybackTracer {
     companion object {
         private const val TAG = "AerioTrace"
         private const val PRESS_MAX_AGE_MS = 15_000L
+        /** Same-channel press stamps closer than this are one tune. */
+        private const val PRESS_DEDUPE_MS = 500L
         private const val SUMMARY_DEFER_MS = 2_000L
         private const val PERF_INTERVAL_MS = 15_000L
         private const val FEED_WINDOW_MS = 30_000L

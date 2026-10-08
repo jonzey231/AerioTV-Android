@@ -669,6 +669,10 @@ fun EditPlaylistScreen(
                             },
                             selected = offsetMinutes,
                             onSelect = { viewModel.setCatchupTimeOffsetMinutes(catchupPlaylistId, it) },
+                            // TV: one titled row with the current value that
+                            // opens the 19 choices on their own, as Apple TV
+                            // does (inline they buried the page, no title).
+                            tvChoiceSheet = true,
                         )
                     }
                 }

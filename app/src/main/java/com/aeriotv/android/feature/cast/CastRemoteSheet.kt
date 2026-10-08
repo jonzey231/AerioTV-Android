@@ -646,11 +646,25 @@ fun CastRemoteSheet(
                 )
                 Spacer(Modifier.height(10.dp))
                 if (streamInfoRows.isNotEmpty()) {
+                    // The single-channel card already carries RECEIVER (the
+                    // receiver's decoded size); its own summary then reads
+                    // as PLAYER so no label repeats.
+                    val hasReceiverRow = streamInfoRows.any { it.first == "RECEIVER" }
                     StreamInfoRowsCard(
                         rows = streamInfoRows +
-                            listOfNotNull(remoteState.streamInfo.takeIf { it.isNotBlank() }?.let { "RECEIVER" to it }),
+                            listOfNotNull(remoteState.streamInfo.takeIf { it.isNotBlank() }?.let {
+                                (if (hasReceiverRow) "PLAYER" else "RECEIVER") to it
+                            }),
                     )
                     Spacer(Modifier.height(10.dp))
+                    // Transcode notes stay under the card as plain lines.
+                    castDetailLines.filterNot { it.startsWith("Receiver:") }.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodyMedium.subtext(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 if (streamInfoRows.isEmpty()) castDetailLines.forEach { line ->
                     Text(

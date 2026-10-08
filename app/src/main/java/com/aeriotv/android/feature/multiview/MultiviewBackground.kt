@@ -53,6 +53,7 @@ object MultiviewBackground {
         players = tiles.mapIndexed { i, tile ->
             headlessPlayer(app, tile, headers, focused = i == f, positionMs = positions[i] ?: tile.resumePositionMs)
         }
+        endedByReturn = false
         _state.value = State(tiles, f)
         Log.i(TAG, "MultiviewBg: background enter tiles=${tiles.size}")
     }
@@ -72,6 +73,7 @@ object MultiviewBackground {
             val tiles = s.tiles.filterIndexed { i, _ -> i != index }
             players = players.filterIndexed { i, _ -> i != index }
             if (tiles.isEmpty()) {
+                endedByReturn = false
                 _state.value = null
                 Log.i(TAG, "MultiviewBg: remove ${tile.displayName}: no tiles left; Multiview ended")
                 return true
@@ -137,6 +139,15 @@ object MultiviewBackground {
 
     /** Card tap: stop the headless tiles and hand back the grid to restore,
      *  with on-demand tiles carrying their current positions. */
+    /**
+     * True when the last end was a return to the grid ([takeForReturn]): the
+     * Multiview keeps running in the foreground, so the Live TV mirror of the
+     * set must NOT clear. Reset by [stop] and when tiles go to the background.
+     */
+    @Volatile
+    var endedByReturn: Boolean = false
+        private set
+
     fun takeForReturn(): State? {
         val s = _state.value ?: return null
         val tiles = s.tiles.mapIndexed { i, t ->
@@ -148,6 +159,7 @@ object MultiviewBackground {
             }
         }
         releasePlayers()
+        endedByReturn = true
         _state.value = null
         Log.i(TAG, "MultiviewBg: return tiles=${tiles.size}")
         return State(tiles, s.focus)
@@ -157,6 +169,7 @@ object MultiviewBackground {
     fun stop() {
         if (_state.value == null) return
         releasePlayers()
+        endedByReturn = false
         _state.value = null
         Log.i(TAG, "MultiviewBg: stop")
     }
