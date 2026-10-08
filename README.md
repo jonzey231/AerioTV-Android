@@ -8,6 +8,11 @@ AerioTV for Android is a native IPTV streaming app for Android phones, tablets, 
 **Sideload**
 - Download the latest `.apk` from [Releases](https://github.com/jonzey231/AerioTV-Android/releases) and install it (enable install from unknown sources for your browser or file manager, or run `adb install`). The sideload build is occasionally ahead of the Play track.
 
+## Other Platforms
+
+- [AerioTV for Apple](https://github.com/jonzey231/AerioTV): iPhone, iPad, Apple TV, and Mac.
+- [AerioTV for Roku](https://github.com/EndofLineTech/AerioTV-Roku): community port for Roku devices.
+
 ## Screenshots
 
 Screenshots are coming soon.
