@@ -706,10 +706,9 @@ private fun TimeHeader(
                     val x = (t - vs) * pxPerMs
                     if (isTv) drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
                     val label = fmt.format(Date(t)).lowercase(Locale.getDefault())
-                    // A label whose slot started before the edge hugs the edge (clipped
-                    // text aligns to the clipped edge) unless the next label would collide.
-                    val nextX = (t + slot - vs) * pxPerMs
-                    if (x >= 0f || nextX >= 72.dp.toPx()) {
+                    // The edge sits at now (Logan 2026-10-08), so the first slot is
+                    // partial: only half-hour marks at or right of the edge get a label.
+                    if (x >= -1f) {
                         drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, (size.height - 16.sp.toPx()) / 2f), style = labelStyle, maxLines = 1)
                     }
                     t += slot

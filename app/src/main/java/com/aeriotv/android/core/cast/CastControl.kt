@@ -119,6 +119,75 @@ object CastControl {
     const val KEY_MULTIVIEW = "multiview"
     const val MULTIVIEW_MAX_CHANNELS = 9
 
+    // Multiview control over Cast Connect (Logan 2026-10-08). Same "cmd" plus
+    // "type" framing as multiview.open.
+    //   sender -> receiver {"cmd":"multiview.focus","focus":i}   audio to tile i
+    //                      {"cmd":"multiview.layout","layout":"<key>"}   MultiviewLayoutMode key
+    //                      {"cmd":"multiview.stop"}   end the Multiview, TV back to its UI
+    //                      {"cmd":"multiview.getState"}   ask for a multiview.state
+    //   receiver -> sender {"cmd":"multiview.state","active":bool,
+    //                       "channels":[{"channelId":"disp:<uuid>","name":"ESPN2 HD"}],
+    //                       "focus":i,"layout":"<key>","layouts":["auto","stacked"]}
+    // The receiver pushes multiview.state whenever the TV's Multiview changes
+    // (open, focus or layout from either side, tiles added or removed, exit),
+    // so the sender card follows changes made with the TV remote.
+    const val TYPE_MULTIVIEW_FOCUS = "multiview.focus"
+    const val TYPE_MULTIVIEW_LAYOUT = "multiview.layout"
+    const val TYPE_MULTIVIEW_STOP = "multiview.stop"
+    const val TYPE_MULTIVIEW_GET_STATE = "multiview.getState"
+    const val TYPE_MULTIVIEW_STATE = "multiview.state"
+    const val KEY_ACTIVE = "active"
+    const val KEY_NAME = "name"
+    const val KEY_LAYOUT = "layout"
+    const val KEY_LAYOUTS = "layouts"
+
+    /** One tile of a [TYPE_MULTIVIEW_STATE] snapshot. */
+    data class MultiviewTileRef(val channelId: String, val name: String)
+
+    /** The TV's Multiview as the sender card and sheet render it. */
+    data class MultiviewState(
+        val active: Boolean = false,
+        val channels: List<MultiviewTileRef> = emptyList(),
+        val focus: Int = 0,
+        val layout: String = "auto",
+        val layouts: List<String> = emptyList(),
+    )
+
+    private fun multiviewFrame(type: String, build: JSONObject.() -> Unit = {}): String =
+        JSONObject().apply { put(KEY_CMD, type); put(KEY_TYPE, type); build() }.toString()
+
+    fun multiviewFocusMessage(focus: Int): String = multiviewFrame(TYPE_MULTIVIEW_FOCUS) { put(KEY_FOCUS, focus) }
+    fun multiviewLayoutMessage(layout: String): String = multiviewFrame(TYPE_MULTIVIEW_LAYOUT) { put(KEY_LAYOUT, layout) }
+    fun multiviewStopMessage(): String = multiviewFrame(TYPE_MULTIVIEW_STOP)
+    fun multiviewGetStateMessage(): String = multiviewFrame(TYPE_MULTIVIEW_GET_STATE)
+
+    fun multiviewStateMessage(state: MultiviewState): String = multiviewFrame(TYPE_MULTIVIEW_STATE) {
+        put(KEY_ACTIVE, state.active)
+        put(KEY_CHANNELS, JSONArray().apply {
+            state.channels.forEach { c ->
+                put(JSONObject().apply { put(KEY_CHANNEL_ID, c.channelId); put(KEY_NAME, c.name) })
+            }
+        })
+        put(KEY_FOCUS, state.focus)
+        put(KEY_LAYOUT, state.layout)
+        put(KEY_LAYOUTS, JSONArray().apply { state.layouts.forEach { put(it) } })
+    }
+
+    fun decodeMultiviewState(json: JSONObject): MultiviewState {
+        val arr = json.optJSONArray(KEY_CHANNELS)
+        val channels = (0 until (arr?.length() ?: 0)).mapNotNull { i ->
+            arr?.optJSONObject(i)?.let { MultiviewTileRef(it.optString(KEY_CHANNEL_ID), it.optString(KEY_NAME)) }
+        }
+        val layouts = json.optJSONArray(KEY_LAYOUTS)
+        return MultiviewState(
+            active = json.optBoolean(KEY_ACTIVE, false) && channels.isNotEmpty(),
+            channels = channels,
+            focus = json.optInt(KEY_FOCUS, 0).coerceIn(0, (channels.size - 1).coerceAtLeast(0)),
+            layout = json.optString(KEY_LAYOUT).ifBlank { "auto" },
+            layouts = (0 until (layouts?.length() ?: 0)).mapNotNull { layouts?.optString(it)?.takeIf { k -> k.isNotBlank() } },
+        )
+    }
+
     /** One channel in a [TYPE_MULTIVIEW_OPEN] request. */
     data class MultiviewChannelRef(val channelId: String, val playlistId: String)
 

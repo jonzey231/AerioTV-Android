@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -317,63 +318,10 @@ fun MultiviewCompositePreview(
     // tile count; the composite re-lays out live and the preview follows.
     val options = MultiviewCompositeLayout.layoutOptions(count)
     if (count > 0 && options.size > 1) {
-        // iOS MultiviewCompositeLayoutRow: "Layout" left, the current value
-        // right with an up/down chevron opening a menu. Android's native
-        // equivalent is a DropdownMenu anchored to the value.
-        var layoutMenuOpen by remember { mutableStateOf(false) }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 14.dp, start = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Layout",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            Box {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { layoutMenuOpen = true }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        layoutMode.displayName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Icon(
-                        Icons.Filled.UnfoldMore,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                DropdownMenu(
-                    expanded = layoutMenuOpen,
-                    onDismissRequest = { layoutMenuOpen = false },
-                ) {
-                    options.forEach { mode ->
-                        DropdownMenuItem(
-                            text = { Text(mode.displayName) },
-                            trailingIcon = if (mode == layoutMode) {
-                                { Icon(Icons.Filled.Check, contentDescription = "Selected") }
-                            } else {
-                                null
-                            },
-                            onClick = {
-                                layoutMenuOpen = false
-                                movingFrom = -1
-                                Log.i("AerioCast", "[MV-CAST] preview layout menu: ${mode.displayName}")
-                                controller.setLayoutMode(mode)
-                            },
-                        )
-                    }
-                }
-            }
+        MultiviewLayoutRow(layoutMode, options) { mode ->
+            movingFrom = -1
+            Log.i("AerioCast", "[MV-CAST] preview layout menu: ${mode.displayName}")
+            controller.setLayoutMode(mode)
         }
     }
     }
@@ -420,5 +368,128 @@ fun MultiviewCompositePreview(
             guard = menuGuard,
             onDismiss = { menuIndex = -1 },
         )
+    }
+}
+
+/**
+ * iOS MultiviewCompositeLayoutRow: "Layout" left, the current value right
+ * with an up/down chevron opening a menu. Android's native equivalent is a
+ * DropdownMenu anchored to the value. Shared by the composited Multiview
+ * preview and the Cast Connect Multiview panel.
+ */
+@Composable
+internal fun MultiviewLayoutRow(
+    current: MultiviewLayoutMode,
+    options: List<MultiviewLayoutMode>,
+    onPick: (MultiviewLayoutMode) -> Unit,
+) {
+    var layoutMenuOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp, start = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Layout",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        Box {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { layoutMenuOpen = true }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    current.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Icon(
+                    Icons.Filled.UnfoldMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            DropdownMenu(
+                expanded = layoutMenuOpen,
+                onDismissRequest = { layoutMenuOpen = false },
+            ) {
+                options.forEach { mode ->
+                    DropdownMenuItem(
+                        text = { Text(mode.displayName) },
+                        trailingIcon = if (mode == current) {
+                            { Icon(Icons.Filled.Check, contentDescription = "Selected") }
+                        } else {
+                            null
+                        },
+                        onClick = {
+                            layoutMenuOpen = false
+                            onPick(mode)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The cast sheet's view of a Multiview the AerioTV Android TV app runs
+ * natively over Cast Connect (Logan 2026-10-08). There is no phone-side
+ * frame to preview, so the channels are listed in grid order: the audio
+ * channel carries the speaker, a tap gives a channel the audio on the TV.
+ * Below, the same Layout row as the composited path. Every change rides the
+ * multiview.* control messages and the TV's state push redraws this.
+ */
+@Composable
+fun NativeMultiviewPanel(
+    state: com.aeriotv.android.core.cast.CastControl.MultiviewState,
+    onFocus: (Int) -> Unit,
+    onLayout: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        state.channels.forEachIndexed { i, ch ->
+            val focused = i == state.focus
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = !focused) {
+                        Log.i("AerioCast", "[MV-CAST] native panel: Make Audio tile=$i")
+                        onFocus(i)
+                    }
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    ch.name.ifBlank { "Channel ${i + 1}" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                if (focused) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = "Audio",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+        val options = state.layouts.map { MultiviewLayoutMode.from(it) }.distinct()
+        if (options.size > 1) {
+            MultiviewLayoutRow(MultiviewLayoutMode.from(state.layout), options) { mode ->
+                Log.i("AerioCast", "[MV-CAST] native panel layout menu: ${mode.displayName}")
+                onLayout(mode.key)
+            }
+        }
     }
 }

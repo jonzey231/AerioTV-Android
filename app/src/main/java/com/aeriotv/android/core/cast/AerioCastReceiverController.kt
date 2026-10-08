@@ -36,6 +36,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -180,6 +181,7 @@ class AerioCastReceiverController @Inject constructor(
         }.isSuccess
         if (!ok) return
         initialized = true
+        startMultiviewStatePush()
 
         // Start the receiver while the app is foreground, stop it when it leaves,
         // per the Cast Connect lifecycle contract.
@@ -408,6 +410,10 @@ class AerioCastReceiverController @Inject constructor(
                 scope.launch { openMultiview(json, senderId) }
                 return
             }
+            if (mvCmd.startsWith("multiview.")) {
+                scope.launch { handleMultiviewControl(mvCmd, json, senderId) }
+                return
+            }
             // ExoPlayer is single-threaded (main); scope is Main.immediate.
             scope.launch {
                 // A live sender is present -> start the position tick. Done inside
@@ -543,6 +549,101 @@ class AerioCastReceiverController @Inject constructor(
         _multiviewRequests.trySend(Unit)
         reply(CastControl.multiviewOpenedMessage(channels.size))
     }
+
+    /**
+     * Multiview control from a Cast Connect sender (Logan 2026-10-08): audio
+     * focus, layout, stop, and a state request. Every change lands in the same
+     * store and Settings value the TV remote drives, so the TV's Multiview
+     * screen follows, and the state push below answers the sender.
+     */
+    private suspend fun handleMultiviewControl(cmd: String, json: JSONObject, senderId: String?) {
+        android.util.Log.i("AerioCast", "[MV-CAST] received $cmd from=$senderId ${json.optString(CastControl.KEY_FOCUS)}${json.optString(CastControl.KEY_LAYOUT)}")
+        when (cmd) {
+            CastControl.TYPE_MULTIVIEW_FOCUS -> multiviewStore.setAudioFocus(json.optInt(CastControl.KEY_FOCUS, -1))
+            CastControl.TYPE_MULTIVIEW_LAYOUT -> {
+                val count = multiviewStore.selected.value.size
+                val mode = com.aeriotv.android.feature.multiview.MultiviewLayoutMode.from(json.optString(CastControl.KEY_LAYOUT))
+                if (mode in com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.layoutOptions(count)) {
+                    runCatching { prefs.setMultiviewLayoutMode(mode.key) }
+                }
+            }
+            CastControl.TYPE_MULTIVIEW_STOP -> {
+                // The same end state as the TV's own Exit Multiview: the
+                // Multiview route pops (its onDispose clears the store and
+                // releases every tile player) and the TV lands on Live TV.
+                if (multiviewActive()) {
+                    multiviewStore.setStaging(false)
+                    _exitRequests.trySend(Unit)
+                    android.util.Log.i("AerioCast", "[MV-CAST] multiview.stop: exiting Multiview to Live TV")
+                }
+            }
+            CastControl.TYPE_MULTIVIEW_GET_STATE -> senderId?.let { sendMultiviewState(listOf(it), currentMultiviewState()) }
+        }
+    }
+
+    private fun multiviewActive(): Boolean =
+        multiviewStore.selected.value.isNotEmpty() && !multiviewStore.isStaging.value
+
+    /** The TV's Multiview right now, in the sender's terms. */
+    private fun currentMultiviewState(layoutKey: String? = null): CastControl.MultiviewState {
+        if (!multiviewActive()) return CastControl.MultiviewState(active = false)
+        val tiles = multiviewStore.selected.value
+        val options = com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.layoutOptions(tiles.size)
+        val mode = com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.effectiveMode(
+            com.aeriotv.android.feature.multiview.MultiviewLayoutMode.from(layoutKey ?: lastLayoutKey),
+            tiles.size,
+        )
+        return CastControl.MultiviewState(
+            active = true,
+            channels = tiles.map { CastControl.MultiviewTileRef(it.id, it.displayName) },
+            focus = multiviewStore.audioFocusedIndex.value,
+            layout = mode.key,
+            layouts = options.map { it.key },
+        )
+    }
+
+    @Volatile private var lastLayoutKey: String = "auto"
+
+    private fun sendMultiviewState(senderIds: List<String>, state: CastControl.MultiviewState) {
+        if (senderIds.isEmpty()) return
+        val msg = CastControl.multiviewStateMessage(state)
+        senderIds.forEach { sid ->
+            runCatching { CastReceiverContext.getInstance().sendMessage(CastControl.NAMESPACE, sid, msg) }
+        }
+        android.util.Log.i(
+            "AerioCast",
+            "[MV-CAST] state -> ${senderIds.size} sender(s) active=${state.active} count=${state.channels.size} " +
+                "focus=${state.focus} layout=${state.layout}",
+        )
+    }
+
+    /** Push multiview.state to every connected sender whenever the TV's
+     *  Multiview changes, including changes made with the TV remote. */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun startMultiviewStatePush() {
+        scope.launch {
+            kotlinx.coroutines.flow.combine(
+                multiviewStore.selected,
+                multiviewStore.audioFocusedIndex,
+                multiviewStore.isStaging,
+                prefs.multiviewLayoutMode,
+            ) { _, _, _, layout -> layout }
+                // openMultiview fills the store a tile at a time: one push per settle.
+                .debounce(150L)
+                .collect { layout ->
+                    lastLayoutKey = layout
+                    val state = currentMultiviewState(layout)
+                    val senders = runCatching { CastReceiverContext.getInstance().senders.map { it.senderId } }
+                        .getOrDefault(emptyList())
+                    // Inactive with nothing sent before: nothing to tell.
+                    if (!state.active && !multiviewStatePushed) return@collect
+                    multiviewStatePushed = state.active
+                    sendMultiviewState(senders, state)
+                }
+        }
+    }
+
+    private var multiviewStatePushed = false
 
     /** Clamp + apply a rewind seek to an absolute wall-clock target, reusing the
      *  on-TV chrome's commitScrubWall rule (PlayerScreen.commitScrubWall): read

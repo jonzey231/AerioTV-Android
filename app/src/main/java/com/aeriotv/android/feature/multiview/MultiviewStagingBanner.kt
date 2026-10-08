@@ -38,7 +38,7 @@ import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.ui.settings.dpadFocusRing
 
 /**
- * The "N tiles staged for Multiview" banner with Clear, Play and Done
+ * The "N channels staged for Multiview" banner with Clear, Play and Done
  * (iOS MultiviewStagingBanner, EPGGuideView.swift). Shared by the Live TV
  * Guide and List so staging from either view shows the same banner at the
  * top of the screen. Renders nothing while staging is off or the pile is
@@ -59,7 +59,7 @@ fun MultiviewStagingBanner(
     val tiles by store.selected.collectAsStateWithLifecycle()
     if (!staging || tiles.isEmpty()) return
     val count = tiles.size
-    val label = if (count == 1) "1 tile staged for Multiview" else "$count tiles staged for Multiview"
+    val label = if (count == 1) "1 channel staged for Multiview" else "$count channels staged for Multiview"
     val guard = rememberTvMenuGuard()
     val playFocus = remember { FocusRequester() }
     LaunchedEffect(count) {

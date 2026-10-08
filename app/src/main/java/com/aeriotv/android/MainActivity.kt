@@ -585,10 +585,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         if (isTelevisionDevice() && !isChangingConfigurations) {
             android.util.Log.i("AerioLeave", "onStop: TV leave -> stopping playback")
-            runCatching { miniPlayerSession.dismiss() }
-            runCatching { exoWindowState.hide() }
-            runCatching { exoHolder.stop() }
-            AerioMediaPlaybackService.stop(this)
+            stopTvPlaybackOnLeave("onStop")
         }
         // Keep Recent Channels Live: a kept channel stays until the user stops
         // it, a newer keep evicts it, the server ends it, or the app exits
@@ -608,6 +605,26 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    /**
+     * Everything audible stops when the app leaves the foreground on a TV:
+     * the single live player AND every Multiview tile (Logan 2026-10-08, the
+     * Streamer kept a tile AudioTrack in state:started at the launcher; the
+     * tiles belong to the Multiview composable, which a stopped activity does
+     * not recompose, so they are stopped here synchronously). A running
+     * Multiview then exits on return, the same end state as a Cast stop, so
+     * the user never comes back to a grid of stopped tiles.
+     */
+    private fun stopTvPlaybackOnLeave(from: String) {
+        runCatching { miniPlayerSession.dismiss() }
+        runCatching { exoWindowState.hide() }
+        runCatching { exoHolder.stop() }
+        if (!com.aeriotv.android.feature.multiview.MultiviewTilePlayers.isEmpty) {
+            com.aeriotv.android.feature.multiview.MultiviewTilePlayers.stopAll("TV leave ($from)")
+            deepLinkTarget.value = DeepLinkTarget.ExitPlayer
+        }
+        AerioMediaPlaybackService.stop(this)
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         when {
@@ -623,12 +640,7 @@ class MainActivity : ComponentActivity() {
             // destroy()) so a quick relaunch reuses the holder. Same teardown
             // order as the X-close path. Must be FIRST so it short-circuits the
             // audio-only + API<31 video branches on TV.
-            isTelevisionDevice() -> {
-                runCatching { miniPlayerSession.dismiss() }
-                runCatching { exoWindowState.hide() }
-                runCatching { exoHolder.stop() }
-                AerioMediaPlaybackService.stop(this)
-            }
+            isTelevisionDevice() -> stopTvPlaybackOnLeave("onUserLeaveHint")
             // Audio-only: never enter PiP. Keep a foreground media notification
             // alive so audio continues with status-bar + lock-screen controls.
             PipState.audioPlaybackActive.value -> {

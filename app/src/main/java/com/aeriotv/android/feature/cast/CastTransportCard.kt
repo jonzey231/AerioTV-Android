@@ -110,6 +110,10 @@ fun CastTransportCard(
     val isCompanion = !casting && companionTv != null
     val active = casting || isCompanion
     val deviceName = if (isCompanion) companionTv?.name else castDevice
+    // Cast Connect Multiview (Logan 2026-10-08): the AerioTV Android TV app
+    // runs the grid natively; the card and sheet follow its state pushes.
+    val nativeMvState by castSender.nativeMultiview.collectAsStateWithLifecycle()
+    val nativeMultiview = if (isCompanion) null else nativeMvState
 
     var sheetOpen by remember { mutableStateOf(false) }
     /** The Cast device picker, opened from the idle sheet's Change Cast Device. */
@@ -172,7 +176,11 @@ fun CastTransportCard(
 
     // What the other screen is on, resolved back to a playlist channel so
     // channel up/down and Switch Stream have something to work with.
-    val currentChannelId = if (isCompanion) companionChannelId else castContent?.mediaId
+    val currentChannelId = when {
+        isCompanion -> companionChannelId
+        nativeMultiview != null -> null
+        else -> castContent?.mediaId
+    }
     val currentChannel = remember(currentChannelId, channels) {
         val id = currentChannelId ?: return@remember null
         val bare = id.substringAfter(':', id)
@@ -202,7 +210,7 @@ fun CastTransportCard(
         else castProgramme?.startMillis ?: 0L
     val programmeEndMs = if (isCompanion) companionDetails?.programmeEndMs ?: 0L
         else castProgramme?.endMillis ?: 0L
-    val logoUrl = if (isCompanion) {
+    val logoUrl = if (nativeMultiview != null) null else if (isCompanion) {
         companionDetails?.logoUrl
     } else {
         castContent?.artUri?.takeIf { it.isNotBlank() }
@@ -218,13 +226,17 @@ fun CastTransportCard(
         isCompanion -> companionDetails?.channelName
             ?: companionNowPlaying.takeIf { it.isNotBlank() }
             ?: ""
+        nativeMultiview != null -> com.aeriotv.android.core.cast.multiview.MultiviewCastController.TITLE
         else -> compositeSingleName ?: castContent?.title.orEmpty()
     }
     val hasContent = title.isNotBlank()
     // Composited Multiview: title "Multiview", the channel names under it,
     // live only (no skips, no channel up/down).
-    val isComposite = !isCompanion &&
+    val isComposite = !isCompanion && nativeMultiview == null &&
         castContent?.mediaId == com.aeriotv.android.core.cast.multiview.MultiviewCastController.MEDIA_ID
+    val nativeNames = nativeMultiview?.channels?.joinToString(", ") { it.name }
+    // Either Multiview path: live only, no channel flips or skips.
+    val isMultiview = isComposite || nativeMultiview != null
     val switchingTo = if (isCompanion) null else castSwitchingTo
     // Google Cast only, and only for the channel actually on the receiver.
     val showCastVideo = !isCompanion && hasContent && switchingTo == null
@@ -248,8 +260,13 @@ fun CastTransportCard(
     // Apple 9c19a33: a composite's Stream Info is one card of labeled rows
     // (SOURCE upstream host, COMPOSITE, FORMAT, VIDEO, AUDIO, then TV and the
     // receiver's own summary), not plain text lines.
-    val castDetailLines = if (isComposite) emptyList() else listOfNotNull(receiverLine) + transcodeNote
-    val compositeInfoRows = if (isComposite) {
+    val castDetailLines = if (isMultiview) emptyList() else listOfNotNull(receiverLine) + transcodeNote
+    val compositeInfoRows = if (nativeMultiview != null) {
+        listOfNotNull(
+            "MULTIVIEW" to "${nativeMultiview.channels.size} channels, on the TV",
+            deviceName?.let { "TV" to it },
+        )
+    } else if (isComposite) {
         com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.streamInfoRows(compositeSession?.sourceHost) +
             listOfNotNull(deviceName?.let { "TV" to it })
     } else if (!isCompanion && hasContent) {
@@ -282,6 +299,10 @@ fun CastTransportCard(
             Log.i(TAG, "[Remote] X: stop + close")
             companionRemote.stopRemotePlayback()
             companionRemote.disconnect()
+        } else if (nativeMultiview != null) {
+            // Stop Casting on a Cast Connect Multiview ends the Multiview on
+            // the TV (back to its UI) and keeps the session, like a channel stop.
+            castSender.stopNativeMultiview()
         } else if (hasContent || switchingTo != null) {
             // Playing card (or its sheet's Stop casting): stop the media, keep
             // the session, and fall back to the idle card (iOS parity).
@@ -326,7 +347,11 @@ fun CastTransportCard(
                 else -> "Casting to ${deviceName ?: "your TV"}"
             },
             deviceName = deviceName,
-            artUri = if (isCompanion) companionDetails?.logoUrl else castContent?.artUri,
+            artUri = when {
+                isCompanion -> companionDetails?.logoUrl
+                nativeMultiview != null -> null
+                else -> castContent?.artUri
+            },
             isPlaying = if (isCompanion) companionIsPlaying else castIsPlaying,
             // Nothing playing yet: the card says where the next tap lands.
             subtitle = when {
@@ -336,10 +361,11 @@ fun CastTransportCard(
                 isCompanion -> "Controlling ${deviceName ?: "TV"}"
                 isComposite && compositeSingleName != null -> null
                 isComposite -> compositeNames ?: castContent?.subtitle
+                nativeMultiview != null -> nativeNames
                 else -> null
             },
             transportIcon = if (isCompanion) Icons.Filled.Tv else Icons.Filled.Cast,
-            showTransport = hasContent,
+            showTransport = hasContent && nativeMultiview == null,
             stopDescription = if (isCompanion) "Stop playback" else "Stop casting",
             onTap = {
                 Log.i(TAG, "[Cast] card tap")
@@ -412,12 +438,25 @@ fun CastTransportCard(
             stopLabel = if (isCompanion) "Stop" else "Stop Casting",
             // Only the companion transport can be dropped while the TV plays on.
             onDisconnect = if (isCompanion) ({ disconnectCompanionOnly() }) else null,
-            canChangeChannel = currentChannel != null && !isComposite,
-            showInlineSkip = !isCompanion && !isComposite,
-            showSkipButtons = !isComposite,
-            programmeTitleOverride = if (isComposite && compositeSingleName == null) compositeNames ?: castContent?.subtitle else null,
-            allowWebScrub = !isComposite,
-            topContent = if (isComposite && multiviewCast != null) {
+            canChangeChannel = currentChannel != null && !isMultiview,
+            showInlineSkip = !isCompanion && !isMultiview,
+            showSkipButtons = !isMultiview,
+            showPlayPause = nativeMultiview == null,
+            programmeTitleOverride = when {
+                nativeMultiview != null -> nativeNames
+                isComposite && compositeSingleName == null -> compositeNames ?: castContent?.subtitle
+                else -> null
+            },
+            allowWebScrub = !isMultiview,
+            topContent = if (nativeMultiview != null) {
+                {
+                    NativeMultiviewPanel(
+                        state = nativeMultiview,
+                        onFocus = { castSender.setNativeMultiviewFocus(it) },
+                        onLayout = { castSender.setNativeMultiviewLayout(it) },
+                    )
+                }
+            } else if (isComposite && multiviewCast != null) {
                 {
                     // Tile menu Switch Stream (Logan 2026-10-07): the same
                     // admin gate and server-side change_stream as the cast

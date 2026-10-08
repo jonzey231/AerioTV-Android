@@ -28,7 +28,9 @@ import kotlin.math.abs
 @Stable
 class GuideGridState(
     initialViewportStartMs: Long,
-    val leadMs: Long = 15 * 60_000L,
+    // The left edge IS now (Logan 2026-10-08): the guide opens with the now
+    // line on the edge and the airing program clipped there, no earlier lead.
+    val leadMs: Long = 0L,
     val panStepMs: Long = 30 * 60_000L,
     val slopMs: Long = 30 * 60_000L,
 ) {
@@ -201,10 +203,10 @@ class GuideGridState(
                 }
                 return true
             }
-            // The edge sits a few minutes past the half hour (now minus the
-            // lead), so a cell starting ON the half hour counts as on screen
-            // when its start is within the lead of the edge.
-            if (prev.startMillis >= viewportStartMs - leadMs) {
+            // The edge sits at now, a few minutes past the half hour, so a
+            // cell starting ON the half hour counts as on screen when its
+            // start is within [EDGE_SLOP_MS] of the edge.
+            if (prev.startMillis >= viewportStartMs - EDGE_SLOP_MS) {
                 focusRow = row
                 focusChannelId = rows.channel(row).id
                 focusCellStartMs = prev.startMillis
@@ -385,4 +387,9 @@ class GuideGridState(
     }
 
     enum class BackStep { RESTORED_NOW_AND_TOP, TOP, NONE }
+
+    private companion object {
+        /** How far left of the edge a cell may start and still count as on screen for a short Left. */
+        const val EDGE_SLOP_MS = 15 * 60_000L
+    }
 }

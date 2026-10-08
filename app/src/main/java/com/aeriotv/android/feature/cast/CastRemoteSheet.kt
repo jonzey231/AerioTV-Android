@@ -176,6 +176,9 @@ fun CastRemoteSheet(
     /** False hides Back / Forward (the composited Multiview is live only);
      *  Play / Pause stays. */
     showSkipButtons: Boolean = true,
+    /** False hides Play / Pause too: a Multiview the AerioTV Android TV app
+     *  runs over Cast Connect has no single transport to pause. */
+    showPlayPause: Boolean = true,
     /** Replaces the program line (the composited Multiview's channel names). */
     programmeTitleOverride: String? = null,
     /** Drawn under the header, above the program block (the composited
@@ -467,7 +470,7 @@ fun CastRemoteSheet(
             // Row 2: Back, Play / Pause, Forward, in equal fixed-width columns
             // so unequal labels cannot pull the row off center.
             val skipEnabled = enabled && (rewindActive || (showInlineSkip && inlineSkipEnabled))
-            Row(
+            if (showSkipButtons || showPlayPause) Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.Top,
@@ -481,7 +484,7 @@ fun CastRemoteSheet(
                         groupAlpha,
                     )
                 }
-                PlayPauseButton(isPlaying, onTogglePlayPause, enabled, groupAlpha)
+                if (showPlayPause) PlayPauseButton(isPlaying, onTogglePlayPause, enabled, groupAlpha)
                 if (showSkipButtons) {
                     LabeledRemoteButton(
                         SkipIntervals.forwardIcon(forwardSeconds),

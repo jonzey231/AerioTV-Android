@@ -454,7 +454,7 @@ fun GuideScreen(
     // whole window, the 800 to 1360 ms frames on return. The retained state
     // is reset to exactly what a new one holds, so focus and viewport land
     // as before; only the rows survive.
-    val grid = remember { RetainedGuideGrid.take(favoritesOnly, System.currentTimeMillis() - 15 * 60_000L) }
+    val grid = remember { RetainedGuideGrid.take(favoritesOnly, System.currentTimeMillis()) }
     androidx.compose.runtime.DisposableEffect(grid) { onDispose { RetainedGuideGrid.give(favoritesOnly, grid) } }
     // Hoisted so a group change can read and set the rows viewport.
     val gridListState = rememberLazyListState()

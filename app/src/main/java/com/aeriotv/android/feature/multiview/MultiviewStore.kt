@@ -129,7 +129,7 @@ class MultiviewStore @Inject constructor() {
     /**
      * iOS `MultiviewStore.isStagingFromGuide`: true while the user is building
      * a pile from the Live TV Guide or List long-press menu. Drives the
-     * "N tiles staged for Multiview" banner on both Live TV views.
+     * "N channels staged for Multiview" banner on both Live TV views.
      */
     private val _isStaging = MutableStateFlow(false)
     val isStaging: StateFlow<Boolean> = _isStaging.asStateFlow()

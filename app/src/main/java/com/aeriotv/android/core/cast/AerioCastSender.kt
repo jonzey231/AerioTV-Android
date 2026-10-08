@@ -372,6 +372,12 @@ class AerioCastSender @Inject constructor(
      *  for staged Multiview. Reset with the receiver target. */
     val receiverMultiview: StateFlow<Boolean> = _receiverMultiview.asStateFlow()
 
+    private val _nativeMultiview = MutableStateFlow<CastControl.MultiviewState?>(null)
+    /** The Multiview the AerioTV Android TV app is running (Cast Connect),
+     *  as its multiview.state pushes report it; null when none. The cast card
+     *  and sheet render it instead of the last single channel (Logan 2026-10-08). */
+    val nativeMultiview: StateFlow<CastControl.MultiviewState?> = _nativeMultiview.asStateFlow()
+
     /** Cast device ids that have answered the hello probe with
      *  platform=android-tv-app at least once, so the picker can list those TVs
      *  first under "AerioTV on TV". */
@@ -456,6 +462,11 @@ class AerioCastSender @Inject constructor(
         // so the measurement now rides along with it.
         noteReceiverCaps(json)
         _receiverMultiview.value = json.optBoolean(CastControl.KEY_MULTIVIEW, false)
+        // A sender that joins while the TV already runs a Multiview (an app
+        // restart, a reconnect) asks for it so the card shows it at once.
+        if (_receiverMultiview.value) {
+            runCatching { currentSession()?.sendMessage(CastControl.NAMESPACE, CastControl.multiviewGetStateMessage()) }
+        }
         when (json.optString(CastControl.KEY_PLATFORM)) {
             CastControl.VALUE_PLATFORM_ANDROID_TV ->
                 resolveReceiverTarget(ReceiverTarget.ANDROID_TV_APP)
@@ -523,6 +534,15 @@ class AerioCastSender @Inject constructor(
             // receiver spells it "cmd" like every other frame on this namespace.
             val type = json.optString(CastControl.KEY_TYPE)
             val mvCmd = json.optString(CastControl.KEY_CMD).ifBlank { type }
+            if (mvCmd == CastControl.TYPE_MULTIVIEW_STATE) {
+                val st = CastControl.decodeMultiviewState(json)
+                Log.i(
+                    TAG,
+                    "[MV-CAST] state <- active=${st.active} count=${st.channels.size} focus=${st.focus} layout=${st.layout}",
+                )
+                _nativeMultiview.value = st.takeIf { it.active }
+                return@runCatching
+            }
             if (mvCmd == CastControl.TYPE_MULTIVIEW_OPENED || mvCmd == CastControl.TYPE_MULTIVIEW_ERROR) {
                 Log.i(TAG, "[MV-CAST] reply <- $message")
                 return@runCatching
@@ -1768,6 +1788,34 @@ class AerioCastSender @Inject constructor(
         runCatching { session.sendMessage(CastControl.NAMESPACE, message) }
     }
 
+    /** Give the audio to tile [index] of the TV's Multiview (Cast Connect). */
+    fun setNativeMultiviewFocus(index: Int) {
+        val mv = _nativeMultiview.value ?: return
+        if (index !in mv.channels.indices || index == mv.focus) return
+        Log.i(TAG, "[MV-CAST] sent multiview.focus focus=$index")
+        // Optimistic: the TV's state push confirms it.
+        _nativeMultiview.value = mv.copy(focus = index)
+        runCatching { currentSession()?.sendMessage(CastControl.NAMESPACE, CastControl.multiviewFocusMessage(index)) }
+    }
+
+    /** Set the TV's Multiview layout to the [MultiviewLayoutMode] key [layout]. */
+    fun setNativeMultiviewLayout(layout: String) {
+        val mv = _nativeMultiview.value ?: return
+        if (layout == mv.layout) return
+        Log.i(TAG, "[MV-CAST] sent multiview.layout layout=$layout")
+        _nativeMultiview.value = mv.copy(layout = layout)
+        runCatching { currentSession()?.sendMessage(CastControl.NAMESPACE, CastControl.multiviewLayoutMessage(layout)) }
+    }
+
+    /** Stop Casting on a Cast Connect Multiview: the TV leaves Multiview for
+     *  its own UI, the session stays (idle card), like a single-channel stop. */
+    fun stopNativeMultiview() {
+        Log.i(TAG, "[MV-CAST] sent multiview.stop")
+        _nativeMultiview.value = null
+        runCatching { currentSession()?.sendMessage(CastControl.NAMESPACE, CastControl.multiviewStopMessage()) }
+        stopPlayback()
+    }
+
     /** Jump the TV back to the live edge. */
     fun goLiveRemote() =
         sendControl(CastControl.command(CastControl.CMD_GO_LIVE))
@@ -1910,6 +1958,7 @@ class AerioCastSender @Inject constructor(
         targetProbeJob = null
         _receiverTarget.value = ReceiverTarget.UNKNOWN
         _receiverMultiview.value = false
+        _nativeMultiview.value = null
         deferredTune = null
         receiverCaps = null
         loggedCaps = null

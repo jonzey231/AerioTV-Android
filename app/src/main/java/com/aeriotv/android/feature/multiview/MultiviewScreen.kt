@@ -2294,6 +2294,7 @@ private fun ExoTile(
                 }
             playerRef.value = player
             onPlayer(player)
+            MultiviewTilePlayers.register(player)
             com.aeriotv.android.core.playback.PlaybackActivityTracker.playerCreated()
 
             // Bounded re-prepare on fatal error, copying the cooldown shape
@@ -2591,6 +2592,7 @@ private fun ExoTile(
             onPlayer(null)
             tracer.tracedPlayer = null
             playerRef.value?.let {
+                MultiviewTilePlayers.unregister(it)
                 it.removeAnalyticsListener(tracer.analyticsListener)
                 // Releases, then closes any live socket still parked in a read.
                 liveCalls.release(it)
