@@ -23,10 +23,13 @@ class CompositeClock(val t0Nanos: Long) {
  * and stamped with its playout wall time; output is ADTS frames on the
  * [clock] timeline, the same timeline the video frames use.
  *
- * The timeline is sample-continuous. A chunk that lands more than
- * [REANCHOR_NANOS] away from where the timeline expects it (a focus switch,
- * a tile stall) re-anchors: later chunks jump forward (a short gap), earlier
- * ones are dropped until the tile's clock catches up. While no PCM arrives
+ * The timeline is sample-continuous. Chunk stamps come from the focused
+ * tile's picture clock (the frames the compositor draws), so the timeline
+ * follows the picture: a [Reanchor] (focus switch, stall resume, restart,
+ * picture timestamp jump) snaps it to the chunk's stamp; otherwise a chunk
+ * more than [REANCHOR_NANOS] later than expected jumps forward (a short
+ * gap) and one more than that earlier has its stale head trimmed, so the
+ * audio never trails the picture. While no PCM arrives
  * (focused tile still starting, stalled, or silent) silence is generated so
  * the audio rendition never starves the receiver.
  */
@@ -40,14 +43,18 @@ class CompositeAudioEncoder(
         private const val CHANNELS = CompositePcmNormalizer.OUT_CHANNELS
         private const val FRAMES_PER_BLOCK = 1024
         private const val BITRATE = 128_000
-        private const val REANCHOR_NANOS = 200_000_000L
+        private const val REANCHOR_NANOS = 100_000_000L
         /** Silence fills the timeline up to this far behind now. */
         private const val SILENCE_TRAIL_NANOS = 100_000_000L
         /** No PCM for this long counts as no PCM. */
         private const val IDLE_NANOS = 300_000_000L
     }
 
-    private class Chunk(val samples: ShortArray, val startNanos: Long, val reanchorTile: Int)
+    /** Why the timeline snaps to a chunk, with the focused tile's drawn
+     *  picture time and the chunk's audio time (media ms) for the log. */
+    class Reanchor(val tile: Int, val reason: String, val videoMs: Long, val audioMs: Long)
+
+    private class Chunk(val samples: ShortArray, val startNanos: Long, val reanchor: Reanchor?)
 
     private val queue = LinkedBlockingQueue<Chunk>()
     @Volatile private var running = false
@@ -62,6 +69,9 @@ class CompositeAudioEncoder(
     private var nextNanos = -1L
     private var lastPcmAtNanos = 0L
     @Volatile var droppedChunks = 0
+        private set
+    /** Late PCM frames trimmed to keep the audio on the picture. */
+    @Volatile var trimmedSamples = 0L
         private set
     /** The encoder's AudioSpecificConfig (csd-0) as hex, once it is known. */
     @Volatile var csd0Hex: String = ""
@@ -91,12 +101,11 @@ class CompositeAudioEncoder(
         return true
     }
 
-    /** Focused tile PCM, interleaved stereo at 48 kHz. Any thread.
-     *  [reanchorTile] >= 0: that tile just resumed after a stall; the
-     *  timeline snaps to this chunk's playout stamp whatever the drift, so
-     *  lip sync does not carry the stall. */
-    fun submit(samples: ShortArray, playoutNanos: Long, reanchorTile: Int = -1) {
-        if (running && !paused && samples.isNotEmpty()) queue.offer(Chunk(samples, playoutNanos, reanchorTile))
+    /** Focused tile PCM, interleaved stereo at 48 kHz, stamped on the
+     *  tile's picture clock. Any thread. [reanchor] non-null: the timeline
+     *  snaps to this chunk's stamp whatever the drift. */
+    fun submit(samples: ShortArray, playoutNanos: Long, reanchor: Reanchor? = null) {
+        if (running && !paused && samples.isNotEmpty()) queue.offer(Chunk(samples, playoutNanos, reanchor))
     }
 
     /** Background pause: no PCM, no silence; the timeline restarts from the
@@ -135,7 +144,7 @@ class CompositeAudioEncoder(
                 }
                 if (chunk != null) {
                     lastPcmAtNanos = now
-                    if (chunk.reanchorTile >= 0) reanchor(chunk)
+                    chunk.reanchor?.let { reanchor(chunk, it) }
                     append(c, chunk.samples, chunk.startNanos)
                 } else if (now - lastPcmAtNanos > IDLE_NANOS) {
                     fillSilence(c, now - SILENCE_TRAIL_NANOS)
@@ -147,11 +156,14 @@ class CompositeAudioEncoder(
         }
     }
 
-    /** Snap the timeline to [chunk]'s playout stamp (tile resumed after a
-     *  stall); the partial block before it is dropped. */
-    private fun reanchor(chunk: Chunk) {
+    /** Snap the timeline to [chunk]'s picture-clock stamp; the partial
+     *  block before it is dropped. delta = how far the timeline moved. */
+    private fun reanchor(chunk: Chunk, r: Reanchor) {
         val deltaMs = if (nextNanos >= 0) (chunk.startNanos - nextNanos) / 1_000_000 else 0L
-        log("[MV-CAST] composite audio re-anchor tile=${chunk.reanchorTile} delta=${deltaMs}ms")
+        log(
+            "[MV-CAST] composite audio re-anchor tile=${r.tile} reason=${r.reason} " +
+                "video=${r.videoMs}ms audio=${r.audioMs}ms delta=${deltaMs}ms",
+        )
         blockFill = 0
         nextNanos = chunk.startNanos
     }
@@ -174,8 +186,15 @@ class CompositeAudioEncoder(
         if (nextNanos >= 0) {
             val drift = startNanos - nextNanos
             if (drift < -REANCHOR_NANOS) {
-                droppedChunks++
-                return
+                // Late: the head of the chunk belongs to pictures already
+                // drawn. Trim it so the rest lands where it belongs.
+                val skipSamples = ((-drift) * RATE / 1_000_000_000L).toInt() * CHANNELS
+                if (skipSamples >= samples.size) {
+                    droppedChunks++
+                    return
+                }
+                trimmedSamples += skipSamples / CHANNELS
+                return append(c, samples.copyOfRange(skipSamples, samples.size), nextNanos)
             }
             if (drift > REANCHOR_NANOS) {
                 blockFill = 0

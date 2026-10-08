@@ -84,6 +84,11 @@ class MultiviewCompositor(
         const val MAX_BEHIND_NANOS = 3_000_000_000L
         private const val STATS_NANOS = 10_000_000_000L
         private const val MAX_TILE_RETRIES = 10
+        /** Composite tile buffering (see startPlayer). */
+        private const val TILE_MIN_BUFFER_MS = 10_000
+        private const val TILE_MAX_BUFFER_MS = 30_000
+        private const val TILE_START_BUFFER_MS = 6_000
+        private const val TILE_REBUFFER_MS = 8_000
         /** Preview notice on a tile that is retrying, and on one that gave up. */
         const val NOTICE_RECONNECTING = "Reconnecting"
         const val NOTICE_UNAVAILABLE = "Unavailable"
@@ -194,6 +199,11 @@ class MultiviewCompositor(
         /** Set when the slot changes channel: the GL thread drops the old
          *  logo texture before the new one loads. */
         @Volatile var dropLogo = false
+        /** Media time of the frames this tile releases (audio sync). */
+        val picture = TilePictureClock()
+        /** Media time of the picture last drawn, and when (GL thread). */
+        @Volatile var drawnPtsUs = Long.MIN_VALUE
+        @Volatile var drawnAtNanos = 0L
     }
 
     private val initialCount = tiles.size.coerceAtMost(MultiviewCompositeLayout.MAX_TILES)
@@ -262,7 +272,16 @@ class MultiviewCompositor(
     @Volatile private var pendingFocusTapNanos = 0L
     @Volatile private var pendingFocusIndex = -1
     /** Tile whose next PCM re-anchors the composite audio; -1 when none. */
-    @Volatile private var reanchorTile = -1
+    /** Per slot: a pending composite audio re-anchor and its reason. Only
+     *  the focused tile's PCM consumes its own entry, so a stall on any
+     *  other tile never touches the focused tile's audio timeline. */
+    private val pendingReanchor = java.util.concurrent.atomic.AtomicReferenceArray<String?>(MultiviewCompositeLayout.MAX_TILES)
+
+    /** Focused tile's newest PCM chunk: media time and picture-clock
+     *  stamp (the `av offset` line). Written on the tile playback thread. */
+    @Volatile private var lastAudioTileForOffset = -1
+    @Volatile private var lastAudioPtsUs = 0L
+    @Volatile private var lastAudioPlayoutNanos = 0L
 
     /** App in the background (set by the controller). The composite keeps
      *  rendering, encoding and muxing exactly as in the foreground (the cast
@@ -425,6 +444,9 @@ class MultiviewCompositor(
         Log.i(TAG, "[MV-CAST] composite focus ${state[focused].source?.displayName} -> ${state[index].source?.displayName}")
         pendingFocusIndex = index
         pendingFocusTapNanos = tapNanos
+        // The new tile's audio starts on its own picture clock.
+        for (i in 0 until MultiviewCompositeLayout.MAX_TILES) pendingReanchor.set(i, null)
+        pendingReanchor.set(index, "focus")
         focusChangedAtNanos = System.nanoTime()
         focused = index
     }
@@ -569,7 +591,10 @@ class MultiviewCompositor(
     private var pcmSamples = 0L
     private var pcmFormatWindow = ""
 
-    override fun onPcm(tile: Int, bytes: ByteArray, sampleRate: Int, channels: Int, pcmEncoding: Int, playoutNanos: Long) {
+    override fun pictureNowUs(tile: Int, nowNanos: Long): Long? =
+        state.getOrNull(tile)?.picture?.nowPtsUs(nowNanos)
+
+    override fun onPcm(tile: Int, bytes: ByteArray, sampleRate: Int, channels: Int, pcmEncoding: Int, playoutNanos: Long, audioPtsUs: Long) {
         val samples = synchronized(normalizer) {
             if (tile != lastAudioTile) {
                 normalizer.reset()
@@ -582,9 +607,15 @@ class MultiviewCompositor(
                 pcmSamples += out.size
             }
         }
-        val reanchor = reanchorTile == tile
-        if (reanchor) reanchorTile = -1
-        audio.submit(samples, playoutNanos, if (reanchor) tile else -1)
+        lastAudioPtsUs = audioPtsUs
+        lastAudioPlayoutNanos = playoutNanos
+        lastAudioTileForOffset = tile
+        val reason = pendingReanchor.getAndSet(tile, null)
+        val reanchor = reason?.let {
+            val drawn = state[tile].drawnPtsUs
+            CompositeAudioEncoder.Reanchor(tile, it, if (drawn == Long.MIN_VALUE) -1L else drawn / 1000, audioPtsUs / 1000)
+        }
+        audio.submit(samples, playoutNanos, reanchor)
     }
 
     // ---- players (main thread) ----
@@ -617,14 +648,30 @@ class MultiviewCompositor(
         val player = ExoPlayer.Builder(context)
             .setRenderersFactory(renderers)
             .setLoadControl(
+                // Composite tiles only (2026-10-08, Nothing Phone 3-tile cast:
+                // tiles started on 1 s and resumed on 3 s, then stalled again
+                // with buf=380 ms to 2.2 s against Dispatcharr's 8 to 9.5 s
+                // burst cadence). Every stall here freezes a tile on the TV
+                // and gaps the composite audio, so a tile starts on 6 s,
+                // resumes on 8 s and keeps 10 to 30 s; the progressive TS
+                // source has no live-offset target to pull it back to the
+                // edge. The local Multiview and the single player are
+                // unchanged.
                 DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(5_000, 15_000, 1_000, 3_000)
+                    .setBufferDurationsMs(TILE_MIN_BUFFER_MS, TILE_MAX_BUFFER_MS, TILE_START_BUFFER_MS, TILE_REBUFFER_MS)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build(),
             )
             .setHandleAudioBecomingNoisy(false)
             .build()
         player.setVideoSurface(surface)
+        t.picture.reset()
+        player.setVideoFrameMetadataListener { presentationTimeUs, releaseTimeNs, _, _ ->
+            if (t.picture.onFrame(presentationTimeUs, releaseTimeNs)) {
+                Log.i(TAG, "[MV-CAST] composite tile ${t.index} picture clock jumped to ${presentationTimeUs / 1000}ms")
+                pendingReanchor.set(t.index, "jump")
+            }
+        }
         player.addListener(object : Player.Listener {
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 t.videoWidth = videoSize.width
@@ -683,7 +730,7 @@ class MultiviewCompositor(
                             // composite audio re-anchors to it on the next PCM
                             // so lip sync does not carry the stall.
                             Log.i(TAG, "[MV-CAST] composite tile ${t.index} resumed after stall")
-                            reanchorTile = t.index
+                            pendingReanchor.set(t.index, "stall")
                         }
                         t.wasReady = true
                     }
@@ -722,7 +769,8 @@ class MultiviewCompositor(
         Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${source.displayName}: ingest restarted on a new connection, decoder and demux reset (retry ${t.retries})")
         t.wasReady = false
         t.stalled = false
-        reanchorTile = t.index
+        pendingReanchor.set(t.index, "restart")
+        t.picture.reset()
         player.stop()
         player.setMediaSource(
             com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, http),
@@ -875,6 +923,7 @@ class MultiviewCompositor(
                 t.surfaceTexture?.let { st ->
                     st.updateTexImage()
                     st.getTransformMatrix(t.texMatrix)
+                    t.picture.ptsForRelease(st.timestamp)?.let { t.drawnPtsUs = it; t.drawnAtNanos = now }
                     t.hasFrame = true
                     t.framesRendered++
                 }
@@ -1294,6 +1343,20 @@ class MultiviewCompositor(
                     "silenceBlocks=${silence - healthSilence} dropped=${audio.droppedChunks} csd0=${audio.csd0Hex.ifEmpty { "none" }}",
             )
             healthSilence = silence
+            // Lip sync of the focused tile: the audio's media time at the
+            // moment the compositor drew its newest picture, minus that
+            // picture's media time (positive = audio ahead).
+            val ft = state[focused]
+            if (lastAudioTileForOffset == ft.index && ft.drawnPtsUs != Long.MIN_VALUE && lastAudioPlayoutNanos != 0L) {
+                val audioAtDraw = lastAudioPtsUs + (ft.drawnAtNanos - lastAudioPlayoutNanos) / 1000
+                Log.i(
+                    TAG,
+                    "[MV-CAST] av offset tile=${ft.index} ${(audioAtDraw - ft.drawnPtsUs) / 1000}ms " +
+                        "video=${ft.drawnPtsUs / 1000}ms audio=${audioAtDraw / 1000}ms trimmed=${audio.trimmedSamples}",
+                )
+            } else {
+                Log.i(TAG, "[MV-CAST] av offset tile=${ft.index} n/a (no drawn picture or PCM yet)")
+            }
             healthEncoded = enc
             healthDropped = dropped
             healthAudio = audioChunks

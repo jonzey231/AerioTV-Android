@@ -52,4 +52,23 @@ class MultiviewCompositePcmTest {
         val len = ((f[3].toInt() and 3) shl 11) or ((f[4].toInt() and 0xFF) shl 3) or ((f[5].toInt() and 0xFF) shr 5)
         assertEquals(107, len)
     }
+
+    @Test
+    fun `picture clock follows frames, freezes in a stall and flags jumps`() {
+        val c = TilePictureClock()
+        assertEquals(null, c.nowPtsUs(0L))
+        assertEquals(false, c.onFrame(1_000_000L, 1_000_000_000L))
+        assertEquals(false, c.onFrame(1_033_000L, 1_033_000_000L))
+        // 10 ms after the newest frame: its time plus 10 ms.
+        assertEquals(1_043_000L, c.nowPtsUs(1_043_000_000L))
+        // Stalled: capped 300 ms past the newest frame.
+        assertEquals(1_333_000L, c.nowPtsUs(5_000_000_000L))
+        // The drawn frame is found by its release (SurfaceTexture) time.
+        assertEquals(1_000_000L, c.ptsForRelease(1_002_000_000L))
+        assertEquals(null, c.ptsForRelease(2_000_000_000L))
+        // A seek to the live edge moves media time by seconds: a jump.
+        assertEquals(true, c.onFrame(9_000_000L, 5_000_000_000L))
+        c.reset()
+        assertEquals(null, c.nowPtsUs(5_000_000_000L))
+    }
 }

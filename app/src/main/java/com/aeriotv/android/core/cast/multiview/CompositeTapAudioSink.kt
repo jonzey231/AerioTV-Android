@@ -12,9 +12,75 @@ interface CompositeAudioTap {
     /** Whether [tile]'s PCM is wanted now (the audio-focused tile only). */
     fun wants(tile: Int): Boolean
 
-    /** [bytes] of [tile]'s PCM that the tile's clock plays at
-     *  [playoutNanos] (System.nanoTime base). */
-    fun onPcm(tile: Int, bytes: ByteArray, sampleRate: Int, channels: Int, pcmEncoding: Int, playoutNanos: Long)
+    /** [bytes] of [tile]'s PCM starting at media time [audioPtsUs], which
+     *  the tile's picture clock reaches at [playoutNanos] (System.nanoTime
+     *  base). */
+    fun onPcm(tile: Int, bytes: ByteArray, sampleRate: Int, channels: Int, pcmEncoding: Int, playoutNanos: Long, audioPtsUs: Long)
+
+    /** [tile]'s picture clock at [nowNanos] (media time of the picture it
+     *  shows, see [TilePictureClock]); null before its first frame. */
+    fun pictureNowUs(tile: Int, nowNanos: Long): Long?
+}
+
+/**
+ * A composite tile's picture clock (2026-10-08, Nothing Phone stutter: after
+ * a stall the composite audio trailed the picture). Fed by the tile player's
+ * VideoFrameMetadataListener with each frame's media time and the wall time
+ * (System.nanoTime) it is released to the tile's SurfaceTexture, which is
+ * also the SurfaceTexture timestamp the compositor sees when it draws it.
+ * The audio tap stamps and paces PCM by this clock, so the composite's audio
+ * follows the frames the compositor actually draws through stalls, restarts
+ * and timestamp jumps. Extrapolation past the newest frame is capped, so the
+ * clock freezes (and audio stops) while the tile's picture is stalled.
+ * Pure; unit tested.
+ */
+class TilePictureClock {
+    companion object {
+        private const val RING = 32
+        /** The clock runs on past the newest frame for at most this long. */
+        const val MAX_EXTRAPOLATION_NANOS = 300_000_000L
+        /** Media time moving more than this between frames is a jump. */
+        const val JUMP_US = 1_000_000L
+    }
+
+    private val pts = LongArray(RING)
+    private val release = LongArray(RING)
+    private var count = 0
+    private var head = 0
+
+    @Synchronized fun reset() { count = 0; head = 0 }
+
+    /** Records a frame; true when its media time jumped (a seek or a
+     *  source timestamp discontinuity), which re-anchors the audio. */
+    @Synchronized fun onFrame(ptsUs: Long, releaseNanos: Long): Boolean {
+        val jumped = count > 0 && kotlin.math.abs(ptsUs - pts[(head + RING - 1) % RING]) > JUMP_US
+        pts[head] = ptsUs
+        release[head] = releaseNanos
+        head = (head + 1) % RING
+        if (count < RING) count++
+        return jumped
+    }
+
+    @Synchronized fun nowPtsUs(nowNanos: Long): Long? {
+        if (count == 0) return null
+        val i = (head + RING - 1) % RING
+        // A frame released ahead of now (the decoder schedules frames a
+        // little early) puts the clock before it by that lead.
+        val elapsed = (nowNanos - release[i]).coerceAtMost(MAX_EXTRAPOLATION_NANOS)
+        return pts[i] + elapsed / 1000L
+    }
+
+    /** Media time of the frame released closest to [releaseNanos] (a
+     *  SurfaceTexture timestamp); null when none is within 20 ms. */
+    @Synchronized fun ptsForRelease(releaseNanos: Long): Long? {
+        var best = -1
+        var bestD = Long.MAX_VALUE
+        for (k in 0 until count) {
+            val d = kotlin.math.abs(release[k] - releaseNanos)
+            if (d < bestD) { bestD = d; best = k }
+        }
+        return if (best >= 0 && bestD <= 20_000_000L) pts[best] else null
+    }
 }
 
 /**
@@ -26,6 +92,11 @@ interface CompositeAudioTap {
  * same moment lands on its SurfaceTexture. That shared wall clock is what
  * keeps the composite's audio in sync with the focused tile's picture, and
  * focus switches are a flag flip (every tile keeps decoding its audio).
+ *
+ * When the tile has drawn a picture, PCM is paced and stamped by the tile's
+ * [TilePictureClock] instead (the media time of the frames the compositor
+ * draws), and PCM the picture has already passed is dropped, so a stall or
+ * a restart cannot leave the audio behind the picture.
  *
  * Used with a clockless tile audio renderer (aerioRenderersFactory with a
  * tile gate), so the tile runs on ExoPlayer's standalone clock.
@@ -43,6 +114,9 @@ class CompositeTapAudioSink(
     private var sampleRate = 0
     private var channels = 0
     private var pcmEncoding = 0
+    /** Renderer stream offset: handleBuffer times minus this are media
+     *  times, the domain of the video frame metadata. */
+    private var streamOffsetUs = 0L
 
     private fun wallUs() = System.nanoTime() / 1000L
     private fun pacedNowUs(): Long =
@@ -57,15 +131,24 @@ class CompositeTapAudioSink(
         super.configure(inputFormat, specifiedBufferSize, outputChannels)
     }
 
+    override fun setOutputStreamOffsetUs(outputStreamOffsetUs: Long) {
+        if (outputStreamOffsetUs != androidx.media3.common.C.TIME_UNSET) streamOffsetUs = outputStreamOffsetUs
+        super.setOutputStreamOffsetUs(outputStreamOffsetUs)
+    }
+
     override fun handleBuffer(buffer: java.nio.ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
         if (anchorPtsUs == AudioSink.CURRENT_POSITION_NOT_SET) reanchor(presentationTimeUs)
-        val now = pacedNowUs()
-        if (presentationTimeUs > now + CUSHION_US) return false
-        if (tap.wants(tile) && buffer.hasRemaining()) {
+        val nowNanos = System.nanoTime()
+        val mediaPtsUs = presentationTimeUs - streamOffsetUs
+        val picture = tap.pictureNowUs(tile, nowNanos)
+        // How far ahead of the clock this PCM plays: the picture clock once
+        // the tile shows frames, the sink's own wall pacing before that.
+        val aheadUs = if (picture != null) mediaPtsUs - picture else presentationTimeUs - pacedNowUs()
+        if (aheadUs > CUSHION_US) return false
+        if (tap.wants(tile) && buffer.hasRemaining() && aheadUs >= -STALE_US) {
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)
-            val playoutNanos = System.nanoTime() + (presentationTimeUs - now) * 1000L
-            tap.onPcm(tile, bytes, sampleRate, channels, pcmEncoding, playoutNanos)
+            tap.onPcm(tile, bytes, sampleRate, channels, pcmEncoding, nowNanos + aheadUs * 1000L, mediaPtsUs)
         }
         buffer.position(buffer.limit())
         return true
@@ -101,5 +184,8 @@ class CompositeTapAudioSink(
 
     private companion object {
         const val CUSHION_US = 250_000L
+        /** PCM this far behind the picture is stale (pictures already
+         *  drawn); it is dropped rather than stretching the timeline. */
+        const val STALE_US = 150_000L
     }
 }
