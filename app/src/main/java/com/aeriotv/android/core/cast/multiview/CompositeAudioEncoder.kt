@@ -63,6 +63,12 @@ class CompositeAudioEncoder(
     private var lastPcmAtNanos = 0L
     @Volatile var droppedChunks = 0
         private set
+    /** The encoder's AudioSpecificConfig (csd-0) as hex, once it is known. */
+    @Volatile var csd0Hex: String = ""
+        private set
+    /** Blocks of generated silence queued (no PCM from the focused tile). */
+    @Volatile var silenceBlocks = 0L
+        private set
 
     fun start(): Boolean {
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, RATE, CHANNELS).apply {
@@ -158,6 +164,7 @@ class CompositeAudioEncoder(
         val zeros = ShortArray(FRAMES_PER_BLOCK * CHANNELS)
         while (nextNanos + framesToNanos(FRAMES_PER_BLOCK) <= untilNanos) {
             append(c, zeros, nextNanos)
+            silenceBlocks++
         }
     }
 
@@ -214,6 +221,13 @@ class CompositeAudioEncoder(
             val idx = c.dequeueOutputBuffer(info, 0)
             if (idx < 0) return
             val out = c.getOutputBuffer(idx)
+            if (out != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                val cfg = ByteArray(info.size)
+                out.position(info.offset)
+                out.get(cfg)
+                csd0Hex = cfg.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+                log("[MV-CAST] AAC encoder csd-0=$csd0Hex (${cfg.size} B)")
+            }
             if (out != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                 val raw = ByteArray(info.size)
                 out.position(info.offset)

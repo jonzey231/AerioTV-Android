@@ -157,6 +157,16 @@ fun aerioRenderersFactory(
                     clockless = true,
                 ),
             )
+            // The bundled FFmpeg renderer behind it, clockless too, exactly
+            // as the live player has it behind the platform renderer
+            // (EXTENSION_RENDERER_MODE_ON). Without it a tile whose audio the
+            // platform cannot decode to PCM (AC-3 on phones with no AC-3
+            // MediaCodec decoder, e.g. the Nothing Phone) had NO audio
+            // renderer: the track stayed unplayed, no PCM ever reached the
+            // tile sink, and the composite cast carried only generated
+            // silence (Nothing Phone log 2026-10-08 14:35: three ESPN tiles,
+            // three video decoders, zero audio decoders created).
+            out.add(ClocklessRenderer(androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer(eventHandler, eventListener, audioSink)))
         }
 
         override fun buildVideoRenderers(
@@ -573,6 +583,23 @@ private class AerioMediaCodecVideoRenderer(
  * 2. [clockless] (multiview tiles only) drops the media clock, so the tile runs
  *    on ExoPlayer's standalone clock whether or not its sink is muted.
  */
+/**
+ * Forwards every call to [inner] but never offers its media clock, so a
+ * Multiview tile keeps running on ExoPlayer's standalone clock whichever
+ * audio renderer claims the track. For renderers that cannot be subclassed
+ * (FfmpegAudioRenderer is final).
+ */
+@OptIn(UnstableApi::class)
+private class ClocklessRenderer(private val inner: Renderer) : Renderer by inner {
+    override fun getMediaClock(): androidx.media3.exoplayer.MediaClock? = null
+    override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
+        inner.getDurationToProgressUs(positionUs, elapsedRealtimeUs)
+    override fun setPlaybackSpeed(currentPlaybackSpeed: Float, targetPlaybackSpeed: Float) =
+        inner.setPlaybackSpeed(currentPlaybackSpeed, targetPlaybackSpeed)
+    override fun enableMayRenderStartOfStream() = inner.enableMayRenderStartOfStream()
+    override fun release() = inner.release()
+}
+
 @OptIn(UnstableApi::class)
 private class AerioMediaCodecAudioRenderer(
     context: Context,

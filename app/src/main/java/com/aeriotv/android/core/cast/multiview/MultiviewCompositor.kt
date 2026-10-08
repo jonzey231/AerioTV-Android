@@ -558,13 +558,25 @@ class MultiviewCompositor(
 
     private var lastAudioTile = -1
 
+    // `[MV-CAST] audio` window stats (normalizer lock): the tile whose PCM
+    // reached the tap, and the RMS of that PCM after normalization.
+    private var pcmTileWindow = -1
+    private var pcmSumSq = 0.0
+    private var pcmSamples = 0L
+    private var pcmFormatWindow = ""
+
     override fun onPcm(tile: Int, bytes: ByteArray, sampleRate: Int, channels: Int, pcmEncoding: Int, playoutNanos: Long) {
         val samples = synchronized(normalizer) {
             if (tile != lastAudioTile) {
                 normalizer.reset()
                 lastAudioTile = tile
             }
-            normalizer.convert(bytes, sampleRate, channels, pcmEncoding)
+            normalizer.convert(bytes, sampleRate, channels, pcmEncoding).also { out ->
+                pcmTileWindow = tile
+                pcmFormatWindow = "${sampleRate}Hz/${channels}ch/enc$pcmEncoding"
+                for (v in out) { val d = v.toDouble(); pcmSumSq += d * d }
+                pcmSamples += out.size
+            }
         }
         val reanchor = reanchorTile == tile
         if (reanchor) reanchorTile = -1
@@ -641,6 +653,18 @@ class MultiviewCompositor(
                 Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${t.source?.displayName}: retry ${t.retries}/$MAX_TILE_RETRIES in ${delay / 1000} s")
                 setNotice(t.index, NOTICE_RECONNECTING)
                 main.postDelayed({ if (running && t.player === player) restartSource(t, player, http) }, delay)
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                // Which audio format each tile carries and whether any audio
+                // renderer took it: an unsupported track means no PCM ever
+                // reaches the composite tap (silence on the receiver).
+                val audioGroups = tracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }
+                val desc = if (audioGroups.isEmpty()) "none" else audioGroups.joinToString(", ") { g ->
+                    val f = g.getTrackFormat(0)
+                    "${f.sampleMimeType} ${f.channelCount}ch ${f.sampleRate}Hz supported=${g.isSupported} selected=${g.isSelected}"
+                }
+                Log.i(TAG, "[MV-CAST] composite tile ${t.index} audio tracks: $desc")
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1208,6 +1232,7 @@ class MultiviewCompositor(
     private var healthEncoded = 0L
     private var healthDropped = 0
     private var healthAudio = 0L
+    private var healthSilence = 0L
     private val healthBytes = LongArray(MultiviewCompositeLayout.MAX_TILES)
     private val healthFrames = LongArray(MultiviewCompositeLayout.MAX_TILES)
     private val healthStalls = IntArray(MultiviewCompositeLayout.MAX_TILES)
@@ -1240,6 +1265,26 @@ class MultiviewCompositor(
                 "[MV-CAST] health $tiles enc fps=${"%.1f".format(java.util.Locale.US, (enc - healthEncoded) / seconds)} " +
                     "dropped=${dropped - healthDropped} queue=${submitted.size} audioChunks=${audioChunks - healthAudio}",
             )
+            // Audio diagnostic (2026-10-08, Nothing Phone composite cast with
+            // no sound): which tile is focused, which tile's PCM actually
+            // reached the tap, how loud it was (dBFS; -inf = no PCM or
+            // digital silence), AAC frames per second, generated silence
+            // blocks, and the encoder's csd-0.
+            val (pcmTile, rmsDb, pcmFmt) = synchronized(normalizer) {
+                val r = if (pcmSamples > 0) Math.sqrt(pcmSumSq / pcmSamples) / 32768.0 else 0.0
+                val db = if (r > 0) "%.1f".format(java.util.Locale.US, 20 * Math.log10(r)) else "-inf"
+                val out = Triple(pcmTileWindow, db, pcmFormatWindow)
+                pcmTileWindow = -1; pcmSumSq = 0.0; pcmSamples = 0L; pcmFormatWindow = ""
+                out
+            }
+            val silence = audio.silenceBlocks
+            Log.i(
+                TAG,
+                "[MV-CAST] audio focused=$focused tap=$pcmTile pcm=${pcmFmt.ifEmpty { "none" }} rms=${rmsDb}dBFS " +
+                    "aac=${"%.1f".format(java.util.Locale.US, (audioChunks - healthAudio) / seconds)}/s " +
+                    "silenceBlocks=${silence - healthSilence} dropped=${audio.droppedChunks} csd0=${audio.csd0Hex.ifEmpty { "none" }}",
+            )
+            healthSilence = silence
             healthEncoded = enc
             healthDropped = dropped
             healthAudio = audioChunks
