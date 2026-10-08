@@ -935,7 +935,13 @@ fun PlayerScreen(
     // Remote Control A2: showProgramInfo action re-arms the same card
     // without a channel change (OK = info panel in the standard scheme).
     var programInfoPulse by remember { mutableStateOf(0) }
-    LaunchedEffect(currentChannel?.id, programInfoPulse) {
+    // GH #127: Settings > Player > Pop Up Info Card on Channel Change.
+    val popUpInfoCardOnChange by settingsVm.playerShowChannelInfoCard
+        .collectAsStateWithLifecycle(initialValue = true)
+    var lastInfoPulseSeen by remember { mutableStateOf(0) }
+    LaunchedEffect(currentChannel?.id, programInfoPulse, popUpInfoCardOnChange) {
+        val pulsed = programInfoPulse != lastInfoPulseSeen
+        lastInfoPulseSeen = programInfoPulse
         // Re-arm whenever the user channel-flips to a new id (or the
         // showProgramInfo remote action pulses).
         // Remote Control A2: every successful tune also feeds the
@@ -944,6 +950,13 @@ fun PlayerScreen(
         // Phones/tablets (2026-10-07): the info card and the controls are one
         // visibility state, so a channel change wakes the chrome itself
         // (restarting its timer) instead of a card-only hint window.
+        // GH #127: with Pop Up Info Card on Channel Change off, a channel
+        // change shows nothing by itself; the card still appears with the
+        // controls. The showProgramInfo remote pulse is an explicit request.
+        if (!popUpInfoCardOnChange && !pulsed) {
+            launchHintActive = false
+            return@LaunchedEffect
+        }
         if (!isTvForm && currentChannel != null) {
             if (!chromeVisible) chromeReason = "channel change"
             chromeVisible = true

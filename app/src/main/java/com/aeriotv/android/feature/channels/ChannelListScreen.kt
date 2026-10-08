@@ -736,6 +736,9 @@ fun ChannelListScreen(
                         isFavorite = channel.id in favoriteIds,
                         onPlay = { onChannelClick(channel) },
                         onToggleFavorite = { favoritesVm.toggle(channel) },
+                        onRemoveFromRecents = if (channel.id in recentChannelIds) {
+                            { settingsVm.removeRecentChannel(channel.id) }
+                        } else null,
                         onShowProgramInfo = { programInfoTarget = it },
                         onShowRecord = { recordTarget = it },
                         palette = palette,
@@ -994,6 +997,9 @@ internal fun ChannelRow(
      *  Null = not offered (Favorites tab, no stream URL). */
     onToggleMultiview: (() -> Unit)? = null,
     inMultiview: Boolean = false,
+    /** GH #130: non-null while the channel is in Recently Watched; the
+     *  long-press menu then offers "Remove from Recently Watched". */
+    onRemoveFromRecents: (() -> Unit)? = null,
 ) {
     // iPhone-shaped row on phone and tablet (time on the title line, italic
     // sub-title line); TV keeps the fixed-slot layout.
@@ -1433,6 +1439,10 @@ internal fun ChannelRow(
                                     if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
                                 ) { onToggleFavorite() },
                             )
+                            // GH #130 (Apple 5e34cf6), right after Favorites.
+                            onRemoveFromRecents?.let { remove ->
+                                add(TvMenuAction("Remove from Recently Watched", Icons.Outlined.History, destructive = true) { remove() })
+                            }
                             // #45: Add to Collection + the contextual remove
                             // (iOS cardMenuButtons order: right after Favorites).
                             collectionsMenu?.let { cm ->
@@ -1511,6 +1521,9 @@ internal fun ChannelRow(
                                 if (isFavorite) Icons.Outlined.Star else Icons.Filled.Star,
                             ) { onToggleFavorite() },
                         )
+                        onRemoveFromRecents?.let { remove ->
+                            add(TvMenuAction("Remove from Recently Watched", Icons.Outlined.History, destructive = true) { remove() })
+                        }
                         onToggleMultiview?.let { toggle ->
                             add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", Icons.Outlined.GridView) { toggle() })
                         }

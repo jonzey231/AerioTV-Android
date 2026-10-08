@@ -85,6 +85,8 @@ fun PlayerSettingsScreen(
     val playerPrefsScope = androidx.compose.runtime.rememberCoroutineScope()
     val skipWithoutControls by playerPrefs.skipWithoutControls.collectAsStateWithLifecycle(initialValue = false)
 
+    val showChannelInfoCard by viewModel.playerShowChannelInfoCard
+        .collectAsStateWithLifecycle(initialValue = true)
     val cardChannelLogo by viewModel.playerCardShowChannelLogo
         .collectAsStateWithLifecycle(initialValue = true)
     val cardChannelName by viewModel.playerCardShowChannelName
@@ -203,6 +205,15 @@ fun PlayerSettingsScreen(
                             )
                         }
                     }
+                    // GH #127 (Apple d051505): only the pop-up on a channel
+                    // change; the card still shows with the player controls.
+                    SettingsToggleRow(
+                        title = "Pop Up Info Card on Channel Change",
+                        subtitle = "Show the channel and program card for a few seconds after a channel change. The card still appears with the player controls.",
+                        leadingIcon = if (isTv) Icons.Filled.FilterNone else null,
+                        checked = showChannelInfoCard,
+                        onCheckedChange = viewModel::setPlayerShowChannelInfoCard,
+                    )
                 }
 
                 // MARK: Live Rewind

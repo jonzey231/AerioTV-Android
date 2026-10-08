@@ -158,6 +158,11 @@ fun CastRemoteSheet(
     /** Google Cast: the card's "Receiver: ..." stat and transcode note, shown
      *  again at the top of Stream Info. */
     castDetailLines: List<String> = emptyList(),
+    /** Labeled Stream Info rows (label to value) shown as one card; the
+     *  Multiview composite's SOURCE, COMPOSITE, FORMAT, VIDEO, AUDIO, TV
+     *  (Apple 9c19a33). The receiver's own summary joins as a RECEIVER row.
+     *  Empty for a single-channel cast, which keeps its lines. */
+    streamInfoRows: List<Pair<String, String>> = emptyList(),
     /** Current programme's start / end (epoch ms) for the time range and
      *  progress bar; 0 hides both. */
     programmeStartMs: Long = 0L,
@@ -640,17 +645,24 @@ fun CastRemoteSheet(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(10.dp))
-                castDetailLines.forEach { line ->
+                if (streamInfoRows.isNotEmpty()) {
+                    StreamInfoRowsCard(
+                        rows = streamInfoRows +
+                            listOfNotNull(remoteState.streamInfo.takeIf { it.isNotBlank() }?.let { "RECEIVER" to it }),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+                if (streamInfoRows.isEmpty()) castDetailLines.forEach { line ->
                     Text(
                         text = line,
                         style = MaterialTheme.typography.bodyMedium.subtext(),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (castDetailLines.isNotEmpty() && remoteState.streamInfo.isNotBlank()) {
+                if (streamInfoRows.isEmpty() && castDetailLines.isNotEmpty() && remoteState.streamInfo.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                 }
-                if (castDetailLines.isEmpty() || remoteState.streamInfo.isNotBlank()) {
+                if (streamInfoRows.isEmpty() && (castDetailLines.isEmpty() || remoteState.streamInfo.isNotBlank())) {
                     Text(
                         text = remoteState.streamInfo.ifBlank { "No stream details available" },
                         style = MaterialTheme.typography.bodyMedium.subtext(),
@@ -990,6 +1002,52 @@ private fun OptionRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Stream Info as one card of labeled rows (Apple CastStreamInfoCard /
+ * AirPlayStreamInfoCard): an accent monospace label column, right aligned,
+ * and the value beside it.
+ */
+@Composable
+private fun StreamInfoRowsCard(rows: List<Pair<String, String>>) {
+    androidx.compose.foundation.layout.Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+    ) {
+        rows.forEach { (label, value) ->
+            androidx.compose.foundation.layout.Row(
+                verticalAlignment = androidx.compose.ui.Alignment.Top,
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.width(72.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }

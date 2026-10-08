@@ -217,10 +217,12 @@ class MultiviewCastController @Inject constructor(
 
     /**
      * Live TV "Add to Multiview" while the composite runs (Apple e1dcbd2
-     * parity): the channel joins the running pile, or leaves it when it is
-     * already a tile, instead of a fresh staged pile replacing it. The
-     * composite restarts with the new tile set (same cast session, audio
-     * focus kept on its tile). Returns false when no composite is running.
+     * parity): the channel joins the running composite, or leaves it when it
+     * is already a tile, instead of a fresh staged set replacing it. The tile
+     * set changes IN PLACE (Apple 6136daf): no composite restart and no
+     * receiver reload, from one tile back to the grid and anywhere in 1 to 4
+     * tiles; audio focus stays on its tile. Returns false when no composite
+     * is running.
      */
     fun toggleTile(tile: MultiviewTile): Boolean {
         val s = _session.value ?: return false
@@ -231,44 +233,58 @@ class MultiviewCastController @Inject constructor(
             sender.notifyCastProblem(CAST_LIMIT_NOTE)
             return true
         }
-        if (isTile && next.size == 1) {
-            dropToSingleTile(s, next[0])
-            return true
-        }
         if (next.isEmpty()) {
             Log.i(TAG, "[MV-CAST] composite: no tiles left, stopping")
             stop("no tiles left")
             if (sender.content.value?.mediaId == MEDIA_ID) sender.stopPlayback()
             return true
         }
-        if (!MultiviewCompositeLayout.canCast(next.size)) {
-            Log.i(TAG, "[MV-CAST] composite remove ${tile.displayName} refused: ${next.size} tile(s) would be left")
+        val c = compositor
+        if (c == null) {
+            // No compositor (should not happen with a session): the old
+            // restart path, which needs at least two tiles.
+            if (!MultiviewCompositeLayout.canCast(next.size)) return true
+            val focusedId = s.tiles.getOrNull(s.focused)?.id
+            start(next, lastHeaders, next.indexOfFirst { it.id == focusedId }.coerceAtLeast(0))
             return true
         }
+        // In place (Apple 6136daf parity, Logan: adding back from one tile
+        // must return to the grid in place): the encoder, the pipe, the
+        // proxy and the receiver's load keep running, so the TV never
+        // reloads. Only the compositor's tile set and layout change.
         val focusedId = s.tiles.getOrNull(s.focused)?.id
-        val focus = next.indexOfFirst { it.id == focusedId }.coerceAtLeast(0)
-        Log.i(TAG, "[MV-CAST] composite ${if (isTile) "remove" else "add"} ${tile.displayName}: ${s.tiles.size} -> ${next.size} tiles")
-        start(next, lastHeaders, focus)
+        if (isTile) {
+            val pos = s.tiles.indexOfFirst { it.id == tile.id }
+            val slot = order.getOrElse(pos) { -1 }
+            c.removeTile(slot)
+            order = order.filterIndexed { i, _ -> i != pos }
+        } else {
+            runCatching { timeshift.stopRetainedChannel(tile.id) }
+            val slot = c.addTile(tile)
+            if (slot < 0) {
+                Log.w(TAG, "[MV-CAST] composite add ${tile.displayName}: no free slot, restarting the composite")
+                start(next, lastHeaders, next.indexOfFirst { it.id == focusedId }.coerceAtLeast(0))
+                return true
+            }
+            order = order + slot
+        }
+        // Focus follows its tile; when the focused tile left, the compositor
+        // moved audio to the first remaining tile.
+        val focusSlot = c.focused
+        val focus = order.indexOf(focusSlot).takeIf { it >= 0 }
+            ?: next.indexOfFirst { it.id == focusedId }.coerceAtLeast(0)
+        val layout = MultiviewCompositeLayout.effectiveMode(s.layoutMode, next.size)
+        c.layoutMode = layout
+        Log.i(
+            TAG,
+            "[MV-CAST] composite ${if (isTile) "remove" else "add"} ${tile.displayName}: ${s.tiles.size} -> ${next.size} tiles " +
+                "in place (same stream, no receiver reload${if (next.size == 1) ", ${next[0].displayName} full frame" else ""})",
+        )
+        _session.value = s.copy(tiles = next, focused = focus, layoutMode = layout)
+        // The new grid reaches the TV when the receiver's playhead does, so a
+        // receiver far behind is caught up (same as a layout change).
+        compositeCatchUp("tiles ${next.size}")
         return true
-    }
-
-    /**
-     * One tile left (Apple 6136daf round 9, Logan: removing down to one tile
-     * must be seamless). Round 7's hand-off to a normal single-channel cast
-     * reloaded the receiver and left the TV dark. The composite now keeps
-     * running (same encoder, pipe, proxy and receiver load) and draws the
-     * remaining tile full frame at 1280x720, so the receiver never reloads.
-     * The card and sheet read it as that channel ([Session.singleChannelName]).
-     * Add to Multiview returns to the grid; removing the last tile stops.
-     */
-    private fun dropToSingleTile(s: Session, tile: MultiviewTile) {
-        val c = compositor ?: return
-        val pos = s.tiles.indexOfFirst { it.id == tile.id }
-        val tileIndex = order.getOrElse(pos) { pos }
-        Log.i(TAG, "[MV-CAST] composite remove: ${s.tiles.size} -> 1 tile (${tile.displayName} full frame, same stream, no receiver reload)")
-        c.dropToSingle(tileIndex)
-        order = listOf(tileIndex)
-        _session.value = s.copy(tiles = listOf(tile), focused = 0)
     }
 
     /** Tap on a tile in the phone preview (a position): audio and
@@ -394,9 +410,8 @@ class MultiviewCastController @Inject constructor(
     }
 
     /** Preview tile menu Remove from Multiview: the tile at position
-     *  [index] leaves the running pile (the composite restarts with the
-     *  rest, same cast session). With one tile left the composite keeps
-     *  running with that tile full frame (no receiver reload). */
+     *  [index] leaves the running composite in place (same stream, no
+     *  receiver reload). With one tile left that tile draws full frame. */
     fun removeAt(index: Int): Boolean {
         val tile = _session.value?.tiles?.getOrNull(index) ?: return false
         return toggleTile(tile)
@@ -409,7 +424,7 @@ class MultiviewCastController @Inject constructor(
         val s = _session.value ?: return
         if (a == b || a !in s.tiles.indices || b !in s.tiles.indices) return
         order = MultiviewCompositeLayout.swapOrder(order, a, b)
-        compositor?.setSlots(MultiviewCompositeLayout.slotsFor(order))
+        compositor?.setOrder(order)
         val tiles = s.tiles.toMutableList().also { it[a] = s.tiles[b]; it[b] = s.tiles[a] }
         val focused = when (s.focused) { a -> b; b -> a; else -> s.focused }
         Log.i(TAG, "[MV-CAST] composite swap ${s.tiles[a].displayName} <-> ${s.tiles[b].displayName}")

@@ -2122,7 +2122,7 @@ private fun MainTabContent(
                 )
             }
             AppTab.Favorites -> {
-    FavoritesTabContent(onChannelClick = onChannelClick)
+    FavoritesTabContent(onChannelClick = onChannelClick, onPlayCatchup = onPlayCatchup)
             }
             AppTab.DVR -> {
                 // Media center on every form factor (TV joined 2026-09-10).

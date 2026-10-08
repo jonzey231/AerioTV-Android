@@ -1677,6 +1677,7 @@ class PlaylistRepository @Inject constructor(
         end: Long,
     ): Int? {
         val n = fetchGridChunk(playlist, base, start, end) ?: return null
+        DeletedPlaylists.ensureAlive(playlist.id, "EPG chunk coverage")
         runCatching {
             epgChunkCoverageDao.upsert(
                 EpgChunkCoverage(
@@ -2765,6 +2766,7 @@ class PlaylistRepository @Inject constructor(
         val entities = withContext(layeringDispatcher) {
             programmes.map { it.toCacheEntity(playlistId, now) }
         }
+        DeletedPlaylists.ensureAlive(playlistId, "EPG cache")
         // Catch-up (task #135): MERGE the feed instead of replacing the whole
         // cache, so already-aired rows survive refreshes and accumulate into a
         // browsable history, then prune to the playlist's retention window
@@ -2829,6 +2831,7 @@ class PlaylistRepository @Inject constructor(
             }
         }
         if (entities.isEmpty()) return
+        DeletedPlaylists.ensureAlive(playlistId, "EPG enrichment")
         epgProgrammeDao.insertAll(entities)
     }
 
@@ -2862,6 +2865,7 @@ class PlaylistRepository @Inject constructor(
         // stays clean and reloads never feed a duplicate key to the url-keyed
         // Live TV lists. Distinct streams that share a tvg-id are kept.
         val channels = rawChannels.distinctBy { it.url }
+        DeletedPlaylists.ensureAlive(playlistId, "channel snapshot")
         // GH #31: persist in CHUNKS inside ONE transaction instead of mapping the
         // whole ~100k-row entity list + one giant insertAll. That overlap (the
         // channel list + the full entity list + the transaction bind) was the
@@ -3188,6 +3192,12 @@ class PlaylistRepository @Inject constructor(
      * rows would outlive the playlist forever.
      */
     suspend fun deletePlaylist(playlistId: String): Result<Unit> = runCatching {
+        // Crash guard (Apple d051505 parity): mark the id deleted and stop
+        // every background task that holds it BEFORE anything is purged, so
+        // none of them writes rows for this playlist after its next
+        // suspension point.
+        DeletedPlaylists.mark(playlistId)
+        cancelPlaylistTasks(playlistId)
         // Drop any in-memory JWT pair for the row we're removing so the
         // warmup coordinator stops trying to refresh a dead playlist on
         // the next foreground.
@@ -3216,6 +3226,23 @@ class PlaylistRepository @Inject constructor(
         // Reminders, watch progress and local recordings are ON DELETE
         // CASCADE against this row, so the DAO delete takes them with it.
         dao.deleteById(playlistId)
+    }
+
+    /**
+     * Playlist delete: cancel the repository-owned background tasks keyed to
+     * [playlistId] (upstream XMLTV layering / grid window walk, background EPG
+     * sweep). Logs one `[PLAYLIST] delete: cancelled <task>` line per task.
+     */
+    fun cancelPlaylistTasks(playlistId: String) {
+        val cancelled = mutableListOf<String>()
+        layeringJobs.remove(playlistId)?.let { job ->
+            if (job.isActive) { job.cancel(); cancelled += "EPG layering/grid walk" }
+        }
+        epgSweepJobs.remove(playlistId)?.let { job ->
+            if (job.isActive) { job.cancel(); cancelled += "EPG background sweep" }
+        }
+        for (task in cancelled) Log.i("PlaylistRepo", "[PLAYLIST] delete: cancelled $task (${playlistId.take(8)})")
+        if (cancelled.isEmpty()) Log.i("PlaylistRepo", "[PLAYLIST] delete: no running repository tasks (${playlistId.take(8)})")
     }
 
     /** Persist a user-chosen ordering of playlists. Sequence of ids is taken

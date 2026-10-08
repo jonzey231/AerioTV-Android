@@ -66,6 +66,9 @@ import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 fun FavoritesTabContent(
     modifier: Modifier = Modifier,
     onChannelClick: (M3UChannel) -> Unit,
+    /** TV Favorites guide: OK / Watch from Start on an aired catch-up cell
+     *  (Shawneau 2026-10-07: it had no route here, so nothing played). */
+    onPlayCatchup: (String, String, String, Long, Long, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
     favoritesVm: FavoritesViewModel = hiltViewModel(),
     playlistVm: PlaylistViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
@@ -135,6 +138,7 @@ fun FavoritesTabContent(
             canToggleViewMode = false,
             onToggleViewMode = {},
             favoritesOnly = true,
+            onPlayCatchup = onPlayCatchup,
             modifier = modifier.fillMaxSize(),
         )
         return

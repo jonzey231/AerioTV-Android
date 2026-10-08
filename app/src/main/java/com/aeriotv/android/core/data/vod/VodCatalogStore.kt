@@ -67,6 +67,10 @@ class VodCatalogStore @Inject constructor(
         if (rows.isEmpty()) return 0
         return withContext(Dispatchers.IO) {
             writeLock.withLock {
+                // Playlist delete crash guard: a sweep page that lands after
+                // the delete never writes rows for the deleted playlist.
+                com.aeriotv.android.core.data.repository.DeletedPlaylists
+                    .ensureAlive(playlistIdOf(playlistKey), "VOD catalog")
                 db.withTransaction {
                     var touched = 0
                     for (r in rows) {
@@ -131,6 +135,8 @@ class VodCatalogStore @Inject constructor(
         firstQuery: (String) -> String,
     ): SweepPlan = withContext(Dispatchers.IO) {
         writeLock.withLock {
+            com.aeriotv.android.core.data.repository.DeletedPlaylists
+                .ensureAlive(playlistIdOf(playlistKey), "VOD sweep start")
             db.withTransaction {
                 val now = System.currentTimeMillis()
                 val state = dao.state(playlistKey, kind)
@@ -161,7 +167,11 @@ class VodCatalogStore @Inject constructor(
 
     /** Save a lane's position after a page landed (or a page failed). */
     suspend fun saveLane(lane: VodSweepLaneEntity) = withContext(Dispatchers.IO) {
-        writeLock.withLock { dao.upsertLane(lane) }
+        writeLock.withLock {
+            com.aeriotv.android.core.data.repository.DeletedPlaylists
+                .ensureAlive(playlistIdOf(lane.playlistKey), "VOD sweep lane")
+            dao.upsertLane(lane)
+        }
     }
 
     suspend fun state(playlistKey: String, kind: String): VodSweepStateEntity? =

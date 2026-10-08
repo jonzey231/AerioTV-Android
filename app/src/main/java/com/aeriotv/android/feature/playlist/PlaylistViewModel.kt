@@ -227,6 +227,10 @@ class PlaylistViewModel @Inject constructor(
          */
         private const val CHANNEL_CACHE_TTL_MS = 24L * 60L * 60L * 1000L
 
+        /** GH #124: non-Dispatcharr playlists above this many channels keep
+         *  the fresh-cache skip at cold launch (Apple GuideStore.largePlaylistChannels). */
+        private const val LARGE_PLAYLIST_CHANNELS = 5_000
+
         /**
          * iOS GuideStore audit P3 #12: trigger a Rolling Prefetch when the
          * user has scrolled within 4 hours of the latest cached programme's
@@ -486,6 +490,47 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Playlist delete crash guard (Apple d051505 parity): the cold-launch
+     * bootstrap job and the EPG load jobs, keyed by the playlist they hold, so
+     * [deletePlaylist] can cancel them before the row goes away.
+     */
+    private val playlistTasks = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, kotlinx.coroutines.Job>>()
+
+    private val playlistTaskSeq = java.util.concurrent.atomic.AtomicLong()
+
+    private fun trackPlaylistTask(playlistId: String, name: String, job: kotlinx.coroutines.Job) {
+        val tasks = playlistTasks.getOrPut(playlistId) { java.util.concurrent.ConcurrentHashMap() }
+        // Unique key: several EPG loads can overlap; each must stay cancellable.
+        val key = "$name#${playlistTaskSeq.incrementAndGet()}"
+        tasks[key] = job
+        job.invokeOnCompletion { tasks.remove(key, job) }
+    }
+
+    private fun cancelPlaylistTasks(playlistId: String) {
+        val tasks = playlistTasks.remove(playlistId).orEmpty()
+        var any = false
+        for ((key, job) in tasks) {
+            val name = key.substringBefore('#')
+            if (job.isActive) {
+                job.cancel()
+                any = true
+                Log.i(TAG, "[PLAYLIST] delete: cancelled $name (${playlistId.take(8)})")
+            }
+        }
+        if (_state.value.playlist?.id == playlistId) {
+            guideForwardJob?.let { job ->
+                if (job.isActive) {
+                    job.cancel()
+                    any = true
+                    Log.i(TAG, "[PLAYLIST] delete: cancelled guide range fetch (${playlistId.take(8)})")
+                }
+            }
+            guideForwardJob = null
+        }
+        if (!any) Log.i(TAG, "[PLAYLIST] delete: no running view model tasks (${playlistId.take(8)})")
+    }
+
     private fun bootstrap() {
         viewModelScope.launch {
             // Reclaim download temps orphaned by a process death mid fetch,
@@ -500,6 +545,25 @@ class PlaylistViewModel @Inject constructor(
             }
             val sourceType = SourceType.entries.firstOrNull { it.name == saved.sourceType }
                 ?: SourceType.M3uUrl
+            coroutineContext[kotlinx.coroutines.Job]?.let { trackPlaylistTask(saved.id, "startup channel load", it) }
+
+            // GH #124 (Apple 5e34cf6 parity): a cold launch (the process was
+            // killed in the background, then reopened) refreshes channels AND
+            // guide for EVERY backend. The 24 h channel TTL and 30 min guide
+            // TTL used to skip the network on relaunch, so a playlist that
+            // changed on the provider stayed stale until a manual refresh.
+            // The cache still paints first; the refresh runs behind it. Huge
+            // non-Dispatcharr panels keep the fresh-cache skip (their full
+            // M3U/XMLTV pass on top of the cache is what pushes small TV
+            // boxes past their memory line), the same carve-out Apple keeps.
+            val cachedForGate = runCatching { repository.newestChannelFetch(saved.id) }.getOrNull()
+            val isDispatcharrSource = sourceType == SourceType.DispatcharrApiKey ||
+                sourceType == SourceType.DispatcharrUserPass
+            val channelCountForGate = maxOf(saved.channelCount, 0)
+            val largeNonDispatcharr = !isDispatcharrSource && channelCountForGate > LARGE_PLAYLIST_CHANNELS
+            val channelCacheFresh = cachedForGate != null &&
+                (System.currentTimeMillis() - cachedForGate) < CHANNEL_CACHE_TTL_MS
+            val startupRefresh = !(largeNonDispatcharr && channelCacheFresh)
 
             // Phase 130: paint the disk-cached channel list IMMEDIATELY so the
             // Live TV rail + cells are never blank on a cold launch (Archie's
@@ -549,19 +613,37 @@ class PlaylistViewModel @Inject constructor(
                 // Start the EPG cache-first paint in parallel so the guide
                 // cells light up immediately too, instead of waiting on the
                 // channel network refresh.
-                loadEpgIfConfigured(saved)
+                loadEpgIfConfigured(saved, coldLaunch = startupRefresh)
             }
 
             // Freshness gate: within the TTL window, the cached rail is
             // good enough and we skip the channel network round-trip entirely
             // (the EPG cache has its own 30-min TTL).
-            val newest = runCatching { repository.newestChannelFetch(saved.id) }.getOrNull()
-            val freshChannels = hasChannelCache && newest != null &&
-                (System.currentTimeMillis() - newest) < CHANNEL_CACHE_TTL_MS
-            if (freshChannels) {
-                Log.i(TAG, "bootstrap: channel cache fresh, skipping network refresh")
+            val freshChannels = hasChannelCache && channelCacheFresh
+            val ageMin = cachedForGate?.let { (System.currentTimeMillis() - it) / 60_000L }
+            if (freshChannels && !startupRefresh) {
+                Log.i(
+                    TAG,
+                    "[STARTUP] refresh skipped: large non-Dispatcharr playlist " +
+                        "($channelCountForGate channels > $LARGE_PLAYLIST_CHANNELS), channel cache fresh (age ${ageMin}m)",
+                )
                 return@launch
             }
+            if (freshChannels) {
+                Log.i(
+                    TAG,
+                    "[STARTUP] refresh scheduled: cold launch, channel cache fresh (age ${ageMin}m), " +
+                        "background refresh after the guide paints (type=${saved.sourceType}, channels=$channelCountForGate)",
+                )
+                // Behind the cached paint, never ahead of it.
+                settleGate.awaitGuidePainted()
+            }
+            Log.i(
+                TAG,
+                "[STARTUP] refresh running: cold launch, channels " +
+                    (if (!hasChannelCache) "not cached" else if (freshChannels) "cached" else "cache stale (age ${ageMin}m)") +
+                    " (type=${saved.sourceType})",
+            )
 
             Log.i(TAG, "bootstrap: refreshing channels (hadCache=$hasChannelCache)")
             repository.refresh(saved).fold(
@@ -835,9 +917,14 @@ class PlaylistViewModel @Inject constructor(
             "$prefix: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}"
         }
 
-    private fun loadEpgIfConfigured(playlist: PlaylistEntity, forceRefresh: Boolean = false) {
+    private fun loadEpgIfConfigured(
+        playlist: PlaylistEntity,
+        forceRefresh: Boolean = false,
+        coldLaunch: Boolean = false,
+    ) {
         viewModelScope.launch {
-            doLoadEpg(playlist, forceRefresh)
+            coroutineContext[kotlinx.coroutines.Job]?.let { trackPlaylistTask(playlist.id, "EPG load", it) }
+            doLoadEpg(playlist, forceRefresh, coldLaunch)
             // doLoadEpg rebuilds the catalog on every path that has rows; the
             // fallback covers a failed fetch over a history-only cache.
             if (_state.value.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog) {
@@ -1033,7 +1120,13 @@ class PlaylistViewModel @Inject constructor(
      * Every other caller goes through the fire-and-forget
      * [loadEpgIfConfigured] wrapper and ignores the return.
      */
-    private suspend fun doLoadEpg(playlist: PlaylistEntity, forceRefresh: Boolean): Result<Int>? {
+    private suspend fun doLoadEpg(
+        playlist: PlaylistEntity,
+        forceRefresh: Boolean,
+        /** GH #124: cold launch. Paint the cache, then refresh behind it even
+         *  when the cache is inside its TTL (no coverage purge, unlike force). */
+        coldLaunch: Boolean = false,
+    ): Result<Int>? {
         val sourceType = SourceType.entries.firstOrNull { it.name == playlist.sourceType }
             ?: SourceType.M3uUrl
         // M3uUrl only loads EPG when user provided an XMLTV URL. Dispatcharr derives one
@@ -1106,7 +1199,7 @@ class PlaylistViewModel @Inject constructor(
         // let the age rule decide. Replaces the old "fewer than 20 % of cached
         // keys match" ratio, which fired on every launch of a merged playlist
         // and again mid-session after layering landed.
-        val identityHash = com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsForBridge)
+        val identityHash = com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsForBridge.distinctBy { it.url })
         val storedHash = appPreferences.epgIdentityHash(playlist.id).first()
         val identityStale = hasCache && channelsForBridge.isNotEmpty() && storedHash != identityHash
         // Rows painted from a stale-identity cache before the purge below.
@@ -1202,7 +1295,9 @@ class PlaylistViewModel @Inject constructor(
             val newest = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
             val fresh = newest != null &&
                 (System.currentTimeMillis() - newest) < EPG_CACHE_TTL_MS
-            if (fresh) {
+            if (fresh && coldLaunch && hasCache) {
+                Log.i(TAG, "[STARTUP] refresh running: cold launch, guide cache fresh, background guide refresh (type=${playlist.sourceType})")
+            } else if (fresh) {
                 Log.i(TAG, "loadEpgIfConfigured: cache fresh, skipping network")
                 _state.update { it.copy(isEpgLoading = false) }
                 return null
@@ -1255,7 +1350,7 @@ class PlaylistViewModel @Inject constructor(
                 }
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes")
                 // Stamp the cache with the identity it was built for (see identityStale).
-                runCatching { appPreferences.setEpgIdentityHash(playlist.id, com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsNow)) }
+                runCatching { appPreferences.setEpgIdentityHash(playlist.id, com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsNow.distinctBy { it.url })) }
                 // A fetch that yields ZERO programmes is a FAILED fetch, not an
                 // empty guide, and it must not be allowed to overwrite anything.
                 // Installing it wiped the 6,916 rows the cached paint had just
@@ -2306,9 +2401,26 @@ class PlaylistViewModel @Inject constructor(
         viewModelScope.launch { repository.applyPlaylistOrder(orderedIds) }
     }
 
+    /** GH #129: per-playlist Catch-Up Time Offset (minutes), Edit Playlist. */
+    fun catchupTimeOffsetMinutes(playlistId: String): Flow<Int> =
+        appPreferences.catchupTimeOffsetMinutes(playlistId)
+
+    /** GH #129: written on pick (Apple @AppStorage parity), not on Save. */
+    fun setCatchupTimeOffsetMinutes(playlistId: String, minutes: Int) {
+        viewModelScope.launch {
+            appPreferences.setCatchupTimeOffsetMinutes(playlistId, minutes)
+            Log.i(TAG, "[CATCHUP] time offset set to $minutes min for playlist ${playlistId.take(8)}")
+        }
+    }
+
     /** Delete a saved playlist by id. If the deleted row was the active one,
      * fall back to the most-recent remaining playlist (or NeedsUrl if none). */
     fun deletePlaylist(playlistId: String) {
+        // Crash guard (Apple d051505 parity): stop every task that holds this
+        // playlist BEFORE the row is deleted; none of them may read or write
+        // the deleted record afterward.
+        com.aeriotv.android.core.data.repository.DeletedPlaylists.mark(playlistId)
+        cancelPlaylistTasks(playlistId)
         viewModelScope.launch {
             val wasActive = repository.activePlaylist()?.id == playlistId
             repository.deletePlaylist(playlistId)

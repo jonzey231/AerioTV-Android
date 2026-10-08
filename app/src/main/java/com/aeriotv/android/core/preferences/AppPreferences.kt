@@ -701,6 +701,29 @@ class AppPreferences @Inject constructor(
      * affect ONLY that card -- never the guide, channel list, mini player,
      * notifications or cast UI. All default true; device-local, not synced.
      */
+    /**
+     * Settings > Player > On-Screen Display > Pop Up Info Card on Channel
+     * Change (GH #127, Apple key playerShowChannelInfoCard). Off hides only
+     * the card that pops up on a channel change; it still shows with the
+     * player controls. Default on; synced like the Apple key.
+     */
+    val playerShowChannelInfoCard: Flow<Boolean> =
+        store.data.map { it[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] ?: true }
+    suspend fun setPlayerShowChannelInfoCard(value: Boolean) {
+        store.edit { it[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] = value }
+    }
+
+    /**
+     * Settings > Live TV > Program Info Button (GH #127, Apple key
+     * guideProgramInfoButton): "off" (default), "current", "all". Phone and
+     * tablet guide cells only. Synced like the Apple key.
+     */
+    val guideProgramInfoButton: Flow<String> =
+        store.data.map { it[KEY_GUIDE_PROGRAM_INFO_BUTTON] ?: GuideProgramInfoButton.OFF }
+    suspend fun setGuideProgramInfoButton(value: String) {
+        store.edit { it[KEY_GUIDE_PROGRAM_INFO_BUTTON] = value }
+    }
+
     val playerCardShowChannelLogo: Flow<Boolean> =
         store.data.map { it[KEY_PLAYER_CARD_CHANNEL_LOGO] ?: true }
     suspend fun setPlayerCardShowChannelLogo(value: Boolean) {
@@ -886,6 +909,27 @@ class AppPreferences @Inject constructor(
             val reordered = (listOf(id) + existing.filterNot { it == id }).take(RECENT_CHANNELS_CAP)
             prefs[KEY_RECENT_CHANNEL_IDS] = reordered.joinToString("\n")
         }
+    }
+
+    /**
+     * GH #130: drop one channel from Recently Watched (channel long-press
+     * "Remove from Recently Watched"). Logged as [RECENTS].
+     */
+    suspend fun removeRecentChannel(channelId: String) {
+        store.edit { prefs ->
+            val existing = (prefs[KEY_RECENT_CHANNEL_IDS] ?: "")
+                .split('\n')
+                .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            val kept = existing.filterNot { it == channelId }
+            prefs[KEY_RECENT_CHANNEL_IDS] = kept.joinToString("\n")
+            android.util.Log.i("AerioRecents", "[RECENTS] removed one channel, ${kept.size} left")
+        }
+    }
+
+    /** GH #130: Settings > Live TV > Clear Recently Watched (after a confirm). */
+    suspend fun clearRecentChannels() {
+        store.edit { it.remove(KEY_RECENT_CHANNEL_IDS) }
+        android.util.Log.i("AerioRecents", "[RECENTS] cleared")
     }
 
     /**
@@ -1588,6 +1632,8 @@ class AppPreferences @Inject constructor(
         data[KEY_GUIDE_SIDEBAR_LAYOUT]?.let { out["guideSidebarLayout"] = it }
         data[KEY_PHONE_GROUP_SELECTOR]?.let { out["phoneGroupSelector"] = it }
         data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
+        data[KEY_GUIDE_PROGRAM_INFO_BUTTON]?.let { out["guideProgramInfoButton"] = it }
+        data[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD]?.let { out["playerShowChannelInfoCard"] = it.toString() }
         data[KEY_SHOW_REMOTE_HINTS]?.let { out["showRemoteHints"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
@@ -1650,6 +1696,8 @@ class AppPreferences @Inject constructor(
                     put("guideSidebarLayout", KEY_GUIDE_SIDEBAR_LAYOUT)
                     put("phoneGroupSelector", KEY_PHONE_GROUP_SELECTOR)
                     put("guideTuneInMini", KEY_GUIDE_TUNE_IN_MINI)
+                    put("guideProgramInfoButton", KEY_GUIDE_PROGRAM_INFO_BUTTON)
+                    put("playerShowChannelInfoCard", KEY_PLAYER_SHOW_CHANNEL_INFO_CARD)
                     put("showRemoteHints", KEY_SHOW_REMOTE_HINTS)
                     put("showEpgBadgesTv", KEY_SHOW_EPG_BADGES_TV)
                     put("showEpgBadgesMobile", KEY_SHOW_EPG_BADGES_MOBILE)
@@ -1692,6 +1740,10 @@ class AppPreferences @Inject constructor(
             keys["guideSidebarLayout"]?.let { prefs[KEY_GUIDE_SIDEBAR_LAYOUT] = it }
             keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR] = it }
             keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
+            keys["guideProgramInfoButton"]?.takeIf { it in GuideProgramInfoButton.VALUES }
+                ?.let { prefs[KEY_GUIDE_PROGRAM_INFO_BUTTON] = it }
+            keys["playerShowChannelInfoCard"]?.toBooleanStrictOrNull()
+                ?.let { prefs[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] = it }
             keys["showRemoteHints"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_REMOTE_HINTS] = it }
             keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
             keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
@@ -1794,6 +1846,19 @@ class AppPreferences @Inject constructor(
         store.data.map { it[KEY_LIVE_REWIND_KEEP_RECENT] ?: false }
     suspend fun setLiveRewindKeepRecent(value: Boolean) {
         store.edit { it[KEY_LIVE_REWIND_KEEP_RECENT] = value }
+    }
+
+    /**
+     * GH #129 (Apple 5e34cf6 parity): per-playlist Catch-Up Time Offset in
+     * minutes, -180..180, default 0. Same key as Apple
+     * (`catchupTimeOffsetMinutes.<playlistId>`). Applied only to the times
+     * sent to the server (timeshift URL start, Dispatcharr session start,
+     * seek re-tunes), never to the guide or saved positions.
+     */
+    fun catchupTimeOffsetMinutes(playlistId: String): kotlinx.coroutines.flow.Flow<Int> =
+        store.data.map { (it[keyCatchupTimeOffset(playlistId)] ?: 0).coerceIn(-180, 180) }
+    suspend fun setCatchupTimeOffsetMinutes(playlistId: String, minutes: Int) {
+        store.edit { it[keyCatchupTimeOffset(playlistId)] = minutes.coerceIn(-180, 180) }
     }
 
     /** Guide rebuild (docs/guide-semantics.md s.4): the identity fingerprint
@@ -2160,6 +2225,8 @@ class AppPreferences @Inject constructor(
         private fun keyAccountFacts(playlistId: String) =
             stringPreferencesKey("dispatcharr_account_facts_$playlistId")
         private fun keyEpgIdentityHash(playlistId: String) = stringPreferencesKey("epg_identity_hash_$playlistId")
+        private fun keyCatchupTimeOffset(playlistId: String) =
+            androidx.datastore.preferences.core.intPreferencesKey("catchupTimeOffsetMinutes.$playlistId")
 
         /** GH #81: per-playlist Live TV group token (see [liveGroupToken]). */
         private fun keyLiveGroupToken(playlistId: String) = stringPreferencesKey("live_group_token_$playlistId")
@@ -2211,6 +2278,8 @@ class AppPreferences @Inject constructor(
         val KEY_GUIDE_SIDEBAR_LAYOUT = stringPreferencesKey("guide_sidebar_layout")
         val KEY_PHONE_GROUP_SELECTOR = stringPreferencesKey("phone_group_selector")
         val KEY_GUIDE_TUNE_IN_MINI = booleanPreferencesKey("guide_tune_in_mini")
+        val KEY_GUIDE_PROGRAM_INFO_BUTTON = stringPreferencesKey("guideProgramInfoButton")
+        val KEY_PLAYER_SHOW_CHANNEL_INFO_CARD = booleanPreferencesKey("playerShowChannelInfoCard")
         val KEY_SHOW_REMOTE_HINTS = booleanPreferencesKey("show_remote_hints")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
         val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")
@@ -2350,3 +2419,21 @@ const val PLAYER_EDGE_LEFT = "left"
 
 /** Brightness slides on the right edge of the player; volume on the left. */
 const val PLAYER_EDGE_RIGHT = "right"
+
+/**
+ * Settings > Live TV > Program Info Button values (Apple GuideProgramInfoButton,
+ * same key and strings): the guide cell info button on phone and tablet.
+ */
+object GuideProgramInfoButton {
+    const val OFF = "off"
+    const val CURRENT = "current"
+    const val ALL = "all"
+    val VALUES = setOf(OFF, CURRENT, ALL)
+
+    /** Whether a cell gets the button for [mode]; [isLive] = airing now. */
+    fun shows(mode: String, isLive: Boolean): Boolean = when (mode) {
+        CURRENT -> isLive
+        ALL -> true
+        else -> false
+    }
+}

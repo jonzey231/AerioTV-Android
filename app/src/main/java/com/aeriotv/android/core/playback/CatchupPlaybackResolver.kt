@@ -8,6 +8,7 @@ import com.aeriotv.android.core.network.XtreamCodesApi
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.first
 
 /**
  * Turns "replay this past programme on this channel" into a playable timeshift
@@ -31,6 +32,7 @@ import javax.inject.Singleton
 class CatchupPlaybackResolver @Inject constructor(
     private val dispatcharrClient: DispatcharrClient,
     private val xtreamApi: XtreamCodesApi,
+    private val appPreferences: com.aeriotv.android.core.preferences.AppPreferences,
 ) {
 
     /** XC output creds per Dispatcharr base URL, memoized for the process. */
@@ -103,6 +105,19 @@ class CatchupPlaybackResolver @Inject constructor(
             ?.takeIf { channel.catchupDays > 0 }
             ?: throw Failure.NotCatchup()
         val sourceType = SourceType.entries.firstOrNull { it.name == playlist.sourceType }
+        // GH #129: the playlist's Catch-Up Time Offset shifts the REQUEST
+        // window as a whole (start and end together). The guide times the
+        // caller passed stay untouched for positions, resume keys and display.
+        val shiftMinutes = runCatching {
+            appPreferences.catchupTimeOffsetMinutes(playlist.id).first()
+        }.getOrDefault(0)
+        val shiftMs = shiftMinutes * 60_000L
+        CatchupRequestShift.activeMillis = shiftMs
+        if (shiftMinutes != 0) {
+            android.util.Log.i("CatchupResolver", "[CATCHUP] time offset $shiftMinutes min applied")
+        }
+        @Suppress("NAME_SHADOWING") val startMillis = startMillis + shiftMs
+        @Suppress("NAME_SHADOWING") val endMillis = endMillis + shiftMs
         when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass -> {
                 // Follow the live stream's host (LAN/WAN-aware) rather than the
@@ -226,6 +241,15 @@ class CatchupPlaybackResolver @Inject constructor(
     ): String? {
         val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: return null
         val base = baseOf(currentPlaybackUrl) ?: return null
+        // GH #129: the seek re-tune asks for guide time + offset, the same
+        // shift the opening request carried.
+        val shiftMs = CatchupRequestShift.activeMillis
+        if (shiftMs != 0L) {
+            android.util.Log.i("CatchupResolver", "[CATCHUP] time offset ${shiftMs / 60_000L} min applied")
+        }
+        @Suppress("NAME_SHADOWING") val absStartMillis = absStartMillis + shiftMs
+        @Suppress("NAME_SHADOWING") val programmeEndMillis =
+            if (programmeEndMillis > 0L) programmeEndMillis + shiftMs else programmeEndMillis
         val minted = dispatcharrClient.createCatchupSession(
             baseUrl = base,
             apiKey = apiKey,
@@ -288,4 +312,16 @@ class CatchupPlaybackResolver @Inject constructor(
         if (u.scheme.isNullOrBlank() || u.host.isNullOrBlank()) null
         else "${u.scheme}://${u.host}$port"
     }.getOrNull()
+}
+
+/**
+ * GH #129: the Catch-Up Time Offset (ms) the current catch-up playback was
+ * opened with. Set by [CatchupPlaybackResolver.resolve]; read by the seek
+ * paths ([CatchupPlaybackResolver.remintNative] and
+ * [CatchupUrlBuilder.rebuildForOffset]) so a re-tune carries the same shift as
+ * the opening request. Only ever applied to request times; one catch-up
+ * playback runs at a time.
+ */
+object CatchupRequestShift {
+    @Volatile var activeMillis: Long = 0L
 }

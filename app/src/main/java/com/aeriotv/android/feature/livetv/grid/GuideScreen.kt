@@ -197,6 +197,8 @@ fun GuideScreen(
     // the pref folds into the hidden set the sheets and the filters see.
     val recentGroupVisible by settingsVm.recentGroupVisible.collectAsStateWithLifecycle()
     val recentChannelIds by settingsVm.recentChannelIds.collectAsStateWithLifecycle(initialValue = emptyList())
+    val programInfoButtonMode by settingsVm.guideProgramInfoButton
+        .collectAsStateWithLifecycle(initialValue = com.aeriotv.android.core.preferences.GuideProgramInfoButton.OFF)
     val effectiveHidden = remember(hiddenGroups, recentGroupVisible) {
         if (recentGroupVisible) hiddenGroups
         else hiddenGroups + com.aeriotv.android.feature.playlist.PlaylistViewModel.RECENT_GROUP
@@ -639,6 +641,7 @@ fun GuideScreen(
     // Start", so both go through one resolve + navigate path.
     val startCatchup: (M3UChannel, EPGProgramme) -> Unit = { channel, cell ->
         viewModel.playCatchup(channel, cell) { result ->
+            result.onFailure { android.util.Log.w("GuideGrid", "[GUIDE] catch-up resolve failed: ${it.message}") }
             result.onSuccess { r ->
                 // TV: remember the launched cell and the timeline so the
                 // guide that composes again after the replay lands back here.
@@ -787,10 +790,17 @@ fun GuideScreen(
     // on the channel that is still playing (now in the mini player), not
     // wherever the grid was before. Keyed on the mini's channel so it fires
     // on the fullscreen -> mini hand-off and stays quiet otherwise.
+    var miniAnchoredFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(miniChannelId, rows.isEmpty, tabActive) {
+        if (miniChannelId == null) miniAnchoredFor = null
         if (!tabActive) return@LaunchedEffect
         val id = miniChannelId ?: return@LaunchedEffect
         if (!isTv || rows.isEmpty) return@LaunchedEffect
+        // GH #128: the guide opened from fullscreen lands on NOW as well as
+        // the playing channel (a held Left used to leave it panned back).
+        // A catch-up return restores its own timeline in the effect below.
+        if (id != miniAnchoredFor && !GuideCatchupReturn.pending()) grid.anchorToNow(nowMs)
+        miniAnchoredFor = id
         val found = grid.focusChannel(id)
         val requested = if (found) runCatching { gridFocus.requestFocus() }.getOrDefault(false) else false
         if (isTv) {
@@ -1173,7 +1183,10 @@ fun GuideScreen(
                     // Already-aired + within the catch-up window: play it from
                     // the start right away (no menu first). The rail tap hands
                     // us the cell airing NOW, so tapping the logo still tunes live.
-                    if (!cell.isPlaceholder && channel.canReplay(cell, nowMs)) startCatchup(channel, cell)
+                    if (!cell.isPlaceholder && channel.canReplay(cell, nowMs)) {
+                        android.util.Log.i("GuideGrid", "[GUIDE] select on aired cell -> catch-up from start (${channel.name} @${cell.startMillis})")
+                        startCatchup(channel, cell)
+                    }
                     // OK on the channel already in the corner mini promotes the
                     // mini to fullscreen instead of re-tuning the same stream.
                     else if (isTv && miniChannelId == channel.id) miniPlayerVm.session.requestResume()
@@ -1201,6 +1214,11 @@ fun GuideScreen(
                 },
                 compact = previewMode,
                 clockSelectTrigger = clockSelectTrigger,
+                // GH #127: phone / tablet cell info button (TV has the long-press menu).
+                programInfoButtonMode = programInfoButtonMode,
+                onOpenProgramInfo = if (isTv) null else { channel, cell ->
+                    programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId)
+                },
                 remoteAction = { slot -> remoteMap.guideAction(slot, sidebarGroupMode) },
                 onHostAction = hostAction,
                 focusRequester = gridFocus,
@@ -1414,6 +1432,7 @@ fun GuideScreen(
         val inMultiview = stagedMultiview.any { it.id == channel.id }
         val key = reminderKey(channel.name, cell.title, cell.startMillis)
         val isFavorite = channel.id in favoriteIds
+        val isRecent = channel.id in recentChannelIds
         val atCap = stagedMultiview.size >= 4
         val canAddToMultiview = channel.url.isNotBlank() && (!atCap || inMultiview)
         val canRecord = notEnded && (isLive || canRecordToServer)
@@ -1434,6 +1453,8 @@ fun GuideScreen(
                 if (isLive && channel.url.isNotBlank()) add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { onChannelClick(channel) })
                 else if (replayable) add(TvMenuAction("Watch from Start", Icons.Outlined.History, onClick = watchFromStart))
                 add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites", if (isFavorite) Icons.Outlined.StarOutline else Icons.Filled.Star) { favoritesVm.toggle(channel) })
+                // GH #130 (Apple d051505): only while the channel is in Recently Watched.
+                if (isRecent) add(TvMenuAction("Remove from Recently Watched", Icons.Outlined.History, destructive = true) { settingsVm.removeRecentChannel(channel.id) })
                 add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", Icons.Outlined.GridView, enabled = canAddToMultiview) { multiviewStore.stageToggle(channel) })
                 add(TvMenuAction("Add Channel to Collection", Icons.Outlined.CreateNewFolder) { collectionPickerFor = channel.id to channel.name })
                 if (!cell.isPlaceholder) {
@@ -1451,6 +1472,7 @@ fun GuideScreen(
         } else {
         val actions = buildList {
             add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites") { favoritesVm.toggle(channel) })
+            if (isRecent) add(TvMenuAction("Remove from Recently Watched", destructive = true) { settingsVm.removeRecentChannel(channel.id) })
             add(TvMenuAction(if (inMultiview) "Remove from Multiview" else "Add to Multiview", enabled = canAddToMultiview) { multiviewStore.stageToggle(channel) })
             add(TvMenuAction("Add Channel to Collection") { collectionPickerFor = channel.id to channel.name })
             // Jump To and Back to Now live on the clock cell now (tvOS parity).
@@ -1601,6 +1623,8 @@ internal object GuideCatchupReturn {
     }
 
     fun consume(): Target? = pending.also { pending = null }
+
+    fun pending(): Boolean = pending != null
 }
 
 /** Share of a phone guide row (98dp) taken by secondary lines; drives Subtext Size growth. */

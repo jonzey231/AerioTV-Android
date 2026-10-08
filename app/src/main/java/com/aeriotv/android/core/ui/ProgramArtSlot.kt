@@ -64,8 +64,10 @@ object ProgramArtSlot {
     /** Unscaled reserved width: [baseHeight] at 16:9. */
     val baseMaxWidth = 180.dp
 
-    /** Unscaled floor, so very tall art still leaves a touchable slot. */
-    val baseMinWidth = 56.dp
+    /** Unscaled floor, so very tall art still leaves a touchable slot.
+     *  Half the height, as tvOS ProgramArtSlotMetrics.minWidth (was 56 dp,
+     *  which squared off tall portrait game art a little early). */
+    val baseMinWidth = baseHeight * 0.5f
 
     /** The app-wide Text Size factor. The ONE knob that resizes this slot. */
     val scale: Float
@@ -167,6 +169,12 @@ fun ProgramArtSlot(
                     val h = state.result.image.height.toFloat()
                     if (w > 0f && h > 0f) {
                         val a = w / h
+                        // Hard data for the TV header art reports (Shawneau
+                        // 2026-10-07): decoded size and the slot it lands in.
+                        android.util.Log.i(
+                            "ProgramArt",
+                            "[ART] decoded ${w.toInt()}x${h.toInt()} aspect=${"%.2f".format(a)} slot=${ProgramArtSlot.widthFor(a, scale).value.toInt()}x${slotHeight.value.toInt()}dp fit",
+                        )
                         aspect = a
                         ProgramArtSlot.remember(model, a)
                         onAspect?.invoke(a)

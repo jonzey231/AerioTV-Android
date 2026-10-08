@@ -6,6 +6,9 @@ import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import android.content.res.Configuration
 import android.util.Log
+import androidx.compose.runtime.rememberCoroutineScope
+import com.aeriotv.android.core.data.db.entity.canSwitchStream
+import androidx.compose.material.icons.filled.SwapVert
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -739,6 +742,24 @@ fun MultiviewScreen(
     // tracks exist), Move Tile, Remove (destructive). Opened by long-OK on a
     // tile; only reachable from the grid (the key handler is gated off in
     // fullscreen), so no "Exit Full-Screen" row is needed -- BACK exits.
+    // GH #125 (Apple 5e34cf6 parity): per-tile Switch Stream on the LOCAL
+    // tile menu, the same wording and gate as the composite preview menu.
+    // Shown only for a Dispatcharr live channel on an account that may switch
+    // (canSwitchStream fails closed while the level is unknown); hidden
+    // otherwise. Dispatcharr switches the channel's upstream in place, so
+    // only this tile's source changes and the other tiles keep running.
+    val mvPlaylistState by playlistVm.state.collectAsState()
+    val mvLivePlaylist by playlistVm.activePlaylistLive.collectAsState(initial = null)
+    val mvCanSwitchStream = (mvLivePlaylist ?: mvPlaylistState.playlist)
+        ?.let { with(it) { canSwitchStream() } } ?: false
+    fun tileSwitchChannel(tile: MultiviewTile): com.aeriotv.android.core.data.M3UChannel? =
+        if (tile.kind != TileKind.Live) null
+        else mvPlaylistState.channels.firstOrNull { it.id == tile.id }
+            ?.takeIf { it.id.startsWith("disp:") && it.dispatcharrChannelId != null }
+    val switchScope = rememberCoroutineScope()
+    var tileSwitchStreams by remember { mutableStateOf<List<com.aeriotv.android.feature.player.StreamOption>?>(null) }
+    var tileSwitchCurrentId by remember { mutableStateOf<Int?>(null) }
+    var tileSwitchChannel by remember { mutableStateOf<com.aeriotv.android.core.data.M3UChannel?>(null) }
     val menuIdx = tileMenuIndex
     val menuTile = menuIdx?.let { selected.getOrNull(it) }
     if (menuIdx != null && menuTile != null) {
@@ -794,6 +815,44 @@ fun MultiviewScreen(
                         },
                     ),
                 )
+                val switchCh = if (mvCanSwitchStream) tileSwitchChannel(menuTile) else null
+                val switchChPk = switchCh?.dispatcharrChannelId
+                if (switchCh != null && switchChPk != null) {
+                    add(
+                        TvMenuAction(
+                            label = "Switch Stream",
+                            icon = Icons.Filled.SwapVert,
+                            onClick = {
+                                Log.i(TAG, "[MV] tile menu: Switch Stream tile=$menuIdx channel=${switchCh.name}")
+                                tileSwitchChannel = switchCh
+                                switchScope.launch {
+                                    if (!playlistVm.recheckSwitchStreamAllowed("Switch Stream open (Multiview tile)")) {
+                                        android.widget.Toast.makeText(
+                                            mvContext,
+                                            com.aeriotv.android.feature.player.SWITCH_DENIED_MESSAGE,
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                        return@launch
+                                    }
+                                    val m3uNames = playlistVm.loadM3uAccountNames()
+                                    tileSwitchCurrentId = playlistVm.loadCurrentStreamId(switchCh.id.removePrefix("disp:"))
+                                    tileSwitchStreams = playlistVm.loadChannelStreams(switchChPk).map { st ->
+                                        com.aeriotv.android.feature.player.StreamOption(
+                                            id = st.id,
+                                            name = st.name.orEmpty(),
+                                            resolution = st.resolution,
+                                            fps = st.sourceFps,
+                                            bitrateKbps = st.outputBitrateKbps,
+                                            videoCodec = st.videoCodec,
+                                            audioCodec = st.audioCodec,
+                                            sourceName = st.m3uAccount?.let { m3uNames[it] },
+                                        )
+                                    }
+                                }
+                            },
+                        ),
+                    )
+                }
                 add(
                     TvMenuAction(
                         label = "Full-Screen in Grid",
@@ -919,6 +978,45 @@ fun MultiviewScreen(
             },
             guard = tileMenuGuard,
             onDismiss = { tileMenuIndex = null },
+        )
+    }
+
+    tileSwitchStreams?.let { streams ->
+        com.aeriotv.android.feature.player.SwitchStreamSheet(
+            streams = streams,
+            currentStreamId = tileSwitchCurrentId,
+            onSelect = { streamId ->
+                val uuid = tileSwitchChannel?.id?.removePrefix("disp:")
+                tileSwitchStreams = null
+                if (uuid != null) {
+                    // Optimistic radio mark; a failure puts the previous one
+                    // back (cast card and Apple SwitchStreamView parity).
+                    val previousId = tileSwitchCurrentId
+                    tileSwitchCurrentId = streamId
+                    switchScope.launch {
+                        val error = playlistVm.switchChannelStream(uuid, streamId).exceptionOrNull()
+                        if (error == null) {
+                            Log.i(TAG, "[SwitchStream] multiview tile change_stream ok stream=$streamId")
+                            return@launch
+                        }
+                        if (tileSwitchCurrentId == streamId) tileSwitchCurrentId = previousId
+                        Log.w(TAG, "[SwitchStream] multiview tile change_stream failed stream=$streamId: ${error.message}")
+                        android.widget.Toast.makeText(
+                            mvContext,
+                            com.aeriotv.android.feature.player.switchStreamFailureMessage(
+                                "switch the stream",
+                                com.aeriotv.android.feature.player.SWITCH_DENIED_MESSAGE,
+                                error,
+                            ),
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        if ((error as? com.aeriotv.android.core.network.DispatcharrHttpFailure)?.status == 403) {
+                            playlistVm.recheckSwitchStreamAllowed("403 on change_stream")
+                        }
+                    }
+                }
+            },
+            onDismiss = { tileSwitchStreams = null },
         )
     }
 

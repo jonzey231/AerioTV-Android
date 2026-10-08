@@ -648,6 +648,32 @@ fun EditPlaylistScreen(
                 }
             }
 
+            // GH #129 (Apple 5e34cf6 parity): per-playlist Catch-Up Time
+            // Offset. Catch-up is built for Dispatcharr and Xtream Codes only.
+            // Saved on pick; applied only to the times sent to the server.
+            val catchupPlaylistId = playlist?.id
+            if ((isDispatcharr || sourceType == SourceType.XtreamCodes) && catchupPlaylistId != null) {
+                item("catch-up") {
+                    val offsetFlow = remember(catchupPlaylistId) {
+                        viewModel.catchupTimeOffsetMinutes(catchupPlaylistId)
+                    }
+                    val offsetMinutes by offsetFlow.collectAsStateWithLifecycle(initialValue = 0)
+                    SettingsSection(
+                        header = "Catch-Up",
+                        footer = CATCHUP_OFFSET_HELP_TEXT,
+                    ) {
+                        SettingsPickerRow(
+                            title = "Catch-Up Time Offset",
+                            options = CATCHUP_OFFSET_CHOICES.map { minutes ->
+                                SettingsPickerOption(value = minutes, label = catchupOffsetLabel(minutes))
+                            },
+                            selected = offsetMinutes,
+                            onSelect = { viewModel.setCatchupTimeOffsetMinutes(catchupPlaylistId, it) },
+                        )
+                    }
+                }
+            }
+
             if (isDispatcharr) {
                 item("channel-profile") {
                     SettingsSection(
@@ -834,4 +860,18 @@ private fun SegmentChip(
             fontWeight = FontWeight.Medium,
         )
     }
+}
+
+/** GH #129: Catch-Up Time Offset choices in minutes (Apple CatchupOffsetChoices). */
+private val CATCHUP_OFFSET_CHOICES =
+    listOf(-180, -120, -90, -60, -45, -30, -15, -10, -5, 0, 5, 10, 15, 30, 45, 60, 90, 120, 180)
+
+private const val CATCHUP_OFFSET_HELP_TEXT =
+    "Shift catch-up start times when your EPG and your provider's catch-up server disagree."
+
+private fun catchupOffsetLabel(minutes: Int): String {
+    if (minutes == 0) return "0 Minutes (Default)"
+    val sign = if (minutes > 0) "+" else "-"
+    val m = kotlin.math.abs(minutes)
+    return "$sign$m ${if (m == 1) "Minute" else "Minutes"}"
 }

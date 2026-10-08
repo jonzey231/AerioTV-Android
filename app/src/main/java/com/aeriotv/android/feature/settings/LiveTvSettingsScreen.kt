@@ -21,6 +21,10 @@ import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.automirrored.filled.ViewSidebar
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.GridOn
@@ -51,6 +55,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
+import com.aeriotv.android.core.preferences.GuideProgramInfoButton
+import com.aeriotv.android.ui.scale.AlertDialog
+import com.aeriotv.android.ui.settings.SettingsActionRow
+import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
@@ -103,6 +111,9 @@ fun LiveTvSettingsScreen(
     val showEpgBadges by viewModel.showEpgBadges(isTv).collectAsStateWithLifecycle(initialValue = true)
     val hiddenEpgBadges by viewModel.hiddenEpgBadges.collectAsStateWithLifecycle(initialValue = emptySet())
     val scaleLiveTV by viewModel.displayScaleLiveTV.collectAsStateWithLifecycle(initialValue = 1.0f)
+    val programInfoButton by viewModel.guideProgramInfoButton
+        .collectAsStateWithLifecycle(initialValue = GuideProgramInfoButton.OFF)
+    var confirmClearRecents by remember { mutableStateOf(false) }
     val palette by viewModel.categoryPalette.collectAsStateWithLifecycle(initialValue = CategoryPaletteState.Default)
 
     var pickerTarget by remember { mutableStateOf<ProgramCategory?>(null) }
@@ -208,6 +219,21 @@ fun LiveTvSettingsScreen(
                             leadingIcon = if (isTv) Icons.Filled.RoundedCorner else null,
                             checked = roundedProgramCells,
                             onCheckedChange = viewModel::setRoundedProgramCells,
+                        )
+                        // GH #127 (Apple d051505): phone and tablet only; TV
+                        // reaches Program Info from the long-press menu.
+                        if (!isTv) SettingsPickerRow(
+                            title = "Program Info Button",
+                            inlineTitle = true,
+                            options = listOf(
+                                SettingsPickerOption(GuideProgramInfoButton.OFF, "Off", icon = Icons.Filled.Block),
+                                SettingsPickerOption(GuideProgramInfoButton.CURRENT, "Current Programs", icon = Icons.Filled.Sensors),
+                                SettingsPickerOption(GuideProgramInfoButton.ALL, "All Programs", icon = Icons.Outlined.Info),
+                            ),
+                            selected = programInfoButton,
+                            onSelect = viewModel::setGuideProgramInfoButton,
+                            leadingIcon = Icons.Outlined.Info,
+                            footer = "Adds an info button to guide program cells that opens Program Info in one tap. Current Programs shows it on programs airing now; All Programs shows it on every cell wide enough for it.",
                         )
                     }
                 }
@@ -482,10 +508,43 @@ fun LiveTvSettingsScreen(
                         )
                     }
                 }
+
+                // MARK: Recently Watched (GH #130, Apple 5e34cf6)
+                item("recently-watched") {
+                    SettingsSection(header = "Recently Watched") {
+                        SettingsActionRow(
+                            label = "Clear Recently Watched",
+                            leadingIcon = Icons.Filled.History,
+                            destructive = true,
+                            onClick = { confirmClearRecents = true },
+                        )
+                    }
+                }
             }
         }
     }
 
+    }
+
+    if (confirmClearRecents) {
+        AlertDialog(
+            onDismissRequest = { confirmClearRecents = false },
+            title = { Text("Clear Recently Watched?") },
+            text = { Text("Removes every channel from Recently Watched.") },
+            confirmButton = {
+                SettingsDialogTextButton(
+                    label = "Clear",
+                    destructive = true,
+                    onClick = {
+                        confirmClearRecents = false
+                        viewModel.clearRecentChannels()
+                    },
+                )
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { confirmClearRecents = false })
+            },
+        )
     }
 
     pickerTarget?.let { bucket ->

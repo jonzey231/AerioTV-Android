@@ -244,12 +244,14 @@ fun CastTransportCard(
     // Apple a4bd790: the channel line follows the composite's live tiles
     // (add, remove, swap), not the subtitle set once at load.
     val compositeNames = compositeSession?.tiles?.takeIf { it.isNotEmpty() }?.joinToString(", ") { it.displayName }
-    val castDetailLines = if (isComposite) {
-        // Round 3: the tiles' upstream host first (Apple's SOURCE row).
-        com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.streamInfoLines(compositeSession?.sourceHost)
-    } else {
-        listOfNotNull(receiverLine) + transcodeNote
-    }
+    // Apple 9c19a33: a composite's Stream Info is one card of labeled rows
+    // (SOURCE upstream host, COMPOSITE, FORMAT, VIDEO, AUDIO, then TV and the
+    // receiver's own summary), not plain text lines.
+    val castDetailLines = if (isComposite) emptyList() else listOfNotNull(receiverLine) + transcodeNote
+    val compositeInfoRows = if (isComposite) {
+        com.aeriotv.android.core.cast.multiview.MultiviewCompositeLayout.streamInfoRows(compositeSession?.sourceHost) +
+            listOfNotNull(deviceName?.let { "TV" to it })
+    } else emptyList()
 
     fun flipChannel(delta: Int) {
         val idx = channels.indexOfFirst { it.id == currentChannel?.id }
@@ -439,6 +441,7 @@ fun CastTransportCard(
             inlineSkipEnabled = castCanSkip || position.canSeek || remoteState.canSeek,
             canSwitchStream = canSwitchStream,
             castDetailLines = castDetailLines,
+            streamInfoRows = compositeInfoRows,
             onTogglePlayPause = {
                 if (isCompanion) companionRemote.togglePlayPause() else castSender.togglePlayPause()
             },

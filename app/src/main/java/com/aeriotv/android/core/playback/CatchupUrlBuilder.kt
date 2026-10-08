@@ -110,11 +110,17 @@ object CatchupUrlBuilder {
         programmeStartMillis: Long,
         programmeEndMillis: Long,
         offsetMillis: Long,
+        /** GH #129: Catch-Up Time Offset (ms). Moves the request window as a
+         *  whole; the programme times stay the guide's. */
+        requestShiftMillis: Long = CatchupRequestShift.activeMillis,
     ): String? {
         val m = TIMESHIFT_SEGMENTS.find(url) ?: return null
-        val newStartMillis = programmeStartMillis + offsetMillis.coerceAtLeast(0L)
+        val newStartMillis = programmeStartMillis + offsetMillis.coerceAtLeast(0L) + requestShiftMillis
+        if (requestShiftMillis != 0L) {
+            android.util.Log.i("CatchupUrlBuilder", "[CATCHUP] time offset ${requestShiftMillis / 60_000L} min applied")
+        }
         val durationMin = ceil(
-            (programmeEndMillis - newStartMillis).coerceAtLeast(60_000L) / 60_000.0,
+            (programmeEndMillis + requestShiftMillis - newStartMillis).coerceAtLeast(60_000L) / 60_000.0,
         ).toInt()
         val start = formatStart(newStartMillis, panelTimeZoneId)
         return url.replaceRange(

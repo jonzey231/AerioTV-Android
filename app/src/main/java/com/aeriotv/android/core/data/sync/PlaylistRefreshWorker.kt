@@ -115,8 +115,24 @@ class PlaylistRefreshWorker @AssistedInject constructor(
             epg.getOrThrow(),
             channels.getOrThrow(),
         )
-        runCatching { repository.saveEpgToCache(playlist.id, bridged) }
+        val saved = runCatching { repository.saveEpgToCache(playlist.id, bridged) }
             .onFailure { Log.w(TAG, "saveEpgToCache failed", it) }
+        if (saved.isSuccess) {
+            // GH #124 (Apple d051505 parity: the background refresh result must
+            // be SAVED and then trusted). Stamp the cache with the channel
+            // identity it was built for, over the same url-deduplicated list
+            // the next cold launch paints from (loadCachedChannels). Without
+            // the stamp a channel-list change in this run read as an identity
+            // mismatch at launch, which purged the rows just written.
+            runCatching {
+                prefs.setEpgIdentityHash(
+                    playlist.id,
+                    com.aeriotv.android.core.guide.GuideIdentityHash.of(
+                        channels.getOrThrow().distinctBy { it.url },
+                    ),
+                )
+            }.onFailure { Log.w(TAG, "identity stamp failed", it) }
+        }
         Log.i(
             TAG,
             "Background refresh OK: ${channels.getOrThrow().size} channels, " +

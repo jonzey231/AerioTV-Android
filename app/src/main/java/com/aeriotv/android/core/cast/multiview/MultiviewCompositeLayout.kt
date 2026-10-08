@@ -230,6 +230,20 @@ object MultiviewCompositeLayout {
     fun streamInfoLines(sourceHost: String?): List<String> =
         listOfNotNull(sourceHost?.takeIf { it.isNotBlank() }?.let { "Source: $it" }) + STREAM_INFO_LINES
 
+    /**
+     * Composite Stream Info as labeled rows inside the cast sheet's Stream
+     * Info card (Apple 9c19a33: one box, no plain-text block under it):
+     * SOURCE (the tiles' upstream host), COMPOSITE, FORMAT, VIDEO, AUDIO.
+     * The sheet appends its existing rows (TV, RECEIVER) after these.
+     */
+    fun streamInfoRows(sourceHost: String?): List<Pair<String, String>> =
+        listOfNotNull(sourceHost?.takeIf { it.isNotBlank() }?.let { "SOURCE" to it }) + listOf(
+            "COMPOSITE" to "${WIDTH}x$HEIGHT at $FPS fps",
+            "FORMAT" to "MPEG-TS to fMP4",
+            "VIDEO" to "H.264",
+            "AUDIO" to "AAC-LC stereo 48 kHz",
+        )
+
     /** Distinct upstream hosts of [urls], comma separated; null when none. */
     fun sourceHost(urls: List<String>): String? =
         urls.mapNotNull { hostOf(it) }.distinct().takeIf { it.isNotEmpty() }?.joinToString(", ")

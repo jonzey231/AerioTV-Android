@@ -443,6 +443,18 @@ class SettingsViewModel @Inject constructor(
 
     // Player Info Card elements (App Behaviors, Apple parity). All default true;
     // they gate ONLY the in-player program info card.
+    // GH #127: Pop Up Info Card on Channel Change (default on).
+    val playerShowChannelInfoCard: Flow<Boolean> = prefs.playerShowChannelInfoCard
+    fun setPlayerShowChannelInfoCard(value: Boolean) {
+        viewModelScope.launch { prefs.setPlayerShowChannelInfoCard(value) }
+    }
+
+    // GH #127: Settings > Live TV > Program Info Button (off/current/all).
+    val guideProgramInfoButton: Flow<String> = prefs.guideProgramInfoButton
+    fun setGuideProgramInfoButton(value: String) {
+        viewModelScope.launch { prefs.setGuideProgramInfoButton(value) }
+    }
+
     val playerCardShowChannelLogo: Flow<Boolean> = prefs.playerCardShowChannelLogo
     fun setPlayerCardShowChannelLogo(value: Boolean) {
         viewModelScope.launch { prefs.setPlayerCardShowChannelLogo(value) }
@@ -550,6 +562,14 @@ class SettingsViewModel @Inject constructor(
     val recentChannelIds: Flow<List<String>> = prefs.recentChannelIds
     fun recordRecentChannel(channelId: String) {
         viewModelScope.launch { prefs.recordRecentChannel(channelId) }
+    }
+    /** GH #130: channel long-press "Remove from Recently Watched". */
+    fun removeRecentChannel(channelId: String) {
+        viewModelScope.launch { prefs.removeRecentChannel(channelId) }
+    }
+    /** GH #130: Settings > Live TV > Clear Recently Watched. */
+    fun clearRecentChannels() {
+        viewModelScope.launch { prefs.clearRecentChannels() }
     }
 
     val defaultTab: StateFlow<String> = prefs.defaultTab

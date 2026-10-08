@@ -160,12 +160,16 @@ class MultiviewCompositor(
                 "M14,3.23v2.06c2.89,0.86 5,3.54 5,6.71s-2.11,5.85 -5,6.71v2.06c4.01,-0.91 7,-4.49 7,-8.77s-2.99,-7.86 -7,-8.77z"
     }
 
-    private class Tile(val index: Int, val source: MultiviewTile) {
+    /** One of the [MultiviewCompositeLayout.MAX_TILES] fixed slots. [index]
+     *  is the slot (and the audio-tap id); [source] is the channel it shows,
+     *  null while the slot is free. Slots are reused when a tile is added in
+     *  place (no encoder, pipe or receiver restart). */
+    private class Tile(val index: Int, @Volatile var source: MultiviewTile?) {
         var texId = 0
         var surfaceTexture: SurfaceTexture? = null
         var surface: Surface? = null
         @Volatile var frameAvailable = false
-        var hasFrame = false
+        @Volatile var hasFrame = false
         val texMatrix = FloatArray(16)
         @Volatile var videoWidth = 0
         @Volatile var videoHeight = 0
@@ -185,12 +189,26 @@ class MultiviewCompositor(
         @Volatile var logoAspect = 0f
         @Volatile var logoBitmap: android.graphics.Bitmap? = null
         var logoRequested = false
+        /** Set when the slot changes channel: the GL thread drops the old
+         *  logo texture before the new one loads. */
+        @Volatile var dropLogo = false
     }
 
-    private val count = tiles.size.coerceAtMost(MultiviewCompositeLayout.MAX_TILES)
-    private val state = tiles.take(count).mapIndexed { i, t -> Tile(i, t) }
+    private val initialCount = tiles.size.coerceAtMost(MultiviewCompositeLayout.MAX_TILES)
+    private val state = List(MultiviewCompositeLayout.MAX_TILES) { i -> Tile(i, tiles.getOrNull(i)?.takeIf { i < initialCount }) }
 
-    @Volatile var focused: Int = initialFocus.coerceIn(0, count - 1)
+    /**
+     * Display order: position -> slot index, for the slots that show right
+     * now. A tile added or removed in place (Apple 6136daf: no composite
+     * restart, no receiver reload) only edits this; a swap reorders it. One
+     * entry draws full frame like a single-channel cast.
+     */
+    @Volatile private var shown: IntArray = IntArray(initialCount) { it }
+
+    /** Slot indices showing, in position order. */
+    val shownSlots: List<Int> get() = shown.toList()
+
+    @Volatile var focused: Int = initialFocus.coerceIn(0, (initialCount - 1).coerceAtLeast(0))
         private set
 
     /** The user's Multiview look; read on every frame, so a Settings change
@@ -234,9 +252,6 @@ class MultiviewCompositor(
     @Volatile private var bgFrames = 0L
     @Volatile private var bgAudioChunks = 0L
 
-    /** Cell of each tile (tile index -> cell index); swapped live from the
-     *  cast sheet's preview, no encoder or session restart. */
-    @Volatile private var slotOf: IntArray = IntArray(count) { it }
 
     /** ARGB of the focused tile's border: the app's accent color. */
     @Volatile var focusArgb: Int = 0xFFFFFFFF.toInt()
@@ -335,7 +350,7 @@ class MultiviewCompositor(
     /** Builds GL, the encoders and the tile players. False on failure (the
      *  reason is logged; nothing is left running). */
     fun start(): Boolean {
-        if (count < MultiviewCompositeLayout.MIN_TILES) return false
+        if (initialCount < MultiviewCompositeLayout.MIN_TILES) return false
         glThread.start()
         gl = Handler(glThread.looper)
         val latch = CountDownLatch(1)
@@ -361,50 +376,86 @@ class MultiviewCompositor(
         nextTickNanos = System.nanoTime()
         lastForcedKeyElapsed = -1L
         gl.post(tick)
-        main.post { state.forEach { startPlayer(it) } }
+        main.post { state.forEach { if (it.source != null) startPlayer(it) } }
         main.postDelayed(health, STATS_NANOS / 1_000_000)
-        Log.i(TAG, "[MV-CAST] composite start tiles=$count ${W}x$H@$FPS")
+        Log.i(TAG, "[MV-CAST] composite start tiles=$initialCount ${W}x$H@$FPS")
         return true
     }
 
     /** Audio focus and the highlight move to [index]; no restart. */
     fun setFocus(index: Int, tapNanos: Long = System.nanoTime()) {
-        if (index !in 0 until count || index == focused) return
-        Log.i(TAG, "[MV-CAST] composite focus ${state[focused].source.displayName} -> ${state[index].source.displayName}")
+        if (index !in shown || index == focused) return
+        Log.i(TAG, "[MV-CAST] composite focus ${state[focused].source?.displayName} -> ${state[index].source?.displayName}")
         pendingFocusIndex = index
         pendingFocusTapNanos = tapNanos
         focusChangedAtNanos = System.nanoTime()
         focused = index
     }
 
-    /** The one tile a session dropped to a single channel draws full frame;
-     *  -1 while 2 or more tiles show. */
-    @Volatile private var soloTile: Int = -1
-
     /**
-     * Round 9 (Apple 6136daf, Logan: removing down to one tile must be
-     * seamless): keep the encoder, the pipe and the cast load running and
-     * draw tile [index] alone, full frame, with its audio. The other tiles'
-     * players are released. Main thread.
+     * Add [source] in place (Apple 6136daf, round 9 parity): a free slot takes
+     * it and it joins the end of the display order. The encoder, the pipe,
+     * the proxy and the receiver's load keep running, so the TV never
+     * reloads; the next frame re-lays out the grid. Main thread. Returns the
+     * slot, or -1 when every slot is taken or the composite is not running.
      */
-    fun dropToSingle(index: Int) {
-        if (index !in 0 until count || soloTile >= 0) return
-        Log.i(TAG, "[MV-CAST] composite tiles changed: 1 (${state[index].source.displayName} full frame, same stream, no receiver reload)")
-        setFocus(index)
-        soloTile = index
-        state.forEach { t ->
-            if (t.index != index) {
-                val p = t.player ?: return@forEach
-                t.player = null
-                runCatching { p.release() }
-            }
-        }
+    fun addTile(source: MultiviewTile): Int {
+        if (!running) return -1
+        val t = state.firstOrNull { it.source == null && it.index !in shown } ?: return -1
+        t.player?.let { p -> t.player = null; runCatching { p.release() } }
+        t.source = source
+        t.frameAvailable = false
+        t.hasFrame = false
+        t.videoWidth = 0
+        t.videoHeight = 0
+        t.pixelRatio = 1f
+        t.retries = 0
+        t.wasReady = false
+        t.stalled = false
+        t.logoRequested = false
+        t.logoAspect = 0f
+        t.dropLogo = true
+        shown = shown + t.index
+        // A rearrange shows the audio-focus indicator again (Apple parity).
+        focusChangedAtNanos = System.nanoTime()
+        Log.i(TAG, "[MV-CAST] composite tiles changed: ${shown.size} (added ${source.displayName} in slot ${t.index}, same stream, no receiver reload)")
+        startPlayer(t)
+        return t.index
     }
 
-    /** New cell per tile ([slots] tile index -> cell index). */
-    fun setSlots(slots: IntArray) {
-        if (slots.size != count || slots.sorted() != (0 until count).toList()) return
-        slotOf = slots.copyOf()
+    /**
+     * Remove the tile in [slot] in place. With one tile left it draws full
+     * frame (round 9: no padding, corner clip, logo or focus indicator) and
+     * the receiver keeps the same stream. Audio moves to the first remaining
+     * tile when the focused one leaves. Main thread.
+     */
+    fun removeTile(slot: Int) {
+        if (slot !in shown || shown.size <= 1) return
+        val t = state[slot]
+        val name = t.source?.displayName
+        shown = shown.filter { it != slot }.toIntArray()
+        if (focused == slot) setFocus(shown[0])
+        t.player?.let { p ->
+            t.player = null
+            runCatching { p.clearVideoSurface() }
+            runCatching { p.release() }
+        }
+        t.source = null
+        t.hasFrame = false
+        t.dropLogo = true
+        focusChangedAtNanos = System.nanoTime()
+        Log.i(
+            TAG,
+            "[MV-CAST] composite tiles changed: ${shown.size} (removed $name" +
+                (if (shown.size == 1) ", ${state[shown[0]].source?.displayName} full frame" else "") +
+                ", same stream, no receiver reload)",
+        )
+    }
+
+    /** New display order ([order] position -> slot), the same slots as now. */
+    fun setOrder(order: List<Int>) {
+        if (order.size != shown.size || order.sorted() != shown.sorted()) return
+        shown = order.toIntArray()
         // A rearrange shows the audio-focus indicator again (Apple parity);
         // a layout change ([layoutMode]) does not.
         focusChangedAtNanos = System.nanoTime()
@@ -480,6 +531,7 @@ class MultiviewCompositor(
 
     private fun startPlayer(t: Tile) {
         if (!running) return
+        val source = t.source ?: return
         val surface = t.surface ?: return
         val ua = "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
         val http = DefaultHttpDataSource.Factory()
@@ -521,7 +573,7 @@ class MultiviewCompositor(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Log.w(TAG, "[MV-CAST] composite tile ${t.source.displayName} error ${error.errorCodeName}")
+                Log.w(TAG, "[MV-CAST] composite tile ${t.source?.displayName} error ${error.errorCodeName}")
                 if (!running || t.retries >= MAX_TILE_RETRIES) return
                 t.retries++
                 main.postDelayed({ if (running && t.player === player) restartSource(t, player, http) }, TILE_RETRY_MS)
@@ -551,12 +603,12 @@ class MultiviewCompositor(
             }
         })
         player.setMediaSource(
-            com.aeriotv.android.feature.multiview.buildTileMediaSource(t.source.resolvedUrl, http),
+            com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, http),
         )
         player.playWhenReady = true
         player.prepare()
         t.player = player
-        Log.i(TAG, "[MV-CAST] composite tile ${t.index} loading ${t.source.displayName}")
+        Log.i(TAG, "[MV-CAST] composite tile ${t.index} loading ${source.displayName}")
         if (style.showLogos) loadLogo(t)
     }
 
@@ -572,25 +624,27 @@ class MultiviewCompositor(
      * tile's restarted clock on its next PCM.
      */
     private fun restartSource(t: Tile, player: ExoPlayer, http: DefaultHttpDataSource.Factory) {
-        Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${t.source.displayName}: ingest restarted on a new connection, decoder and demux reset (retry ${t.retries})")
+        val source = t.source ?: return
+        Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${source.displayName}: ingest restarted on a new connection, decoder and demux reset (retry ${t.retries})")
         t.wasReady = false
         t.stalled = false
         reanchorTile = t.index
         player.stop()
         player.setMediaSource(
-            com.aeriotv.android.feature.multiview.buildTileMediaSource(t.source.resolvedUrl, http),
+            com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, http),
         )
         player.playWhenReady = true
         player.prepare()
     }
 
-    private fun loadLogos() = state.forEach { loadLogo(it) }
+    private fun loadLogos() = state.forEach { if (it.source != null) loadLogo(it) }
 
     /** Fetch the tile's channel logo through the app's Coil loader (same
      *  cache as the guide and the local tiles), crop it to its opaque bounds
      *  exactly as the local tile does, and hand it to the GL thread. */
     private fun loadLogo(t: Tile) {
-        val url = t.source.logoUrl
+        val source = t.source ?: return
+        val url = source.logoUrl
         if (!running || t.logoRequested || url.isBlank()) return
         t.logoRequested = true
         Thread({
@@ -604,6 +658,8 @@ class MultiviewCompositor(
                         .also { com.aeriotv.android.feature.multiview.TileLogoCrop.cache.put(url, it) }
                 if (crop.width() <= 0 || crop.height() <= 0) return@runCatching
                 val cut = android.graphics.Bitmap.createBitmap(bmp, crop.left, crop.top, crop.width(), crop.height())
+                // The slot changed channel while this loaded: drop it.
+                if (t.source !== source) return@runCatching
                 t.logoAspect = crop.width().toFloat() / crop.height()
                 t.logoBitmap = cut
             }.onFailure { Log.w(TAG, "[MV-CAST] composite logo ${t.index} failed: $it") }
@@ -729,6 +785,11 @@ class MultiviewCompositor(
                     t.framesRendered++
                 }
             }
+            if (t.dropLogo) {
+                t.dropLogo = false
+                if (t.logoTex != 0) GLES20.glDeleteTextures(1, intArrayOf(t.logoTex), 0)
+                t.logoTex = 0
+            }
             t.logoBitmap?.let { bmp ->
                 t.logoBitmap = null
                 if (t.logoTex != 0) GLES20.glDeleteTextures(1, intArrayOf(t.logoTex), 0)
@@ -783,13 +844,14 @@ class MultiviewCompositor(
         // Round 9 (Apple 6136daf): a session dropped to one tile draws it
         // full frame like a single-channel cast: no padding, corner clip,
         // logo or focus indicator. The other tiles' players are released.
-        val solo = soloTile
-        val rects = if (solo >= 0) {
+        val order = shown
+        val single = order.size == 1
+        val rects = if (single) {
             MultiviewCompositeLayout.tileRects(1)
         } else {
-            MultiviewCompositeLayout.tileRects(count, st.padding, mode = layoutMode)
+            MultiviewCompositeLayout.tileRects(order.size, st.padding, mode = layoutMode)
         }
-        val radius = if (solo >= 0) 0f else MultiviewCompositeLayout.cornerRadius(st)
+        val radius = if (single) 0f else MultiviewCompositeLayout.cornerRadius(st)
         val since = System.nanoTime() - focusChangedAtNanos
         val accent = focusArgb
         GLES20.glViewport(0, 0, w, h)
@@ -797,11 +859,10 @@ class MultiviewCompositor(
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-        val slots = slotOf
-        for (t in state) {
-            if (solo >= 0 && t.index != solo) continue
-            val cell = rects.getOrNull(if (solo >= 0) 0 else slots[t.index]) ?: continue
-            val isFocus = t.index == focus && solo < 0
+        for ((pos, slot) in order.withIndex()) {
+            val t = state.getOrNull(slot) ?: continue
+            val cell = rects.getOrNull(pos) ?: continue
+            val isFocus = t.index == focus && !single
             val pic = MultiviewCompositeLayout.letterbox(cell, t.videoWidth, t.videoHeight, t.pixelRatio)
             if (t.hasFrame) {
                 val vp = videoProg ?: continue
@@ -811,7 +872,7 @@ class MultiviewCompositor(
                 setClip(vp, cell, radius, sx, sy, h)
                 quad(vp, pic, t.texMatrix, sx, sy, h)
             }
-            if (solo < 0 && st.showLogos && t.logoTex != 0 && t.logoAspect > 0f) {
+            if (!single && st.showLogos && t.logoTex != 0 && t.logoAspect > 0f) {
                 val place = MultiviewCompositeLayout.logoPlacement(pic, t.logoAspect, st)
                 solid(place.backdrop, 4 * MultiviewCompositeLayout.DP, 0f, 0x8C000000.toInt(), sx, sy, h)
                 bitmap(t.logoTex, place.logo, 0xFFFFFFFF.toInt(), 1f, sx, sy, h)
@@ -1085,7 +1146,7 @@ class MultiviewCompositor(
             val now = System.nanoTime()
             if (healthAt == 0L) healthAt = now - STATS_NANOS
             val seconds = ((now - healthAt) / 1e9).coerceAtLeast(0.001)
-            val tiles = state.joinToString(" ") { t ->
+            val tiles = shown.map { state[it] }.joinToString(" ") { t ->
                 val bytes = t.ingestBytes
                 val frames = t.framesRendered
                 val bps = ((bytes - healthBytes[t.index]) / seconds).toLong()

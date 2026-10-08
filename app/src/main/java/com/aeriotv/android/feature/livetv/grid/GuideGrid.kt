@@ -90,6 +90,7 @@ import com.aeriotv.android.core.ui.seasonEpisodeLabel
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Info
 import com.aeriotv.android.core.remote.GuideRemoteAction
 import com.aeriotv.android.core.remote.RemoteSlot
 import java.text.SimpleDateFormat
@@ -146,6 +147,12 @@ fun GuideGrid(
     traceGates: () -> String = { "" },
     /** Bumped by the host to park the cursor on the clock (Down from the banner, tvOS). */
     clockSelectTrigger: Int = 0,
+    /**
+     * GH #127: Settings > Live TV > Program Info Button ("off" / "current" /
+     * "all"). Phone and tablet only; the host passes [onOpenProgramInfo] null on TV.
+     */
+    programInfoButtonMode: String = com.aeriotv.android.core.preferences.GuideProgramInfoButton.OFF,
+    onOpenProgramInfo: ((M3UChannel, EPGProgramme) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     val hourWidthPx = with(density) { hourWidth.toPx() }
@@ -255,8 +262,36 @@ fun GuideGrid(
     }
     // Trace (AerioFocus): which branch decided the key; set inside the handler.
     var traceBy = "none"
+    // GH #128: a key held in fullscreen (Left = Return to TV Guide, or Back)
+    // keeps auto-repeating after the guide opens; those repeats must not pan
+    // the timeline back in time. Any Left / Right / Back repeat whose first
+    // press the grid never saw is swallowed, along with its key-up, so the
+    // guide stays on now and the playing channel. Plain sets: never read in
+    // composition.
+    val keysDownSeen = remember { HashSet<Key>() }
+    val keysSwallowing = remember { HashSet<Key>() }
     val keyHandlerInner: (KeyEvent) -> Boolean = handler@{ event ->
         traceBy = "unhandled"
+        if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight || event.key == Key.Back) {
+            val rc = (event.nativeKeyEvent as? AndroidKeyEvent)?.repeatCount ?: 0
+            when (event.type) {
+                KeyEventType.KeyDown -> {
+                    if (rc == 0) { keysDownSeen.add(event.key); keysSwallowing.remove(event.key) }
+                    else if (event.key !in keysDownSeen) {
+                        if (keysSwallowing.add(event.key)) {
+                            android.util.Log.i("GuideGrid", "[PRESS] swallowed repeat after guide open (${guideTraceKeyName(event) ?: event.key})")
+                        }
+                        traceBy = "swallowed-repeat"
+                        return@handler true
+                    }
+                }
+                KeyEventType.KeyUp -> {
+                    keysDownSeen.remove(event.key)
+                    if (keysSwallowing.remove(event.key)) { traceBy = "swallowed-repeat-up"; return@handler true }
+                }
+                else -> Unit
+            }
+        }
         if (clockSelected) {
             traceBy = "clock"
             val native = event.nativeKeyEvent as? AndroidKeyEvent
@@ -547,6 +582,8 @@ fun GuideGrid(
                     textMeasurer = textMeasurer,
                     onPlay = onPlay,
                     onOpenMenu = onOpenMenu,
+                    infoButtonMode = if (onOpenProgramInfo != null) programInfoButtonMode else com.aeriotv.android.core.preferences.GuideProgramInfoButton.OFF,
+                    onOpenProgramInfo = onOpenProgramInfo,
                     onTapFocus = { r, cell ->
                         state.focusRowAt(r, cell.startMillis)
                         runCatching { focusRequester.requestFocus() }
@@ -700,8 +737,19 @@ private fun GridRow(
     onTapFocus: (Int, EPGProgramme) -> Unit,
     compact: Boolean = false,
     isTv: Boolean = false,
+    infoButtonMode: String = com.aeriotv.android.core.preferences.GuideProgramInfoButton.OFF,
+    onOpenProgramInfo: ((M3UChannel, EPGProgramme) -> Unit)? = null,
 ) {
     val channel = state.rows.channel(row)
+    // GH #127 (Apple 363b9db / d051505 / 3a9f8c5): small info-circle button in
+    // the bottom-right corner of the cell's VISIBLE part, on cells at least
+    // about 120 dp wide. Stays during Multiview picking (Apple 1cbfae5).
+    val infoPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.Info)
+    fun showsInfoButton(cell: EPGProgramme, visibleW: Float, minW: Float): Boolean =
+        onOpenProgramInfo != null && !cell.isPlaceholder && visibleW >= minW &&
+            com.aeriotv.android.core.preferences.GuideProgramInfoButton.shows(
+                infoButtonMode, nowMs in cell.startMillis until cell.endMillis,
+            )
     val colors = MaterialTheme.colorScheme
     // Only the row that gains or loses focus redraws on a vertical move:
     // derivedStateOf notifies the draw scope only when THIS row's answer
@@ -826,7 +874,22 @@ private fun GridRow(
                             onTapFocus(row, railCell); onPlay(channel, railCell); return@detectTapGestures
                         }
                         val t = state.drawViewportStartMs + ((pos.x - railWidthPx) / pxPerMs).toLong()
-                        state.rows.cellAt(row, t)?.let { cell -> onTapFocus(row, cell); onPlay(channel, cell) }
+                        val tapped = state.rows.cellAt(row, t)
+                        if (tapped != null && onOpenProgramInfo != null) {
+                            // Hit-test the corner button on the cell's visible slice.
+                            val stripW = size.width - railWidthPx
+                            val vs = state.drawStartMs
+                            val cx0 = ((tapped.startMillis - vs) * pxPerMs).coerceAtLeast(0f)
+                            val cx1 = ((tapped.endMillis - vs) * pxPerMs).coerceAtMost(stripW)
+                            val hit = GUIDE_INFO_BUTTON_HIT.toPx()
+                            val sx = pos.x - railWidthPx
+                            if (showsInfoButton(tapped, cx1 - cx0, GUIDE_INFO_BUTTON_MIN_CELL.toPx()) &&
+                                sx >= cx1 - hit && sx <= cx1 && pos.y >= size.height - hit
+                            ) {
+                                onTapFocus(row, tapped); onOpenProgramInfo(channel, tapped); return@detectTapGestures
+                            }
+                        }
+                        tapped?.let { cell -> onTapFocus(row, cell); onPlay(channel, cell) }
                     },
                     onLongPress = { pos ->
                         val t = state.drawViewportStartMs + ((pos.x - railWidthPx).coerceAtLeast(0f) / pxPerMs).toLong()
@@ -1148,8 +1211,11 @@ private fun GridRow(
                         style = Stroke(width = bw),
                     )
                 }
+                val infoButton = showsInfoButton(cell, w, GUIDE_INFO_BUTTON_MIN_CELL.toPx())
+                val infoReserve = if (infoButton) GUIDE_INFO_BUTTON_SIZE.toPx() + GUIDE_INFO_BUTTON_INSET.toPx() else 0f
                 if (w >= 40.dp.toPx()) {
-                    val textW = (w - 2 * padH).toInt().coerceAtLeast(1)
+                    // Text stops short of the info button when it shows.
+                    val textW = (w - 2 * padH - infoReserve).toInt().coerceAtLeast(1)
                     val tall = size.height >= 44.dp.toPx()
                     // Phone rows (98dp, Logan 2026-09-05 / EPGGuideView.swift)
                     // have room for TWO description lines under the title and
@@ -1301,6 +1367,13 @@ private fun GridRow(
                         }
                     }
                 }
+                if (infoButton) {
+                    val bs = GUIDE_INFO_BUTTON_SIZE.toPx()
+                    val inset = GUIDE_INFO_BUTTON_INSET.toPx()
+                    translate(left = x0 + w - inset - bs, top = size.height - 1f - inset - bs) {
+                        with(infoPainter) { draw(Size(bs, bs), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(accent)) }
+                    }
+                }
             }
             if (nowMs in (vs + 1) until ve) {
                 val x = (nowMs - vs) * pxPerMs
@@ -1386,6 +1459,11 @@ internal fun guideTraceCell(state: GuideGridState): String {
 
 private fun GuideRemoteAction.orDefault(default: GuideRemoteAction) = if (this == GuideRemoteAction.NONE) default else this
 private const val MIN_CELL_PX = 6f
+/** GH #127 guide cell info button: glyph size, corner inset, tap target, min visible cell width. */
+private val GUIDE_INFO_BUTTON_SIZE = 18.dp
+private val GUIDE_INFO_BUTTON_INSET = 5.dp
+private val GUIDE_INFO_BUTTON_HIT = 40.dp
+private val GUIDE_INFO_BUTTON_MIN_CELL = 120.dp
 private const val CELL_TEXT_CACHE_SOFT_CAP = 48
 private const val CELL_TEXT_EVICT_MARGIN_MS = 12 * 3_600_000L
 private const val RAIL_NAME_KEY = Long.MIN_VALUE + 2
