@@ -138,6 +138,17 @@ internal class TileLiveCalls {
                 // Mirrors setAllowCrossProtocolRedirects(true).
                 .followRedirects(true)
                 .followSslRedirects(true)
+                // One TCP connection PER TILE (Logan 2026-10-10, Streamer
+                // freeze after Move Tile). The Dispatcharr host negotiates
+                // HTTP/2, so this shared client multiplexed every live tile
+                // onto ONE socket with one connection flow-control window:
+                // a stall or loss on that socket stalled every tile at once,
+                // and the swap's two cancelled streams sat on the same window
+                // the surviving tiles read from (Blue Jackets' loader went
+                // silent with no error). HttpURLConnection, which these
+                // factories replaced in 6ed34e5e, was HTTP/1.1, one socket
+                // per tile; keep that isolation.
+                .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
                 .build()
         }
 

@@ -5,6 +5,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -88,8 +90,14 @@ fun TvPill(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    /** Long OK (group pills: set/clear the default group). The release that
+     *  follows a TV long press is swallowed so it does not also click. */
+    onLongClick: (() -> Unit)? = null,
+    /** Trailing thumbtack: this pill is the default group (tvOS pin.fill). */
+    trailingPin: Boolean = false,
 ) {
     val focused by interactionSource.collectIsFocusedAsState()
+    val longGuard = com.aeriotv.android.core.tv.rememberTvMenuGuard()
     val colors = MaterialTheme.colorScheme
     // Unselected fill is a white wash rather than the card colour: on the
     // translucent sheets the card colour vanished into the surface (Logan
@@ -119,7 +127,18 @@ fun TvPill(
             )
             // One focus target only: clickable() contributes it (a nested
             // focusable() drew the square ripple, see the guide pills).
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .then(
+                if (onLongClick == null) {
+                    Modifier.clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = longGuard.wrap(onClick),
+                        onLongClick = { onLongClick(); longGuard.arm() },
+                    )
+                },
+            )
             .padding(horizontal = TvChrome.pillHorizontalPadding, vertical = TvChrome.pillVerticalPadding),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -135,6 +154,14 @@ fun TvPill(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (trailingPin) {
+            Icon(
+                imageVector = androidx.compose.material.icons.Icons.Filled.PushPin,
+                contentDescription = "Default group",
+                tint = ink.copy(alpha = 0.7f),
+                modifier = Modifier.size(9.dp),
+            )
+        }
     }
 }
 

@@ -432,13 +432,18 @@ fun GuideScreen(
     val jumpWindowStart = jumpTargetMs?.let { (it - 3 * 3_600_000L) / QUANTUM_MS * QUANTUM_MS }
     // Quantized to 15 min so re-entering the tab within that window reuses
     // the memoized rows instead of rebuilding them for a new "now".
-    val windowStartMs = remember(historyHours, jumpWindowStart) {
+    // Keyed on the 15-min "now" quantum too (Logan 2026-10-10: the guide
+    // opened hours behind). The guide composition outlives the app going to
+    // the background (kept tabs), so a window computed once at composition
+    // stayed pinned to that hour and the viewport clamped into it.
+    val nowQuantum = nowMs / QUANTUM_MS
+    val windowStartMs = remember(historyHours, jumpWindowStart, nowQuantum) {
         minOf(
             (System.currentTimeMillis() - historyHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS,
             jumpWindowStart ?: Long.MAX_VALUE,
         )
     }
-    val windowEndMs = remember(forwardHours, jumpWindowEnd) {
+    val windowEndMs = remember(forwardHours, jumpWindowEnd, nowQuantum) {
         maxOf(
             (System.currentTimeMillis() + forwardHours * 3_600_000L) / QUANTUM_MS * QUANTUM_MS + QUANTUM_MS,
             jumpWindowEnd ?: 0L,
@@ -620,6 +625,53 @@ fun GuideScreen(
         }
     }
     val snapToNow: () -> Unit = { jumpTargetMs = null; pendingJumpScroll = false; grid.anchorToNow(System.currentTimeMillis()) }
+
+    // The guide always opens and resumes at now (Logan 2026-10-10). The
+    // composition (and the retained grid) survives the app being backgrounded
+    // and the tab being hidden, so neither path went through resetForEntry:
+    // coming back after a long idle showed the hours-old viewport. On every
+    // foreground start and every tab re-entry, refresh the clock and anchor
+    // at now, unless a catch-up return is restoring its own timeline.
+    val guideLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    var foregroundStarts by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    androidx.compose.runtime.DisposableEffect(guideLifecycle) {
+        // Only an ON_START that follows an ON_STOP is a resume. Adding the
+        // observer replays ON_START for an already started owner; that first
+        // entry is resetForEntry's job, not ours.
+        var stopped = false
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            when (e) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> stopped = true
+                androidx.lifecycle.Lifecycle.Event.ON_START -> if (stopped) { stopped = false; foregroundStarts++ }
+                else -> Unit
+            }
+        }
+        guideLifecycle.addObserver(obs)
+        onDispose { guideLifecycle.removeObserver(obs) }
+    }
+    // Tab re-entry: a false -> true flip of tabActive after this composition
+    // has already been shown once.
+    var tabEntries by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val lastTabActive = remember { booleanArrayOf(tabActive) }
+    LaunchedEffect(tabActive) {
+        if (tabActive && !lastTabActive[0]) tabEntries++
+        lastTabActive[0] = tabActive
+    }
+    LaunchedEffect(foregroundStarts, tabEntries) {
+        if (foregroundStarts == 0 && tabEntries == 0) return@LaunchedEffect
+        // Empty rows: the window is unset (a fresh state already sits at now).
+        if (!tabActive || GuideCatchupReturn.pending() || grid.rows.isEmpty) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        val before = grid.viewportStartMs
+        nowMs = now
+        jumpTargetMs = null
+        pendingJumpScroll = false
+        grid.anchorToNow(now)
+        com.aeriotv.android.ui.tv.TvFocusTrace.guide(
+            "anchor-at-now resumes=$foregroundStarts tabEntries=$tabEntries viewportBefore=$before " +
+                "viewportAfter=${grid.viewportStartMs} behindMin=${(now - before) / 60_000L} rows=${grid.rows.size}",
+        )
+    }
 
     val gridFocus = remember { FocusRequester() }
     val pillsFocus = remember { FocusRequester() }
@@ -1090,9 +1142,25 @@ fun GuideScreen(
                 },
             )
         }
+        val pillsContext = androidx.compose.ui.platform.LocalContext.current
         if (isTv && !sidebarGroupMode && !favoritesOnly) GroupPills(
             onManageGroups = { showManageGroups = true },
             hiddenGroupCount = hiddenGroups.size,
+            defaultToken = defaultGroupToken,
+            onSetDefault = { token ->
+                // Brief confirmation (Logan 2026-10-10); the pin on the pill
+                // is the lasting mark. Same toggle as the sidebar rows:
+                // holding the current default clears it.
+                val clearing = token == defaultGroupToken
+                val label = pillItems.firstOrNull { it.first == token }?.second ?: token
+                com.aeriotv.android.ui.tv.TvFocusTrace.guide("default group ${if (clearing) "cleared" else "set"} token=$token")
+                android.widget.Toast.makeText(
+                    pillsContext,
+                    if (clearing) "Default group cleared" else "Live TV opens on $label",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                viewModel.setDefaultGroup(token)
+            },
             items = pillItems,
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
@@ -1524,16 +1592,22 @@ private fun GroupPills(
     hiddenGroupCount: Int = 0,
     /** tvOS: the first pill's left edge sits on the program column. */
     leadInset: androidx.compose.ui.unit.Dp = 12.dp,
+    /** GH #81 default group: long OK on a pill sets/clears it (the same
+     *  toggle the sidebar rows use); the default pill carries a thumbtack. */
+    defaultToken: String = "",
+    onSetDefault: ((String) -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val topNav = com.aeriotv.android.feature.main.LocalTvTopNavFocusRequester.current
+    com.aeriotv.android.feature.livetv.RevealPrependedGroups(listState, items.map { it.first }, leadingItems = 1)
     // The row's focus entry used to be a requester on the FIRST pill only.
     // LazyRow disposes pills scrolled out of view, so once the user walked
     // right and picked a later group the first pill was gone, the requester
     // was unattached, and Up from the guide clock went nowhere (the user was
     // stuck on the clock). The requester now sits on the row itself (a focus
     // group) and entry is routed to the SELECTED pill, the tvOS behaviour.
-    val selectedIndex = items.indexOfFirst { it.first == selected }
+    // LazyRow index: the Manage Groups circle is item 0, pills follow.
+    val selectedIndex = items.indexOfFirst { it.first == selected }.let { if (it < 0) -1 else it + 1 }
     val selectedPillFocus = remember { FocusRequester() }
     var rowHasFocus by remember { mutableStateOf(false) }
     // A selection made from OUTSIDE the row (sidebar, remote shortcut) glides
@@ -1568,6 +1642,21 @@ private fun GroupPills(
             }
             .focusGroup(),
     ) {
+        // Logan 2026-10-10 (explicit decision): the round Manage Groups
+        // button sits to the LEFT of the first group pill on every pill row.
+        // Entry focus still goes to the SELECTED pill (selectedPillFocus);
+        // Left from the first pill lands here.
+        item(key = "__manage__") {
+            com.aeriotv.android.feature.livetv.TvManageGroupsCircle(
+                hiddenGroupsCount = hiddenGroupCount,
+                onClick = onManageGroups,
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
+                    },
+            )
+        }
         items(items, key = { it.first }) { (group, label) ->
             // TV chrome canon (ui/tv/TvChrome.kt): capsule, accent fill when
             // selected, white ring focused+selected / accent ring focused+
@@ -1579,22 +1668,12 @@ private fun GroupPills(
                 onClick = { onSelect(group) },
                 icon = if (group == com.aeriotv.android.feature.playlist.PlaylistViewModel.FAVORITES_GROUP) Icons.Filled.Star else null,
                 interactionSource = interaction,
+                onLongClick = onSetDefault?.let { set -> { set(group) } },
+                trailingPin = group == defaultToken ||
+                    (group == com.aeriotv.android.feature.playlist.PlaylistViewModel.ALL_GROUPS && defaultToken.isBlank()),
                 modifier = Modifier
                     .padding(end = 8.dp)
                     .then(if (group == selected) Modifier.focusRequester(selectedPillFocus) else Modifier)
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
-                    },
-            )
-        }
-        // tvOS (GH #57): the round Manage Groups button sits AFTER the last
-        // group so it reads as an action on the row, not another chip.
-        item(key = "__manage__") {
-            com.aeriotv.android.feature.livetv.TvManageGroupsCircle(
-                hiddenGroupsCount = hiddenGroupCount,
-                onClick = onManageGroups,
-                modifier = Modifier
-                    .padding(start = 0.dp)
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) onDown() else false
                     },

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -85,10 +86,17 @@ fun TvActionMenuDialog(
             shape = RoundedCornerShape(28.dp),
             color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-            modifier = Modifier.width(width),
+            // Long menus (the Multiview tile menu) used to run past the
+            // screen bottom with the last rows unreachable: cap the card at
+            // the screen and scroll the rows; focus moves bring the focused
+            // capsule into view.
+            modifier = Modifier.width(width)
+                .heightIn(max = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.92f).dp),
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+                modifier = Modifier
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -101,8 +109,9 @@ fun TvActionMenuDialog(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
-                actions.forEach { action ->
+                actions.forEachIndexed { i, action ->
                     TvMenuCapsule(
+                        isFirst = i == 0,
                         label = action.label,
                         enabled = action.enabled,
                         destructive = action.destructive,
@@ -111,6 +120,7 @@ fun TvActionMenuDialog(
                     )
                 }
                 TvMenuCapsule(
+                    isFirst = actions.isEmpty(),
                     label = "Cancel",
                     enabled = true,
                     destructive = false,
@@ -124,6 +134,7 @@ fun TvActionMenuDialog(
 
 @Composable
 private fun TvMenuCapsule(
+    isFirst: Boolean,
     label: String,
     enabled: Boolean,
     destructive: Boolean,
@@ -149,6 +160,10 @@ private fun TvMenuCapsule(
                 if (!it.isFocused) okLatched = false
             }
             .onPreviewKeyEvent { event ->
+                // Up on the first row stays put: there is nothing focusable
+                // above it, and letting the key through dropped focus out of
+                // the menu into empty space (Logan 2026-10-10, Streamer).
+                if (isFirst && event.key == Key.DirectionUp) return@onPreviewKeyEvent true
                 val isOk = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
                 if (!isOk) return@onPreviewKeyEvent false
                 when (event.type) {

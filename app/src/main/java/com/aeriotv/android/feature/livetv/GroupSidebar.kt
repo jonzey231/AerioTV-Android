@@ -140,6 +140,7 @@ internal fun GroupSidebarPanel(
 ) {
     val listState = rememberLazyListState()
     val manageFocus = remember { FocusRequester() }
+    RevealPrependedGroups(listState, groups)
     // Once a refocus ran, [initialFocus] follows that row instead of the
     // active one (a preview can make them differ).
     var focusTargetToken by remember { mutableStateOf<String?>(null) }
@@ -971,6 +972,39 @@ internal fun PhoneGroupDrawerHost(
                 onSetDefault = onSetDefault,
                 hiddenGroupCount = hiddenGroupCount,
             )
+        }
+    }
+}
+
+/**
+ * Item 2 (Logan 2026-10-10, Streamer): the Favorites group did not appear
+ * after the first favorite was added. The data was already reactive (Room
+ * flow -> favoriteIds -> orderGroups(hasFavorites)); the LIST hid it.
+ * Favorites is pinned in front of All, and a Lazy list keeps its first
+ * visible item by KEY when an item is inserted in front of it, so the new
+ * row landed one slot above the viewport. When a token appears in front of
+ * the previous first token and the list was showing that first token,
+ * scroll back to the start so the new group is on screen.
+ * [leadingItems] counts non-group items ahead of the tokens (the pill row's
+ * Manage Groups circle).
+ */
+@androidx.compose.runtime.Composable
+internal fun RevealPrependedGroups(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    tokens: List<String>,
+    leadingItems: Int = 0,
+) {
+    val previousFirst = remember { arrayOfNulls<String>(1) }
+    val first = tokens.firstOrNull()
+    LaunchedEffect(first) {
+        val old = previousFirst[0]
+        previousFirst[0] = first
+        if (old == null || first == null || old == first) return@LaunchedEffect
+        val oldIndex = tokens.indexOf(old)
+        if (oldIndex <= 0) return@LaunchedEffect
+        if (listState.firstVisibleItemIndex <= oldIndex + leadingItems) {
+            android.util.Log.i("AerioFocus", "[GROUPS] prepended $first before $old; revealing list start")
+            listState.scrollToItem(0)
         }
     }
 }

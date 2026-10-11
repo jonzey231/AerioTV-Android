@@ -319,17 +319,22 @@ fun GuideGrid(
                     if (down) {
                         val rc = native?.repeatCount ?: 0
                         if (rc == 0) clockOkHeld = false
-                        else if (!clockOkHeld && (rc >= HOLD_LEFT_REPEATS || native?.isLongPress == true)) { clockOkHeld = true; onOpenJumpToDay() }
+                        else if (!clockOkHeld && (rc >= HOLD_LEFT_REPEATS || native?.isLongPress == true)) {
+                            clockOkHeld = true
+                            android.util.Log.i("AerioGuide", "[GUIDE] clock long press: Jump To Day")
+                            onOpenJumpToDay()
+                        }
                     } else {
-                        // Plain Select opens Jump To Day, the same as the long
-                        // press and the same as a tap on touch (Logan
-                        // 2026-09-19). While a jump is ACTIVE the cell shows
-                        // the jump target and Select returns to now instead,
-                        // so the one-press way back is not lost. Left/Right
-                        // and the clock cursor itself are untouched: the
-                        // locked D-pad rule is only about movement.
+                        // Plain Select returns the guide to now; the long
+                        // press opens Jump To Day (Logan 2026-10-10, the
+                        // tvOS EPGGuideView clock: onTap snapToNow,
+                        // onLongPress showJumpSheet). The clock keeps the
+                        // cursor, as tvOS keeps focus on the cell. Left/Right
+                        // are untouched: the locked D-pad rule is only about
+                        // movement.
                         if (!clockOkHeld) {
-                            if (jumpLabel != null) { clockSelected = false; onClockTap() } else onOpenJumpToDay()
+                            android.util.Log.i("AerioGuide", "[GUIDE] clock select: back to now")
+                            onClockTap()
                         }
                         clockOkHeld = false
                     }
@@ -666,7 +671,7 @@ private fun TimeHeader(
                 .then(
                     if (isTv) Modifier
                     else Modifier.combinedClickable(
-                        onClick = { if (jumpLabel != null) onClockTap() else onOpenJumpToDay() },
+                        onClick = onClockTap,
                         onLongClick = onOpenJumpToDay,
                     ),
                 ),

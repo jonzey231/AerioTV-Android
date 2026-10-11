@@ -524,7 +524,9 @@ fun ChannelListScreen(
                         )
                     }
                 }
-                item {
+                // Logan 2026-10-10 (explicit decision): Manage Groups sits to
+                // the LEFT of the first group pill.
+                item(key = "__manage__") {
                     Box(
                         modifier = Modifier
                             .size(36.dp)

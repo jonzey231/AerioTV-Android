@@ -235,6 +235,7 @@ fun MultiviewScreen(
     // Playback submenu (iOS parity 2026-08-28): per-tile RW/Pause/FF +
     // conditional Return to Live, opened from the tile menu.
     var playbackMenuIndex by remember { mutableStateOf<Int?>(null) }
+    var layoutMenuOpen by remember { mutableStateOf(false) }
     // Exit Multiview defers the store clear to disposal (see the menu
     // action) so the grid never shows the empty placeholder mid-pop.
     val exitClearRequested = remember { mutableStateOf(false) }
@@ -432,7 +433,7 @@ fun MultiviewScreen(
                 style = MaterialTheme.typography.bodyMedium.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            CloseButton(onClose = onClose)
+            if (!isTvDevice) CloseButton(onClose = onClose)
         }
         return
     }
@@ -598,7 +599,9 @@ fun MultiviewScreen(
             },
         )
 
-        if (chromeVisible) {
+        // TV has no Close X (Apple tvOS Multiview has none; Logan
+        // 2026-10-10): Back runs the same cascade. Touch keeps the X.
+        if (chromeVisible && !isTvDevice) {
             CloseButton(onClose = {
                 // Close X cascades through transient modes before fully
                 // exiting multiview: cancel relocate -> exit fullscreen ->
@@ -746,13 +749,12 @@ fun MultiviewScreen(
         )
     }
 
-    // Tile context menu: the Android port of tvOS MultiviewTileView.
-    // tileContextMenu (MultiviewTileView.swift 428-496). Same action order:
-    // Make Audio (hidden on the audio tile), Full-Screen in Grid, Spotlight,
-    // Audio Track (audio tile only, >1 track), Subtitle Track (only when
-    // tracks exist), Move Tile, Remove (destructive). Opened by long-OK on a
-    // tile; only reachable from the grid (the key handler is gated off in
-    // fullscreen), so no "Exit Full-Screen" row is needed -- BACK exits.
+    // Tile context menu: the Android port of tvOS MultiviewTileView
+    // tileContextMenu. Same items and order (see the list below); Layout is
+    // ONE row opening a shape submenu and the track rows live in Playback, so
+    // every row fits. Opened by long-OK on a tile; only reachable from the
+    // grid (the key handler is gated off in fullscreen), so no "Exit
+    // Full-Screen" row is needed -- BACK exits.
     // GH #125 (Apple 5e34cf6 parity): per-tile Switch Stream on the LOCAL
     // tile menu, the same wording and gate as the composite preview menu.
     // Shown only for a Dispatcharr live channel on an account that may switch
@@ -775,55 +777,44 @@ fun MultiviewScreen(
     val menuTile = menuIdx?.let { selected.getOrNull(it) }
     if (menuIdx != null && menuTile != null) {
         val isSpotlit = spotlightId == menuTile.id
-        // Track lists evaluated at menu-open, the same way tvOS hides the
-        // rows when the tile reports nothing.
-        val menuPlayer = tilePlayers[menuIdx]
-        val menuSubtitleTracks = remember(menuIdx, menuTile.id) {
-            menuPlayer?.readSubtitleTracks().orEmpty()
-        }
-        val menuAudioTracks = remember(menuIdx, menuTile.id) {
-            // Selecting audio on a non-focused tile is moot (its audio track
-            // type is disabled by the budget gate), so only the audio tile
-            // offers the row.
-            if (menuIdx == focused) menuPlayer?.readAudioTracks().orEmpty() else emptyList()
-        }
         TvActionMenuDialog(
             title = menuTile.displayName,
             actions = buildList {
-                // Select (long-OK) opens this menu, so "Add streams" must live
-                // here too -- it previously existed ONLY behind the Back exit
-                // dialog. Same re-entrant picker; the store APPENDS.
-                if (selected.size < storeHandle.maxTiles) {
-                    add(
-                        TvMenuAction(
-                            label = "Add Channel",
-                            icon = Icons.Filled.Add,
-                            onClick = { addPickerOpen = true },
-                        ),
-                    )
-                }
-                // Swap Stream: re-point THIS tile at something else through
-                // the very same picker as "Add streams". No cap check here -
-                // the grid does not grow, so the tile count is unchanged.
-                // Playback submenu (iOS parity): RW 60s / Pause / FF 60s /
-                // conditional Return to Live for THIS tile's player.
+                // Apple tvOS tileContextMenu order (MultiviewTileView.swift):
+                // Remove, Move Tile, Playback, Switch Stream, Change Channel,
+                // Add Channel, Full-Screen in Grid, Spotlight, Layout. Audio
+                // and subtitle tracks live inside Playback, as on Apple.
+                add(
+                    TvMenuAction(
+                        label = "Remove",
+                        icon = Icons.Outlined.Close,
+                        destructive = true,
+                        onClick = {
+                            // iOS MultiviewStore.remove(id:) semantics: audio
+                            // promotes in removeAt; ALL position-keyed screen
+                            // state (spotlight, relocate, fullscreen, overlay
+                            // sets) reconciles in removeTileAt.
+                            val removingLast = selected.size <= 1
+                            removeTileAt(menuIdx)
+                            if (removingLast) onClose()
+                        },
+                    ),
+                )
+                add(
+                    TvMenuAction(
+                        label = "Move Tile",
+                        icon = Icons.Filled.OpenWith,
+                        onClick = {
+                            relocatingIndex = menuIdx
+                            chromeVisible = true
+                        },
+                    ),
+                )
                 add(
                     TvMenuAction(
                         label = "Playback",
                         icon = Icons.Filled.PlayArrow,
                         onClick = { playbackMenuIndex = menuIdx },
-                    ),
-                )
-                // "Change Channel" (nee Swap Stream, renamed with iOS
-                // 2026-08-28 - it re-points the tile at another CHANNEL).
-                add(
-                    TvMenuAction(
-                        label = "Change Channel",
-                        icon = Icons.Filled.SwapHoriz,
-                        onClick = {
-                            swapTargetTileId = menuTile.id
-                            addPickerOpen = true
-                        },
                     ),
                 )
                 val switchCh = if (mvCanSwitchStream) tileSwitchChannel(menuTile) else null
@@ -864,6 +855,27 @@ fun MultiviewScreen(
                         ),
                     )
                 }
+                // "Change Channel" (nee Swap Stream, renamed with iOS
+                // 2026-08-28 - it re-points the tile at another CHANNEL).
+                add(
+                    TvMenuAction(
+                        label = "Change Channel",
+                        icon = Icons.Filled.SwapHoriz,
+                        onClick = {
+                            swapTargetTileId = menuTile.id
+                            addPickerOpen = true
+                        },
+                    ),
+                )
+                if (selected.size < storeHandle.maxTiles) {
+                    add(
+                        TvMenuAction(
+                            label = "Add Channel",
+                            icon = Icons.Filled.Add,
+                            onClick = { addPickerOpen = true },
+                        ),
+                    )
+                }
                 add(
                     TvMenuAction(
                         label = "Full-Screen in Grid",
@@ -880,7 +892,7 @@ fun MultiviewScreen(
                 )
                 add(
                     TvMenuAction(
-                        label = if (isSpotlit) "Remove Spotlight" else "Spotlight This Tile",
+                        label = if (isSpotlit) "Remove Spotlight" else "Spotlight",
                         icon = Icons.Filled.ViewSidebar,
                         onClick = {
                             if (isSpotlit) {
@@ -894,98 +906,23 @@ fun MultiviewScreen(
                         },
                     ),
                 )
-                // Issue #48: grid SHAPE picker. Grid-wide (any tile sets the
-                // shared, persisted layout); only appears where a real alternative
-                // shape exists (3/5 Even Grid, 6 Hero + Corner). Spotlight is not a
-                // shape here -- it is the per-tile "Spotlight This Tile" action
-                // above. The active shape shows a checkmark; picking any shape
-                // clears the per-tile spotlight so a leftover hero can't override
-                // the chosen shape and make the switch a no-op.
-                val availableModes = MultiviewLayoutMode.available(selected.size)
-                // Checkmark = the layout actually being RENDERED. Hero + Corner
-                // away from 6 tiles falls back to the Default table, so mark
-                // Default active there. Even Grid renders at any count, so when it
-                // is persisted but not offered (e.g. grown to 7 tiles) NO row is
-                // checkmarked -- never mislabeling Default while a non-default grid
-                // is on screen.
-                val effectiveMode =
-                    if (layoutMode == MultiviewLayoutMode.HeroCorner &&
-                        layoutMode !in availableModes
-                    ) MultiviewLayoutMode.Auto else layoutMode
-                availableModes.forEach { mode ->
-                    val activeMode = effectiveMode == mode
+                // Layout (Apple tvOS parity): ONE "Layout: <current>" row that
+                // opens the shape submenu, instead of a row per shape. Issue
+                // #48 rules live in the submenu below.
+                val rowModes = MultiviewLayoutMode.available(selected.size)
+                if (rowModes.isNotEmpty()) {
+                    // The label names the layout actually rendered (Hero +
+                    // Corner away from 6 tiles renders Default).
+                    val shown = if (layoutMode == MultiviewLayoutMode.HeroCorner && layoutMode !in rowModes)
+                        MultiviewLayoutMode.Auto else layoutMode
                     add(
                         TvMenuAction(
-                            label = "Layout: ${mode.displayName}",
-                            icon = if (activeMode) Icons.Filled.Check else mode.menuIcon(),
-                            onClick = {
-                                settingsVm.setMultiviewLayoutMode(mode.key)
-                                spotlightId = null
-                            },
+                            label = "Layout: ${shown.displayName}",
+                            icon = layoutMode.menuIcon(),
+                            onClick = { layoutMenuOpen = true },
                         ),
                     )
                 }
-                if (menuAudioTracks.size > 1) {
-                    add(
-                        TvMenuAction(
-                            label = "Audio Track",
-                            icon = Icons.Filled.Audiotrack,
-                            onClick = { audioTrackTileIndex = menuIdx },
-                        ),
-                    )
-                }
-                if (menuSubtitleTracks.isNotEmpty()) {
-                    add(
-                        TvMenuAction(
-                            label = "Subtitle Track",
-                            icon = Icons.Filled.Subtitles,
-                            onClick = { subtitleTileIndex = menuIdx },
-                        ),
-                    )
-                }
-                // Item #16: scrubber toggle, VOD/DVR only (Live has no finite
-                // duration). Toggles this tile's position in scrubberTiles;
-                // the overlay (sibling of Tile in TileGrid) reads/seeks the
-                // already-hoisted tilePlayers[menuIdx].
-                if (menuTile.kind == TileKind.Vod || menuTile.kind == TileKind.Dvr) {
-                    val scrubOn = menuIdx in scrubberTiles
-                    add(
-                        TvMenuAction(
-                            label = if (scrubOn) "Hide Scrubber" else "Show Scrubber",
-                            icon = Icons.Filled.Timeline,
-                            onClick = {
-                                scrubberTiles = if (scrubOn) scrubberTiles - menuIdx
-                                else scrubberTiles + menuIdx
-                            },
-                        ),
-                    )
-                }
-                add(
-                    TvMenuAction(
-                        label = "Move Tile",
-                        icon = Icons.Filled.OpenWith,
-                        onClick = {
-                            relocatingIndex = menuIdx
-                            chromeVisible = true
-                        },
-                    ),
-                )
-                add(
-                    TvMenuAction(
-                        label = "Remove",
-                        icon = Icons.Outlined.Close,
-                        destructive = true,
-                        onClick = {
-                            // iOS MultiviewStore.remove(id:) semantics: audio
-                            // promotes in removeAt; ALL position-keyed screen
-                            // state (spotlight, relocate, fullscreen, overlay
-                            // sets) reconciles in removeTileAt.
-                            val removingLast = selected.size <= 1
-                            removeTileAt(menuIdx)
-                            if (removingLast) onClose()
-                        },
-                    ),
-                )
             },
             guard = tileMenuGuard,
             onDismiss = { tileMenuIndex = null },
@@ -1090,9 +1027,72 @@ fun MultiviewScreen(
                         ),
                     )
                 }
+                // Track rows sit inside Playback (Apple tvOS parity). Audio
+                // Track only on the audio tile: other tiles' audio renderers
+                // are disabled by the budget gate.
+                if (pbIdx == focused && (pbPlayer?.readAudioTracks()?.size ?: 0) > 1) {
+                    add(
+                        TvMenuAction(
+                            label = "Audio Track",
+                            icon = Icons.Filled.Audiotrack,
+                            onClick = { audioTrackTileIndex = pbIdx },
+                        ),
+                    )
+                }
+                if (pbPlayer?.readSubtitleTracks()?.isNotEmpty() == true) {
+                    add(
+                        TvMenuAction(
+                            label = "Subtitle Track",
+                            icon = Icons.Filled.Subtitles,
+                            onClick = { subtitleTileIndex = pbIdx },
+                        ),
+                    )
+                }
+                // Item #16: scrubber toggle, VOD/DVR only.
+                if (pbTile.kind == TileKind.Vod || pbTile.kind == TileKind.Dvr) {
+                    val scrubOn = pbIdx in scrubberTiles
+                    add(
+                        TvMenuAction(
+                            label = if (scrubOn) "Hide Scrubber" else "Show Scrubber",
+                            icon = Icons.Filled.Timeline,
+                            onClick = {
+                                scrubberTiles = if (scrubOn) scrubberTiles - pbIdx
+                                else scrubberTiles + pbIdx
+                            },
+                        ),
+                    )
+                }
             },
             guard = tileMenuGuard,
             onDismiss = { playbackMenuIndex = null },
+        )
+    }
+
+    // Layout submenu (Apple tvOS "Layout: <current>" Menu). Issue #48:
+    // grid-wide shape, only shapes that exist for this tile count. The
+    // checkmark is the layout actually RENDERED: Hero + Corner away from 6
+    // tiles falls back to Default, and a persisted Even Grid that is no
+    // longer offered checks nothing. Picking any shape clears the per-tile
+    // spotlight so a leftover hero cannot make the switch a no-op.
+    if (layoutMenuOpen) {
+        val availableModes = MultiviewLayoutMode.available(selected.size)
+        val effectiveMode =
+            if (layoutMode == MultiviewLayoutMode.HeroCorner && layoutMode !in availableModes)
+                MultiviewLayoutMode.Auto else layoutMode
+        TvActionMenuDialog(
+            title = "Layout",
+            actions = availableModes.map { mode ->
+                TvMenuAction(
+                    label = mode.displayName,
+                    icon = if (effectiveMode == mode) Icons.Filled.Check else mode.menuIcon(),
+                    onClick = {
+                        settingsVm.setMultiviewLayoutMode(mode.key)
+                        spotlightId = null
+                    },
+                )
+            },
+            guard = tileMenuGuard,
+            onDismiss = { layoutMenuOpen = false },
         )
     }
 
@@ -2065,6 +2065,11 @@ private fun ExoTile(
 ) {
     val url = tile.resolvedUrl
     val channelName = tile.displayName
+    // A Move Tile swap re-points this positional tile in place; the factory's
+    // TileStats runnable must log the CURRENT channel, not the one the tile
+    // opened with (the 2026-10-10 freeze log had every swapped tile's stats
+    // under the other tile's name).
+    val channelNameNow = androidx.compose.runtime.rememberUpdatedState(channelName)
     // Live tiles use the grid's headers; VOD/DVR carry their own per-tile auth.
     val headers = if (tile.kind == TileKind.Live) gridHeaders else tile.httpHeaders
     val isVod = tile.kind == TileKind.Vod
@@ -2165,9 +2170,25 @@ private fun ExoTile(
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build()
             } else {
-                val minBufferMs = maxOf(5_000, cachingMs)
+                // Logan 2026-10-10 (mv5min.log, Streamer): a live tile stalled
+                // 6 times in 5 min, each time its buffer drained to ~120 ms,
+                // because Dispatcharr sends in 8 to 9.5 s bursts and the tile
+                // kept 5 s and resumed on 3 s. Same rule as the composite cast
+                // tiles (MultiviewCompositor TILE_*_BUFFER_MS, cf285e3f): keep
+                // and resume on a full burst gap (10 s). Max 20 s (not the
+                // composite's 30 s) bounds memory with 4+ tiles on the
+                // Streamer: about 20 MB a tile at 8 Mbps. Start stays short so
+                // opening a tile is not gated on 10 s; Apple tvOS tiles get the
+                // same cushion from their live join offset (TSHLSRemuxer
+                // [AVP-MV] offset, 3x target duration plus the stream buffer).
+                val minBufferMs = maxOf(LIVE_TILE_MIN_BUFFER_MS, cachingMs)
                 DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(minBufferMs, maxOf(15_000, minBufferMs), 1_000, 3_000)
+                    .setBufferDurationsMs(
+                        minBufferMs,
+                        maxOf(LIVE_TILE_MAX_BUFFER_MS, minBufferMs),
+                        LIVE_TILE_START_BUFFER_MS,
+                        LIVE_TILE_REBUFFER_MS,
+                    )
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build()
             }
@@ -2243,6 +2264,9 @@ private fun ExoTile(
                     // Always-on tune/stall/feed tracer (tag AerioTrace).
                     addAnalyticsListener(tracer.analyticsListener)
                     tracer.tracedPlayer = this
+                    // Per-frame render cadence for the [PERF] line: tiles never
+                    // installed it, so every tile logged render=0.0fps.
+                    setVideoFrameMetadataListener(tracer.frameMetadataListener())
                     // Audio focus is a VOLUME flip, never a track toggle
                     // (Logan 2026-09-02: switching the focused tile froze the
                     // stream for a moment). Disabling/enabling the audio track
@@ -2286,7 +2310,7 @@ private fun ExoTile(
                                 lastDropped = c.droppedBufferCount; lastRendered = c.renderedOutputBufferCount
                                 lastOffsetUs = c.totalVideoFrameProcessingOffsetUs; lastOffsetCount = c.videoFrameProcessingOffsetCount
                                 val avgMs = if (offN > 0) offUs / offN / 1000.0 else 0.0
-                                Log.i("TileStats", "$channelName audio=$audioStrategy dropped=$dropped frames=$rendered avgOffsetMs=${"%.1f".format(avgMs)} maxConsecDrop=${c.maxConsecutiveDroppedBufferCount}")
+                                Log.i("TileStats", "${channelNameNow.value} audio=$audioStrategy dropped=$dropped frames=$rendered avgOffsetMs=${"%.1f".format(avgMs)} maxConsecDrop=${c.maxConsecutiveDroppedBufferCount}")
                             }
                             if (!statsStopped.get()) statsHandler.postDelayed(this, 10_000L)
                         }
@@ -2515,6 +2539,41 @@ private fun ExoTile(
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 setPlayer(player)
             }
+            // API 33+ only: below that SurfaceView ignores clipBounds and the
+            // overscanned layer would spill over the neighboring tiles.
+            if (surfaceTiles && android.os.Build.VERSION.SDK_INT >= 33) {
+                // Green tile edges (Logan 2026-10-10, Streamer): a 720p
+                // channel decodes into a 1920x1088 adaptive buffer
+                // (SurfaceFlinger: geomBufferSize=[0 0 1920 1088]
+                // geomContentCrop=[0 0 1280 720], composition=DEVICE). The
+                // HWC scaler's filter taps past the content crop into
+                // unwritten buffer area (YUV 0 = green), drawing a 1 to 2 px
+                // green line along the tile edges. GPU screencaps never show
+                // it. Overscan the SurfaceView by TILE_SURFACE_OVERSCAN_PX on
+                // every side inside the content frame (clipChildren) so the
+                // layer's source crop starts a few texels inside the picture
+                // and the filter only ever reads real video.
+                (playerView.videoSurfaceView as? android.view.SurfaceView)?.let { sv ->
+                    val m = TILE_SURFACE_OVERSCAN_PX
+                    sv.layoutParams = android.widget.FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ).apply { setMargins(-m, -m, -m, -m) }
+                    // Parent clipChildren does NOT crop a SurfaceView layer
+                    // (measured: displayFrame grew 8 px per side, sourceCrop
+                    // unchanged). SurfaceView clip bounds do (API 33+): they
+                    // become the layer crop, so the source crop moves inside
+                    // the picture.
+                    sv.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+                        val w = r - l
+                        val h = b - t
+                        if (w > 2 * m && h > 2 * m) {
+                            val want = android.graphics.Rect(m, m, w - m, h - m)
+                            if (v.clipBounds != want) v.clipBounds = want
+                        }
+                    }
+                }
+            }
             if (surfaceTiles && tileScalingIsCrop) {
                 player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
             }
@@ -2618,9 +2677,38 @@ private fun ExoTile(
     LaunchedEffect(playerRef.value) {
         val p = playerRef.value ?: return@LaunchedEffect
         var lastItem: androidx.media3.common.MediaItem? = null
+        // Live-tile stall watchdog (Logan 2026-10-10, Streamer freeze log):
+        // a tile's loader stopped receiving bytes with no error and no clean
+        // end (last [FEED] gap 21:05:31, then nothing), so the tile sat in
+        // BUFFERING with frames=0 forever; only errors and clean ends ever
+        // reconnected. Buffering longer than TILE_STALL_REPRIME_MS (above the
+        // Dispatcharr proxy's measured 8 to 9.5 s burst cadence) re-primes
+        // the current URL through the same path as the overlay Retry.
+        var bufferingSinceMs = 0L
+        var bufferedAtCheckMs = 0L
         while (true) {
             kotlinx.coroutines.delay(1_000L)
             tracer.tick(p)
+            if (traceKind == "live" && p.playWhenReady &&
+                p.playbackState == androidx.media3.common.Player.STATE_BUFFERING &&
+                tileError.value == null && tileLimit.value == null
+            ) {
+                // Only a SILENT loader re-primes: a tile refilling toward the
+                // 10 s resume gate can buffer for two bursts (~19 s) while
+                // its buffer grows; that is progress, not a stall.
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val buffered = p.totalBufferedDuration
+                if (bufferingSinceMs == 0L || buffered > bufferedAtCheckMs + 500L) {
+                    bufferingSinceMs = nowMs
+                    bufferedAtCheckMs = buffered
+                } else if (nowMs - bufferingSinceMs >= TILE_STALL_REPRIME_MS) {
+                    Log.w(TAG, "[RECOVER] tile $channelName no buffer growth for ${nowMs - bufferingSinceMs}ms (buffered=${buffered}ms); re-priming")
+                    bufferingSinceMs = 0L
+                    tileRetryRef.value?.invoke()
+                }
+            } else {
+                bufferingSinceMs = 0L
+            }
             if (forcedHlsTile) {
                 // A new source (swap, retry, reconnect) is a new prime.
                 val item = p.currentMediaItem
@@ -2952,6 +3040,22 @@ private val tileAudioStrategyCached: String by lazy {
  * the TextureView path for comparison.
  */
 private val tileViewIsSurface: Boolean by lazy { readDebugProp("debug.aerio.tile_view") != "texture" }
+
+/**
+ * Pixels the tile SurfaceView extends past its content frame on each side
+ * (clipped away). Keeps the HWC scaler's filter taps inside the decoded
+ * picture so buffer padding never shows as a green edge.
+ */
+private const val TILE_SURFACE_OVERSCAN_PX = 4
+
+/** Live tile LoadControl (see the ExoTile factory): one Dispatcharr burst gap. */
+private const val LIVE_TILE_MIN_BUFFER_MS = 10_000
+private const val LIVE_TILE_MAX_BUFFER_MS = 20_000
+private const val LIVE_TILE_START_BUFFER_MS = 2_000
+private const val LIVE_TILE_REBUFFER_MS = 10_000
+
+/** BUFFERING with no buffer growth on a live tile before the watchdog re-primes it. */
+private const val TILE_STALL_REPRIME_MS = 15_000L
 
 /** Dev-only: `adb shell setprop debug.aerio.tile_scaling crop|fit` for SurfaceView tiles. */
 private val tileScalingIsCrop: Boolean by lazy { readDebugProp("debug.aerio.tile_scaling") == "crop" }
