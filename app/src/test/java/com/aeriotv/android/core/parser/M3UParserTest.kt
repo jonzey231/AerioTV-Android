@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class M3UParserTest {
 
@@ -103,5 +104,79 @@ class M3UParserTest {
 
         assertEquals(5000, channels.size)
         println("M3UParser benchmark for 5,000 channels: ${"%.2f".format(elapsedMs)} ms")
+    }
+
+    @Test
+    fun realDataM3UBenchmark() {
+        val file = java.io.File("/home/luke/.cache/Google/AndroidStudio2026.2.1/projects/aeriotv-android.f0381c01/.artifacts/fa34c772-b13c-4d60-a027-a33c21b632d7/scratch/test_feed.m3u")
+        if (!file.exists()) return
+
+        // Warm up
+        M3UParser.parseFile(file)
+
+        val times = mutableListOf<Double>()
+        var count = 0
+        for (i in 1..10) {
+            val start = System.nanoTime()
+            val channels = M3UParser.parseFile(file)
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+            times.add(elapsedMs)
+            count = channels.size
+        }
+
+        val avgMs = times.average()
+        println("=== REAL M3U BENCHMARK ===")
+        println("Parsed $count channels from real feed")
+        println("Average parse time: ${"%.2f".format(avgMs)} ms (min: ${"%.2f".format(times.minOrNull())} ms, max: ${"%.2f".format(times.maxOrNull())} ms)")
+    }
+
+    @Test
+    fun compareOldVsNewM3U() {
+        val file = File("/home/luke/.cache/Google/AndroidStudio2026.2.1/projects/aeriotv-android.f0381c01/.artifacts/fa34c772-b13c-4d60-a027-a33c21b632d7/scratch/test_feed.m3u")
+        if (!file.exists()) return
+
+        val lines = file.readLines().filter { it.startsWith("#EXTINF:") }
+
+        val regex = Regex("""([\w-]+)="([^"]*)"""")
+        fun parseExtInfOld(line: String) {
+            val result = mutableMapOf<String, String>()
+            val commaIndex = line.lastIndexOf(',')
+            if (commaIndex >= 0 && commaIndex < line.length - 1) {
+                result["name"] = line.substring(commaIndex + 1).trim()
+            }
+            for (match in regex.findAll(line)) {
+                val key = match.groupValues[1].lowercase()
+                val value = match.groupValues[2]
+                result[key] = value
+            }
+        }
+
+        // Warmup
+        repeat(5) {
+            lines.forEach { parseExtInfOld(it) }
+            M3UParser.parseFile(file)
+        }
+
+        // Measure OLD (Regex on #EXTINF lines)
+        val startOld = System.nanoTime()
+        repeat(100) {
+            lines.forEach { parseExtInfOld(it) }
+        }
+        val durationOld = (System.nanoTime() - startOld) / 1_000_000.0
+
+        // Measure NEW (Full M3UParser on real file)
+        val startNew = System.nanoTime()
+        repeat(100) {
+            M3UParser.parseFile(file)
+        }
+        val durationNew = (System.nanoTime() - startNew) / 1_000_000.0
+
+        val speedup = ((durationOld - durationNew) / durationOld) * 100.0
+        val ratio = durationOld / durationNew
+
+        println("=== REAL M3U PARSER COMPARISON (${lines.size} ExtInf Lines x 100 iterations) ===")
+        println("Old (Regex) Time: ${"%.2f".format(durationOld)} ms")
+        println("New (Zero-Regex Scanner) Time: ${"%.2f".format(durationNew)} ms")
+        println("Speedup: ${"%.1f".format(speedup)}% faster (${"%.2f".format(ratio)}x speedup)")
     }
 }

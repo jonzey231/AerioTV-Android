@@ -335,7 +335,7 @@ object XMLTVParser {
         return null to null
     }
 
-    private fun parseXMLTVDate(raw: String): Long? {
+    internal fun parseXMLTVDate(raw: String): Long? {
         val s = raw.trim()
         if (s.isEmpty()) return null
 
