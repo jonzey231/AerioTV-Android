@@ -7,7 +7,7 @@ import com.aeriotv.android.core.data.M3UChannel
  * (lines 16-105) to Kotlin. Matches algorithm and edge-case handling line-for-line:
  *  - Line-by-line scan with lookahead for the URL line after #EXTINF
  *  - Skip blank lines and # comments between #EXTINF and its URL
- *  - Attributes parsed by regex `([\w-]+)="([^"]*)"`, keys lowercased
+ *  - Attributes parsed by zero-allocation character-index scanner, keys lowercased
  *  - Display name comes from text after the last comma in the #EXTINF line
  *  - Aggressive whitespace trimming on every candidate line
  *  - UTF-8 first, fall back to ISO-8859-1 (handled by [parseBytes])
@@ -209,7 +209,7 @@ object M3UParser {
         )
     }
 
-    private fun parseExtInf(line: String): Map<String, String> {
+    internal fun parseExtInf(line: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
 
         val commaIndex = line.lastIndexOf(',')

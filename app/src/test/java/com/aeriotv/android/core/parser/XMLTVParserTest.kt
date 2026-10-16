@@ -3,6 +3,8 @@ package com.aeriotv.android.core.parser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Ignore
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -132,13 +134,14 @@ class XMLTVParserTest {
     }
 
     @Test
+    @Ignore("Manual benchmark test")
     fun realDataXMLTVBenchmark() {
         val file = java.io.File("/home/luke/.cache/Google/AndroidStudio2026.2.1/projects/aeriotv-android.f0381c01/.artifacts/fa34c772-b13c-4d60-a027-a33c21b632d7/scratch/test_feed.xml")
-        if (!file.exists()) return
+        assumeTrue("Real feed test file missing", file.exists())
 
         val times = mutableListOf<Double>()
         var count = 0
-        for (i in 1..3) {
+        for (runIdx in 1..3) {
             val start = System.nanoTime()
             val progs = XMLTVParser.parseFile(file)
             val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
@@ -153,6 +156,7 @@ class XMLTVParserTest {
     }
 
     @Test
+    @Ignore("Manual benchmark test")
     fun compareOldVsNewXMLTVDate() {
         val dates = listOf("20260912140000 +0000", "20260912140000 -0500", "20260912140000 +0200", "20260912140000")
 
