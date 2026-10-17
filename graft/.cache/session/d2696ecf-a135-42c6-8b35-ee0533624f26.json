@@ -1,0 +1,10 @@
+{
+  "lastQuery": "are the perf changes on this branch..good?",
+  "perAgentQuery": {},
+  "graftReads": 0,
+  "sourceReads": 4,
+  "savedTokens": 0,
+  "injectedPointers": [],
+  "nudges": 0,
+  "host": "claude-code"
+}

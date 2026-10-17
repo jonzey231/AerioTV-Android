@@ -7,7 +7,7 @@ import com.aeriotv.android.core.data.M3UChannel
  * (lines 16-105) to Kotlin. Matches algorithm and edge-case handling line-for-line:
  *  - Line-by-line scan with lookahead for the URL line after #EXTINF
  *  - Skip blank lines and # comments between #EXTINF and its URL
- *  - Attributes parsed by regex `([\w-]+)="([^"]*)"`, keys lowercased
+ *  - Attributes parsed by zero-allocation character-index scanner, keys lowercased
  *  - Display name comes from text after the last comma in the #EXTINF line
  *  - Aggressive whitespace trimming on every candidate line
  *  - UTF-8 first, fall back to ISO-8859-1 (handled by [parseBytes])
@@ -17,7 +17,6 @@ import com.aeriotv.android.core.data.M3UChannel
  */
 object M3UParser {
 
-    private val ATTRIBUTE_REGEX = Regex("""([\w-]+)="([^"]*)"""")
 
     /**
      * GH #31: the ONLY attribute keys anything reads back off
@@ -210,7 +209,7 @@ object M3UParser {
         )
     }
 
-    private fun parseExtInf(line: String): Map<String, String> {
+    internal fun parseExtInf(line: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
 
         val commaIndex = line.lastIndexOf(',')
@@ -218,12 +217,38 @@ object M3UParser {
             result["name"] = line.substring(commaIndex + 1).trim()
         }
 
-        for (match in ATTRIBUTE_REGEX.findAll(line)) {
-            val key = match.groupValues[1].lowercase()
-            val value = match.groupValues[2]
-            result[key] = value
+        val limit = if (commaIndex >= 0) commaIndex else line.length
+        var i = 0
+        while (i < limit) {
+            val equalsIndex = line.indexOf('=', i)
+            if (equalsIndex < 0 || equalsIndex >= limit) break
+
+            if (equalsIndex + 1 < limit && line[equalsIndex + 1] == '"') {
+                var keyStart = equalsIndex - 1
+                while (keyStart >= i && isKeyChar(line[keyStart])) {
+                    keyStart--
+                }
+                keyStart++
+
+                if (keyStart < equalsIndex) {
+                    val valStart = equalsIndex + 2
+                    val valEnd = line.indexOf('"', valStart)
+                    if (valEnd in valStart until limit) {
+                        val key = line.substring(keyStart, equalsIndex).lowercase()
+                        val value = line.substring(valStart, valEnd)
+                        result[key] = value
+                        i = valEnd + 1
+                        continue
+                    }
+                }
+            }
+            i = equalsIndex + 1
         }
 
         return result
+    }
+
+    private fun isKeyChar(c: Char): Boolean {
+        return c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '_' || c == '-'
     }
 }

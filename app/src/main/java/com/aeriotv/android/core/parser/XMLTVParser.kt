@@ -135,7 +135,13 @@ object XMLTVParser {
          *  knows the returned list is a FRAGMENT of the feed. */
         truncated: java.util.concurrent.atomic.AtomicBoolean? = null,
     ): List<EPGProgramme> {
-        val parser = Xml.newPullParser()
+        val parser: XmlPullParser = try {
+            Xml.newPullParser()
+        } catch (_: Throwable) {
+            // Android SDK android.util.Xml stubs throw RuntimeException in pure JVM unit tests;
+            // fall back to kxml2 parser via reflection for test execution.
+            (java.lang.Class.forName("org.kxml2.io.KXmlParser").getDeclaredConstructor().newInstance() as XmlPullParser)
+        }
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
         parser.setInput(input, null)
 
@@ -183,10 +189,12 @@ object XMLTVParser {
             if (shouldAbort != null && ++eventsSinceCheck >= ABORT_CHECK_EVERY) {
                 eventsSinceCheck = 0
                 if (shouldAbort()) {
-                    android.util.Log.w(
-                        "XMLTVParser",
-                        "parse aborted by budget; keeping ${out.size} programmes parsed so far",
-                    )
+                    runCatching {
+                        android.util.Log.w(
+                            "XMLTVParser",
+                            "parse aborted by budget; keeping ${out.size} programmes parsed so far",
+                        )
+                    }
                     // Tell the caller this list is a FRAGMENT. A partial
                     // feed must not be treated as authoritative for the
                     // channels it happens to mention, or the cache merge
@@ -329,11 +337,72 @@ object XMLTVParser {
         return null to null
     }
 
-    private fun parseXMLTVDate(raw: String): Long? {
+    internal fun parseXMLTVDate(raw: String): Long? {
         val s = raw.trim()
         if (s.isEmpty()) return null
+
+        val fastParsed = parseXMLTVDateFast(s)
+        if (fastParsed != null) return fastParsed
+
         runCatching { return xmltvFmtTz.get()!!.parse(s)?.time }
         runCatching { return xmltvFmtUtc.get()!!.parse(s)?.time }
         return null
+    }
+
+    private fun parseXMLTVDateFast(s: String): Long? {
+        if (s.length < 14) return null
+
+        for (idx in 0 until 14) {
+            if (s[idx] !in '0'..'9') return null
+        }
+
+        val year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0')
+        val month = (s[4] - '0') * 10 + (s[5] - '0')
+        val day = (s[6] - '0') * 10 + (s[7] - '0')
+        val hour = (s[8] - '0') * 10 + (s[9] - '0')
+        val minute = (s[10] - '0') * 10 + (s[11] - '0')
+        val second = (s[12] - '0') * 10 + (s[13] - '0')
+
+        if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+            return null
+        }
+
+        var zoneOffset = java.time.ZoneOffset.UTC
+        if (s.length > 14) {
+            val rest = s.substring(14).trim()
+            if (rest.isNotEmpty() && rest != "Z" && rest != "+0000" && rest != "-0000" && rest != "+00:00") {
+                val signIndex = if (rest[0] == '+' || rest[0] == '-') 0 else -1
+                if (signIndex == 0 && rest.length >= 5) {
+                    val isNeg = rest[0] == '-'
+                    val h1 = rest[1] - '0'
+                    val h2 = rest[2] - '0'
+                    if (h1 in 0..9 && h2 in 0..9) {
+                        val hours = h1 * 10 + h2
+                        if (hours in 0..23) {
+                            val mOffset = if (rest[3] == ':') {
+                                if (rest.length >= 6 && rest[4] in '0'..'9' && rest[5] in '0'..'9') {
+                                    val m = (rest[4] - '0') * 10 + (rest[5] - '0')
+                                    if (m in 0..59) hours * 60 + m else null
+                                } else null
+                            } else if (rest[3] in '0'..'9' && rest[4] in '0'..'9') {
+                                val m = (rest[3] - '0') * 10 + (rest[4] - '0')
+                                if (m in 0..59) hours * 60 + m else null
+                            } else null
+
+                            if (mOffset != null) {
+                                val totalSeconds = if (isNeg) -mOffset * 60 else mOffset * 60
+                                runCatching { zoneOffset = java.time.ZoneOffset.ofTotalSeconds(totalSeconds) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return runCatching {
+            java.time.LocalDateTime.of(year, month, day, hour, minute, second)
+                .toInstant(zoneOffset)
+                .toEpochMilli()
+        }.getOrNull()
     }
 }

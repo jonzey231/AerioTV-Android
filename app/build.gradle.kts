@@ -229,6 +229,7 @@ dependencies {
 
     // Pure-JVM unit tests for the cast HLS proxy remuxer (test scope only).
     testImplementation(libs.junit)
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.ktor.client.core)
