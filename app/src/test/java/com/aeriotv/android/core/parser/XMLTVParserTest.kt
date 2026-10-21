@@ -7,9 +7,28 @@ import org.junit.Assume.assumeTrue
 import org.junit.Ignore
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 class XMLTVParserTest {
+
+    // JVM unit tests: android.util.Xml.newPullParser() is a stub that throws,
+    // so the parser comes from kxml2 (test classpath) here -- the fallback
+    // deliberately lives in this test setup, not in production code.
+    private fun parseXmltv(
+        input: InputStream,
+        knownChannelKeys: Set<String>? = null,
+        shouldAbort: (() -> Boolean)? = null,
+        truncated: AtomicBoolean? = null,
+    ) = XMLTVParser.parseWith(
+        org.kxml2.io.KXmlParser().apply {
+            setFeature(org.xmlpull.v1.XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+            setInput(input, null)
+        },
+        knownChannelKeys,
+        shouldAbort,
+        truncated,
+    )
 
     @Test
     fun parseProgrammeWithBadgesAndMetadata() {
@@ -29,7 +48,7 @@ class XMLTVParserTest {
             </tv>
         """.trimIndent()
 
-        val progs = XMLTVParser.parse(ByteArrayInputStream(xml.toByteArray()))
+        val progs = parseXmltv(ByteArrayInputStream(xml.toByteArray()))
         assertEquals(1, progs.size)
 
         val p = progs[0]
@@ -61,11 +80,40 @@ class XMLTVParserTest {
             </tv>
         """.trimIndent()
 
-        val progs = XMLTVParser.parse(ByteArrayInputStream(xml.toByteArray()))
+        val progs = parseXmltv(ByteArrayInputStream(xml.toByteArray()))
         assertEquals(3, progs.size)
         assertNotNull(progs[0].startMillis)
         assertNotNull(progs[1].startMillis)
         assertNotNull(progs[2].startMillis)
+    }
+
+    @Test
+    fun namedZoneDatesFallBackAndAreNotUTC() {
+        // The fast path can only handle numeric offsets; a named zone like
+        // EST must fall back to SimpleDateFormat, which resolves it to
+        // UTC-05:00 -- NOT silently parse as UTC.
+        val expected = java.text.SimpleDateFormat("yyyyMMddHHmmss Z", java.util.Locale.US)
+            .parse("20260912140000 EST")!!.time
+        val parsed = XMLTVParser.parseXMLTVDate("20260912140000 EST")
+
+        assertEquals(expected, parsed)
+        val utc = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }.parse("20260912140000")!!.time
+        assertTrue("EST must not collapse to UTC", parsed != utc)
+
+        // And end-to-end through the parser.
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <tv>
+              <programme start="20260912140000 EST" stop="20260912150000 EST" channel="ch1">
+                <title>Show</title>
+              </programme>
+            </tv>
+        """.trimIndent()
+        val progs = parseXmltv(ByteArrayInputStream(xml.toByteArray()))
+        assertEquals(1, progs.size)
+        assertEquals(expected, progs[0].startMillis)
     }
 
     @Test
@@ -83,7 +131,7 @@ class XMLTVParserTest {
         """.trimIndent()
 
         val knownKeys = setOf("wanted.us")
-        val progs = XMLTVParser.parse(ByteArrayInputStream(xml.toByteArray()), knownChannelKeys = knownKeys)
+        val progs = parseXmltv(ByteArrayInputStream(xml.toByteArray()), knownChannelKeys = knownKeys)
 
         assertEquals(1, progs.size)
         assertEquals("wanted.us", progs[0].channelId)
@@ -98,7 +146,7 @@ class XMLTVParserTest {
         sb.append("</tv>")
 
         val truncated = AtomicBoolean(false)
-        val progs = XMLTVParser.parse(
+        val progs = parseXmltv(
             input = ByteArrayInputStream(sb.toString().toByteArray()),
             shouldAbort = { true },
             truncated = truncated,
@@ -123,10 +171,10 @@ class XMLTVParserTest {
         val content = sb.toString()
 
         // Warm up
-        XMLTVParser.parse(ByteArrayInputStream(content.toByteArray()))
+        parseXmltv(ByteArrayInputStream(content.toByteArray()))
 
         val start = System.nanoTime()
-        val progs = XMLTVParser.parse(ByteArrayInputStream(content.toByteArray()))
+        val progs = parseXmltv(ByteArrayInputStream(content.toByteArray()))
         val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
 
         assertEquals(5000, progs.size)
@@ -136,7 +184,9 @@ class XMLTVParserTest {
     @Test
     @Ignore("Manual benchmark test")
     fun realDataXMLTVBenchmark() {
-        val file = java.io.File("/home/luke/.cache/Google/AndroidStudio2026.2.1/projects/aeriotv-android.f0381c01/.artifacts/fa34c772-b13c-4d60-a027-a33c21b632d7/scratch/test_feed.xml")
+        val path = System.getenv("AERIO_BENCH_XMLTV_FILE")
+        assumeTrue("Set AERIO_BENCH_XMLTV_FILE to a local XMLTV file to run", !path.isNullOrBlank())
+        val file = java.io.File(path!!)
         assumeTrue("Real feed test file missing", file.exists())
 
         val times = mutableListOf<Double>()
@@ -158,7 +208,15 @@ class XMLTVParserTest {
     @Test
     @Ignore("Manual benchmark test")
     fun compareOldVsNewXMLTVDate() {
-        val dates = listOf("20260912140000 +0000", "20260912140000 -0500", "20260912140000 +0200", "20260912140000")
+        val dates = listOf(
+            "20260912140000 +0000",
+            "20260912140000 -0500",
+            "20260912140000 +0200",
+            "20260912140000",
+            // Named zone: the fast path must NOT claim this as UTC -- it has
+            // to fall back so SimpleDateFormat resolves EST to -05:00.
+            "20260912140000 EST",
+        )
 
         val fmtTz = java.text.SimpleDateFormat("yyyyMMddHHmmss Z", java.util.Locale.US)
         val fmtUtc = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US)

@@ -95,6 +95,11 @@ class M3UParserTest {
             "#EXTINF:-1 tvg-id=\"ch1\" tvg-logo=\"http://example.com/logo?a=1&b=2\" group-title=\"Sports | Action\",Sports 1",
             "#EXTINF:-1 tvg-id=\"\" tvg-name=\"ABC\" radio=\"true\",ABC Radio",
             "#EXTINF:-1 tvg-id=\"100\" tvg-name=\"Foo, Bar\",Foo, Bar Channel",
+            // Quoted value holds the last comma and no name follows: the
+            // attribute scan must not truncate at the in-quote comma.
+            "#EXTINF:-1 tvg-id=\"a,b\"",
+            // Quoted comma mid-line with a name after the real split comma.
+            "#EXTINF:-1 tvg-name=\"Sports, Evening\" tvg-id=\"s1\" group-title=\"A, B\" ,Named Channel",
             "#EXTINF:-1 channel-id=\"uuid-1234\" uuid=\"uuid-5678\",Test Channel",
         )
 
@@ -123,7 +128,9 @@ class M3UParserTest {
     @Test
     @Ignore("Manual benchmark test")
     fun realDataM3UBenchmark() {
-        val file = File("/home/luke/.cache/Google/AndroidStudio2026.2.1/projects/aeriotv-android.f0381c01/.artifacts/fa34c772-b13c-4d60-a027-a33c21b632d7/scratch/test_feed.m3u")
+        val path = System.getenv("AERIO_BENCH_M3U_FILE")
+        assumeTrue("Set AERIO_BENCH_M3U_FILE to a local playlist file to run", !path.isNullOrBlank())
+        val file = File(path!!)
         assumeTrue("Real feed test file missing", file.exists())
 
         // Warm up
@@ -148,7 +155,9 @@ class M3UParserTest {
     @Test
     @Ignore("Manual benchmark test")
     fun compareOldVsNewM3U() {
-        val file = File("/home/luke/.cache/Google/AndroidStudio2026.2.1/projects/aeriotv-android.f0381c01/.artifacts/fa34c772-b13c-4d60-a027-a33c21b632d7/scratch/test_feed.m3u")
+        val path = System.getenv("AERIO_BENCH_M3U_FILE")
+        assumeTrue("Set AERIO_BENCH_M3U_FILE to a local playlist file to run", !path.isNullOrBlank())
+        val file = File(path!!)
         assumeTrue("Real feed test file missing", file.exists())
 
         val lines = file.readLines().filter { it.startsWith("#EXTINF:") }

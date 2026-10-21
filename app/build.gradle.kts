@@ -139,6 +139,15 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            // android.util.Log (and other framework stubs) return defaults
+            // instead of throwing "not mocked" in JVM unit tests, so parser
+            // code can call Log.w directly without production-side guards.
+            isReturnDefaultValues = true
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

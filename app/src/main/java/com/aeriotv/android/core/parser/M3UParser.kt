@@ -217,7 +217,22 @@ object M3UParser {
             result["name"] = line.substring(commaIndex + 1).trim()
         }
 
-        val limit = if (commaIndex >= 0) commaIndex else line.length
+        // The attribute scan must stop at the comma that separates the
+        // attribute block from the display name. That is NOT always
+        // lastIndexOf(','): in `tvg-id="a,b"` with no name after it, the
+        // last comma sits INSIDE the quoted value, and truncating there cut
+        // the attribute mid-value so it was dropped entirely (the old regex
+        // scanned the whole line and kept it). Find the last comma that
+        // sits OUTSIDE a quoted value instead.
+        var limit = -1
+        var inQuotes = false
+        for (idx in line.indices) {
+            when (line[idx]) {
+                '"' -> inQuotes = !inQuotes
+                ',' -> if (!inQuotes) limit = idx
+            }
+        }
+        if (limit < 0) limit = line.length
         var i = 0
         while (i < limit) {
             val equalsIndex = line.indexOf('=', i)
