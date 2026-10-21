@@ -135,25 +135,37 @@ object XMLTVParser {
          *  knows the returned list is a FRAGMENT of the feed. */
         truncated: java.util.concurrent.atomic.AtomicBoolean? = null,
     ): List<EPGProgramme> {
-        val parser = Xml.newPullParser()
+        val parser: XmlPullParser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
         parser.setInput(input, null)
 
-        // Teach KXmlParser about undeclared HTML entities before it sees them.
-        // Method is part of the kxml2 implementation; if Android ever swaps the
-        // backing parser, the catch keeps us building. Failing to register just
-        // means those entities will throw at parse time as before.
+        // Teach the backing parser about undeclared HTML entities before it
+        // sees them. defineEntityReplacementText is implemented by kxml2
+        // (Android's backing parser); the catch keeps us building if Android
+        // ever swaps the backing parser. Failing to register just means
+        // those entities will throw at parse time as before.
         runCatching {
-            val method = parser.javaClass.getMethod(
-                "defineEntityReplacementText",
-                String::class.java,
-                String::class.java,
-            )
             for ((name, replacement) in HTML_ENTITIES) {
-                method.invoke(parser, name, replacement)
+                parser.defineEntityReplacementText(name, replacement)
             }
         }
 
+        return parseWith(parser, knownChannelKeys, shouldAbort, truncated)
+    }
+
+    /**
+     * The parse loop proper, over an already-configured [XmlPullParser].
+     * Internal so JVM unit tests can supply their own parser (kxml2 is on
+     * the test classpath): the Android [Xml] factory is a stub there, and
+     * the kxml2 fallback deliberately lives in the test setup, not in
+     * production code.
+     */
+    internal fun parseWith(
+        parser: XmlPullParser,
+        knownChannelKeys: Set<String>? = null,
+        shouldAbort: (() -> Boolean)? = null,
+        truncated: java.util.concurrent.atomic.AtomicBoolean? = null,
+    ): List<EPGProgramme> {
         val out = mutableListOf<EPGProgramme>()
 
         var insideProgramme = false
@@ -329,11 +341,88 @@ object XMLTVParser {
         return null to null
     }
 
-    private fun parseXMLTVDate(raw: String): Long? {
+    internal fun parseXMLTVDate(raw: String): Long? {
         val s = raw.trim()
         if (s.isEmpty()) return null
+
+        val fastParsed = parseXMLTVDateFast(s)
+        if (fastParsed != null) return fastParsed
+
         runCatching { return xmltvFmtTz.get()!!.parse(s)?.time }
         runCatching { return xmltvFmtUtc.get()!!.parse(s)?.time }
         return null
+    }
+
+    private fun parseXMLTVDateFast(s: String): Long? {
+        if (s.length < 14) return null
+
+        for (idx in 0 until 14) {
+            if (s[idx] !in '0'..'9') return null
+        }
+
+        val year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0')
+        val month = (s[4] - '0') * 10 + (s[5] - '0')
+        val day = (s[6] - '0') * 10 + (s[7] - '0')
+        val hour = (s[8] - '0') * 10 + (s[9] - '0')
+        val minute = (s[10] - '0') * 10 + (s[11] - '0')
+        val second = (s[12] - '0') * 10 + (s[13] - '0')
+
+        if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+            return null
+        }
+
+        var zoneOffset = java.time.ZoneOffset.UTC
+        if (s.length > 14) {
+            val rest = s.substring(14).trim()
+            when {
+                // UTC spellings and a bare tail (zone-less): already UTC.
+                rest.isEmpty() || rest == "Z" ||
+                    rest == "+0000" || rest == "-0000" || rest == "+00:00" -> Unit
+                // Numeric offsets (+hhmm / +hh:mm / -hhmm) parse inline.
+                else -> {
+                    val offsetSeconds = parseOffsetSeconds(rest)
+                        // Named zones (EST, CST, GMT-5, ...) are NOT handled
+                        // inline: defaulting them to UTC silently shifted
+                        // every programme by the zone's offset. Return null
+                        // so the caller falls back to SimpleDateFormat,
+                        // which resolves them properly.
+                        ?: return null
+                    zoneOffset = java.time.ZoneOffset.ofTotalSeconds(offsetSeconds)
+                }
+            }
+        }
+
+        return java.time.LocalDateTime.of(year, month, day, hour, minute, second)
+            .toInstant(zoneOffset)
+            .toEpochMilli()
+    }
+
+    /** Parse a `+hhmm` / `+hh:mm` / `-hhmm` style tail into total seconds.
+     *  Returns null for anything else (named zones, odd formats) so the
+     *  caller can fall back to [SimpleDateFormat]. */
+    private fun parseOffsetSeconds(rest: String): Int? {
+        if (rest.isEmpty() || (rest[0] != '+' && rest[0] != '-')) return null
+        if (rest.length < 5) return null
+
+        val isNeg = rest[0] == '-'
+        val h1 = rest[1] - '0'
+        val h2 = rest[2] - '0'
+        if (h1 !in 0..9 || h2 !in 0..9) return null
+        val hours = h1 * 10 + h2
+        if (hours !in 0..23) return null
+
+        val minutes: Int? = if (rest[3] == ':') {
+            if (rest.length >= 6 && rest[4] in '0'..'9' && rest[5] in '0'..'9') {
+                val m = (rest[4] - '0') * 10 + (rest[5] - '0')
+                if (m in 0..59) m else null
+            } else null
+        } else if (rest[3] in '0'..'9' && rest[4] in '0'..'9') {
+            val m = (rest[3] - '0') * 10 + (rest[4] - '0')
+            if (m in 0..59) m else null
+        } else null
+
+        if (minutes == null) return null
+        val total = hours * 60 + minutes
+        return if (isNeg) -total * 60 else total * 60
     }
 }

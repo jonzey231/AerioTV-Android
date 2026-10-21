@@ -41,3 +41,6 @@ keystore.properties
 
 # AI-assistant instructions, local only
 CLAUDE.md
+
+# graft session tool scratch state
+graft/
