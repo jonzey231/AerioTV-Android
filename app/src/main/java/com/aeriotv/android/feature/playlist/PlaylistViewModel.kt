@@ -27,6 +27,7 @@ import com.aeriotv.android.core.preferences.AppPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -446,6 +447,10 @@ class PlaylistViewModel @Inject constructor(
         }
         viewModelScope.launch {
             profileManager.manageRequests.collect { requestSettingsPage("playlist-detail") }
+        }
+        // A completed switch to another profile lands on the Live TV tab.
+        viewModelScope.launch {
+            com.aeriotv.android.core.profiles.ProfileSwitchFocus.switches.drop(1).collect { requestLiveTvTab() }
         }
         observeMemoryPressure()
         observeUpstreamLayering()

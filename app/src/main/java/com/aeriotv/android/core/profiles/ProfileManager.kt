@@ -106,6 +106,9 @@ class ProfileManager @Inject constructor(
         watchdog = null
         _switching.value = false
         closePlayer.trySend(Unit)
+        ProfileSwitchFocus.onSwitchCompleted()
+        // Every switch lands on the Live TV root, so focus goes to the grid.
+        ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
         ProfileSwitchFocus.onScrimReleased()
         val pp = pendingProbe?.takeIf { it.gen == gen } ?: return
         pendingProbe = null

@@ -59,6 +59,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -3010,6 +3011,16 @@ private fun SettingsTabContent(
         } else if (nav.stack.any { it is SettingsRoute.ManageProfiles }) {
             nav.popToRoot()
         }
+    }
+    // A switch to another profile returns Settings to its root, so coming
+    // back to this tab never reopens a page from the previous profile.
+    val profileSwitches by com.aeriotv.android.core.profiles.ProfileSwitchFocus.switches.collectAsStateWithLifecycle()
+    var seenProfileSwitches by rememberSaveable { mutableLongStateOf(profileSwitches) }
+    LaunchedEffect(profileSwitches) {
+        if (profileSwitches == seenProfileSwitches) return@LaunchedEffect
+        seenProfileSwitches = profileSwitches
+        nav.popToRoot()
+        selection = if (tvRail) SettingsRoute.Root else DefaultSettingsPaneSelection
     }
     val renderRoute: @Composable (SettingsRoute?) -> Unit = { r0 ->
     val r = if (r0.allowedFor(activeRole)) r0 else null

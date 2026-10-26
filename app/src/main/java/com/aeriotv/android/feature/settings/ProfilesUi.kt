@@ -498,7 +498,7 @@ fun ProfilesSection(playlistId: String) {
 
     fun doSwitch(p: DispatcharrProfile) {
         busy = true; status = null
-        com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Row(p.id))
+        com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Guide)
         vm.switchTo(playlistId, p.id) { err -> busy = false; status = err }
     }
     val rowFocus = remember { mutableMapOf<String, androidx.compose.ui.focus.FocusRequester>() }

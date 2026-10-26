@@ -92,11 +92,13 @@ object GuidePreviewBanner {
         @Composable get() = ProgramArtSlot.height + 5.dp * ProgramArtSlot.scale + DESCRIPTION_RESERVE * ProgramArtSlot.scale
 
     /**
-     * Two extra description lines reserved under the art (2026-10-26): the
-     * synopsis wraps to up to 3 lines and the banner height stays the same
-     * for every program, so the guide's time row never moves.
+     * Room reserved under the art (2026-10-26) so the worst case fits: title,
+     * channel, subtitle, meta row, and 3 description lines. The banner height
+     * is the same for every program, so the guide's time row never moves.
+     * The copy lines carry explicit line heights (the theme's 24 sp body
+     * line height made every small line 24 sp tall and left one line).
      */
-    private val DESCRIPTION_RESERVE = 28.dp
+    private val DESCRIPTION_RESERVE = 32.dp
 
     /**
      * The TV lift: tvOS pulls the banner 28 pt up under the tab bar so eight
@@ -307,19 +309,19 @@ fun GuidePreviewBanner(
                 var titleLines by remember(program.title) { androidx.compose.runtime.mutableIntStateOf(1) }
                 Text(
                     program.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    lineHeight = 22.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     onTextLayout = { titleLines = it.lineCount },
                 )
                 if (channel != null) {
-                    Text(channel.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.textAccent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(channel.name, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.textAccent, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 val sub = program.subTitle?.takeIf { !subtitleIsRedundant(it, program.title, program.description) }
                 if (sub != null) {
-                    Text(sub, fontSize = 11.sp.subtext(), fontWeight = FontWeight.Medium, fontStyle = FontStyle.Italic, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(sub, fontSize = 11.sp.subtext(), lineHeight = 15.sp.subtext(), fontWeight = FontWeight.Medium, fontStyle = FontStyle.Italic, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(Modifier.height(16.dp * ProgramArtSlot.scale), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     val range = fmt.format(Date(program.startMillis)) + " - " + fmt.format(Date(program.endMillis))
-                    Text(range, fontSize = 10.sp.subtext(), fontWeight = FontWeight.Medium, color = colors.onSurfaceVariant, maxLines = 1)
+                    Text(range, fontSize = 10.sp.subtext(), lineHeight = 14.sp.subtext(), fontWeight = FontWeight.Medium, color = colors.onSurfaceVariant, maxLines = 1)
                     if (program.startMillis <= nowMs && nowMs < program.endMillis) {
                         val left = ((program.endMillis - nowMs) / 60_000L).toInt().coerceAtLeast(1)
                         Text("·", fontSize = 10.sp.subtext(), color = colors.tertiary)
