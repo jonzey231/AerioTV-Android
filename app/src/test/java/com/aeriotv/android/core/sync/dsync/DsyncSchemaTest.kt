@@ -121,9 +121,15 @@ class DsyncSchemaTest {
         assertEquals(listOf(c), DsyncPayloads.decodeCollections(dc))
         val salt = "b81e" + "0".repeat(28)
         val hash = DsyncPinHash.hash(salt, "UULR")
-        val rows = listOf(ProfileRow(1, "admin", "Logan", "none", "", "", role = "admin"), ProfileRow(7, "test1", "Kids", "directions", hash, salt, role = "child"))
+        val rows = listOf(
+            ProfileRow(1, "admin", "Logan", "none", "", "", role = "admin", avatar = com.aeriotv.android.core.profiles.AvatarSpec()),
+            ProfileRow(7, "test1", "Kids", "directions", hash, salt, role = "child", avatar = com.aeriotv.android.core.profiles.AvatarSpec("paw", "orange")),
+        )
         val dp = roundTrip(DsyncKey.Profiles, DsyncPayloads.encodeProfiles(null, rows))
         assertEquals(rows, DsyncPayloads.decodeProfiles(dp))
+        // Position 8: {} for the default, {"icon","color"} otherwise.
+        assertTrue(dp.toString().contains(""""admin",0,{}]"""))
+        assertTrue(dp.toString().contains("""{"icon":"paw","color":"orange"}"""))
         // An older writer without the role position: reader keeps its own ("").
         val old = obj("""{"rows":[[3,"x","X","none","",""]]}""")
         assertEquals("", DsyncPayloads.decodeProfiles(old)!![0].role)
@@ -271,5 +277,28 @@ class DsyncSchemaTest {
         md.update(ByteArray(16)); md.update("1234".toByteArray())
         assertEquals(md.digest().joinToString("") { "%02x".format(it) }, h)
         assertNotNull(DsyncPinHash.hexToBytes("b81e"))
+    }
+
+    @Test fun profileAvatarWire() {
+        // Absent (older writer) = null, the reader keeps its own avatar.
+        assertNull(DsyncPayloads.decodeProfiles(obj("""{"rows":[[3,"x","X","none","","","user",5]]}"""))!![0].avatar)
+        // Unknown ids fall back per field; a trailing position after the avatar is kept.
+        val r = DsyncPayloads.decodeProfiles(obj("""{"rows":[[3,"x","X","none","","","user",5,{"icon":"dragon","color":"blue"},"next"]]}"""))!![0]
+        assertEquals(com.aeriotv.android.core.profiles.AvatarSpec("initial", "blue"), r.avatar)
+        assertEquals(1, r.tail.extra.size)
+        assertEquals("""{"color":"blue"}""", DsyncPayloads.encodeAvatar(r.avatar).toString())
+        assertEquals("{}", DsyncPayloads.encodeAvatar(null).toString())
+    }
+
+    @Test fun avatarDefaultsAreStable() {
+        val cat = com.aeriotv.android.core.profiles.AvatarCatalog
+        assertEquals(12, cat.ICONS.size)
+        assertEquals(8, cat.COLORS.size)
+        // Sum of "test1" chars (116+101+115+116+49 = 497) mod 8 = 1, blue.
+        assertEquals(1, cat.defaultColorIndex("Test1"))
+        assertEquals("blue", cat.colorFor(null, "test1"))
+        assertEquals("ember", cat.colorFor(com.aeriotv.android.core.profiles.AvatarSpec("star", "ember"), "test1"))
+        assertNull(cat.normalize(com.aeriotv.android.core.profiles.AvatarSpec("nope", "nope")))
+        assertEquals("initial", cat.iconFor(null))
     }
 }

@@ -2413,6 +2413,9 @@ private fun TvTopTabBar(
             armed = false
         }
     }
+    // The profile switcher right of the capsule (2c): Right from the last
+    // pill moves here explicitly (the geometric search did not leave the group).
+    val profileSwitcherFocus = remember { FocusRequester() }
     LaunchedEffect(focusedTab) {
         val cur = focusedTab ?: return@LaunchedEffect
         // Deliberate bar ENTRY (a fresh D-pad UP) selects immediately too, so
@@ -2584,9 +2587,30 @@ private fun TvTopTabBar(
                                 onSelect(tab)
                             }
                         },
-                        modifier = pillRequesters[tab]?.let { Modifier.focusRequester(it) } ?: Modifier,
+                        modifier = (pillRequesters[tab]?.let { Modifier.focusRequester(it) } ?: Modifier).then(
+                            if (tab == tabs.last()) {
+                                Modifier.onPreviewKeyEvent { e ->
+                                    e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                                        e.key == androidx.compose.ui.input.key.Key.DirectionRight &&
+                                        runCatching { profileSwitcherFocus.requestFocus() }.isSuccess
+                                }
+                            } else Modifier,
+                        ),
                     )
                 }
+            }
+            // Profile switcher (2c): right of the capsule, outside its focus
+            // group like the circles on the left, so Right from the last pill
+            // reaches it geometrically and focus never selects a tab.
+            Box {
+                com.aeriotv.android.feature.settings.TvProfileSwitcherButton(
+                    modifier = Modifier.focusRequester(profileSwitcherFocus),
+                    size = 28,
+                    onDown = {
+                        val target = tabEntryFocus?.value
+                        target != null && runCatching { target.requestFocus() }.getOrDefault(false)
+                    },
+                )
             }
             if (showActionCircles) {
                 Row(
@@ -2624,12 +2648,14 @@ private fun TvTopTabBar(
     ) { measurables, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val capsule = measurables[0].measure(loose)
-        val circles = measurables.getOrNull(1)?.measure(loose)
+        val avatar = measurables[1].measure(loose)
+        val circles = measurables.getOrNull(2)?.measure(loose)
         val width = constraints.maxWidth
         val height = maxOf(capsule.height, circles?.height ?: 0)
         layout(width, height) {
             val capsuleX = (width - capsule.width) / 2
             capsule.placeRelative(capsuleX, (height - capsule.height) / 2)
+            avatar.placeRelative(capsuleX + capsule.width + 10.dp.roundToPx(), (height - avatar.height) / 2)
             val circlesX = capsuleX - 10.dp.roundToPx() - (circles?.width ?: 0)
             circles?.placeRelative(circlesX, (height - circles.height) / 2)
             // Publish the real left edge for the hint chips. Writing snapshot

@@ -237,8 +237,10 @@ data class ProfileRow(
     val pinSalt: String,
     /** "admin" | "user" | "child"; "" = absent (older writer), reader keeps its own. */
     val role: String = "",
-    /** Unix seconds of the last change to this row's name, PIN, or role; 0 = absent (older writer). */
+    /** Unix seconds of the last change to this row's name, PIN, role, or avatar; 0 = absent (older writer). */
     val updatedAt: Long = 0L,
+    /** Position 8, `{"icon","color"}`; null = absent (older writer, reader keeps its own). */
+    val avatar: com.aeriotv.android.core.profiles.AvatarSpec? = null,
     val tail: Tail = Tail(),
 )
 
@@ -445,7 +447,8 @@ object DsyncPayloads {
             pinSalt = r.getOrNull(5).asStr() ?: "",
             role = r.getOrNull(6).asStr()?.takeIf { it in ROLES } ?: "",
             updatedAt = r.getOrNull(7).asLong() ?: 0L,
-            tail = tailOf(r, 8),
+            avatar = decodeAvatar(r.getOrNull(8)),
+            tail = tailOf(r, 9),
         )
     }
     fun encodeProfiles(base: JsonObject?, rows: List<ProfileRow>): JsonObject =
@@ -460,9 +463,31 @@ object DsyncPayloads {
                     JsonPrimitive(if (none) "" else it.pinSalt),
                     JsonPrimitive(it.role.takeIf { r -> r in ROLES } ?: "user"),
                     JsonPrimitive(it.updatedAt),
+                    encodeAvatar(it.avatar),
                 ),
             ).plusTail(it.tail)
         }))
+
+    /** `{}` or a non-object reads as the default; unknown ids fall back per field. */
+    fun decodeAvatar(el: JsonElement?): com.aeriotv.android.core.profiles.AvatarSpec? {
+        if (el == null || el is JsonNull) return null
+        val o = el as? JsonObject ?: return com.aeriotv.android.core.profiles.AvatarSpec()
+        val cat = com.aeriotv.android.core.profiles.AvatarCatalog
+        return com.aeriotv.android.core.profiles.AvatarSpec(
+            icon = o["icon"].asStr()?.takeIf { it in cat.ICONS } ?: cat.INITIAL,
+            color = o["color"].asStr()?.takeIf { it in cat.COLORS } ?: "",
+        )
+    }
+
+    fun encodeAvatar(a: com.aeriotv.android.core.profiles.AvatarSpec?): JsonObject {
+        val n = com.aeriotv.android.core.profiles.AvatarCatalog.normalize(a) ?: return JsonObject(emptyMap())
+        return JsonObject(
+            buildMap {
+                if (n.icon != com.aeriotv.android.core.profiles.AvatarCatalog.INITIAL) put("icon", JsonPrimitive(n.icon))
+                if (n.color.isNotEmpty()) put("color", JsonPrimitive(n.color))
+            },
+        )
+    }
 
     /** Carry trailing positions from the last pulled rows onto our rebuilt rows (rule 6.2). */
     fun <T> carryTails(ours: List<T>, remote: List<T>?, id: (T) -> Any, tail: (T) -> Tail, withTail: (T, Tail) -> T): List<T> {

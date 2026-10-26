@@ -36,6 +36,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -243,21 +245,30 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
                                 .width(120.dp)
                                 .then(if (isLast) Modifier.focusRequester(lastFocus) else Modifier)
                                 .onFocusChanged { focused = it.isFocused }
-                                .clickable(enabled = !busy) {
+                                // No indication: the focus visual is the round
+                                // accent ring, never a square grey highlight.
+                                .clickable(
+                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                    indication = null,
+                                    enabled = !busy,
+                                ) {
                                     if (manager.hasPin(p.id)) pinFor = p else choose(p)
                                 },
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Box {
-                                ProfileAvatar(
-                                    name = p.displayName,
-                                    size = 88,
-                                    modifier = Modifier.border(
-                                        3.dp,
-                                        if (focused) Color.White else Color.Transparent,
-                                        CircleShape,
-                                    ),
-                                )
+                            Box(Modifier.tvFocusScale(focused, focusedScale = 1.08f)) {
+                                Box(
+                                    Modifier
+                                        .border(
+                                            com.aeriotv.android.ui.tv.TvChrome.ringWidth + 1.dp,
+                                            if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            CircleShape,
+                                        )
+                                        .padding(5.dp)
+                                        .alpha(if (focused) 1f else 0.6f),
+                                ) {
+                                    ProfileAvatar(profile = p, size = 88)
+                                }
                                 if (manager.hasPin(p.id)) {
                                     Icon(
                                         Icons.Filled.Lock,
@@ -275,7 +286,8 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
                             Text(
                                 p.displayName,
                                 style = MaterialTheme.typography.titleMedium,
-                                color = if (focused) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (focused) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Normal,
+                                color = if (focused) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 textAlign = TextAlign.Center,

@@ -787,6 +787,12 @@ class ProfileManager @Inject constructor(
                     Log.i(TAG, "[DSYNC] profiles: role ${role.label} for ${local.username}")
                 }
             }
+            // Absent (older writer) keeps the local avatar; {} is a deliberate default.
+            val avatar = r.avatar?.let(AvatarCatalog::normalize)
+            if (r.avatar != null && avatar != local.avatar) {
+                store.update(id) { it.copy(avatar = avatar) }
+                Log.i(TAG, "[DSYNC] profiles: avatar for ${local.username}")
+            }
             val type = PinRules.typeFromWire(r.pinType)
             if (type == null) {
                 // A v1 PIN set on this device before sync stays until re-entered.
@@ -802,6 +808,18 @@ class ProfileManager @Inject constructor(
         if (added > 0) Log.i(TAG, "[DSYNC] profiles: added $added from the synced list")
         refreshActiveRole()
         return added
+    }
+
+    /** Row menu "Avatar" (2c). Stamps the synced row like a rename. */
+    fun setAvatar(playlistId: String, profileId: String, avatar: AvatarSpec?): Result<Unit> = runCatching {
+        val target = store.byId(profileId) ?: error("Profile not found")
+        val isOwn = activeProfileIdNow(playlistId) == profileId
+        check(RoleRules.canEditAvatar(activeRole(playlistId), isOwn)) { "Only an Admin profile can change another profile's avatar." }
+        val clean = AvatarCatalog.normalize(avatar)
+        if (clean == target.avatar) return@runCatching
+        store.update(profileId) { it.copy(avatar = clean) }
+        mutated(profileId, "avatar")
+        Log.i(TAG, "[PROFILE] avatar ${clean?.icon ?: AvatarCatalog.INITIAL}/${clean?.color?.ifEmpty { "default" } ?: "default"} for ${target.username}")
     }
 
     fun rename(profileId: String, name: String) {

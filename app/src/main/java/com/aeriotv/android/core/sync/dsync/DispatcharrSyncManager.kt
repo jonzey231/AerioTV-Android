@@ -1140,6 +1140,7 @@ class DispatcharrSyncManager @Inject constructor(
                 user.id, user.username, p.displayName, type, hash, salt,
                 role = p.effectiveRole().wire,
                 updatedAt = at,
+                avatar = p.avatar ?: com.aeriotv.android.core.profiles.AvatarSpec(),
                 tail = prev?.tail ?: Tail(),
             )
         }

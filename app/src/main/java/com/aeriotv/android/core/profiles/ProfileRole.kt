@@ -66,6 +66,10 @@ object RoleRules {
     /** Dispatcharr Sync `profiles` key: written by the local Admin, server admin or not. */
     fun canWriteProfilesKey(active: ProfileRole?): Boolean = active == ProfileRole.Admin
 
+    /** Row menu "Avatar": an Admin for any profile, a User or Child for its own. */
+    fun canEditAvatar(actor: ProfileRole?, isOwn: Boolean): Boolean =
+        actor == null || actor == ProfileRole.Admin || isOwn
+
     /** Server-editing actions (Mark/Unmark as Radio Channel, Switch Stream, Manage Groups). */
     fun canEditServer(active: ProfileRole?): Boolean = active != ProfileRole.Child
 

@@ -53,7 +53,7 @@ class DsyncGateTest {
         assertTrue(DsyncGate.profileRowWins(localUpdatedAt = 2_000, remote = newer))
         // updatedAt round-trips at position 7.
         val d = DsyncPayloads.encodeProfiles(null, listOf(newer))
-        assertEquals(listOf(newer), DsyncPayloads.decodeProfiles(d))
+        assertEquals(listOf(newer.copy(avatar = com.aeriotv.android.core.profiles.AvatarSpec())), DsyncPayloads.decodeProfiles(d))
     }
 }
 

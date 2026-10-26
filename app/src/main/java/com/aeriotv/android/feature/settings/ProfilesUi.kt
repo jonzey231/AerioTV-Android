@@ -1,6 +1,9 @@
 package com.aeriotv.android.feature.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -155,6 +158,10 @@ class ProfilesViewModel @Inject constructor(
     suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?) =
         manager.addProfile(playlistId, user, password, apiKey)
     fun rename(profileId: String, name: String) = manager.rename(profileId, name)
+    fun setAvatar(playlistId: String, profileId: String, avatar: com.aeriotv.android.core.profiles.AvatarSpec) =
+        manager.setAvatar(playlistId, profileId, avatar)
+    fun canEditAvatar(playlistId: String, profileId: String) =
+        com.aeriotv.android.core.profiles.RoleRules.canEditAvatar(manager.activeRole(playlistId), manager.activeProfile(playlistId)?.id == profileId)
     suspend fun remove(profileId: String) = manager.remove(profileId)
     fun manageProfiles() = manager.requestManageProfiles()
 
@@ -185,9 +192,55 @@ class ProfilesViewModel @Inject constructor(
 }
 
 /** Phone / tablet Live TV header: avatar circle, only with 2+ profiles. */
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
+    ProfileSwitcherHost { active, open ->
+        ProfileAvatar(
+            profile = active,
+            size = 38,
+            modifier = modifier.clip(CircleShape).clickable { open() },
+        )
+    }
+}
+
+/**
+ * Android TV top tab bar (2c): the active profile's avatar after Settings,
+ * the pill height, the standard accent ring while focused. OK opens the same
+ * Switch Profile sheet as the phone header. Hidden for a Child and with fewer
+ * than two profiles. [onDown] moves focus into the tab content.
+ */
+@Composable
+fun TvProfileSwitcherButton(modifier: Modifier = Modifier, size: Int = 28, onDown: () -> Boolean = { false }) {
+    ProfileSwitcherHost { active, open ->
+        val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        val focused by source.collectIsFocusedAsState()
+        Box(
+            modifier = modifier
+                .onPreviewKeyEvent { e ->
+                    e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                        e.key == androidx.compose.ui.input.key.Key.DirectionDown && onDown()
+                }
+                .tvFocusScale(focused, focusedScale = 1.08f)
+                .border(
+                    com.aeriotv.android.ui.tv.TvChrome.ringWidth,
+                    if (focused) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
+                    CircleShape,
+                )
+                .clip(CircleShape)
+                .clickable(interactionSource = source, indication = null) {
+                    android.util.Log.i("AerioProfiles", "[PROFILE] switcher opened (tv top bar)")
+                    open()
+                }
+                .padding(3.dp),
+        ) {
+            ProfileAvatar(profile = active, size = size - 6)
+        }
+    }
+}
+
+/** Visibility, state, and the Switch Profile sheet shared by both switchers. */
+@Composable
+private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile, open: () -> Unit) -> Unit) {
     val vm: ProfilesViewModel = hiltViewModel()
     val playlistId by vm.activePlaylistId.collectAsStateWithLifecycle(initialValue = null)
     val profiles by vm.activePlaylistProfiles.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -204,11 +257,7 @@ fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
     var busy by remember { mutableStateOf(false) }
     var pinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
 
-    ProfileAvatar(
-        name = active.displayName,
-        size = 38,
-        modifier = modifier.clip(CircleShape).clickable { open = true },
-    )
+    button(active) { error = null; open = true }
 
     fun doSwitch(p: DispatcharrProfile) {
         busy = true
@@ -216,24 +265,32 @@ fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
     }
 
     if (open) {
-        ModalBottomSheet(onDismissRequest = { open = false }) {
-            Column(Modifier.padding(bottom = 24.dp)) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { open = false }, traceName = "switch-profile") {
+            Column(Modifier.padding(bottom = 12.dp)) {
                 Text(
                     "Switch Profile",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
+                val firstFocus = remember { androidx.compose.ui.focus.FocusRequester() }
                 profiles.forEach { p ->
                     ProfileRow(
                         profile = p,
                         locked = vm.hasPin(p.id),
                         isActive = p.id == active.id,
+                        modifier = if (p.id == active.id) Modifier.focusRequester(firstFocus) else Modifier,
                         onClick = {
                             if (p.id == active.id || busy) return@ProfileRow
                             if (vm.hasPin(p.id)) pinFor = p
                             else if (vm.isPlaying()) confirm = p else doSwitch(p)
                         },
                     )
+                }
+                LaunchedEffect(Unit) {
+                    repeat(10) {
+                        if (runCatching { firstFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                        kotlinx.coroutines.delay(32L)
+                    }
                 }
                 if (busy) {
                     Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -249,9 +306,12 @@ fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
                     )
                 }
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                var mFocused by remember { mutableStateOf(false) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onFocusChanged { mFocused = it.isFocused }
+                        .settingsRowCard(mFocused)
                         .clickable { open = false; vm.manageProfiles() }
                         .padding(horizontal = 20.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -304,24 +364,6 @@ internal fun StopPlaybackDialog(name: String, onDismiss: () -> Unit, onConfirm: 
     )
 }
 
-@Composable
-fun ProfileAvatar(name: String, size: Int, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(size.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primary),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = name.trim().take(1).uppercase().ifEmpty { "?" },
-            color = MaterialTheme.colorScheme.onPrimary,
-            fontWeight = FontWeight.Bold,
-            fontSize = (size * 0.42f).sp,
-        )
-    }
-}
-
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun ProfileRow(
@@ -344,7 +386,7 @@ internal fun ProfileRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ProfileAvatar(profile.displayName, 32)
+        ProfileAvatar(profile, 32)
         Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -440,6 +482,7 @@ fun ProfilesSection(playlistId: String) {
     var confirmSwitch by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var actionsFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var renaming by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    var avatarFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var removing by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var adding by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -559,6 +602,9 @@ fun ProfilesSection(playlistId: String) {
                     Text(p.username, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.size(8.dp))
                     ChoiceRow(label = "Rename", onClick = { actionsFor = null; renaming = p })
+                    if (vm.canEditAvatar(playlistId, p.id)) {
+                        ChoiceRow(label = "Avatar", onClick = { actionsFor = null; avatarFor = p })
+                    }
                     if (canPin) {
                         ChoiceRow(label = if (hasPin) "Change PIN" else "Set PIN", onClick = { actionsFor = null; settingPin = p })
                         if (hasPin) ChoiceRow(label = "Remove PIN", onClick = { actionsFor = null; removingPin = p })
@@ -593,6 +639,13 @@ fun ProfilesSection(playlistId: String) {
     roleFor?.let { p -> RoleFlow(playlistId, p, vm) { err -> roleFor = null; status = err } }
     resettingPin?.let { p -> ResetPinFlow(playlistId, p, vm) { err -> resettingPin = null; status = err } }
     channelProfilesFor?.let { p -> ChannelProfilesDialog(playlistId, p, vm) { err -> channelProfilesFor = null; status = err } }
+    avatarFor?.let { p ->
+        AvatarPickerDialog(profile = p, onDismiss = { avatarFor = null; rowFocus[p.id]?.let { fr -> scope.launch { restoreFocus(fr, "profile row after avatar") } } }) { spec ->
+            status = vm.setAvatar(playlistId, p.id, spec).exceptionOrNull()?.message
+            avatarFor = null
+            rowFocus[p.id]?.let { fr -> scope.launch { restoreFocus(fr, "profile row after avatar") } }
+        }
+    }
     renaming?.let { p ->
         var name by remember(p.id) { mutableStateOf(p.displayName) }
         val saveFocus = remember { androidx.compose.ui.focus.FocusRequester() }

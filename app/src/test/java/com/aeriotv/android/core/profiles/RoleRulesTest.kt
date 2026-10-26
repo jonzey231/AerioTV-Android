@@ -111,4 +111,12 @@ class RoleRulesTest {
         assertFalse(RoleRules.showLaunchPicker(true, true, true, 1, A))
         assertFalse(RoleRules.showLaunchPicker(true, true, true, 2, C))
     }
+
+    @Test fun avatarEditing() {
+        assertTrue(RoleRules.canEditAvatar(ProfileRole.Admin, isOwn = false))
+        assertTrue(RoleRules.canEditAvatar(ProfileRole.User, isOwn = true))
+        assertTrue(RoleRules.canEditAvatar(ProfileRole.Child, isOwn = true))
+        assertFalse(RoleRules.canEditAvatar(ProfileRole.User, isOwn = false))
+        assertFalse(RoleRules.canEditAvatar(ProfileRole.Child, isOwn = false))
+    }
 }

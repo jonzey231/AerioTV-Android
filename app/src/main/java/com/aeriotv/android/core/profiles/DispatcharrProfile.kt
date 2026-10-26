@@ -55,6 +55,8 @@ data class DispatcharrProfile(
     val role: ProfileRole? = null,
     /** Dispatcharr user id from /me/ (0 = not read yet). */
     val userId: Int = 0,
+    /** App-defined avatar (2c); null = the initial on the username's default color. */
+    val avatar: AvatarSpec? = null,
 )
 
 enum class ProfileLevel(val label: String) {
