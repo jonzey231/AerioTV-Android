@@ -1509,9 +1509,6 @@ class PlaylistViewModel @Inject constructor(
                     // something; short-circuits the recompose when the source
                     // already had categories baked in (XMLTV path).
                     if (enriched !== programmes) {
-                        runCatching { repository.saveEpgToCache(playlist.id, enriched) }
-                            .onFailure { Log.w(TAG, "persisting enriched categories failed", it) }
-                        rebuildGuideCatalog(playlist, "enrich")
                         // Keep the cache enriched too so tints survive a relaunch
                         // -- but write ONLY the rows enrichment actually
                         // touched. E-6: this used to hand the whole feed back
@@ -1531,6 +1528,7 @@ class PlaylistViewModel @Inject constructor(
                         }
                         runCatching { repository.updateEpgRowsInCache(playlist.id, changedRows) }
                             .onFailure { Log.w(TAG, "enriched cache update failed", it) }
+                        rebuildGuideCatalog(playlist, "enrich")
                         Log.i(
                             TAG,
                             "EPG enriched: categories backfilled for now-playing programmes " +
