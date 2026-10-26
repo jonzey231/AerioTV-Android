@@ -1518,9 +1518,11 @@ class PlaylistRepository @Inject constructor(
     }
 
     /**
-     * Dispatcharr-only follow-up that fans `/api/epg/programs/<id>/` requests
-     * for every channel's currently-airing programme, in parallel with a cap
-     * of 4 concurrent in-flight fetches. Mirrors iOS
+     * Dispatcharr-only follow-up that backfills categories for every
+     * channel's currently-airing programme with ONE bulk
+     * `/api/epg/programs/search/?airing_at=<now>` request (paged at 500).
+     * Servers without the search action (404/405) fall back to one
+     * `/api/epg/programs/<id>/` per programme, capped at 4 in flight. Mirrors iOS
      * `EPGGuideView.enrichDispatcharrCategories` (post v1.6.22), the bulk
      * `/api/epg/grid/` endpoint deliberately strips `<category>` for perf, so
      * we lazily backfill the category on the now-airing program per channel
@@ -1533,6 +1535,10 @@ class PlaylistRepository @Inject constructor(
      * single 404 shouldn't blank out the whole channel's tint.
      */
     private val nowAiringCategoryCache by lazy { NowAiringCategoryCache(context) }
+
+    /** Base URLs whose /api/epg/programs/search/ answered 404/405 this
+     *  session (older Dispatcharr); those use the per-program detail call. */
+    private val nowAiringSearchUnsupported: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     suspend fun enrichNowPlayingCategories(
         playlist: PlaylistEntity,
@@ -1569,8 +1575,39 @@ class PlaylistRepository @Inject constructor(
         val cached = nowAiringCategoryCache.fresh(playlist.id, wanted)
         val misses = nowPlayingByChannel.values.filter { it.dispatcharrProgramId !in cached }
         Log.i("PlaylistRepo", "[EPG-ENRICH] now-airing ${wanted.size}: ${cached.size} from cache, ${misses.size} to fetch (tid=${android.os.Process.myTid()})")
-        val fetched: Map<Int, String> = coroutineScope {
-            misses.mapNotNull { p ->
+        // One bulk search answers every now-airing programme (categories
+        // included). Per-id detail calls remain only for servers without the
+        // search action (404/405, remembered per server for the session).
+        var bulk: Map<Int, String> = emptyMap()
+        var useDetailFallback = base in nowAiringSearchUnsupported
+        if (misses.isNotEmpty() && !useDetailFallback) {
+            val iso = java.time.Instant.ofEpochMilli(now)
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
+            runCatching {
+                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                    dispatcharrClient.getNowAiringCategories(base, key, iso)
+                }
+            }.onSuccess { result ->
+                if (result == null) {
+                    nowAiringSearchUnsupported.add(base)
+                    useDetailFallback = true
+                    Log.i("PlaylistRepo", "[EPG-ENRICH] bulk now-airing unsupported (404/405); per-program fallback for this session (tid=${android.os.Process.myTid()})")
+                } else {
+                    // Every miss gets an answer: a programme the server does
+                    // not list as airing right now records blank, so it is
+                    // not re-asked inside the cache window.
+                    bulk = misses.mapNotNull { it.dispatcharrProgramId }
+                        .associateWith { result.categories[it].orEmpty() }
+                    Log.i("PlaylistRepo", "[EPG-ENRICH] bulk now-airing: ${result.categories.size} programs in ${result.requests} request${if (result.requests == 1) "" else "s"} (tid=${android.os.Process.myTid()})")
+                }
+            }.onFailure {
+                // Transient failure: nothing cached, the next refresh retries.
+                Log.w("PlaylistRepo", "[EPG-ENRICH] bulk now-airing failed: ${it.message} (tid=${android.os.Process.myTid()})")
+            }
+        }
+        val detailMisses = if (useDetailFallback) misses else emptyList()
+        val fetchedDetail: Map<Int, String> = coroutineScope {
+            detailMisses.mapNotNull { p ->
                 val pid = p.dispatcharrProgramId ?: return@mapNotNull null
                 async {
                     gate.withPermit {
@@ -1589,6 +1626,7 @@ class PlaylistRepository @Inject constructor(
                 }
             }.awaitAll().filterNotNull().toMap()
         }
+        val fetched: Map<Int, String> = bulk + fetchedDetail
         if (fetched.isNotEmpty()) nowAiringCategoryCache.put(playlist.id, fetched)
         val categoryByProgramId: Map<Int, String> = (cached + fetched).filterValues { it.isNotBlank() }
 

@@ -849,6 +849,46 @@ class DispatcharrClient @Inject constructor() {
     }
 
     /**
+     * GET /api/epg/programs/search/?airing_at=<now>&fields=id,custom_properties
+     * -- every programme airing right now, categories included, in one paged
+     * request (DRF PageNumberPagination, page_size max 500). Replaces one
+     * /api/epg/programs/<id>/ call per now-airing programme. Returns null
+     * when the server has no search action (HTTP 404/405, older builds) so
+     * the caller can fall back to the per-id detail call. Pages are walked by
+     * `page=N` rather than following `next`, which carries the server's own
+     * view of its host and scheme (wrong behind a reverse proxy).
+     */
+    suspend fun getNowAiringCategories(
+        baseUrl: String,
+        apiKey: String,
+        airingAtIso: String,
+        maxPages: Int = 20,
+    ): NowAiringSearchResult? = withContext(Dispatchers.IO) {
+        val all = HashMap<Int, String>()
+        var page = 1
+        var requests = 0
+        val at = java.net.URLEncoder.encode(airingAtIso, "UTF-8")
+        while (page <= maxPages) {
+            val url = "${baseUrl.trimEnd('/')}/api/epg/programs/search/" +
+                "?airing_at=$at&fields=id,custom_properties&page_size=500&page=$page"
+            val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
+            requests += 1
+            unauthorizedCheck(response, url)
+            val code = response.status.value
+            if (code == 404 && page == 1 || code == 405) return@withContext null
+            if (!response.status.isSuccess()) {
+                if (all.isEmpty()) throw DispatcharrError.Transport("Now-airing search failed: HTTP $code")
+                break
+            }
+            val parsed = NowAiringSearchParser.parse(response.bodyAsText())
+            all.putAll(parsed.categories)
+            if (!parsed.hasNext) break
+            page += 1
+        }
+        NowAiringSearchResult(all, requests)
+    }
+
+    /**
      * GET /api/epg/programs/?tvg_id=<id> -- every programme (past AND future)
      * for one EPG feed, NOT bounded to the live now-window the way the cached
      * grid is. Mirrors iOS getUpcomingPrograms' tvg_id query
@@ -3757,4 +3797,42 @@ fun dispatcharrErrorReason(body: String?): String? {
     val text = body.take(200).trim()
     if (text.isEmpty() || text.startsWith("<")) return null
     return text
+}
+
+/** Answer of [DispatcharrClient.getNowAiringCategories]: program id to
+ *  comma-joined categories (blank = none), and how many requests it took. */
+data class NowAiringSearchResult(val categories: Map<Int, String>, val requests: Int)
+
+/** Pure parser for one page of /api/epg/programs/search/ with
+ *  fields=id,custom_properties. Accepts the DRF envelope
+ *  `{count, next, previous, results:[{id, custom_properties:{categories:[..]}}]}`
+ *  and a flat array. custom_properties may be null or lack categories. */
+object NowAiringSearchParser {
+    data class Page(val categories: Map<Int, String>, val hasNext: Boolean)
+
+    private val parser = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    fun parse(body: String): Page {
+        val root = runCatching { parser.parseToJsonElement(body) }.getOrNull() ?: return Page(emptyMap(), false)
+        val (rows, hasNext) = when (root) {
+            is JsonArray -> root to false
+            is JsonObject -> {
+                val next = root["next"] as? JsonPrimitive
+                ((root["results"] as? JsonArray) ?: JsonArray(emptyList())) to
+                    (next != null && next.isString && next.content.isNotBlank())
+            }
+            else -> JsonArray(emptyList()) to false
+        }
+        val out = LinkedHashMap<Int, String>()
+        rows.forEach { row ->
+            val o = row as? JsonObject ?: return@forEach
+            val id = (o["id"] as? JsonPrimitive)?.content?.toIntOrNull() ?: return@forEach
+            val cats = ((o["custom_properties"] as? JsonObject)?.get("categories") as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim() }
+                ?.filter { it.isNotBlank() }
+                .orEmpty()
+            out[id] = cats.joinToString(",")
+        }
+        return Page(out, hasNext)
+    }
 }

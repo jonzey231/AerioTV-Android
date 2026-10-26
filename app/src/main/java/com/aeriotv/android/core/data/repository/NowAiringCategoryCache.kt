@@ -9,7 +9,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Persisted 10-minute cache of `/api/epg/programs/<id>/` category answers
+ * Persisted 10-minute cache of now-airing category answers (bulk
+ * `/api/epg/programs/search/`, or `/api/epg/programs/<id>/` on older servers)
  * for now-airing programmes, one small JSON file per playlist in the cache
  * dir. An empty string records "this programme has no categories" so it is
  * not asked again inside the window. Entries past the TTL are dropped on

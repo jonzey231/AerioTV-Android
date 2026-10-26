@@ -214,9 +214,11 @@ fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
 fun TvProfileSwitcherButton(modifier: Modifier = Modifier, onDown: () -> Boolean = { false }) {
     var tvPicker by remember { mutableStateOf(false) }
     ProfileSwitcherHost { active, open ->
-        // Same shell as the bar's Refresh and Search circles (diameter,
-        // inset, rest fill, white focus platter, grow).
+        // Same diameter, alignment, and 1.08 grow as the bar's Refresh and
+        // Search circles, but the avatar disc IS the button: it fills the
+        // whole circle (no inset, no platter) and focus rings its edge.
         com.aeriotv.android.ui.tv.TvActionCircleSurface(
+            bare = true,
             modifier = modifier.onPreviewKeyEvent { e ->
                 e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
                     e.key == androidx.compose.ui.input.key.Key.DirectionDown && onDown()
@@ -229,7 +231,7 @@ fun TvProfileSwitcherButton(modifier: Modifier = Modifier, onDown: () -> Boolean
         ) {
             ProfileAvatar(
                 profile = active,
-                size = com.aeriotv.android.ui.tv.TvChrome.circleGlyphSize().value.toInt(),
+                size = com.aeriotv.android.ui.tv.TvChrome.circleSize.value.toInt(),
             )
         }
         if (tvPicker) TvProfilePickerDialog(onDismiss = { tvPicker = false })

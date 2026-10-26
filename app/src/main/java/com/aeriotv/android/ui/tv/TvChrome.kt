@@ -219,6 +219,9 @@ fun TvActionCircleSurface(
     accentGlyph: Boolean = false,
     enabled: Boolean = true,
     size: Dp = TvChrome.circleSize,
+    /** The content IS the button (the profile avatar disc): no rest or
+     *  focus platter; focus draws a white ring on the disc edge instead. */
+    bare: Boolean = false,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable androidx.compose.foundation.layout.BoxScope.(glyph: Color) -> Unit,
 ) {
@@ -246,7 +249,7 @@ fun TvActionCircleSurface(
             .tvFocusScale(focused, focusedScale = 1.08f)
             .size(size)
             .clip(CircleShape)
-            .background(fill)
+            .then(if (bare) Modifier else Modifier.background(fill))
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -256,6 +259,9 @@ fun TvActionCircleSurface(
         contentAlignment = Alignment.Center,
     ) {
         content(glyph)
+        if (bare && focused) {
+            Box(Modifier.matchParentSize().border(2.dp, Color.White, CircleShape))
+        }
     }
 }
 
