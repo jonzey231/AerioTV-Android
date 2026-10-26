@@ -2605,7 +2605,6 @@ private fun TvTopTabBar(
             Box {
                 com.aeriotv.android.feature.settings.TvProfileSwitcherButton(
                     modifier = Modifier.focusRequester(profileSwitcherFocus),
-                    size = 28,
                     onDown = {
                         val target = tabEntryFocus?.value
                         target != null && runCatching { target.requestFocus() }.getOrDefault(false)

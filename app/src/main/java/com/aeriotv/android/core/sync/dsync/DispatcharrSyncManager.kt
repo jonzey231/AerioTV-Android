@@ -185,7 +185,7 @@ class DispatcharrSyncManager @Inject constructor(
                 prefs.syncProvider,
                 playlistDao.observeActive().map { rows -> rows.firstOrNull()?.takeIf { it.isDispatcharrDirectConnect() }?.id },
                 ProfileScope.token,
-                kotlinx.coroutines.flow.combine(profileManager.get().switching, profileManager.get().launchPicker) { sw, pk -> sw || pk != null },
+                kotlinx.coroutines.flow.combine(profileManager.get().switching, com.aeriotv.android.core.app.LaunchWorkHold.held) { sw, held -> sw || held },
             ) { provider, pid, token, switching ->
                 // A profile switch (or the TV launch picker) is in flight: hold until its sign-in and
                 // permissions are in place (the scrim drops), then start.

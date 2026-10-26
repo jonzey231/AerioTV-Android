@@ -1532,6 +1532,8 @@ class PlaylistRepository @Inject constructor(
      * Failures on individual program fetches are swallowed silently, a
      * single 404 shouldn't blank out the whole channel's tint.
      */
+    private val nowAiringCategoryCache by lazy { NowAiringCategoryCache(context) }
+
     suspend fun enrichNowPlayingCategories(
         playlist: PlaylistEntity,
         programmes: List<EPGProgramme>,
@@ -1557,8 +1559,18 @@ class PlaylistRepository @Inject constructor(
         // Anything higher and Dispatcharr starts shedding connections; lower
         // and a thousand-channel playlist takes minutes to fully tint.
         val gate = Semaphore(4)
-        val categoryByProgramId: Map<Int, String> = coroutineScope {
-            nowPlayingByChannel.values.mapNotNull { p ->
+        // 10-minute TTL, persisted (NowAiringCategoryCache): a relaunch or a
+        // second refresh inside the window makes zero detail calls. Empty
+        // answers are cached too. Before this, nothing cached a miss and a
+        // fresh grid fetch arrives with categories stripped, so every launch
+        // re-asked for every now-airing programme (~280 calls on the
+        // Streamer, 2026-10-26).
+        val wanted = nowPlayingByChannel.values.mapNotNull { it.dispatcharrProgramId }.toSet()
+        val cached = nowAiringCategoryCache.fresh(playlist.id, wanted)
+        val misses = nowPlayingByChannel.values.filter { it.dispatcharrProgramId !in cached }
+        Log.i("PlaylistRepo", "[EPG-ENRICH] now-airing ${wanted.size}: ${cached.size} from cache, ${misses.size} to fetch (tid=${android.os.Process.myTid()})")
+        val fetched: Map<Int, String> = coroutineScope {
+            misses.mapNotNull { p ->
                 val pid = p.dispatcharrProgramId ?: return@mapNotNull null
                 async {
                     gate.withPermit {
@@ -1571,12 +1583,14 @@ class PlaylistRepository @Inject constructor(
                                 ?.filter { it.isNotBlank() }
                                 ?.joinToString(",")
                                 .orEmpty()
-                            if (joined.isNotBlank()) pid to joined else null
+                            pid to joined
                         }
                     }
                 }
             }.awaitAll().filterNotNull().toMap()
         }
+        if (fetched.isNotEmpty()) nowAiringCategoryCache.put(playlist.id, fetched)
+        val categoryByProgramId: Map<Int, String> = (cached + fetched).filterValues { it.isNotBlank() }
 
         if (categoryByProgramId.isEmpty()) return programmes
 

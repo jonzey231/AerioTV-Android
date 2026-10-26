@@ -1398,6 +1398,9 @@ class PlaylistViewModel @Inject constructor(
         }
         // 3. Stale / forced / first-ever launch -> network. Only show the
         // spinner when there is nothing cached to display yet.
+        // The cached paint above still shows; the network fetch waits for the
+        // launch picker / PIN gate to close.
+        com.aeriotv.android.core.app.LaunchWorkHold.await("EPG fetch")
         Log.i(TAG, "loadEpgIfConfigured: fetching EPG for ${playlist.sourceType} (force=$forceRefresh, hadCache=$hasCache)")
         // A forced reload (Refresh on Edit Playlist, Refresh EPG Data, Refresh
         // Everything) means "get fresh guide data": forget which one-day grid
@@ -1500,7 +1503,10 @@ class PlaylistViewModel @Inject constructor(
                 // `Task { await self.enrichDispatcharrCategories(...) }`.
                 // viewModelScope (not a child of this suspend call) so the
                 // enrichment never blocks refreshEpg's completion signal.
-                viewModelScope.launch {
+                // IO, never Main: the enrichment fan-out and its Room reads
+                // ran on the main thread (Streamer 2026-10-26, tid == pid).
+                viewModelScope.launch(Dispatchers.IO) {
+                    com.aeriotv.android.core.app.LaunchWorkHold.await("now-airing category enrichment")
                     val enriched = runCatching {
                         repository.enrichNowPlayingCategories(playlist, programmes)
                     }.onFailure { Log.w(TAG, "category enrichment failed", it) }
@@ -1509,9 +1515,6 @@ class PlaylistViewModel @Inject constructor(
                     // something; short-circuits the recompose when the source
                     // already had categories baked in (XMLTV path).
                     if (enriched !== programmes) {
-                        runCatching { repository.saveEpgToCache(playlist.id, enriched) }
-                            .onFailure { Log.w(TAG, "persisting enriched categories failed", it) }
-                        rebuildGuideCatalog(playlist, "enrich")
                         // Keep the cache enriched too so tints survive a relaunch
                         // -- but write ONLY the rows enrichment actually
                         // touched. E-6: this used to hand the whole feed back
@@ -1531,6 +1534,10 @@ class PlaylistViewModel @Inject constructor(
                         }
                         runCatching { repository.updateEpgRowsInCache(playlist.id, changedRows) }
                             .onFailure { Log.w(TAG, "enriched cache update failed", it) }
+                        // Rebuild from Room after the targeted write (the whole-feed
+                        // saveEpgToCache that used to precede it re-wrote every row
+                        // to change a few hundred categories). Main, as before.
+                        withContext(Dispatchers.Main) { rebuildGuideCatalog(playlist, "enrich") }
                         Log.i(
                             TAG,
                             "EPG enriched: categories backfilled for now-playing programmes " +

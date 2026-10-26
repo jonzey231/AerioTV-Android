@@ -211,32 +211,26 @@ fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
  * than two profiles. [onDown] moves focus into the tab content.
  */
 @Composable
-fun TvProfileSwitcherButton(modifier: Modifier = Modifier, size: Int = 28, onDown: () -> Boolean = { false }) {
+fun TvProfileSwitcherButton(modifier: Modifier = Modifier, onDown: () -> Boolean = { false }) {
     var tvPicker by remember { mutableStateOf(false) }
     ProfileSwitcherHost { active, open ->
-        val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-        val focused by source.collectIsFocusedAsState()
-        Box(
-            modifier = modifier
-                .onPreviewKeyEvent { e ->
-                    e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
-                        e.key == androidx.compose.ui.input.key.Key.DirectionDown && onDown()
-                }
-                .tvFocusScale(focused, focusedScale = 1.08f)
-                .border(
-                    com.aeriotv.android.ui.tv.TvChrome.ringWidth,
-                    if (focused) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
-                    CircleShape,
-                )
-                .clip(CircleShape)
-                .clickable(interactionSource = source, indication = null) {
-                    // TV: the full-screen "Who is watching?" picker, not the sheet.
-                    android.util.Log.i("AerioProfiles", "[PROFILE] picker opened (tv top bar)")
-                    tvPicker = true
-                }
-                .padding(3.dp),
+        // Same shell as the bar's Refresh and Search circles (diameter,
+        // inset, rest fill, white focus platter, grow).
+        com.aeriotv.android.ui.tv.TvActionCircleSurface(
+            modifier = modifier.onPreviewKeyEvent { e ->
+                e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                    e.key == androidx.compose.ui.input.key.Key.DirectionDown && onDown()
+            },
+            onClick = {
+                // TV: the full-screen "Who is watching?" picker, not the sheet.
+                android.util.Log.i("AerioProfiles", "[PROFILE] picker opened (tv top bar)")
+                tvPicker = true
+            },
         ) {
-            ProfileAvatar(profile = active, size = size - 6)
+            ProfileAvatar(
+                profile = active,
+                size = com.aeriotv.android.ui.tv.TvChrome.circleGlyphSize().value.toInt(),
+            )
         }
         if (tvPicker) TvProfilePickerDialog(onDismiss = { tvPicker = false })
     }

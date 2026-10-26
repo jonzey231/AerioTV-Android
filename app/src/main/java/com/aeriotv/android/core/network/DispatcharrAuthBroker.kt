@@ -50,7 +50,9 @@ class DispatcharrAuthBroker @Inject constructor(
         playlistId: String,
         block: suspend (apiKey: String) -> T,
     ): T {
-        val playlist = dao.byId(playlistId)
+        // Row load off the caller's dispatcher: callers on Main (enrichment,
+        // 2026-10-26 Streamer capture, tid == pid) ran this Room read there.
+        val playlist = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { dao.byId(playlistId) }
             ?: throw IllegalStateException("Playlist $playlistId not found")
         val initialKey = playlist.apiKey?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("Playlist ${playlistId.take(8)} has no api_key")
@@ -59,7 +61,7 @@ class DispatcharrAuthBroker @Inject constructor(
         // Breadcrumb between the Room read above and the network call in
         // block(): discriminates a DB stall from an HTTP stall in captures
         // (2026-08 EPG hang landed somewhere in this stretch).
-        Log.d(TAG, "withApiKeyRetry: row loaded for ${playlistId.take(8)}, invoking call")
+        Log.d(TAG, "withApiKeyRetry: row loaded for ${playlistId.take(8)}, invoking call (tid=${android.os.Process.myTid()} main=${android.os.Looper.myLooper() == android.os.Looper.getMainLooper()})")
         return try {
             block(initialKey)
         } catch (e: DispatcharrError.Unauthorized) {

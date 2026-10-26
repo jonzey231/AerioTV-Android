@@ -157,11 +157,13 @@ class ProfileManager @Inject constructor(
         val all = store.forPlaylist(pid)
         if (RoleRules.showLaunchPicker(isTvDevice(), all.isNotEmpty(), store.askAtLaunch(pid), all.size, restored?.effectiveRole())) {
             _launchPicker.value = LaunchPicker(pid, restored?.id)
+            com.aeriotv.android.core.app.LaunchWorkHold.set(true)
             Log.i(TAG, "[PROFILE] launch picker armed (${all.size} profiles)")
             return
         }
         if (restored != null && pinStore.hasPin(restored.id)) {
             _launchGate.value = restored
+            com.aeriotv.android.core.app.LaunchWorkHold.set(true)
             Log.i(TAG, "[PROFILE] launch gate armed for ${restored.username}")
         }
     }
@@ -175,6 +177,14 @@ class ProfileManager @Inject constructor(
     }
 
     private val _launchGate = kotlinx.coroutines.flow.MutableStateFlow<DispatcharrProfile?>(null)
+
+    /** Releases [com.aeriotv.android.core.app.LaunchWorkHold] once neither
+     *  the launch gate nor the launch picker is up. */
+    private fun releaseLaunchHoldIfClear() {
+        if (_launchGate.value == null && _launchPicker.value == null) {
+            com.aeriotv.android.core.app.LaunchWorkHold.set(false)
+        }
+    }
     /** The locked profile whose PIN must be entered before any content shows. */
     val launchGate: kotlinx.coroutines.flow.StateFlow<DispatcharrProfile?> = _launchGate
 
@@ -200,6 +210,7 @@ class ProfileManager @Inject constructor(
         if (profileId == activeProfileIdNow(pk.playlistId)) {
             switchTickets.remove(profileId)
             _launchPicker.value = null
+            releaseLaunchHoldIfClear()
             ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
             ProfileSwitchFocus.onScrimReleased()
             Log.i(TAG, "[PROFILE] launch picker: kept ${store.byId(profileId)?.username}")
@@ -211,7 +222,7 @@ class ProfileManager @Inject constructor(
         // has landed: the picker's own composition (and its scope) goes away
         // the moment it closes, which used to cancel the switch mid-flight.
         val r = scope.async { switchTo(pk.playlistId, profileId) }.await()
-        if (r.isSuccess) _launchPicker.value = null
+        if (r.isSuccess) { _launchPicker.value = null; releaseLaunchHoldIfClear() }
         return r
     }
 
@@ -372,6 +383,7 @@ class ProfileManager @Inject constructor(
         if (r == PinCheck.Ok) {
             switchTickets.remove(g.id)
             _launchGate.value = null
+            releaseLaunchHoldIfClear()
             ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
             ProfileSwitchFocus.onScrimReleased()
         }
