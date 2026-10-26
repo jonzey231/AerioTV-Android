@@ -234,9 +234,16 @@ class VodCatalogStore @Inject constructor(
         writeLock.withLock {
             val keys = (dao.titlePlaylistKeys() + dao.knownPlaylistKeys()).toSet()
             val activeId = activeKey?.let(::playlistIdOf)
+            // Profiles: each Dispatcharr user on a playlist has its own
+            // identity (field 3 is the username). Only an older identity of
+            // the SAME user (a URL or key change) is stale; another profile's
+            // catalog is kept, or every launch as a different profile wiped it
+            // and forced a full foreground refill (Streamer 2026-10-26).
+            val activeUser = activeKey?.let(::userOf)
             for (k in keys) {
                 val id = playlistIdOf(k)
-                val stale = id == null || id !in validPlaylistIds || (activeId != null && id == activeId && k != activeKey)
+                val stale = id == null || id !in validPlaylistIds ||
+                    (activeId != null && id == activeId && k != activeKey && userOf(k) == activeUser)
                 if (!stale) continue
                 db.withTransaction {
                     dao.deleteTitlesFor(k); dao.deleteStateFor(k); dao.deleteLanesFor(k)
@@ -287,6 +294,8 @@ class VodCatalogStore @Inject constructor(
 
     /** identity() is "v1|<playlistId>|<url>|..."; null for an unknown shape. */
     private fun playlistIdOf(key: String): String? = key.split('|').getOrNull(1)
+
+    private fun userOf(key: String): String = key.split('|').getOrNull(3).orEmpty()
 
     /**
      * One-time import of a pre-Room snapshot file so an upgrade opens with
