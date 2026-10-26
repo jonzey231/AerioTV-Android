@@ -3919,6 +3919,7 @@ class AerioExoPlayerHolder @Inject constructor(
             .readTimeout(liveReadTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
+            .fastFallback(true)
             .addNetworkInterceptor(ForceHls.redirectTokenInterceptor)
             .build()
     }
