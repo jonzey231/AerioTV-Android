@@ -517,10 +517,32 @@ internal fun ChoiceRow(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // D-pad OK fires only on a KeyUp whose KeyDown this row also saw. The
+    // release of the long press that opened a row menu arrives as a bare
+    // KeyUp (its KeyDown went to the launching row), so it cannot pick the
+    // first item (same latch as TvActionMenuDialog).
+    var okLatched by remember { mutableStateOf(false) }
     Row(
         modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (!it.isFocused) okLatched = false
+            }
+            .onPreviewKeyEvent { ev ->
+                val isOk = ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter
+                if (!isOk) return@onPreviewKeyEvent false
+                when (ev.type) {
+                    KeyEventType.KeyDown -> { if (ev.nativeKeyEvent.repeatCount == 0) okLatched = true; true }
+                    KeyEventType.KeyUp -> {
+                        val latched = okLatched
+                        okLatched = false
+                        if (latched) onClick()
+                        true
+                    }
+                    else -> false
+                }
+            }
             .settingsRowCard(focused)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 12.dp),
