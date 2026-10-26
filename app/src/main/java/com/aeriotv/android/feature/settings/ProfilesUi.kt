@@ -164,6 +164,7 @@ class ProfilesViewModel @Inject constructor(
         com.aeriotv.android.core.profiles.RoleRules.canEditAvatar(manager.activeRole(playlistId), manager.activeProfile(playlistId)?.id == profileId)
     suspend fun remove(profileId: String) = manager.remove(profileId)
     fun manageProfiles() = manager.requestManageProfiles()
+    fun setPickerAddUnlocked(playlistId: String?) { manager.pickerAddUnlocked = playlistId }
 
     // PIN (phase 2a)
     fun hasPin(profileId: String) = manager.hasPin(profileId)
@@ -205,12 +206,13 @@ fun ProfileSwitcherButton(modifier: Modifier = Modifier) {
 
 /**
  * Android TV top tab bar (2c): the active profile's avatar after Settings,
- * the pill height, the standard accent ring while focused. OK opens the same
- * Switch Profile sheet as the phone header. Hidden for a Child and with fewer
+ * the pill height, the standard accent ring while focused. OK opens the
+ * full-screen "Who is watching?" picker (TvProfilePickerDialog). Hidden for a Child and with fewer
  * than two profiles. [onDown] moves focus into the tab content.
  */
 @Composable
 fun TvProfileSwitcherButton(modifier: Modifier = Modifier, size: Int = 28, onDown: () -> Boolean = { false }) {
+    var tvPicker by remember { mutableStateOf(false) }
     ProfileSwitcherHost { active, open ->
         val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
         val focused by source.collectIsFocusedAsState()
@@ -228,13 +230,15 @@ fun TvProfileSwitcherButton(modifier: Modifier = Modifier, size: Int = 28, onDow
                 )
                 .clip(CircleShape)
                 .clickable(interactionSource = source, indication = null) {
-                    android.util.Log.i("AerioProfiles", "[PROFILE] switcher opened (tv top bar)")
-                    open()
+                    // TV: the full-screen "Who is watching?" picker, not the sheet.
+                    android.util.Log.i("AerioProfiles", "[PROFILE] picker opened (tv top bar)")
+                    tvPicker = true
                 }
                 .padding(3.dp),
         ) {
             ProfileAvatar(profile = active, size = size - 6)
         }
+        if (tvPicker) TvProfilePickerDialog(onDismiss = { tvPicker = false })
     }
 }
 
@@ -858,7 +862,7 @@ private fun ResetPinFlow(playlistId: String, p: DispatcharrProfile, vm: Profiles
 }
 
 @Composable
-private fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose: () -> Unit) {
+internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose: () -> Unit) {
     var users by remember { mutableStateOf<List<DispatcharrUserSummary>?>(null) }
     var picked by remember { mutableStateOf<DispatcharrUserSummary?>(null) }
     var password by remember { mutableStateOf("") }

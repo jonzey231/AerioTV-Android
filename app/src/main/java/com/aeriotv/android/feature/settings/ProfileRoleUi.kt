@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material3.CircularProgressIndicator
@@ -217,6 +218,9 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val lastFocus = remember { FocusRequester() }
+    val pickerVm: ProfilesViewModel = hiltViewModel()
+    val adder = rememberPickerAdder(pk.playlistId, pickerVm, profiles)
+    val launchRole by com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle()
 
     fun choose(p: DispatcharrProfile) {
         busy = true; error = null
@@ -238,61 +242,17 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
                 Spacer(Modifier.height(32.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                     itemsIndexed(profiles, key = { _, p -> p.id }) { _, p ->
-                        var focused by remember { mutableStateOf(false) }
                         val isLast = p.id == pk.lastProfileId || (pk.lastProfileId == null && p.isDefault)
-                        Column(
-                            Modifier
-                                .width(120.dp)
-                                .then(if (isLast) Modifier.focusRequester(lastFocus) else Modifier)
-                                .onFocusChanged { focused = it.isFocused }
-                                // No indication: the focus visual is the round
-                                // accent ring, never a square grey highlight.
-                                .clickable(
-                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                    indication = null,
-                                    enabled = !busy,
-                                ) {
-                                    if (manager.hasPin(p.id)) pinFor = p else choose(p)
-                                },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Box(Modifier.tvFocusScale(focused, focusedScale = 1.08f)) {
-                                Box(
-                                    Modifier
-                                        .border(
-                                            com.aeriotv.android.ui.tv.TvChrome.ringWidth + 1.dp,
-                                            if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                            CircleShape,
-                                        )
-                                        .padding(5.dp)
-                                        .alpha(if (focused) 1f else 0.6f),
-                                ) {
-                                    ProfileAvatar(profile = p, size = 88)
-                                }
-                                if (manager.hasPin(p.id)) {
-                                    Icon(
-                                        Icons.Filled.Lock,
-                                        contentDescription = "PIN",
-                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .size(26.dp)
-                                            .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
-                                            .padding(4.dp),
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                p.displayName,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = if (focused) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Normal,
-                                color = if (focused) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                            )
-                        }
+                        WhoIsWatchingTile(
+                            profile = p,
+                            locked = manager.hasPin(p.id),
+                            enabled = !busy,
+                            modifier = (if (isLast) Modifier.focusRequester(lastFocus) else Modifier)
+                                .focusRequester(adder.requester(p.id)),
+                        ) { if (manager.hasPin(p.id)) pinFor = p else choose(p) }
+                    }
+                    if (com.aeriotv.android.core.profiles.RoleRules.canSeeSwitcher(launchRole)) {
+                        item("add") { PickerAddTile(enabled = !busy, onStart = adder::start) }
                     }
                 }
                 Spacer(Modifier.height(24.dp))
@@ -315,6 +275,7 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
             lockSeconds = { manager.pinLockSeconds(p.id) },
         )
     }
+    adder.Dialogs()
 }
 
 /** True while the active profile is a Child (reactive). */
@@ -322,3 +283,287 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
 fun rememberIsChildProfile(): Boolean =
     com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle().value ==
         com.aeriotv.android.core.profiles.ProfileRole.Child
+
+/**
+ * One "Who is watching?" tile (launch picker and the TV top-bar picker):
+ * avatar with the round accent ring on focus (no square highlight), dimmed
+ * at rest, lock badge, name; [current] adds a "Current" caption.
+ */
+@Composable
+internal fun WhoIsWatchingTile(
+    profile: DispatcharrProfile,
+    locked: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    current: Boolean = false,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier
+            .width(120.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.tvFocusScale(focused, focusedScale = 1.08f)) {
+            Box(
+                Modifier
+                    .border(
+                        com.aeriotv.android.ui.tv.TvChrome.ringWidth + 1.dp,
+                        if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        CircleShape,
+                    )
+                    .padding(5.dp)
+                    .alpha(if (focused) 1f else 0.6f),
+            ) {
+                ProfileAvatar(profile = profile, size = 88)
+            }
+            if (locked) {
+                Icon(
+                    Icons.Filled.Lock,
+                    contentDescription = "PIN",
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(26.dp)
+                        .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                        .padding(4.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            profile.displayName,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = if (focused) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Normal,
+            color = if (focused) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        if (current) {
+            Text("Current", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+/**
+ * Android TV top-bar profile picker (2c): the launch picker's full-screen
+ * "Who is watching?" with the current profile focused and captioned, Back
+ * closes without switching, and a Manage Profiles tile (Admin / User) that
+ * opens the playlist's Settings page. Switching follows the usual PIN and
+ * stop-playback rules.
+ */
+@Composable
+fun TvProfilePickerDialog(onDismiss: () -> Unit) {
+    val vm: ProfilesViewModel = hiltViewModel()
+    val playlistId by vm.activePlaylistId.collectAsStateWithLifecycle(initialValue = null)
+    val pid = playlistId ?: return
+    val profiles by vm.profiles(pid).collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeId by vm.activeProfileId(pid).collectAsStateWithLifecycle(initialValue = null)
+    val role by vm.activeRole.collectAsStateWithLifecycle()
+    var pinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    var confirm by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val currentFocus = remember { FocusRequester() }
+    val currentId = activeId ?: profiles.firstOrNull { it.isDefault }?.id
+    val adder = rememberPickerAdder(pid, vm, profiles)
+
+    fun doSwitch(p: DispatcharrProfile) {
+        busy = true; error = null
+        com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Guide)
+        vm.switchTo(pid, p.id) { err -> busy = false; error = err; if (err == null) onDismiss() }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false, usePlatformDefaultWidth = false),
+    ) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Who is watching?", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+                Spacer(Modifier.height(32.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                    itemsIndexed(profiles, key = { _, p -> p.id }) { _, p ->
+                        val isCurrent = p.id == currentId
+                        WhoIsWatchingTile(
+                            profile = p,
+                            locked = vm.hasPin(p.id),
+                            enabled = !busy,
+                            current = isCurrent,
+                            modifier = (if (isCurrent) Modifier.focusRequester(currentFocus) else Modifier)
+                                .focusRequester(adder.requester(p.id)),
+                        ) {
+                            when {
+                                isCurrent -> onDismiss()
+                                vm.hasPin(p.id) -> pinFor = p
+                                vm.isPlaying() -> confirm = p
+                                else -> doSwitch(p)
+                            }
+                        }
+                    }
+                    if (com.aeriotv.android.core.profiles.RoleRules.canSeeSwitcher(role)) {
+                        item("add") { PickerAddTile(enabled = !busy, onStart = adder::start) }
+                        item("manage") {
+                            PickerActionTile(Icons.Outlined.ManageAccounts, "Manage Profiles", enabled = !busy) {
+                                Log.i("AerioProfiles", "[PROFILE] manage profiles from tv picker")
+                                onDismiss()
+                                vm.manageProfiles()
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+                if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+            }
+        }
+    }
+    LaunchedEffect(profiles.size, currentId) {
+        if (profiles.isEmpty()) return@LaunchedEffect
+        repeat(10) {
+            if (runCatching { currentFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            kotlinx.coroutines.delay(32L)
+        }
+    }
+    pinFor?.let { p ->
+        SwitchPinDialog(p, vm, onDismiss = { pinFor = null }) {
+            pinFor = null
+            if (vm.isPlaying()) confirm = p else doSwitch(p)
+        }
+    }
+    confirm?.let { p ->
+        StopPlaybackDialog(name = p.displayName, onDismiss = { confirm = null }) { confirm = null; doSwitch(p) }
+    }
+    adder.Dialogs()
+}
+
+/** A picker tile that is an action, not a profile (Add Profile, Manage Profiles). */
+@Composable
+internal fun PickerActionTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .width(120.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .tvFocusScale(focused, focusedScale = 1.08f)
+                .border(
+                    com.aeriotv.android.ui.tv.TvChrome.ringWidth + 1.dp,
+                    if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    CircleShape,
+                )
+                .padding(5.dp)
+                .alpha(if (focused) 1f else 0.6f),
+        ) {
+            Box(
+                Modifier.size(88.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(40.dp))
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (focused) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+internal fun PickerAddTile(enabled: Boolean, onStart: () -> Unit) =
+    PickerActionTile(androidx.compose.material.icons.Icons.Filled.Add, "Add Profile", enabled) {
+        Log.i("AerioProfiles", "[PROFILE] add profile from picker")
+        onStart()
+    }
+
+/**
+ * Picker "Add Profile": an Admin PIN first when any Admin has one, then the
+ * existing Add Profile dialog over the picker; the new profile's tile takes
+ * focus once it appears.
+ */
+internal class PickerAdder(
+    private val playlistId: String,
+    private val vm: ProfilesViewModel,
+) {
+    var askPin by mutableStateOf(false)
+    var adding by mutableStateOf(false)
+    var knownIds: Set<String>? by mutableStateOf(null)
+    private val requesters = mutableMapOf<String, FocusRequester>()
+
+    fun requester(id: String): FocusRequester = requesters.getOrPut(id) { FocusRequester() }
+
+    private fun open() {
+        vm.setPickerAddUnlocked(playlistId)
+        adding = true
+    }
+
+    fun start(current: List<DispatcharrProfile>) {
+        knownIds = current.map { it.id }.toSet()
+        if (vm.adminHasPin(playlistId)) askPin = true else open()
+    }
+
+    @Composable
+    fun Dialogs() {
+        if (askPin) {
+            AdminPinDialog(playlistId, vm, title = "Enter an Admin PIN", onDismiss = { askPin = false; knownIds = null }) {
+                askPin = false
+                open()
+            }
+        }
+        if (adding) AddProfileDialog(playlistId, vm) { adding = false; vm.setPickerAddUnlocked(null) }
+    }
+}
+
+@Composable
+internal fun rememberPickerAdder(playlistId: String, vm: ProfilesViewModel, profiles: List<DispatcharrProfile>): PickerAdderHandle {
+    val adder = remember(playlistId) { PickerAdder(playlistId, vm) }
+    val profilesState = androidx.compose.runtime.rememberUpdatedState(profiles)
+    // Focus the new tile once the added profile shows up.
+    LaunchedEffect(profiles.map { it.id }, adder.adding) {
+        val known = adder.knownIds ?: return@LaunchedEffect
+        if (adder.adding || adder.askPin) return@LaunchedEffect
+        val added = profiles.firstOrNull { it.id !in known } ?: return@LaunchedEffect
+        adder.knownIds = null
+        repeat(20) {
+            if (runCatching { adder.requester(added.id).requestFocus() }.isSuccess) {
+                Log.i("AerioProfiles", "[PROFILE] picker focus on added ${added.username}")
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(50L)
+        }
+    }
+    return remember(adder) { PickerAdderHandle(adder) { profilesState.value } }
+}
+
+internal class PickerAdderHandle(private val adder: PickerAdder, private val current: () -> List<DispatcharrProfile>) {
+    fun start() = adder.start(current())
+    fun requester(id: String) = adder.requester(id)
+    @Composable fun Dialogs() = adder.Dialogs()
+}

@@ -612,7 +612,7 @@ class ProfileManager @Inject constructor(
      * form (username, then password or API key, validated by signing in).
      */
     suspend fun addCandidates(playlistId: String): Result<AddCandidates> = runCatching {
-        check(RoleRules.canManageProfiles(activeRole(playlistId))) { "Only an Admin profile can add profiles." }
+        check(canAdd(playlistId)) { "Only an Admin profile can add profiles." }
         val serverAdmin = baseIsServerAdmin(playlistId) && activeIsAdmin(playlistId)
         if (RoleRules.addPath(serverAdmin, usersListForbidden = false) == RoleRules.AddPath.Manual) {
             return@runCatching AddCandidates.Manual
@@ -659,10 +659,19 @@ class ProfileManager @Inject constructor(
         )
     }
 
+    /**
+     * The TV picker's Add Profile (2c): an Admin PIN (or no Admin PIN on the
+     * playlist) unlocks adding for one dialog, whoever is active.
+     */
+    @Volatile var pickerAddUnlocked: String? = null
+
+    private fun canAdd(playlistId: String): Boolean =
+        RoleRules.canManageProfiles(activeRole(playlistId)) || pickerAddUnlocked == playlistId
+
     /** Add Profile step 1: the server's users, fetched with the admin key. */
     suspend fun listServerUsers(playlistId: String): Result<List<DispatcharrUserSummary>> = runCatching {
         val row = playlistDao.byId(playlistId) ?: error("Playlist not found")
-        check(activeIsAdmin(playlistId) && RoleRules.canManageProfiles(activeRole(playlistId))) { "Only an Admin profile can add profiles." }
+        check(activeIsAdmin(playlistId) && canAdd(playlistId)) { "Only an Admin profile can add profiles." }
         val base = repository.effectiveBaseUrl(row)
         val key = row.apiKey?.takeIf { it.isNotBlank() } ?: error("No API key for this playlist")
         val taken = store.forPlaylist(playlistId).map { it.username }.toSet()
@@ -681,7 +690,7 @@ class ProfileManager @Inject constructor(
     ): Result<DispatcharrProfile> = runCatching {
         // Local Admin role, not the server level: a profile is added by
         // signing in as that user, which never changes the server.
-        check(syncAdding || RoleRules.canManageProfiles(activeRole(playlistId))) { "Only an Admin profile can add profiles." }
+        check(syncAdding || canAdd(playlistId)) { "Only an Admin profile can add profiles." }
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
         val id = UUID.randomUUID().toString()
