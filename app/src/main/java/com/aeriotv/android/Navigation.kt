@@ -2218,11 +2218,8 @@ fun AerioTVNavHost(
         val updateBackStack by navController.currentBackStackEntryAsState()
         UpdateGate(currentRoute = updateBackStack?.destination?.route)
 
-        // Live Rewind one-time feature prompt (task #145). Renders only on
-        // the main tabs after What's New settles, so prompts never stack.
-        com.aeriotv.android.feature.whatsnew.LiveRewindPromptGate(
-            currentRoute = updateBackStack?.destination?.route,
-        )
+        // The one-time "New: Live Rewind" prompt was retired 2026-10-27: the
+        // feature is old news. Settings > Player > Live Rewind remains.
 
         // Mini-player overlay (Phase 139 / audit #22). The session ViewModel
         // is rooted here so the same instance is visible from PlayerScreen
