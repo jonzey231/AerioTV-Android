@@ -4,6 +4,9 @@ import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -146,26 +149,14 @@ fun ConfigureSourceScreen(
 
     TvKeyboardOnOkHost {
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    "Configure",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    // See ChooseSourceTypeScreen: hiding the TV back arrow
-                    // collapses the nav-icon slot and leaves the title inside
-                    // the title-safe margin.
-                    modifier = if (rememberIsTvDevice()) {
-                        Modifier.padding(start = TvSettingsMetrics.topAppBarTitleOverscanPadding)
-                    } else {
-                        Modifier
-                    },
-                )
-            },
-            navigationIcon = {
-                // No back arrow on Android TV -- the remote BACK steps back to
-                // source-type pick. Phones/tablets keep it.
-                if (!rememberIsTvDevice()) {
+        // No page title (owner 2026-10-27): the source card names the step.
+        // Phones/tablets keep the back arrow; on Android TV the remote BACK
+        // steps back to the source-type pick, so the bar is dropped.
+        val isTv = rememberIsTvDevice()
+        if (!isTv) {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -173,13 +164,13 @@ fun ConfigureSourceScreen(
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     }
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
-                titleContentColor = MaterialTheme.colorScheme.onBackground,
-            ),
-        )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                ),
+            )
+        }
 
         val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
         // TV: deadband spec stops the form's +/-1px per-frame jiggle when a
@@ -195,7 +186,15 @@ fun ConfigureSourceScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = vp.gutter, vertical = 12.dp),
+                // Bottom room so Test Connection never sits flush on the
+                // display edge when focus scrolls to it; TV adds top room
+                // for the overscan margin now that the bar is gone.
+                .padding(
+                    start = vp.gutter,
+                    end = vp.gutter,
+                    top = if (isTv) 32.dp else 12.dp,
+                    bottom = if (isTv) 64.dp else 32.dp,
+                ),
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
         Column(
@@ -282,13 +281,30 @@ fun ConfigureSourceScreen(
 
             Spacer(Modifier.height(8.dp))
 
+            // When D-pad focus lands on Test Connection, scroll so the page
+            // shows a strip below it instead of parking it on the edge.
+            val testBringer = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+            val testScope = androidx.compose.runtime.rememberCoroutineScope()
+            var testSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+            val testTail = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx() }
             Button(
                 onClick = { viewModel.loadPlaylist() },
                 enabled = !state.isLoading && validation == null,
                 modifier = Modifier
+                    .onSizeChanged { testSize = it }
+                    .bringIntoViewRequester(testBringer)
+                    .onFocusChanged { fs ->
+                        if (fs.isFocused) testScope.launch {
+                            testBringer.bringIntoView(
+                                androidx.compose.ui.geometry.Rect(
+                                    0f, 0f, testSize.width.toFloat(), testSize.height + testTail,
+                                ),
+                            )
+                        }
+                    }
                     .fillMaxWidth()
                     .heightIn(min = 54.dp)
-                    .dpadFocusRing(RoundedCornerShape(50)),
+                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -754,9 +770,9 @@ private fun SegmentItem(
     val fg = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground
     Box(
         modifier = modifier
+            .dpadFocusRing(RoundedCornerShape(18.dp), washTint = MaterialTheme.colorScheme.primary, onFilled = isSelected)
             .clip(RoundedCornerShape(18.dp))
             .background(bg)
-            .dpadFocusRing(RoundedCornerShape(18.dp), washTint = MaterialTheme.colorScheme.primary)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
@@ -894,8 +910,10 @@ private fun DvrDestinationRow(
                     color = if (selected) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier
+                        // Ring before the clip so the focused scale is not
+                        // cut off; white ring on the selected (filled) pill.
+                        .dpadFocusRing(RoundedCornerShape(50), washTint = MaterialTheme.colorScheme.primary, onFilled = selected)
                         .clip(RoundedCornerShape(50))
-                        .dpadFocusRing(RoundedCornerShape(50), washTint = MaterialTheme.colorScheme.primary)
                         .background(
                             if (selected) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
@@ -941,8 +959,10 @@ private fun GuideHistoryRow(
                     color = if (selected) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier
+                        // Ring before the clip so the focused scale is not
+                        // cut off; white ring on the selected (filled) pill.
+                        .dpadFocusRing(RoundedCornerShape(50), washTint = MaterialTheme.colorScheme.primary, onFilled = selected)
                         .clip(RoundedCornerShape(50))
-                        .dpadFocusRing(RoundedCornerShape(50), washTint = MaterialTheme.colorScheme.primary)
                         .background(
                             if (selected) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),

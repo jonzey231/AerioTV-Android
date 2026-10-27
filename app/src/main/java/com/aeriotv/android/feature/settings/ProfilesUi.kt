@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -1011,33 +1012,43 @@ internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): 
 internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
     var gate by remember { mutableStateOf(false) }
     var explained by remember { mutableStateOf(false) }
+    // Compact by design: one row of three radio choices plus a single
+    // helper line for the selected role, so the user list above it keeps
+    // the height (owner 2026-10-27: three stacked rows squeezed the list).
     Column {
         Text("Role", style = MaterialTheme.typography.titleSmall)
-        com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r ->
-            var focused by remember { mutableStateOf(false) }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .onFocusChanged { focused = it.isFocused }
-                    .settingsRowCard(focused)
-                    .clickable {
-                        if (r == com.aeriotv.android.core.profiles.ProfileRole.Child && !vm.adminHasPin(playlistId)) { explained = false; gate = true }
-                        else onSelect(r)
-                    }
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                androidx.compose.material3.RadioButton(
-                    selected = r == selected, onClick = null,
-                    colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
-                )
-                Spacer(Modifier.size(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(r.label, style = MaterialTheme.typography.bodyLarge)
-                    Text(roleDescription(r), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r ->
+                var focused by remember { mutableStateOf(false) }
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .onFocusChanged { focused = it.isFocused }
+                        .settingsRowCard(focused)
+                        .selectable(selected = r == selected, role = androidx.compose.ui.semantics.Role.RadioButton) {
+                            if (r == com.aeriotv.android.core.profiles.ProfileRole.Child && !vm.adminHasPin(playlistId)) { explained = false; gate = true }
+                            else onSelect(r)
+                        }
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = r == selected, onClick = null,
+                        colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(r.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
                 }
             }
         }
+        Text(
+            roleDescription(selected),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+        )
     }
     if (gate) {
         val admin = vm.activeProfile(playlistId)

@@ -1,5 +1,6 @@
 package com.aeriotv.android.ui.settings
 
+import androidx.compose.ui.graphics.graphicsLayer
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.background
@@ -814,10 +815,21 @@ fun Modifier.settingsRowFocusCard(): Modifier {
 fun Modifier.dpadFocusRing(
     shape: androidx.compose.ui.graphics.Shape,
     washTint: androidx.compose.ui.graphics.Color? = null,
+    // True when the element under the ring is filled with the accent (a
+    // primary Button, a selected pill). An accent ring on an accent fill is
+    // invisible, so focus then draws a white ring plus a slight scale.
+    onFilled: Boolean = false,
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
     return this
         .onFocusChanged { focused = it.isFocused }
+        .then(
+            if (onFilled && focused) {
+                Modifier.graphicsLayer { scaleX = 1.04f; scaleY = 1.04f }
+            } else {
+                Modifier
+            },
+        )
         .then(
             if (washTint != null) {
                 Modifier.background(
@@ -831,8 +843,9 @@ fun Modifier.dpadFocusRing(
         )
         .border(
             width = SettingsFocusRingWidth,
-            color = if (focused) MaterialTheme.colorScheme.primary
-            else androidx.compose.ui.graphics.Color.Transparent,
+            color = if (!focused) androidx.compose.ui.graphics.Color.Transparent
+            else if (onFilled) androidx.compose.ui.graphics.Color.White
+            else MaterialTheme.colorScheme.primary,
             shape = shape,
         )
 }

@@ -151,125 +151,162 @@ fun AddProfilesStepScreen(
         val q = query.trim()
         if (q.isEmpty()) list else list.filter { it.username.contains(q, ignoreCase = true) }
     }
-    // Insets like the other onboarding screens: the title clears the status
-    // bar. The user list scrolls; Add selected / Skip stay pinned below it.
+    // The user list is the primary content and takes the height; search only
+    // filters it. TV (landscape, ~540 dp tall) puts the list on the left and
+    // Role plus the buttons on the right so rows are never squeezed (owner
+    // 2026-10-27: one row was left ~85 px and overlapped by Role). Phones
+    // stack it: list, compact Role, buttons pinned at the bottom.
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val header: @Composable () -> Unit = {
+                Text(
+                    "Add profiles for other users?",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    "Pick the Dispatcharr users who also watch on this device.",
+                    style = MaterialTheme.typography.bodyMedium.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    placeholder = { Text("Search users") },
+                    modifier = Modifier.fillMaxWidth().dpadFocusRing(RoundedCornerShape(4.dp)),
+                )
+
+    }
+    val userList: @Composable (Modifier) -> Unit = { listModifier ->
+                Column(
+                    modifier = listModifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                ) {
+                    shown.forEach { user ->
+                        val checked = user.id in selected
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .dpadFocusRing(RoundedCornerShape(12.dp), washTint = MaterialTheme.colorScheme.primary)
+                                .toggleable(
+                                    value = checked,
+                                    enabled = !busy,
+                                    role = Role.Checkbox,
+                                    onValueChange = { on -> if (on) selected.add(user.id) else selected.remove(user.id) },
+                                )
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = checked, onCheckedChange = null)
+                            Spacer(Modifier.size(12.dp))
+                            Text(user.username, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                            com.aeriotv.android.feature.settings.LevelBadge(
+                                com.aeriotv.android.core.profiles.ProfileLevel.of(
+                                    if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0,
+                                ),
+                            )
+                        }
+                    }
+                    if (shown.isEmpty()) {
+                        Text(
+                            "No users match.",
+                            style = MaterialTheme.typography.bodyMedium.subtext(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+
+    }
+    val controls: @Composable () -> Unit = {
+                com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                Button(
+                    onClick = {
+                        busy = true; error = null
+                        scope.launch {
+                            val failures = mutableListOf<String>()
+                            list.filter { it.id in selected }.forEach { u ->
+                                if (u.apiKey.isNullOrBlank()) {
+                                    needsCredential.add(u)
+                                } else {
+                                    vm.add(playlistId, u, null, null, role).onFailure { failures += u.username }
+                                }
+                            }
+                            busy = false
+                            if (failures.isNotEmpty()) {
+                                error = "Could not add: ${failures.joinToString(", ")}"
+                                selected.retainAll(list.filter { it.username in failures }.map { it.id })
+                            } else if (needsCredential.isEmpty()) {
+                                onDone()
+                            }
+                        }
+                    },
+                    enabled = !busy && selected.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                ) {
+                    if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                    else Text("Add selected", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+                OutlinedButton(
+                    onClick = onDone,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
+                ) { Text("Skip", style = MaterialTheme.typography.titleMedium) }
+                Text(
+                    "You can add or remove profiles later in Settings > Playlists.",
+                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(horizontal = vp.gutter, vertical = 24.dp),
+            .padding(horizontal = vp.gutter, vertical = if (isTv) 16.dp else 24.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Column(
-            modifier = (if (vp.onboardingMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
-                Modifier.widthIn(max = vp.onboardingMaxWidth).fillMaxWidth()
-            else Modifier.fillMaxWidth()).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                "Add profiles for other users?",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                "Pick the Dispatcharr users who also watch on this device.",
-                style = MaterialTheme.typography.bodyMedium.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                singleLine = true,
-                placeholder = { Text("Search users") },
-                modifier = Modifier.fillMaxWidth().dpadFocusRing(RoundedCornerShape(4.dp)),
-            )
+        if (isTv) {
+            Row(
+                modifier = Modifier.widthIn(max = 1100.dp).fillMaxWidth().fillMaxHeight(),
+                horizontalArrangement = Arrangement.spacedBy(32.dp),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1.3f).fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    header()
+                    userList(Modifier.weight(1f))
+                }
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) { controls() }
+            }
+        } else {
             Column(
-                modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                modifier = (if (vp.onboardingMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
+                    Modifier.widthIn(max = vp.onboardingMaxWidth).fillMaxWidth()
+                else Modifier.fillMaxWidth()).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                shown.forEach { user ->
-                    val checked = user.id in selected
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .dpadFocusRing(RoundedCornerShape(12.dp), washTint = MaterialTheme.colorScheme.primary)
-                            .toggleable(
-                                value = checked,
-                                enabled = !busy,
-                                role = Role.Checkbox,
-                                onValueChange = { on -> if (on) selected.add(user.id) else selected.remove(user.id) },
-                            )
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(checked = checked, onCheckedChange = null)
-                        Spacer(Modifier.size(12.dp))
-                        Text(user.username, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                        com.aeriotv.android.feature.settings.LevelBadge(
-                            com.aeriotv.android.core.profiles.ProfileLevel.of(
-                                if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0,
-                            ),
-                        )
-                    }
-                }
-                if (shown.isEmpty()) {
-                    Text(
-                        "No users match.",
-                        style = MaterialTheme.typography.bodyMedium.subtext(),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                header()
+                userList(Modifier.weight(1f))
+                controls()
             }
-            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Button(
-                onClick = {
-                    busy = true; error = null
-                    scope.launch {
-                        val failures = mutableListOf<String>()
-                        list.filter { it.id in selected }.forEach { u ->
-                            if (u.apiKey.isNullOrBlank()) {
-                                needsCredential.add(u)
-                            } else {
-                                vm.add(playlistId, u, null, null, role).onFailure { failures += u.username }
-                            }
-                        }
-                        busy = false
-                        if (failures.isNotEmpty()) {
-                            error = "Could not add: ${failures.joinToString(", ")}"
-                            selected.retainAll(list.filter { it.username in failures }.map { it.id })
-                        } else if (needsCredential.isEmpty()) {
-                            onDone()
-                        }
-                    }
-                },
-                enabled = !busy && selected.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                else Text("Add selected", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            }
-            OutlinedButton(
-                onClick = onDone,
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
-            ) { Text("Skip", style = MaterialTheme.typography.titleMedium) }
-            Text(
-                "You can add or remove profiles later in Settings > Playlists.",
-                style = MaterialTheme.typography.bodySmall.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
         }
     }
 

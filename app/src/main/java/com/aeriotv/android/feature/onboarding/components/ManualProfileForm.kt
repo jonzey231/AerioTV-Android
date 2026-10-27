@@ -104,7 +104,7 @@ fun ManualProfileForm(
                     if (error == null) { username = ""; secret = "" }
                 }
             },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).dpadFocusRing(RoundedCornerShape(50)),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
             else Text("Add Profile")
