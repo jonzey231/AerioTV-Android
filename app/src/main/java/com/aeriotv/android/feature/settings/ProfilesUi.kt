@@ -593,7 +593,9 @@ fun ProfilesSection(playlistId: String) {
             onDismissRequest = { actionsFor = null },
             title = { Text(p.displayName) },
             text = {
-                Column {
+                // Up to ten rows for an Admin: scroll so none clips on a 1080p TV
+                // (a focused row brings itself into view as D-pad focus moves).
+                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
                     Text(
                         listOfNotNull(p.effectiveRole().label, if (hasPin) "PIN" else null).joinToString("  "),
                         style = MaterialTheme.typography.bodySmall,
