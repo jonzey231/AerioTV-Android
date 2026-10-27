@@ -2845,6 +2845,42 @@ class PlaylistRepository @Inject constructor(
                 .map { it.toProgramme() }
         }
 
+    /** Sub-timings of the last [loadCachedEpgTimed] call, for the launch
+     *  paint log line: wait = time until the read started running, query =
+     *  the Room read, map = entity to domain mapping. */
+    data class CachedEpgRead(
+        val programmes: List<EPGProgramme>,
+        val waitMs: Long,
+        val queryMs: Long,
+        val mapMs: Long,
+    )
+
+    /**
+     * Launch-paint variant of the windowed [loadCachedEpg]. Runs on
+     * Dispatchers.IO, NOT the background-priority two-thread EpgWork pool:
+     * at cold launch that pool is busy with CPU-bound layering/parse work
+     * that never yields, so every hop onto it (entering the read, resuming
+     * after Room, mapping) queued behind a whole parse step. The read is a
+     * few thousand rows, short, and is the critical path of the guide paint.
+     * Same query, same rows, same order as [loadCachedEpg].
+     */
+    suspend fun loadCachedEpgTimed(
+        playlistId: String,
+        fromMillis: Long,
+        toMillis: Long,
+    ): CachedEpgRead {
+        val calledAt = android.os.SystemClock.elapsedRealtime()
+        return withContext(Dispatchers.IO) {
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            val rows = epgProgrammeDao.forPlaylistInWindow(playlistId, fromMillis, toMillis)
+            val queriedAt = android.os.SystemClock.elapsedRealtime()
+            val out = ArrayList<EPGProgramme>(rows.size)
+            for (r in rows) out.add(r.toProgramme())
+            val mappedAt = android.os.SystemClock.elapsedRealtime()
+            CachedEpgRead(out, startedAt - calledAt, queriedAt - startedAt, mappedAt - queriedAt)
+        }
+    }
+
     suspend fun newestEpgFetch(playlistId: String): Long? =
         epgProgrammeDao.newestFetchedAt(playlistId)
 

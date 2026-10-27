@@ -1304,9 +1304,10 @@ class PlaylistViewModel @Inject constructor(
         val quickFromMs = maxOf(cacheFromMs, launchNowMs - QUICK_PAINT_BACK_MS)
         val quickToMs = minOf(cacheToMs, launchNowMs + QUICK_PAINT_AHEAD_MS)
         val readStartedAt = android.os.SystemClock.elapsedRealtime()
-        val cachedRaw = runCatching {
-            repository.loadCachedEpg(playlist.id, quickFromMs, quickToMs)
-        }.getOrDefault(emptyList())
+        val cachedRead = runCatching {
+            repository.loadCachedEpgTimed(playlist.id, quickFromMs, quickToMs)
+        }.getOrNull()
+        val cachedRaw = cachedRead?.programmes ?: emptyList()
         val readMs = android.os.SystemClock.elapsedRealtime() - readStartedAt
         // Off-main, same reason as the network path below: on a 30-day Guide
         // Days setting this is effectively the entire cache, which catch-up
@@ -1341,6 +1342,7 @@ class PlaylistViewModel @Inject constructor(
         // sees a subset of the channels other profiles loaded MATCHES; only a
         // different server or a re-keyed channel purges. A channel never seen
         // before (or a legacy single-hash stamp) refetches without a purge.
+        val identityStartedAt = android.os.SystemClock.elapsedRealtime()
         val identityServer = com.aeriotv.android.core.guide.GuideIdentityHash.serverFingerprint(playlist.sourceType, playlist.urlString)
         val identityEntries = com.aeriotv.android.core.guide.GuideIdentityHash.entries(channelsForBridge.distinctBy { it.url })
         val storedStamp = appPreferences.epgIdentityHash(playlist.id).first()
@@ -1348,6 +1350,7 @@ class PlaylistViewModel @Inject constructor(
         val judgement = com.aeriotv.android.core.guide.GuideIdentityHash.judge(storedStamp, identityServer, identityEntries)
         val identityStale = hasCache && identityJudged && judgement.purge
         val identityNeedsFetch = hasCache && identityJudged && judgement.needsFetch
+        val identityMs = android.os.SystemClock.elapsedRealtime() - identityStartedAt
         if (identityJudged) {
             Log.i(
                 TAG,
@@ -1396,7 +1399,9 @@ class PlaylistViewModel @Inject constructor(
             Log.i(
                 TAG,
                 "loadEpgIfConfigured: painted ${cached.size} cached programmes " +
-                    "(read ${readMs}ms, bridge ${bridgeMs}ms)",
+                    "(read ${readMs}ms [wait ${cachedRead?.waitMs}ms query ${cachedRead?.queryMs}ms " +
+                    "map ${cachedRead?.mapMs}ms], bridge ${bridgeMs}ms, identity ${identityMs}ms, " +
+                    "toPaint ${android.os.SystemClock.elapsedRealtime() - readStartedAt}ms)",
             )
             // Quick paint over the rows just read, then widen to the full
             // window off the critical path. Unchanged channels keep their list
