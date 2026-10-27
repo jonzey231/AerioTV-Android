@@ -241,6 +241,8 @@ data class ProfileRow(
     val updatedAt: Long = 0L,
     /** Position 8, `{"icon","color"}`; null = absent (older writer, reader keeps its own). */
     val avatar: com.aeriotv.android.core.profiles.AvatarSpec? = null,
+    /** Position 9, list position (0 first); -1 = absent (older writer, insertion order). */
+    val order: Int = -1,
     val tail: Tail = Tail(),
 )
 
@@ -448,7 +450,8 @@ object DsyncPayloads {
             role = r.getOrNull(6).asStr()?.takeIf { it in ROLES } ?: "",
             updatedAt = r.getOrNull(7).asLong() ?: 0L,
             avatar = decodeAvatar(r.getOrNull(8)),
-            tail = tailOf(r, 9),
+            order = r.getOrNull(9).asInt()?.takeIf { it >= 0 } ?: -1,
+            tail = tailOf(r, 10),
         )
     }
     fun encodeProfiles(base: JsonObject?, rows: List<ProfileRow>): JsonObject =
@@ -464,6 +467,7 @@ object DsyncPayloads {
                     JsonPrimitive(it.role.takeIf { r -> r in ROLES } ?: "user"),
                     JsonPrimitive(it.updatedAt),
                     encodeAvatar(it.avatar),
+                    JsonPrimitive(it.order.coerceAtLeast(0)),
                 ),
             ).plusTail(it.tail)
         }))

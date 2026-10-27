@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -221,6 +222,7 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
     val pickerVm: ProfilesViewModel = hiltViewModel()
     val adder = rememberPickerAdder(pk.playlistId, pickerVm, profiles)
     val launchRole by com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle()
+    var moveFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
 
     fun choose(p: DispatcharrProfile) {
         busy = true; error = null
@@ -249,6 +251,9 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
                             enabled = !busy,
                             modifier = (if (isLast) Modifier.focusRequester(lastFocus) else Modifier)
                                 .focusRequester(adder.requester(p.id)),
+                            onLongClick = if (launchRole == com.aeriotv.android.core.profiles.ProfileRole.Admin) {
+                                { if (!busy) moveFor = p }
+                            } else null,
                         ) { if (manager.hasPin(p.id)) pinFor = p else choose(p) }
                     }
                     if (com.aeriotv.android.core.profiles.RoleRules.canSeeSwitcher(launchRole)) {
@@ -275,7 +280,41 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
             lockSeconds = { manager.pinLockSeconds(p.id) },
         )
     }
+    moveFor?.let { p ->
+        ProfileMoveSheet(p, profiles, onDismiss = { moveFor = null }) { how ->
+            moveFor = null
+            error = manager.move(pk.playlistId, p.id, how).exceptionOrNull()?.message
+            scope.launch { restoreFocus(adder.requester(p.id), "picker tile after move") }
+        }
+    }
     adder.Dialogs()
+}
+
+/**
+ * Admin reorder sheet for a "Who is watching?" tile (launch picker and the
+ * TV top-bar picker): Move Left, Move Right, and Move to Front.
+ */
+@Composable
+internal fun ProfileMoveSheet(
+    profile: DispatcharrProfile,
+    profiles: List<DispatcharrProfile>,
+    onDismiss: () -> Unit,
+    onMove: (com.aeriotv.android.core.profiles.ProfileManager.Move) -> Unit,
+) {
+    val at = profiles.indexOfFirst { it.id == profile.id }
+    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(profile.displayName) },
+        text = {
+            Column {
+                if (at > 0) ChoiceRow(label = "Move Left", onClick = { onMove(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
+                if (at in 0 until profiles.lastIndex) ChoiceRow(label = "Move Right", onClick = { onMove(com.aeriotv.android.core.profiles.ProfileManager.Move.Later) })
+                if (at > 0) ChoiceRow(label = "Move to Front", onClick = { onMove(com.aeriotv.android.core.profiles.ProfileManager.Move.First) })
+            }
+        },
+        confirmButton = {},
+        dismissButton = { com.aeriotv.android.ui.settings.SettingsDialogTextButton(label = "Cancel", onClick = onDismiss) },
+    )
 }
 
 /** True while the active profile is a Child (reactive). */
@@ -296,6 +335,8 @@ internal fun WhoIsWatchingTile(
     enabled: Boolean,
     modifier: Modifier = Modifier,
     current: Boolean = false,
+    /** Admin only: opens the reorder sheet; null = no long press. */
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -303,10 +344,11 @@ internal fun WhoIsWatchingTile(
         modifier
             .width(120.dp)
             .onFocusChanged { focused = it.isFocused }
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 indication = null,
                 enabled = enabled,
+                onLongClick = onLongClick,
                 onClick = onClick,
             ),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -375,6 +417,8 @@ fun TvProfilePickerDialog(onDismiss: () -> Unit) {
     val currentFocus = remember { FocusRequester() }
     val currentId = activeId ?: profiles.firstOrNull { it.isDefault }?.id
     val adder = rememberPickerAdder(pid, vm, profiles)
+    var moveFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    val moveScope = rememberCoroutineScope()
 
     fun doSwitch(p: DispatcharrProfile) {
         busy = true; error = null
@@ -400,6 +444,9 @@ fun TvProfilePickerDialog(onDismiss: () -> Unit) {
                             current = isCurrent,
                             modifier = (if (isCurrent) Modifier.focusRequester(currentFocus) else Modifier)
                                 .focusRequester(adder.requester(p.id)),
+                            onLongClick = if (role == com.aeriotv.android.core.profiles.ProfileRole.Admin) {
+                                { if (!busy) moveFor = p }
+                            } else null,
                         ) {
                             when {
                                 isCurrent -> onDismiss()
@@ -441,6 +488,13 @@ fun TvProfilePickerDialog(onDismiss: () -> Unit) {
     }
     confirm?.let { p ->
         StopPlaybackDialog(name = p.displayName, onDismiss = { confirm = null }) { confirm = null; doSwitch(p) }
+    }
+    moveFor?.let { p ->
+        ProfileMoveSheet(p, profiles, onDismiss = { moveFor = null }) { how ->
+            moveFor = null
+            error = vm.move(pid, p.id, how).exceptionOrNull()?.message
+            moveScope.launch { restoreFocus(adder.requester(p.id), "picker tile after move") }
+        }
     }
     adder.Dialogs()
 }

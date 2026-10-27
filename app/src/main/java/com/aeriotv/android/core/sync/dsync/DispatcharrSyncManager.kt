@@ -1150,7 +1150,7 @@ class DispatcharrSyncManager @Inject constructor(
         val users = adminUsers(s)
         if (users.isEmpty()) return null
         val remote = base?.let(DsyncPayloads::decodeProfiles).orEmpty()
-        val rows = profileStore.forPlaylist(s.playlistId).mapNotNull { p ->
+        val rows = profileStore.forPlaylist(s.playlistId).withIndex().mapNotNull { (index, p) ->
             val user = users.firstOrNull { it.username.equals(p.username, ignoreCase = true) } ?: return@mapNotNull null
             val prev = remote.firstOrNull { it.userId == user.id }
             val rec = pinStore.syncRecord(p.id)
@@ -1170,6 +1170,7 @@ class DispatcharrSyncManager @Inject constructor(
                 role = p.effectiveRole().wire,
                 updatedAt = at,
                 avatar = p.avatar ?: com.aeriotv.android.core.profiles.AvatarSpec(),
+                order = index,
                 tail = prev?.tail ?: Tail(),
             )
         }

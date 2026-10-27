@@ -57,6 +57,9 @@ data class DispatcharrProfile(
     val userId: Int = 0,
     /** App-defined avatar (2c); null = the initial on the username's default color. */
     val avatar: AvatarSpec? = null,
+    /** Admin-set list position within the playlist (0 first); -1 = never
+     *  moved, which keeps insertion order (default profile first). */
+    val order: Int = -1,
 )
 
 enum class ProfileLevel(val label: String) {
@@ -108,6 +111,15 @@ class ProfileStore @Inject constructor(
     fun forPlaylist(playlistId: String): List<DispatcharrProfile> =
         _profiles.value.filter { it.playlistId == playlistId }
             .sortedWith(compareByDescending<DispatcharrProfile> { it.isDefault }.thenBy { it.createdAt })
+            // Stable: profiles never moved keep the insertion order above.
+            .sortedBy { if (it.order >= 0) it.order else Int.MAX_VALUE }
+
+    /** Persist [orderedIds] (every profile of [playlistId]) as positions 0..n-1. */
+    @Synchronized
+    fun setOrder(playlistId: String, orderedIds: List<String>) {
+        val pos = orderedIds.withIndex().associate { (i, id) -> id to i }
+        save(_profiles.value.map { p -> if (p.playlistId == playlistId) pos[p.id]?.let { p.copy(order = it) } ?: p else p })
+    }
 
     fun byId(id: String): DispatcharrProfile? = _profiles.value.firstOrNull { it.id == id }
 

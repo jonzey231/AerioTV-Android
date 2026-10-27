@@ -160,6 +160,8 @@ class ProfilesViewModel @Inject constructor(
     suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
         manager.addProfile(playlistId, user, password, apiKey, role)
     fun rename(profileId: String, name: String) = manager.rename(profileId, name)
+    fun move(playlistId: String, profileId: String, how: com.aeriotv.android.core.profiles.ProfileManager.Move) =
+        manager.move(playlistId, profileId, how)
     fun setAvatar(playlistId: String, profileId: String, avatar: com.aeriotv.android.core.profiles.AvatarSpec) =
         manager.setAvatar(playlistId, profileId, avatar)
     fun canEditAvatar(playlistId: String, profileId: String) =
@@ -602,6 +604,14 @@ fun ProfilesSection(playlistId: String) {
                     ChoiceRow(label = "Rename", onClick = { actionsFor = null; renaming = p })
                     if (vm.isRoleAdmin(playlistId)) {
                         ChoiceRow(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
+                        val at = profiles.indexOfFirst { it.id == p.id }
+                        fun moveRow(how: com.aeriotv.android.core.profiles.ProfileManager.Move) {
+                            actionsFor = null
+                            status = vm.move(playlistId, p.id, how).exceptionOrNull()?.message
+                            scope.launch { rowFocus[p.id]?.let { restoreFocus(it, "profile row after move") } }
+                        }
+                        if (at > 0) ChoiceRow(label = "Move Up", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
+                        if (at in 0 until profiles.lastIndex) ChoiceRow(label = "Move Down", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Later) })
                     }
                     if (vm.canEditAvatar(playlistId, p.id)) {
                         ChoiceRow(label = "Avatar", onClick = { actionsFor = null; avatarFor = p })

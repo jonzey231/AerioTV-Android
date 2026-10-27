@@ -832,6 +832,11 @@ class ProfileManager @Inject constructor(
                     Log.i(TAG, "[DSYNC] profiles: role ${role.label} for ${local.username}")
                 }
             }
+            // Absent order (older writer, -1) keeps the local position.
+            if (r.order >= 0 && r.order != local.order) {
+                store.update(id) { it.copy(order = r.order) }
+                Log.i(TAG, "[DSYNC] profiles: order ${r.order} for ${local.username}")
+            }
             // Absent (older writer) keeps the local avatar; {} is a deliberate default.
             val avatar = r.avatar?.let(AvatarCatalog::normalize)
             if (r.avatar != null && avatar != local.avatar) {
@@ -865,6 +870,34 @@ class ProfileManager @Inject constructor(
         store.update(profileId) { it.copy(avatar = clean) }
         mutated(profileId, "avatar")
         Log.i(TAG, "[PROFILE] avatar ${clean?.icon ?: AvatarCatalog.INITIAL}/${clean?.color?.ifEmpty { "default" } ?: "default"} for ${target.username}")
+    }
+
+    enum class Move { Earlier, Later, First }
+
+    /**
+     * Admin reorder (picker "Move Left" / "Move Right" / "Move to Front",
+     * Settings "Move Up" / "Move Down"). Every profile, the default one
+     * included, can move. Rows whose position changed are stamped so the
+     * order syncs per row. Returns the moved profile's new index.
+     */
+    fun move(playlistId: String, profileId: String, how: Move): Result<Int> = runCatching {
+        check(activeRole(playlistId) == ProfileRole.Admin) { "Only an Admin profile can reorder profiles." }
+        val list = store.forPlaylist(playlistId).toMutableList()
+        val from = list.indexOfFirst { it.id == profileId }
+        check(from >= 0) { "Profile not found" }
+        val to = when (how) {
+            Move.Earlier -> from - 1
+            Move.Later -> from + 1
+            Move.First -> 0
+        }.coerceIn(0, list.lastIndex)
+        if (to == from && list.all { it.order >= 0 }) return@runCatching from
+        val p = list.removeAt(from)
+        list.add(to, p)
+        val before = list.associate { it.id to it.order }
+        store.setOrder(playlistId, list.map { it.id })
+        list.forEachIndexed { i, q -> if (before[q.id] != i) mutated(q.id, "order") }
+        Log.i(TAG, "[PROFILE] moved ${p.username} $from -> $to on ${playlistId.take(8)}")
+        to
     }
 
     fun rename(profileId: String, name: String) {
