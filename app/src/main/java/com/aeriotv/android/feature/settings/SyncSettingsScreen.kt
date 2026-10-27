@@ -68,8 +68,6 @@ import com.aeriotv.android.ui.settings.settingsFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsSection
-import com.aeriotv.android.ui.settings.SettingsPickerOption
-import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.settingsRowCard
 import com.aeriotv.android.ui.settings.settingsTvFocusableRow
@@ -232,28 +230,36 @@ fun SyncSettingsScreen(
                 // Sync with: Off / Google Drive / Dispatcharr. Dispatcharr is
                 // offered only on a Dispatcharr Direct Connect playlist (or
                 // while it is the current choice, so it can be turned off).
-                val options = buildList {
-                    add(SettingsPickerOption("off", "Off"))
-                    add(SettingsPickerOption("drive", "Google Drive"))
-                    if (dsyncAvailable || provider == "dispatcharr") add(SettingsPickerOption("dispatcharr", "Dispatcharr"))
-                }
+                val showDsync = dsyncAvailable || provider == "dispatcharr"
                 SettingsSection(
-                    header = "",
-                    footer = if (tvRows) null else "Dispatcharr keeps your favorites, progress, reminders, and settings on your Dispatcharr server, separately for each profile.",
+                    header = "Sync With",
+                    footer = "Changing the sync source keeps your local data. Admins on a Dispatcharr server can view synced data.",
                 ) {
-                    SettingsPickerRow(
-                        title = "Sync with",
-                        options = options,
-                        selected = provider,
-                        onSelect = { viewModel.setSyncProvider(it) },
-                        inlineTitle = true,
+                    SyncProviderRadioRow(
+                        title = "Off",
+                        subtitle = "Favorites, progress, and settings stay on this device.",
+                        selected = provider == "off",
+                        onClick = { viewModel.setSyncProvider("off") },
+                    )
+                    SyncProviderRadioRow(
+                        title = "Google Drive",
+                        subtitle = "Sync through your Google account. Works with any playlist type.",
+                        selected = provider == "drive",
+                        onClick = { viewModel.setSyncProvider("drive") },
+                    )
+                    if (showDsync) SyncProviderRadioRow(
+                        title = "Dispatcharr",
+                        subtitle = if (dsyncAvailable) "Store sync data on your Dispatcharr server under each profile. Dispatcharr playlists only."
+                        else "Not available for this playlist.",
+                        selected = provider == "dispatcharr",
+                        onClick = { viewModel.setSyncProvider("dispatcharr") },
                     )
                 }
             }
             if (provider == "dispatcharr") {
                 item {
                     SettingsSection(
-                        header = "",
+                        header = "Dispatcharr",
                         footer = if (tvRows) null else "Each profile syncs as its own Dispatcharr user. Playlists and sign-in details never sync here. Admins on your Dispatcharr server can view synced data.",
                     ) {
                         SyncTileActionRow(
@@ -291,7 +297,7 @@ fun SyncSettingsScreen(
                 // account row stays first because Drive, unlike iCloud,
                 // needs an in-app sign-in.
                 SettingsSection(
-                    header = "",
+                    header = "Google Drive",
                     // Apple TV shows no footer under this card.
                     footer = if (tvRows) null else "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read.",
                 ) {
@@ -567,6 +573,32 @@ fun SyncSettingsScreen(
  * config check moved to its own [DeveloperConfigHint] beneath the button,
  * so this card stays user-facing copy regardless of build state.
  */
+/** Sync source choice: radio, title, and subtitle in the standard row card. */
+@Composable
+private fun SyncProviderRadioRow(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
+    SettingsRowContainer(onClick = onClick, traceTitle = title) {
+        androidx.compose.material3.RadioButton(
+            selected = selected,
+            onClick = null,
+            colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SignedOutWelcomeBanner() {
     val accent = MaterialTheme.colorScheme.primary
