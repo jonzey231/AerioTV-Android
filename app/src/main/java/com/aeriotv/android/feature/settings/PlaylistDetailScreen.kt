@@ -51,6 +51,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -215,8 +217,43 @@ fun PlaylistDetailScreen(
             contentAlignment = Alignment.TopCenter,
         ) {
         val isTv = rememberIsTvDevice()
+        // TV entry lands on the FIRST focusable row. The Profiles section
+        // (item 0) loads asynchronously, so the push-time focus request found
+        // only the Actions rows; with Active Playlist disabled it landed on
+        // Edit Playlist, and the list then kept that row anchored as Profiles
+        // filled in above it. Until the user presses a key here, each growth
+        // of item 0 scrolls back to the top and re-enters focus at row one.
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val listFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+        var userMoved by remember { mutableStateOf(false) }
+        if (isTv) {
+            LaunchedEffect(playlist.id) {
+                androidx.compose.runtime.snapshotFlow {
+                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == 0 }?.size ?: 0
+                }.collect { size ->
+                    if (userMoved || size <= 0) return@collect
+                    listState.scrollToItem(0)
+                    val ok = runCatching { listFocus.requestFocus() }.isSuccess
+                    android.util.Log.i("AerioFocus", "[SETTINGS] landing after=item0 size=$size result=$ok")
+                }
+            }
+        }
         LazyColumn(
-            modifier = Modifier.settingsFormWidth(),
+            state = listState,
+            modifier = Modifier
+                .settingsFormWidth()
+                .then(
+                    if (isTv) {
+                        Modifier
+                            .focusRequester(listFocus)
+                            .onPreviewKeyEvent { e ->
+                                if (e.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) userMoved = true
+                                false
+                            }
+                    } else {
+                        Modifier
+                    },
+                ),
             // 104dp bottom clears the MainScaffold NavigationBar on phones;
             // the TV nav lives at the top, so a slim overscan inset suffices.
             contentPadding = PaddingValues(
