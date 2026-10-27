@@ -1212,15 +1212,17 @@ class AppPreferences @Inject constructor(
             else prefs[KEY_HIDDEN_DVR_CHANNELS] = channels.joinToString("\n")
         }
     }
-    val hiddenMovieGroups: Flow<Set<String>> = store.data.map { prefs ->
-        val raw = prefs[KEY_HIDDEN_MOVIE_GROUPS] ?: ""
+    // Per profile, like [hiddenGroups] (review 2026-10-27): device-wide keys
+    // let one profile's Sync pull overwrite another profile's hidden groups.
+    val hiddenMovieGroups: Flow<Set<String>> = scopedData.map { prefs ->
+        val raw = prefs[KEY_HIDDEN_MOVIE_GROUPS.s()] ?: ""
         if (raw.isBlank()) emptySet()
         else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
     }
     suspend fun setHiddenMovieGroups(groups: Set<String>) {
         store.edit { prefs ->
-            if (groups.isEmpty()) prefs.remove(KEY_HIDDEN_MOVIE_GROUPS)
-            else prefs[KEY_HIDDEN_MOVIE_GROUPS] = groups.joinToString("\n")
+            if (groups.isEmpty()) prefs.remove(KEY_HIDDEN_MOVIE_GROUPS.s())
+            else prefs[KEY_HIDDEN_MOVIE_GROUPS.s()] = groups.joinToString("\n")
         }
     }
     /**
@@ -1251,15 +1253,17 @@ class AppPreferences @Inject constructor(
         if (raw.isNullOrBlank()) emptySet()
         else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
 
-    val hiddenSeriesGroups: Flow<Set<String>> = store.data.map { prefs ->
-        val raw = prefs[KEY_HIDDEN_SERIES_GROUPS] ?: ""
+    // Per profile, like [hiddenGroups] (review 2026-10-27): device-wide keys
+    // let one profile's Sync pull overwrite another profile's hidden groups.
+    val hiddenSeriesGroups: Flow<Set<String>> = scopedData.map { prefs ->
+        val raw = prefs[KEY_HIDDEN_SERIES_GROUPS.s()] ?: ""
         if (raw.isBlank()) emptySet()
         else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
     }
     suspend fun setHiddenSeriesGroups(groups: Set<String>) {
         store.edit { prefs ->
-            if (groups.isEmpty()) prefs.remove(KEY_HIDDEN_SERIES_GROUPS)
-            else prefs[KEY_HIDDEN_SERIES_GROUPS] = groups.joinToString("\n")
+            if (groups.isEmpty()) prefs.remove(KEY_HIDDEN_SERIES_GROUPS.s())
+            else prefs[KEY_HIDDEN_SERIES_GROUPS.s()] = groups.joinToString("\n")
         }
     }
     suspend fun autoResumeLastChannelOnce(): Boolean =

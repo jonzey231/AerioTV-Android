@@ -36,6 +36,20 @@ class VodIdResolver @Inject constructor(
     private val prefs = context.getSharedPreferences("aerio_vod_ids", Context.MODE_PRIVATE)
     private val fetchedSeries = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
+    /**
+     * Movie ids (and uuids) the catalog did not hold, remembered for this
+     * process per catalog state (review 2026-10-27): every pull re-scanned
+     * the whole catalog for rows of movies this catalog never had. The
+     * stamp is identity + generation + row count, so any sweep page that
+     * lands invalidates the memo and the next lookup scans again.
+     */
+    private val missMemo = MissMemo()
+
+    private suspend fun catalogStamp(key: String): String {
+        val gen = catalog.state(key, VodCatalogStore.KIND_MOVIE)?.generation ?: -1L
+        return "$key|$gen|${catalog.count(key, VodCatalogStore.KIND_MOVIE)}"
+    }
+
     init {
         VodIdSink.onEpisodes = { pairs -> record("e", pairs) }
     }
@@ -55,7 +69,12 @@ class VodIdResolver @Inject constructor(
     /** Movie uuid -> Dispatcharr movie id. */
     suspend fun movieId(row: PlaylistEntity, uuid: String): Int? {
         if (prefs.contains("m:$uuid")) return prefs.getInt("m:$uuid", 0)
-        val id = catalog.movie(catalogKey(row), uuid)?.id ?: return null
+        catalog.migrateIdentitiesToV2()
+        val key = catalogKey(row)
+        val stamp = catalogStamp(key)
+        if (missMemo.isMiss(stamp, "u:$uuid")) return null
+        val id = catalog.movie(key, uuid)?.id
+        if (id == null) { missMemo.addMisses(stamp, listOf("u:$uuid")); return null }
         record("m", listOf(uuid to id))
         return id
     }
@@ -66,9 +85,16 @@ class VodIdResolver @Inject constructor(
         val missing = HashSet<Int>()
         ids.forEach { id -> prefs.getString("M:$id", null)?.let { out[id] = it } ?: missing.add(id) }
         if (missing.isNotEmpty()) {
-            val found = catalog.movieUuidsByIds(catalogKey(row), missing)
-            record("m", found.map { (id, uuid) -> uuid to id })
-            out += found
+            catalog.migrateIdentitiesToV2()
+            val key = catalogKey(row)
+            val stamp = catalogStamp(key)
+            val toScan = missing.filterTo(HashSet()) { !missMemo.isMiss(stamp, "i:$it") }
+            if (toScan.isNotEmpty()) {
+                val found = catalog.movieUuidsByIds(key, toScan)
+                record("m", found.map { (id, uuid) -> uuid to id })
+                out += found
+                missMemo.addMisses(stamp, (toScan - found.keys).map { "i:$it" })
+            }
         }
         return out
     }
@@ -95,5 +121,18 @@ class VodIdResolver @Inject constructor(
             true
         }.onFailure { Log.w("AerioDsync", "[DSYNC] episode ids for series $seriesId: ${it.javaClass.simpleName}") }
             .getOrDefault(false)
+    }
+}
+
+/** Lookup misses valid for one catalog stamp; a new stamp starts empty. */
+internal class MissMemo {
+    private var stamp: String? = null
+    private val misses = HashSet<String>()
+
+    @Synchronized fun isMiss(stamp: String, key: String): Boolean = this.stamp == stamp && key in misses
+
+    @Synchronized fun addMisses(stamp: String, keys: Collection<String>) {
+        if (this.stamp != stamp) { this.stamp = stamp; misses.clear() }
+        misses += keys
     }
 }

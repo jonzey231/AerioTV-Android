@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -399,7 +400,7 @@ class DvrViewModel @Inject constructor(
         val remote: List<DispatcharrRecording>,
         val rows: List<Recording>,
     )
-    private var lastServerFetch: ServerFetch? = null
+    @Volatile private var lastServerFetch: ServerFetch? = null
 
     init {
         // Cached list first, network second (Logan 2026-09-12): the tab paints
@@ -424,8 +425,13 @@ class DvrViewModel @Inject constructor(
         // stays in Recording Now. A tick is skipped while a refresh is still
         // in flight.
         viewModelScope.launch {
+            val lifecycle = androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle
             while (isActive) {
                 kotlinx.coroutines.delay(30_000)
+                // Paused while the app is in the background (review
+                // 2026-10-27): no network every 30 s nobody can see. The
+                // first tick after a return refreshes.
+                lifecycle.currentStateFlow.first { it.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) }
                 if (refreshJob?.isActive != true) refresh()
             }
         }
@@ -494,6 +500,11 @@ class DvrViewModel @Inject constructor(
                             hasRecordingsHint = hint,
                         )
                     }
+                    lastServerFetch = null
+                    // Paint the new source's (or profile's) cached list at
+                    // once instead of a blank tab until the network answers
+                    // (review 2026-10-27); restoreFromCache checks DVR access.
+                    restoreFromCache()
                     refresh()
                 }
         }
@@ -526,7 +537,10 @@ class DvrViewModel @Inject constructor(
      */
     private suspend fun restoreFromCache(): Int {
         val playlist = playlistRepository.activePlaylist() ?: return 0
-        val snap = recordingsCache.load(recordingsCache.identity(playlist)) ?: return 0
+        // dvr_access "none": a user who may not list recordings never sees
+        // the cached ones either.
+        if (!playlist.dispatcharrCanViewDvr()) return 0
+        val snap = recordingsCache.loadFor(playlist) ?: return 0
         if (snap.recordings.isEmpty()) return 0
         _state.update { st ->
             val local = st.recordings.filter { it.source == Source.Local }
@@ -550,8 +564,15 @@ class DvrViewModel @Inject constructor(
         }
     }
 
-    fun refresh() {
-        refreshJob = viewModelScope.launch {
+    /**
+     * [showIndicator]: a user pull to refresh. Otherwise (the 30 s poll, tab
+     * entry, after an edit) the loading flag only goes up when no server
+     * rows are on screen, so a silent poll never flickers a spinner over the
+     * list (review 2026-10-27). The work (mapping, compare, EPG hydration)
+     * runs on Default, never Main; state goes out through _state.update.
+     */
+    fun refresh(showIndicator: Boolean = false) {
+        refreshJob = viewModelScope.launch(Dispatchers.Default) {
             // Opportunistic capability probe: entering DVR with a snapshot that
             // is missing, stale or past its TTL re-reads it before the list is
             // gated, so a user whose admin just granted DVR manage access does
@@ -599,7 +620,8 @@ class DvrViewModel @Inject constructor(
             }
             _state.update {
                 it.copy(
-                    isLoading = true, error = null, unsupportedSource = false,
+                    isLoading = showIndicator || it.recordings.none { r -> r.source == Source.Server },
+                    error = null, unsupportedSource = false,
                     isDispatcharrDirect = isDispatcharrDirect, canRecordToServer = canRecordToServer,
                 )
             }

@@ -78,11 +78,51 @@ class VodLibrarySnapshotStore @Inject constructor(
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    /**
+     * v2 (review 2026-10-27): playlist + URL + username, no API key hash, so
+     * a key rotation keeps the catalog. VodCatalogStore.migrateIdentitiesToV2
+     * re-keys the Room rows; [load] carries a v1 file forward.
+     */
     fun identity(p: PlaylistEntity): String =
+        "v2|${p.id}|${p.urlString}|${p.username ?: ""}"
+
+    /** The pre-2026-10-27 identity, read once to migrate its file. */
+    fun legacyIdentity(p: PlaylistEntity): String =
         "v1|${p.id}|${p.urlString}|${p.username ?: ""}|${p.apiKey?.hashCode() ?: 0}"
 
+    // filesDir, not cacheDir (review 2026-10-27): the denied flags and schema
+    // in here arm the written-under-denial latch, and a cache trim that
+    // removed the file forced a full sweep of both halves over an intact
+    // Room catalog.
     private fun file(identity: String): File =
+        File(context.filesDir, "vod-library-${identity.hashCode().toUInt()}.json")
+
+    private fun legacyCacheFile(identity: String): File =
         File(context.cacheDir, "vod-library-${identity.hashCode().toUInt()}.json")
+
+    /**
+     * Move an older file (cacheDir, or the v1 identity) to [identity]'s
+     * filesDir home, once. No-op when the current file already exists.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun migrateFrom(identity: String, legacyIdentity: String?) = withContext(Dispatchers.IO) {
+        if (file(identity).isFile) return@withContext
+        val candidates = listOfNotNull(
+            identity to legacyCacheFile(identity),
+            legacyIdentity?.let { it to file(it) },
+            legacyIdentity?.let { it to legacyCacheFile(it) },
+        )
+        for ((oldId, f) in candidates) {
+            if (!f.isFile) continue
+            val snap = runCatching {
+                f.inputStream().buffered(STREAM_BUFFER_BYTES).use { json.decodeFromStream<Snapshot>(it) }
+            }.getOrNull()?.takeIf { it.identity == oldId } ?: continue
+            save(snap.copy(identity = identity))
+            runCatching { f.delete() }
+            Log.i(TAG, "[VOD-CACHE] snapshot metadata moved to filesDir under the v2 identity")
+            return@withContext
+        }
+    }
 
     /**
      * STREAMED, not [File.readText]. Measured on the Google TV Streamer
@@ -124,7 +164,7 @@ class VodLibrarySnapshotStore @Inject constructor(
      * playlist's snapshot exactly where it is so switching back is instant.
      */
     suspend fun delete(identity: String) = withContext(Dispatchers.IO) {
-        runCatching { file(identity).delete() }
+        runCatching { file(identity).delete(); legacyCacheFile(identity).delete() }
             .onFailure { Log.w(TAG, "snapshot delete failed: ${it.message}") }
         Unit
     }

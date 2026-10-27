@@ -3,6 +3,7 @@ package com.aeriotv.android.core.network
 import android.util.Log
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -40,6 +41,37 @@ class DispatcharrAuthBroker @Inject constructor(
     private val dao: PlaylistDao,
 ) {
     /**
+     * Per-session row cache (review 2026-10-27): a sweep made one Room read
+     * plus decrypt per page. Keyed by playlist and profile scope token, and
+     * cleared on ANY write to the playlists table (a key rotation, an edit,
+     * a profile switch rewriting the row), so a stale key is never served.
+     */
+    private class CachedRow(val token: String, val row: PlaylistEntity)
+    private val rowCache = java.util.concurrent.ConcurrentHashMap<String, CachedRow>()
+    private val invalidator = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun startInvalidator() {
+        if (!invalidator.compareAndSet(false, true)) return
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO).launch {
+            dao.observeAll().collect { rowCache.clear() }
+        }
+    }
+
+    private suspend fun loadRow(playlistId: String): PlaylistEntity? {
+        startInvalidator()
+        val token = com.aeriotv.android.core.profiles.ProfileScope.token.value
+        rowCache[playlistId]?.takeIf { it.token == token }?.let { return it.row }
+        val row = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { dao.byId(playlistId) }
+            ?: return null
+        rowCache[playlistId] = CachedRow(token, row)
+        Log.d(TAG, "withApiKeyRetry: row loaded for ${playlistId.take(8)}")
+        return row
+    }
+
+    /** Drop the cached row (the key on it was just rejected or replaced). */
+    fun invalidateRow(playlistId: String) { rowCache.remove(playlistId) }
+
+    /**
      * Run [block] with the playlist's persisted api_key. On
      * [DispatcharrError.Unauthorized], run [silentRebootstrapApiKey] and
      * replay [block] with the freshly-issued key. On any other failure
@@ -52,19 +84,16 @@ class DispatcharrAuthBroker @Inject constructor(
     ): T {
         // Row load off the caller's dispatcher: callers on Main (enrichment,
         // 2026-10-26 Streamer capture, tid == pid) ran this Room read there.
-        val playlist = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { dao.byId(playlistId) }
+        val playlist = loadRow(playlistId)
             ?: throw IllegalStateException("Playlist $playlistId not found")
         val initialKey = playlist.apiKey?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("Playlist ${playlistId.take(8)} has no api_key")
         client.seedAuthMode(playlist)
         client.seedUserAgent(playlist)
-        // Breadcrumb between the Room read above and the network call in
-        // block(): discriminates a DB stall from an HTTP stall in captures
-        // (2026-08 EPG hang landed somewhere in this stretch).
-        Log.d(TAG, "withApiKeyRetry: row loaded for ${playlistId.take(8)}, invoking call (tid=${android.os.Process.myTid()} main=${android.os.Looper.myLooper() == android.os.Looper.getMainLooper()})")
         return try {
             block(initialKey)
         } catch (e: DispatcharrError.Unauthorized) {
+            invalidateRow(playlistId)
             // Task #49 (iOS verifyConnection v1.6.20 parity): before assuming
             // the KEY was rotated, check whether the 401 is a header-SHAPE
             // rejection -- some deployments (reverse proxies, hardened
@@ -120,6 +149,7 @@ class DispatcharrAuthBroker @Inject constructor(
         client.seedAuthMode(playlist.copy(dispatcharrAuthMode = detected))
         if (detected == previous) return null
         dao.update(playlist.copy(dispatcharrAuthMode = detected))
+        invalidateRow(playlist.id)
         Log.i(TAG, "auth-mode auto-detect for ${playlist.id.take(8)}: $previous -> $detected")
         return detected
     }
@@ -160,6 +190,7 @@ class DispatcharrAuthBroker @Inject constructor(
             tokenStore.store(row.id, pair.access, pair.refresh)
             val newKey = client.fetchCurrentUserApiKey(row.urlString, pair.access)
             dao.update(row.copy(apiKey = newKey))
+            invalidateRow(row.id)
             Log.i(TAG, "silentRebootstrap OK for ${playlist.id.take(8)}")
             newKey
         } catch (c: kotlinx.coroutines.CancellationException) {

@@ -509,7 +509,7 @@ fun DvrMediaTabContent(
             railLetters = available,
             railIndexOf = { letter -> filteredLibrary.indexOfFirst { bucket(it.title) == letter } },
             isRefreshing = state.isLoading && recordings.isNotEmpty(),
-            onRefresh = { viewModel.refresh() },
+            onRefresh = { viewModel.refresh(showIndicator = true) },
         )
     }
 

@@ -36,8 +36,24 @@ class DvrRecordingsCache @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /** Keyed by the playlist identity, so another source never serves a stale list. */
+    // v2 (review 2026-10-27): no API key hash, so a key rotation keeps the
+    // cached list. [load] reads a v1 file once when the v2 one is missing.
     fun identity(p: PlaylistEntity): String =
+        "v2|${p.id}|${p.urlString}|${p.username ?: ""}"
+
+    fun legacyIdentity(p: PlaylistEntity): String =
         "v1|${p.id}|${p.urlString}|${p.username ?: ""}|${p.apiKey?.hashCode() ?: 0}"
+
+    /** [load] for [p], falling back to (and carrying forward) the v1 file. */
+    suspend fun loadFor(p: PlaylistEntity): Snapshot? {
+        val id = identity(p)
+        load(id)?.let { return it }
+        val legacyId = legacyIdentity(p)
+        val old = load(legacyId) ?: return null
+        save(id, old.recordings)
+        withContext(Dispatchers.IO) { runCatching { file(legacyId).delete() } }
+        return old.copy(identity = id)
+    }
 
     private fun file(identity: String): File =
         File(context.cacheDir, "dvr-recordings-${identity.hashCode().toUInt()}.json")

@@ -139,6 +139,11 @@ class EncryptingPlaylistDao(
             dispatcharrCapabilitiesFetchedAt = raw.dispatcharrCapabilitiesFetchedAt,
             dispatcharrCapabilitiesSchema = raw.dispatcharrCapabilitiesSchema,
             dispatcharrCapabilitiesStale = raw.dispatcharrCapabilitiesStale,
+            // Server-wide fields: another profile's refresh (its own, usually
+            // smaller, channel list) must not overwrite the row's count or
+            // last-refreshed time (2026-10-27).
+            channelCount = raw.channelCount,
+            lastRefreshedAt = raw.lastRefreshedAt,
         )
     }
 

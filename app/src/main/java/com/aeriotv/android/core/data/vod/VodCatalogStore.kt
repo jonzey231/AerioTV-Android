@@ -56,12 +56,21 @@ class VodCatalogStore @Inject constructor(
      * they are (first category wins the group stamp); new titles are inserted.
      * Returns how many rows were new or refreshed.
      */
-    suspend fun writeMovies(playlistKey: String, generation: Long, movies: List<DispatcharrVODMovie>): Int =
-        writeRows(playlistKey, KIND_MOVIE, generation, movies.map { movieRow(playlistKey, generation, it) })
+    suspend fun writeMovies(playlistKey: String, generation: Long, movies: List<DispatcharrVODMovie>): Int {
+        if (movies.isEmpty()) return 0
+        // Row building (title mapping, normalizing, a JSON encode per title)
+        // runs on IO, never on the caller's thread: foreground sweeps and the
+        // Xtream walk call this from viewModelScope.
+        val rows = withContext(Dispatchers.IO) { movies.map { movieRow(playlistKey, generation, it) } }
+        return writeRows(playlistKey, KIND_MOVIE, generation, rows)
+    }
 
     /** Series counterpart of [writeMovies]. */
-    suspend fun writeSeries(playlistKey: String, generation: Long, series: List<DispatcharrVODSeries>): Int =
-        writeRows(playlistKey, KIND_SERIES, generation, series.map { seriesRow(playlistKey, generation, it) })
+    suspend fun writeSeries(playlistKey: String, generation: Long, series: List<DispatcharrVODSeries>): Int {
+        if (series.isEmpty()) return 0
+        val rows = withContext(Dispatchers.IO) { series.map { seriesRow(playlistKey, generation, it) } }
+        return writeRows(playlistKey, KIND_SERIES, generation, rows)
+    }
 
     private suspend fun writeRows(playlistKey: String, kind: String, generation: Long, rows: List<VodTitleEntity>): Int {
         if (rows.isEmpty()) return 0
@@ -292,7 +301,63 @@ class VodCatalogStore @Inject constructor(
         }
     }
 
-    /** identity() is "v1|<playlistId>|<url>|..."; null for an unknown shape. */
+    @Volatile private var identitiesMigrated = false
+    @Volatile private var countsLogged = false
+
+    /**
+     * One-time re-key of the v1 identities ("v1|id|url|user|keyHash") to v2
+     * ("v2|id|url|user"), review 2026-10-27: an API key rotation minted a new
+     * identity and pruneIdentities then deleted the old catalog, forcing a
+     * full re-download. Per (playlist, url, user) the v1 identity with the
+     * newest completed sweep is re-keyed; the others are dropped. A v2
+     * identity that already exists wins over every v1 one. Cheap no-op once
+     * no v1 key is left, and run at most once per process.
+     */
+    suspend fun migrateIdentitiesToV2() = withContext(Dispatchers.IO) {
+        if (identitiesMigrated) return@withContext
+        writeLock.withLock {
+            if (identitiesMigrated) return@withLock
+            val keys = (dao.titlePlaylistKeys() + dao.knownPlaylistKeys()).toSet()
+            val groups = keys.filter { it.startsWith("v1|") }.groupBy { v2KeyOf(it) }
+            for ((target, olds) in groups) {
+                if (target == null) continue
+                val keep = if (target in keys) null
+                    else olds.maxByOrNull { dao.newestCompletion(it) ?: 0L }
+                db.withTransaction {
+                    for (k in olds) {
+                        if (k == keep) {
+                            dao.rekeyTitles(k, target); dao.rekeyStates(k, target); dao.rekeyLanes(k, target)
+                        } else {
+                            dao.deleteTitlesFor(k); dao.deleteStateFor(k); dao.deleteLanesFor(k)
+                        }
+                    }
+                }
+                Log.i(TAG, "[VOD-DB] identity v2 migration: playlist ${playlistIdOf(target)?.take(8)} " +
+                    "kept=${keep != null} dropped=${olds.size - (if (keep != null) 1 else 0)}")
+            }
+            identitiesMigrated = true
+        }
+    }
+
+    /**
+     * Once per process: the stored movie / series counts of every profile
+     * (identity) on [playlistId], so the logs show whether the server
+     * filters VOD per user before the catalog goes per server.
+     */
+    suspend fun logProfileCountsOnce(playlistId: String) = withContext(Dispatchers.IO) {
+        if (countsLogged) return@withContext
+        countsLogged = true
+        val keys = (dao.titlePlaylistKeys() + dao.knownPlaylistKeys()).toSet()
+            .filter { playlistIdOf(it) == playlistId }
+        if (keys.size < 2) return@withContext
+        val parts = keys.sorted().mapIndexed { i, k ->
+            "profile${i + 1} movies=${dao.count(k, KIND_MOVIE)} series=${dao.count(k, KIND_SERIES)}"
+        }
+        Log.i(TAG, "[VOD-CAT] per-profile stored counts for playlist ${playlistId.take(8)}: ${parts.joinToString("; ")}")
+    }
+
+    /** identity() is "v2|<playlistId>|<url>|<user>" (or a legacy v1 key);
+     *  null for an unknown shape. */
     private fun playlistIdOf(key: String): String? = key.split('|').getOrNull(1)
 
     private fun userOf(key: String): String = key.split('|').getOrNull(3).orEmpty()
@@ -565,6 +630,14 @@ class VodCatalogStore @Inject constructor(
         const val ROW_CACHE_SIZE = 2_400
         const val IMPORT_CHUNK = 500
         const val SEARCH_LIMIT = 500
+
+        /** "v1|id|url|user|hash" -> "v2|id|url|user"; null when not a v1 key. */
+        fun v2KeyOf(v1: String): String? {
+            if (!v1.startsWith("v1|")) return null
+            val parts = v1.split('|')
+            if (parts.size < 5) return null
+            return "v2|" + parts.subList(1, parts.size - 1).joinToString("|")
+        }
     }
 }
 

@@ -114,6 +114,19 @@ interface VodCatalogDao {
     @Query("DELETE FROM vod_sweep_lane WHERE playlistKey = :playlistKey")
     suspend fun deleteLanesFor(playlistKey: String)
 
+    // Identity re-key (v1 with the API key hash -> v2 without it).
+    @Query("UPDATE vod_title SET playlistKey = :newKey WHERE playlistKey = :oldKey")
+    suspend fun rekeyTitles(oldKey: String, newKey: String)
+
+    @Query("UPDATE vod_sweep_state SET playlistKey = :newKey WHERE playlistKey = :oldKey")
+    suspend fun rekeyStates(oldKey: String, newKey: String)
+
+    @Query("UPDATE vod_sweep_lane SET playlistKey = :newKey WHERE playlistKey = :oldKey")
+    suspend fun rekeyLanes(oldKey: String, newKey: String)
+
+    @Query("SELECT MAX(completedAtMs) FROM vod_sweep_state WHERE playlistKey = :playlistKey")
+    suspend fun newestCompletion(playlistKey: String): Long?
+
     // ---- Sweep state
 
     @Query("SELECT * FROM vod_sweep_state WHERE playlistKey = :playlistKey AND kind = :kind")

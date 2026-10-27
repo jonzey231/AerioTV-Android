@@ -128,6 +128,18 @@ interface EpgProgrammeDao {
     @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: String)
 
+    /** REKEYED identity purge (2026-10-27): only the re-keyed channels' rows. */
+    @Query("DELETE FROM epg_programme WHERE playlistId = :playlistId AND channelId IN (:channelIds)")
+    suspend fun deleteForChannels(playlistId: String, channelIds: List<String>): Int
+
+    /** Rows stored under a raw feed key (pre-canonical builds): no identity
+     *  check can vouch for which channel they attach to after a re-key. */
+    @Query(
+        "DELETE FROM epg_programme WHERE playlistId = :playlistId " +
+            "AND channelId NOT LIKE 'disp:%' AND channelId NOT LIKE 'm3u:%'"
+    )
+    suspend fun deleteNonCanonical(playlistId: String): Int
+
     /** Prune one source's programmes that ended before its retention cutoff
      *  (catch-up task #135: retention is per playlist now, so the old blanket
      *  cross-source ended-1h-ago delete is gone). Returns the row count so the

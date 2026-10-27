@@ -20,4 +20,15 @@ object BackgroundSweep {
                 body.run()
             }, "aerio-bg-sweep").apply { isDaemon = true }
         }.asCoroutineDispatcher()
+
+    /**
+     * Foreground counterpart: a normal-priority single thread. A sweep the
+     * user is waiting on still maps pages and builds rows off the main
+     * thread (review 2026-10-27), and a single thread keeps the same
+     * one-at-a-time confinement the sweep state relies on in the background.
+     */
+    val foregroundDispatcher: CoroutineDispatcher =
+        Executors.newSingleThreadExecutor { body ->
+            Thread(body, "aerio-fg-sweep").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
 }

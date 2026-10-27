@@ -143,6 +143,8 @@ class DispatcharrSyncManager @Inject constructor(
         var serverFull = false
         var paused = false
         val serverBytes = HashMap<String, Long>()
+        /** Bucket wire name -> list `bytes` when that bucket was last fetched. */
+        val fetchedBytes = HashMap<String, Long>()
         /** Categories present inside their v2 key on the server. */
         val present = java.util.Collections.synchronizedSet(HashSet<DsyncKey>())
         val pending = HashMap<DsyncKey, Job>()
@@ -514,6 +516,15 @@ class DispatcharrSyncManager @Inject constructor(
             keys.forEach { s.present -= it; s.read += it }
             return
         }
+        // No HEAD / ETag on App Data, so the list's `bytes` is the only
+        // change signal. A pull under BUCKET_REFETCH_MIN_MS after the last
+        // one that sees the same size skips the GET (review 2026-10-27);
+        // anything older, or any size change, fetches as before.
+        val listed = s.serverBytes[b.wire]
+        if (shouldSkipBucketGet(s.lastPullAt, System.currentTimeMillis(), s.fetchedBytes[b.wire], listed)) {
+            Log.d(TAG, "[DSYNC] skip get ${b.wire}: unchanged ${listed}B, last pull under ${BUCKET_REFETCH_MIN_MS / 1000}s ago")
+            return
+        }
         when (val f = fetchBucket(c, b)) {
             Fetched.Absent -> keys.forEach { s.present -= it; s.read += it }
             Fetched.Failed -> Unit
@@ -523,6 +534,7 @@ class DispatcharrSyncManager @Inject constructor(
                 Log.w(TAG, "[DSYNC] skip ${b.wire} v${f.version} > v${DsyncV2.SCHEMA}")
             }
             is Fetched.Got -> {
+                listed?.let { s.fetchedBytes[b.wire] = it }
                 saveBucketRaw(s, b, f.bucket.raw)
                 keys.forEach { key ->
                     when (val d = DsyncV2.category(f.bucket, key)) {
@@ -1443,3 +1455,10 @@ class DispatcharrSyncManager @Inject constructor(
         )
     }
 }
+
+/** Dispatcharr Sync: skip a bucket GET pulled moments ago with the same listed size. */
+internal const val BUCKET_REFETCH_MIN_MS = 60_000L
+
+internal fun shouldSkipBucketGet(lastPullAt: Long, now: Long, fetchedBytes: Long?, listedBytes: Long?): Boolean =
+    lastPullAt > 0L && now - lastPullAt in 0 until BUCKET_REFETCH_MIN_MS &&
+        fetchedBytes != null && listedBytes != null && fetchedBytes == listedBytes
