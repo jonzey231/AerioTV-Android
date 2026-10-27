@@ -98,6 +98,9 @@ object DisplayFrameRateMatcher {
         /** False on phones / tablets: measure [contentFps] only (the format
          *  badge and Stream Info need it) and never request a display rate. */
         matchRate: Boolean = true,
+        /** VOD only: also request the 24 film class (23.976 / 24). Live keeps
+         *  the 50 / 60 classes only. */
+        filmRate: Boolean = false,
     ): Any? {
         // Android#134: measure on every API level. Below S (Shield on
         // Android 11) there is no Surface.setFrameRate, but the measured rate
@@ -106,12 +109,14 @@ object DisplayFrameRateMatcher {
         val deltasUs = ArrayDeque<Long>()
         var lastPtsUs = -1L
         var lastAppliedFps = 0f
+        var lastLoggedClass = Float.NaN
         val listener = VideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
             if (lastPtsUs >= 0L) {
                 val d = presentationTimeUs - lastPtsUs
                 if (d < 0L || d > 1_000_000L) {
                     deltasUs.clear() // stream discontinuity / channel flip
                     contentFps.value = 0f
+                    lastLoggedClass = Float.NaN
                 } else if (d in 4_000L..210_000L) {
                     deltasUs.addLast(d)
                     if (deltasUs.size > 60) deltasUs.removeFirst()
@@ -145,10 +150,24 @@ object DisplayFrameRateMatcher {
                 // 24-class film cadence (23.976 / 24) is deliberately NOT
                 // requested: it divides neither 50 nor 60, so it keeps the
                 // status-quo 3:2 behavior until handled on purpose.
+                //
+                // VOD (filmRate) requests the 24 class directly: a film title
+                // on a 60 Hz panel otherwise plays with 3:2 pulldown judder
+                // (Streamer 2026-10-27). 24 is a real panel mode, not a
+                // sub-mode override, so the 25 lesson above does not apply.
                 val target = when {
                     fps in 45f..65f -> fps
                     fps in 24.5f..32.5f -> fps * 2f
+                    filmRate && fps in 23.5f..24.5f -> filmTarget(sorted, surfaceView)
                     else -> 0f
+                }
+                val cls = if (target > 0f) target else Math.round(fps).toFloat()
+                if (lastLoggedClass.isNaN() || abs(cls - lastLoggedClass) > 1.0f) {
+                    lastLoggedClass = cls
+                    // Always PTS-derived: this runs on the playback thread,
+                    // where reading player.videoFormat throws a wrong-thread
+                    // runtime check.
+                    Log.i(TAG, "[AerioFpsMatch] measured ${"%.3f".format(fps)} (n=${deltasUs.size}, source=pts)")
                 }
                 if (matchRate && target > 0f && abs(target - lastAppliedFps) > 1.0f) {
                     lastAppliedFps = target
@@ -175,6 +194,15 @@ object DisplayFrameRateMatcher {
         latestHandle = listener
         attachedPlayer = player
         return listener
+    }
+
+    /** 23.976 when the median frame interval says below 24.0 fps and the
+     *  display lists a 23.976-class mode, else 24. */
+    private fun filmTarget(sorted: List<Long>, surfaceView: SurfaceView): Float {
+        val median = 1_000_000.0 / sorted[sorted.size / 2]
+        if (median >= 24.0) return 24f
+        val modes = runCatching { surfaceView.display?.supportedModes }.getOrNull() ?: return 24f
+        return if (modes.any { abs(it.refreshRate - 23.976f) < 0.01f }) 23.976f else 24f
     }
 
     /** Hand ownership back to an earlier attachment (the live window) after

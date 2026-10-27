@@ -41,7 +41,7 @@ internal object VodFrameRateMatch {
         val sv = view.videoSurfaceView as? SurfaceView ?: return
         val prevPlayer = DisplayFrameRateMatcher.attachedPlayer
         val prevHandle = DisplayFrameRateMatcher.latestHandle
-        val handle = DisplayFrameRateMatcher.attach(player, sv, matchRate = isTv(view))
+        val handle = DisplayFrameRateMatcher.attach(player, sv, matchRate = isTv(view), filmRate = true)
         attachments[view] = Attachment(player, handle, sv, prevPlayer, prevHandle)
         tracer.contentFpsProvider = { DisplayFrameRateMatcher.contentFps.value }
         runCatching {
