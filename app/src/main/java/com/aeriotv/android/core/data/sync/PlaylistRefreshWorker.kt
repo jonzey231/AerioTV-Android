@@ -125,10 +125,15 @@ class PlaylistRefreshWorker @AssistedInject constructor(
             // the stamp a channel-list change in this run read as an identity
             // mismatch at launch, which purged the rows just written.
             runCatching {
+                val g = com.aeriotv.android.core.guide.GuideIdentityHash
+                val server = g.serverFingerprint(playlist.sourceType, playlist.urlString)
                 prefs.setEpgIdentityHash(
                     playlist.id,
-                    com.aeriotv.android.core.guide.GuideIdentityHash.of(
-                        channels.getOrThrow().distinctBy { it.url },
+                    g.merged(
+                        prefs.epgIdentityHash(playlist.id).first(),
+                        server,
+                        g.entries(channels.getOrThrow().distinctBy { it.url }),
+                        reset = false,
                     ),
                 )
             }.onFailure { Log.w(TAG, "identity stamp failed", it) }

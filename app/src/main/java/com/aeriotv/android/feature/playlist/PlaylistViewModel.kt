@@ -726,8 +726,15 @@ class PlaylistViewModel @Inject constructor(
                     "[STARTUP] refresh scheduled: cold launch, channel cache fresh (age ${ageMin}m), " +
                         "background refresh after the guide paints (type=${saved.sourceType}, channels=$channelCountForGate)",
                 )
-                // Behind the cached paint, never ahead of it.
-                settleGate.awaitGuidePainted()
+                // Behind the cached paint, never ahead of it. After the launch
+                // picker / PIN gate the cached paint already ran under it, so
+                // the refresh starts the moment the hold releases (Streamer
+                // 2026-10-27: 12 s from "launch work resumed" to this refresh).
+                if (com.aeriotv.android.core.app.LaunchWorkHold.heldThisLaunch) {
+                    com.aeriotv.android.core.app.LaunchWorkHold.await("channel refresh")
+                } else {
+                    settleGate.awaitGuidePainted()
+                }
             }
             Log.i(
                 TAG,
@@ -1021,14 +1028,32 @@ class PlaylistViewModel @Inject constructor(
             "$prefix: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}"
         }
 
+    private var epgLoadJob: kotlinx.coroutines.Job? = null
+    private var epgLoadPlaylistId: String? = null
+    private var epgLoadForced = false
+
     private fun loadEpgIfConfigured(
         playlist: PlaylistEntity,
         forceRefresh: Boolean = false,
         coldLaunch: Boolean = false,
     ) {
-        viewModelScope.launch {
+        // One EPG load per playlist at a time, latest wins (Streamer
+        // 2026-10-27: the bootstrap load parked on the launch hold and the
+        // profile-switch load both fetched, hadCache=false then true). The
+        // newer call carries the newer channel list; a superseded forced load
+        // passes its force on.
+        val prior = epgLoadJob?.takeIf { it.isActive && epgLoadPlaylistId == playlist.id }
+        val force = forceRefresh || (prior != null && epgLoadForced)
+        if (prior != null) {
+            Log.i(TAG, "loadEpgIfConfigured: superseding the in-flight EPG load (${playlist.id.take(8)}, force=$force)")
+            prior.cancel()
+        }
+        epgLoadPlaylistId = playlist.id
+        epgLoadForced = force
+        epgLoadJob = viewModelScope.launch {
+            prior?.join()
             coroutineContext[kotlinx.coroutines.Job]?.let { trackPlaylistTask(playlist.id, "EPG load", it) }
-            doLoadEpg(playlist, forceRefresh, coldLaunch)
+            doLoadEpg(playlist, force, coldLaunch)
             // doLoadEpg rebuilds the catalog on every path that has rows; the
             // fallback covers a failed fetch over a history-only cache.
             if (_state.value.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog) {
@@ -1310,17 +1335,37 @@ class PlaylistViewModel @Inject constructor(
         // let the age rule decide. Replaces the old "fewer than 20 % of cached
         // keys match" ratio, which fired on every launch of a merged playlist
         // and again mid-session after layering landed.
-        val identityHash = com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsForBridge.distinctBy { it.url })
-        val storedHash = appPreferences.epgIdentityHash(playlist.id).first()
-        val identityStale = hasCache && channelsForBridge.isNotEmpty() && storedHash != identityHash
+        //
+        // 2026-10-27: the identity belongs to the SERVER (the playlist row),
+        // not the active profile. See GuideIdentityHash.judge: a profile that
+        // sees a subset of the channels other profiles loaded MATCHES; only a
+        // different server or a re-keyed channel purges. A channel never seen
+        // before (or a legacy single-hash stamp) refetches without a purge.
+        val identityServer = com.aeriotv.android.core.guide.GuideIdentityHash.serverFingerprint(playlist.sourceType, playlist.urlString)
+        val identityEntries = com.aeriotv.android.core.guide.GuideIdentityHash.entries(channelsForBridge.distinctBy { it.url })
+        val storedStamp = appPreferences.epgIdentityHash(playlist.id).first()
+        val identityJudged = channelsForBridge.isNotEmpty()
+        val judgement = com.aeriotv.android.core.guide.GuideIdentityHash.judge(storedStamp, identityServer, identityEntries)
+        val identityStale = hasCache && identityJudged && judgement.purge
+        val identityNeedsFetch = hasCache && identityJudged && judgement.needsFetch
+        if (identityJudged) {
+            Log.i(
+                TAG,
+                "loadEpgIfConfigured: identity ${judgement.verdict} (playlist=${playlist.id.take(8)} " +
+                    "profile=${com.aeriotv.android.core.profiles.ProfileScope.current().ifEmpty { "default" }.take(8)} " +
+                    "server=${LogSanitizer.redact(identityServer)} storedServerMatch=${judgement.storedServer == identityServer} " +
+                    "loaded=${identityEntries.size} stored=${judgement.storedEntries} rekeyed=${judgement.rekeyed} " +
+                    "new=${judgement.newChannels} hasCache=$hasCache)",
+            )
+        }
         // Rows painted from a stale-identity cache before the purge below.
         var identityPainted = 0
         if (identityStale) {
             Log.w(
                 TAG,
-                "loadEpgIfConfigured: cached EPG keys do not match current channel " +
-                    "identity (stored=${storedHash.take(8)} current=${identityHash.take(8)} " +
-                    "channels=${channelsForBridge.size}); treating cache as stale and refetching",
+                "loadEpgIfConfigured: cached EPG keys do not match the server's channel " +
+                    "identity (${judgement.verdict}, rekeyed=${judgement.rekeyed}, " +
+                    "channels=${channelsForBridge.size}); purging cache and refetching",
             )
             // Paint what is still unambiguous BEFORE the purge. The identity
             // hash also covers each channel's guide key (Dispatcharr's EPGData
@@ -1402,7 +1447,7 @@ class PlaylistViewModel @Inject constructor(
                     "(written by a build with a known EPG cache defect); forcing one refetch",
             )
         }
-        if (!forceRefresh && !staleEpoch && !identityStale) {
+        if (!forceRefresh && !staleEpoch && !identityStale && !identityNeedsFetch) {
             val newest = runCatching { repository.newestEpgFetch(playlist.id) }.getOrNull()
             val fresh = newest != null &&
                 (System.currentTimeMillis() - newest) < EPG_CACHE_TTL_MS
@@ -1464,7 +1509,15 @@ class PlaylistViewModel @Inject constructor(
                 }
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes")
                 // Stamp the cache with the identity it was built for (see identityStale).
-                runCatching { appPreferences.setEpgIdentityHash(playlist.id, com.aeriotv.android.core.guide.GuideIdentityHash.of(channelsNow.distinctBy { it.url })) }
+                runCatching {
+                    val g = com.aeriotv.android.core.guide.GuideIdentityHash
+                    val server = g.serverFingerprint(playlist.sourceType, playlist.urlString)
+                    val prior = appPreferences.epgIdentityHash(playlist.id).first()
+                    appPreferences.setEpgIdentityHash(
+                        playlist.id,
+                        g.merged(prior, server, g.entries(channelsNow.distinctBy { it.url }), reset = identityStale),
+                    )
+                }
                 // A fetch that yields ZERO programmes is a FAILED fetch, not an
                 // empty guide, and it must not be allowed to overwrite anything.
                 // Installing it wiped the 6,916 rows the cached paint had just

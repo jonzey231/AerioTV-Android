@@ -23,8 +23,15 @@ object LaunchWorkHold {
     private val _held = MutableStateFlow(false)
     val held: StateFlow<Boolean> = _held.asStateFlow()
 
+    /** True once the launch picker or PIN gate held launch work this
+     *  process. The work it released runs at once (the user already waited
+     *  behind the picker), never behind the guide-paint wait. */
+    @Volatile var heldThisLaunch: Boolean = false
+        private set
+
     fun set(hold: Boolean) {
         if (_held.value == hold) return
+        if (hold) heldThisLaunch = true
         _held.value = hold
         Log.i(TAG, if (hold) "[PROFILE] launch work deferred until the picker closes" else "[PROFILE] launch work resumed")
     }
