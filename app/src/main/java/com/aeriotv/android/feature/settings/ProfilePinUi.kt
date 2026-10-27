@@ -145,6 +145,13 @@ fun PinEntryDialog(
         return true
     }
 
+    // Every PIN pad pauses launch and switch work, cached paints included,
+    // until it leaves composition (ok, cancel, or back). Streamer 2026-10-27:
+    // the cached paints under the pad dropped frames while the PIN was typed.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        com.aeriotv.android.core.app.LaunchWorkHold.pinPadOpened()
+        onDispose { com.aeriotv.android.core.app.LaunchWorkHold.pinPadClosed() }
+    }
     val rootFocus = remember { FocusRequester() }
     Dialog(
         onDismissRequest = { back() },

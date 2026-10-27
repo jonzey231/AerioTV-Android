@@ -470,6 +470,7 @@ class OnDemandViewModel @Inject constructor(
                     if (rows == 0) return@collectLatest
                     if (isMovie) holdMoviesLibrary = false else holdSeriesLibrary = false
                 }
+                com.aeriotv.android.core.app.LaunchWorkHold.awaitPinPad(if (isMovie) "movies library build" else "series library build")
                 val pending = if (isMovie) _moviesLibraryPending else _seriesLibraryPending
                 pending.value = true
                 val built = runCatching { buildLibrary(isMovie, spec) }
@@ -547,6 +548,7 @@ class OnDemandViewModel @Inject constructor(
                     catalogStore.logProfileCountsOnce(playlist.id)
                 }.onFailure { warnUnlessCancelled("VOD identity migration failed", it) }
             }
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitPinPad("VOD restore")
             val decodeStartedAt = android.os.SystemClock.elapsedRealtime()
             val meta = identity?.let { loadSnapshotMetadata(it) }
             val decodeMs = android.os.SystemClock.elapsedRealtime() - decodeStartedAt
@@ -597,6 +599,8 @@ class OnDemandViewModel @Inject constructor(
             // A denied half is simply not attached to its catalog. The rows
             // stay in Room untouched, so a later grant reattaches instantly
             // (the Room-era replacement for shelving the JSON lists).
+            // Attaching the keys builds the library index: not under a pad.
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitPinPad("VOD library index")
             if (!moviesDenied) movieCatalogKey.value = identity
             if (!seriesDenied) seriesCatalogKey.value = identity
             val movieGroups = if (moviesDenied) emptyList() else meta?.movieGroupNames.orEmpty()

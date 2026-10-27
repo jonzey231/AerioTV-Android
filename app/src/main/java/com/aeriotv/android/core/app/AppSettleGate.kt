@@ -142,6 +142,8 @@ class AppSettleGate @Inject constructor() {
      * (sweeps, refills, enrichment, sync pulls) stays parked.
      */
     suspend fun awaitGuidePaintedForCachedRead() {
+        // A PIN pad on screen pauses cached work too (2026-10-27).
+        LaunchWorkHold.awaitPinPad("cached read behind the guide paint")
         withTimeoutOrNull(GUIDE_PAINT_WAIT_MAX_MS) { guidePainted.first { it } }
     }
 

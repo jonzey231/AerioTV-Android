@@ -516,7 +516,9 @@ class VodCatalogStore @Inject constructor(
             MediaSortOrder.YearOldest -> "(year IS NULL) ASC, year ASC, sortKey ASC"
             MediaSortOrder.RatingHighest -> "COALESCE(ratingValue, -1.0) DESC, sortKey ASC"
         }
-        val sql = "SELECT id, bucket" + (if (bindHidden) "" else ", itemKey") +
+        // unicode(bucket): the bucket letter as an int, so the index walk
+        // allocates no String per row (40k titles at launch, 2026-10-27).
+        val sql = "SELECT id, unicode(bucket)" + (if (bindHidden) "" else ", itemKey") +
             " FROM vod_title WHERE $where ORDER BY $order"
         val hiddenSet = if (bindHidden) null else hiddenItemKeys.toHashSet()
         var ids = LongArray(4096)
@@ -530,7 +532,7 @@ class VodCatalogStore @Inject constructor(
                 }
                 if (n == ids.size) { ids = ids.copyOf(n * 2); buckets = buckets.copyOf(n * 2) }
                 ids[n] = c.getLong(0)
-                buckets[n] = c.getString(1)?.firstOrNull() ?: '#'
+                buckets[n] = if (c.isNull(1)) '#' else c.getInt(1).toChar()
                 n++
             }
         }

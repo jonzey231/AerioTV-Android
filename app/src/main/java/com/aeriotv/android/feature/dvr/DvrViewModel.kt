@@ -409,12 +409,15 @@ class DvrViewModel @Inject constructor(
         // first frame if anything is playing, ~20 s in). Nothing cached means
         // there is nothing to show, so that launch refreshes straight away.
         viewModelScope.launch {
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitPinPad("DVR restore")
             val restored = restoreFromCache()
             if (restored > 0) {
                 com.aeriotv.android.core.app.AppLaunchTrace.noteDvrRestored()
                 settleGate.awaitSettled()
                 settleGate.awaitSweepWindow()
             }
+            // Network: parked behind the launch picker / PIN gate / PIN pad.
+            com.aeriotv.android.core.app.LaunchWorkHold.await("DVR first refresh")
             refresh()
             refreshJob?.join()
             Log.i(TAG, "[DVR] background refresh: ${_state.value.recordings.size} recordings")
