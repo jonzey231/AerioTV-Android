@@ -512,6 +512,15 @@ object DatabaseModule {
         }
     }
 
+    /** Launch guide read: the window index also carries startMillis so the
+     *  overlap test needs no table lookup (EpgProgrammeEntity indices). */
+    internal val MIGRATION_37_38 = object : Migration(37, 38) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP INDEX IF EXISTS `index_epg_programme_playlistId_endMillis`")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_epg_programme_playlistId_endMillis_startMillis` ON `epg_programme` (`playlistId`, `endMillis`, `startMillis`)")
+        }
+    }
+
     /** Pure SQL list so the sqlite3 dry run and a unit test can replay it. */
     internal val MIGRATION_36_37_SQL = listOf(
         "CREATE TABLE IF NOT EXISTS `favorite_channel_new` (`channelId` TEXT NOT NULL, `channelName` TEXT NOT NULL, `displayOrder` INTEGER NOT NULL, `addedAt` INTEGER NOT NULL, `profileScope` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`channelId`, `profileScope`))",
@@ -543,7 +552,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .build()
 

@@ -30,7 +30,11 @@ import androidx.room.PrimaryKey
         // Streamer paid 7605 ms for a 2-day window over a 267K-row table
         // (gtvlogs/session7.txt 14:29:17.640). Equality column first, range
         // column second, which is the order SQLite can use for both.
-        Index(value = ["playlistId", "endMillis"]),
+        // 2026-10-27 (schema 38): startMillis appended so the window query's
+        // `startMillis < ?` is checked inside the index. With the two-column
+        // index every entry with endMillis > from (the whole rest of the
+        // Guide Days span) cost a table-row lookup just to be rejected.
+        Index(value = ["playlistId", "endMillis", "startMillis"]),
         // Task #137: one row per (source, channel, start slot). With
         // OnConflictStrategy.REPLACE on insertAll, a fresh feed's copy of an
         // already-cached programme replaces it in place instead of

@@ -73,6 +73,26 @@ interface EpgProgrammeDao {
     ): List<EpgProgrammeEntity>
 
     /**
+     * Launch paint read: [forPlaylistInWindow] without the description column
+     * (the long text that made each row several hundred bytes and the result
+     * span several CursorWindows). The quick paint draws cells only; the full
+     * window rebuild that follows reads whole rows, and GuideCatalog list
+     * equality includes description, so every cell is replaced by its full row.
+     */
+    @Transaction
+    @Query(
+        "SELECT id, channelId, title, startMillis, endMillis, category, dispatcharrProgramId, " +
+            "subTitle, season, episode, isNew, isLiveBroadcast, isPremiere, isFinale, isRepeat, iconUrl " +
+            "FROM epg_programme WHERE playlistId = :playlistId " +
+            "AND endMillis > :fromMillis AND startMillis < :toMillis"
+    )
+    suspend fun paintRowsInWindow(
+        playlistId: String,
+        fromMillis: Long,
+        toMillis: Long,
+    ): List<EpgPaintRow>
+
+    /**
      * EPG-scope search for the global Search surface (parity task #41 / iOS
      * SearchView EPG scope). Matches title OR description, case-insensitive
      * (Room LIKE is case-insensitive for ASCII), time-windowed to now-forward
@@ -255,3 +275,23 @@ interface EpgProgrammeDao {
         insertAll(drawable)
     }
 }
+
+/** Projection for [EpgProgrammeDao.paintRowsInWindow]. */
+data class EpgPaintRow(
+    val id: Long,
+    val channelId: String,
+    val title: String,
+    val startMillis: Long,
+    val endMillis: Long,
+    val category: String,
+    val dispatcharrProgramId: Int?,
+    val subTitle: String?,
+    val season: Int?,
+    val episode: Int?,
+    val isNew: Boolean,
+    val isLiveBroadcast: Boolean,
+    val isPremiere: Boolean,
+    val isFinale: Boolean,
+    val isRepeat: Boolean,
+    val iconUrl: String?,
+)

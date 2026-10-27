@@ -2872,12 +2872,52 @@ class PlaylistRepository @Inject constructor(
         val calledAt = android.os.SystemClock.elapsedRealtime()
         return withContext(Dispatchers.IO) {
             val startedAt = android.os.SystemClock.elapsedRealtime()
-            val rows = epgProgrammeDao.forPlaylistInWindow(playlistId, fromMillis, toMillis)
+            logPaintQueryPlanOnce()
+            val rows = epgProgrammeDao.paintRowsInWindow(playlistId, fromMillis, toMillis)
             val queriedAt = android.os.SystemClock.elapsedRealtime()
             val out = ArrayList<EPGProgramme>(rows.size)
-            for (r in rows) out.add(r.toProgramme())
+            for (r in rows) out.add(
+                EPGProgramme(
+                    channelId = r.channelId,
+                    title = r.title,
+                    description = "",
+                    startMillis = r.startMillis,
+                    endMillis = r.endMillis,
+                    category = r.category,
+                    dispatcharrProgramId = r.dispatcharrProgramId,
+                    subTitle = r.subTitle,
+                    season = r.season,
+                    episode = r.episode,
+                    isNew = r.isNew,
+                    isLiveBroadcast = r.isLiveBroadcast,
+                    isPremiere = r.isPremiere,
+                    isFinale = r.isFinale,
+                    isRepeat = r.isRepeat,
+                    iconUrl = r.iconUrl,
+                ),
+            )
             val mappedAt = android.os.SystemClock.elapsedRealtime()
             CachedEpgRead(out, startedAt - calledAt, queriedAt - startedAt, mappedAt - queriedAt)
+        }
+    }
+
+    @Volatile private var paintPlanLogged = false
+
+    /** One EXPLAIN QUERY PLAN of the launch paint query per process, so the
+     *  index choice is on record in the log. */
+    private fun logPaintQueryPlanOnce() {
+        if (paintPlanLogged) return
+        paintPlanLogged = true
+        runCatching {
+            database.openHelper.readableDatabase.query(
+                "EXPLAIN QUERY PLAN SELECT id FROM epg_programme WHERE playlistId = ? " +
+                    "AND endMillis > ? AND startMillis < ?",
+                arrayOf<Any?>("x", 0L, 1L),
+            ).use { c ->
+                val plan = StringBuilder()
+                while (c.moveToNext()) plan.append(c.getString(c.columnCount - 1)).append(" | ")
+                android.util.Log.i("PlaylistRepository", "[EPG-PAINT] plan: $plan")
+            }
         }
     }
 
