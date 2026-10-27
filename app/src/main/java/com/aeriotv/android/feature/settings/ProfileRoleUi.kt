@@ -74,7 +74,7 @@ fun ManageProfilesRow(onClick: () -> Unit) {
     SettingsCard {
         SettingsNavRow(
             title = "Manage Profiles",
-            subtitle = "Needs an Admin PIN",
+            subtitle = "Switch profiles, Admin PIN",
             icon = Icons.Outlined.ManageAccounts,
             onClick = onClick,
         )

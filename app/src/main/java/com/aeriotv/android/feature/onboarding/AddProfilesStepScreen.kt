@@ -98,12 +98,12 @@ class AddProfilesStepViewModel @Inject constructor(
         Step.Skip
     }
 
-    suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?) =
-        if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey)
-        else manager.addProfileManual(playlistId, username, password, null)
+    suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
+        if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
+        else manager.addProfileManual(playlistId, username, password, null, role)
 
-    suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?) =
-        manager.addProfile(playlistId, user, password, apiKey)
+    suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
+        manager.addProfile(playlistId, user, password, apiKey, role)
 
     private companion object { const val TAG = "AddProfilesStep" }
 }
@@ -120,6 +120,8 @@ fun AddProfilesStepScreen(
     var error by remember { mutableStateOf<String?>(null) }
     // Users whose key was missing: prompt for a password or key, one at a time.
     val needsCredential = remember { mutableStateListOf<DispatcharrUserSummary>() }
+    var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
+    val profilesVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
     val scope = rememberCoroutineScope()
 
     var manual by remember { mutableStateOf(false) }
@@ -224,6 +226,7 @@ fun AddProfilesStepScreen(
                     )
                 }
             }
+            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             Button(
                 onClick = {
@@ -234,7 +237,7 @@ fun AddProfilesStepScreen(
                             if (u.apiKey.isNullOrBlank()) {
                                 needsCredential.add(u)
                             } else {
-                                vm.add(playlistId, u, null, null).onFailure { failures += u.username }
+                                vm.add(playlistId, u, null, null, role).onFailure { failures += u.username }
                             }
                         }
                         busy = false
@@ -274,7 +277,7 @@ fun AddProfilesStepScreen(
         CredentialDialog(
             user = u,
             onSubmit = { password, key ->
-                vm.add(playlistId, u, password, key).fold(
+                vm.add(playlistId, u, password, key, role).fold(
                     { needsCredential.remove(u); if (needsCredential.isEmpty() && error == null) onDone(); null },
                     { it.message ?: "Could not add profile" },
                 )
@@ -334,6 +337,8 @@ private fun CredentialDialog(
 @Composable
 private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewModel, onDone: () -> Unit) {
     val added = remember { mutableStateListOf<String>() }
+    var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
+    val profilesVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
     Box(
         modifier = Modifier
@@ -366,9 +371,10 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
             added.forEach { name ->
                 Text("Added $name", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
             }
+            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
             com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
                 onAdd = { u, pw, key ->
-                    vm.addManual(playlistId, u, pw, key).fold(
+                    vm.addManual(playlistId, u, pw, key, role).fold(
                         { added += it.username; null },
                         { it.message ?: "Could not add profile" },
                     )

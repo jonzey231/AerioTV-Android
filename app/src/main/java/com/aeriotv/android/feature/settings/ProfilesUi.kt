@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -115,9 +117,9 @@ class ProfilesViewModel @Inject constructor(
             manager.baseIsServerAdmin(playlistId), manager.activeIsAdmin(playlistId), manager.activeRole(playlistId),
         )
     suspend fun addCandidates(playlistId: String) = manager.addCandidates(playlistId)
-    suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?) =
-        if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey)
-        else manager.addProfileManual(playlistId, username, password, null)
+    suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
+        if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
+        else manager.addProfileManual(playlistId, username, password, null, role)
     fun isRoleAdmin(playlistId: String) = manager.activeRole(playlistId) == com.aeriotv.android.core.profiles.ProfileRole.Admin
     val activeRole = com.aeriotv.android.core.profiles.ProfileRoles.active
 
@@ -155,8 +157,8 @@ class ProfilesViewModel @Inject constructor(
     }
 
     suspend fun listUsers(playlistId: String) = manager.listServerUsers(playlistId)
-    suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?) =
-        manager.addProfile(playlistId, user, password, apiKey)
+    suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
+        manager.addProfile(playlistId, user, password, apiKey, role)
     fun rename(profileId: String, name: String) = manager.rename(profileId, name)
     fun setAvatar(playlistId: String, profileId: String, avatar: com.aeriotv.android.core.profiles.AvatarSpec) =
         manager.setAvatar(playlistId, profileId, avatar)
@@ -355,7 +357,7 @@ internal fun SwitchPinDialog(p: DispatcharrProfile, vm: ProfilesViewModel, onDis
 
 @Composable
 internal fun StopPlaybackDialog(name: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(
+    com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Switch Profile") },
         text = { Text("Stop playback and switch to $name?") },
@@ -395,6 +397,12 @@ internal fun ProfileRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Text(
+                listOfNotNull(profile.effectiveRole().label, if (locked) "PIN" else null).joinToString("  "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+            )
             val sub = buildList {
                 add(profile.username)
                 add(
@@ -423,27 +431,12 @@ internal fun ProfileRow(
             )
             Spacer(Modifier.size(6.dp))
         }
-        RoleBadge(profile)
         if (isActive) {
             Spacer(Modifier.size(8.dp))
             Icon(Icons.Filled.Check, contentDescription = "Active", tint = MaterialTheme.colorScheme.primary)
         }
         trailing?.invoke()
     }
-}
-
-@Composable
-private fun RoleBadge(profile: DispatcharrProfile) {
-    val role = profile.effectiveRole()
-    Text(
-        text = role.label,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onTertiaryContainer,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.tertiaryContainer)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    )
 }
 
 @Composable
@@ -594,14 +587,22 @@ fun ProfilesSection(playlistId: String) {
         var canPin by remember(p.id) { mutableStateOf(false) }
         LaunchedEffect(p.id, activeId) { canPin = vm.canManagePin(playlistId, p.id) }
         val hasPin = vm.hasPin(p.id)
-        AlertDialog(
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { actionsFor = null },
             title = { Text(p.displayName) },
             text = {
                 Column {
+                    Text(
+                        listOfNotNull(p.effectiveRole().label, if (hasPin) "PIN" else null).joinToString("  "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                     Text(p.username, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.size(8.dp))
                     ChoiceRow(label = "Rename", onClick = { actionsFor = null; renaming = p })
+                    if (vm.isRoleAdmin(playlistId)) {
+                        ChoiceRow(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
+                    }
                     if (vm.canEditAvatar(playlistId, p.id)) {
                         ChoiceRow(label = "Avatar", onClick = { actionsFor = null; avatarFor = p })
                     }
@@ -612,9 +613,6 @@ fun ProfilesSection(playlistId: String) {
                         if (hasPin && vm.isRoleAdmin(playlistId) && p.id != activeId) {
                             ChoiceRow(label = "Reset PIN", onClick = { actionsFor = null; resettingPin = p })
                         }
-                    }
-                    if (vm.isRoleAdmin(playlistId)) {
-                        ChoiceRow(label = "Role", onClick = { actionsFor = null; roleFor = p })
                     }
                     if (canChannelProfiles) {
                         ChoiceRow(label = "Channel Profiles", onClick = { actionsFor = null; channelProfilesFor = p })
@@ -649,7 +647,7 @@ fun ProfilesSection(playlistId: String) {
     renaming?.let { p ->
         var name by remember(p.id) { mutableStateOf(p.displayName) }
         val saveFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-        AlertDialog(
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { renaming = null },
             title = { Text("Rename") },
             text = {
@@ -681,7 +679,7 @@ fun ProfilesSection(playlistId: String) {
         )
     }
     removing?.let { p ->
-        AlertDialog(
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { removing = null },
             title = { Text("Remove Profile") },
             text = {
@@ -758,7 +756,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
     }
     val to = picked
     when {
-        to == null -> AlertDialog(
+        to == null -> com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("Role") },
             text = {
@@ -766,7 +764,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
                     Text(p.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.size(8.dp))
                     com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r ->
-                        ChoiceRow(label = r.label, checked = r == current, modifier = if (r == current) Modifier.focusRequester(currentFocus) else Modifier, onClick = {
+                        ChoiceRow(label = r.label, checked = r == current, radio = true, modifier = if (r == current) Modifier.focusRequester(currentFocus) else Modifier, onClick = {
                             when (val g = vm.roleChangeGate(playlistId, p.id, r)) {
                                 is com.aeriotv.android.core.profiles.RoleRules.RoleChange.Denied -> onClose(g.reason)
                                 com.aeriotv.android.core.profiles.RoleRules.RoleChange.Allowed -> apply(r)
@@ -791,7 +789,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
             if (admin == null) { onClose("Profile not found"); return }
             var explained by remember(p.id) { mutableStateOf(false) }
             if (!explained) {
-                AlertDialog(
+                com.aeriotv.android.ui.settings.SettingsAlertDialog(
                     onDismissRequest = { onClose(null) },
                     title = { Text("Admin PIN Required") },
                     text = { Text("A Child profile needs an Admin PIN to leave it. Set a PIN for ${admin.displayName} first.") },
@@ -814,7 +812,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
 private fun ResetPinFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesViewModel, onClose: (String?) -> Unit) {
     val scope = rememberCoroutineScope()
     vm.pinRemovalBlock(playlistId, p.id)?.let { reason ->
-        AlertDialog(
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("Reset PIN") },
             text = { Text(reason) },
@@ -824,7 +822,7 @@ private fun ResetPinFlow(playlistId: String, p: DispatcharrProfile, vm: Profiles
     }
     when (val g = vm.resetGate(playlistId)) {
         is com.aeriotv.android.core.profiles.RoleRules.ResetGate.Denied -> LaunchedEffect(p.id) { onClose(g.reason) }
-        com.aeriotv.android.core.profiles.RoleRules.ResetGate.ConfirmOnly -> AlertDialog(
+        com.aeriotv.android.core.profiles.RoleRules.ResetGate.ConfirmOnly -> com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("Reset PIN") },
             text = { Text("Remove the PIN for ${p.displayName}? ${p.displayName} can set a new one.") },
@@ -868,6 +866,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     val scope = rememberCoroutineScope()
     val firstUser = remember { androidx.compose.ui.focus.FocusRequester() }
     var manual by remember { mutableStateOf(false) }
+    var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
     LaunchedEffect(playlistId) {
         vm.addCandidates(playlistId).fold(
             { c ->
@@ -880,15 +879,18 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         )
     }
     if (manual) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = onClose,
             title = { Text("Add Profile") },
             text = {
-                com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
-                    onAdd = { u, pw, key ->
-                        vm.addManual(playlistId, u, pw, key).fold({ onClose(); null }, { it.message ?: "Could not add profile" })
-                    },
-                )
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RolePicker(playlistId, vm, role) { role = it }
+                    com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
+                        onAdd = { u, pw, key ->
+                            vm.addManual(playlistId, u, pw, key, role).fold({ onClose(); null }, { it.message ?: "Could not add profile" })
+                        },
+                    )
+                }
             },
             confirmButton = {},
             dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onClose) },
@@ -896,18 +898,19 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         return
     }
     LaunchedEffect(users?.isNotEmpty() == true) { if (users?.isNotEmpty() == true) focusFirst(firstUser) }
-    AlertDialog(
+    com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onClose,
         title = { Text("Add Profile") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val u = picked
+                RolePicker(playlistId, vm, role) { role = it }
                 if (u == null) {
                     when {
                         users == null && error == null -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         users?.isEmpty() == true -> Text("Every Dispatcharr user on this server already has a profile.")
                         busy -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        users != null -> LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        users != null -> LazyColumn(Modifier.heightIn(max = 220.dp)) {
                             items(users.orEmpty(), key = { it.id }) { user ->
                                 var rowFocused by remember { mutableStateOf(false) }
                                 Row(
@@ -923,7 +926,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                                                 // Server gave us this user's key: add now, no prompt.
                                                 busy = true; error = null
                                                 scope.launch {
-                                                    vm.add(playlistId, user, null, null).fold(
+                                                    vm.add(playlistId, user, null, null, role).fold(
                                                         { onClose() },
                                                         { busy = false; picked = user; error = it.message ?: "Could not add profile" },
                                                     )
@@ -969,7 +972,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                     onClick = {
                         busy = true; error = null
                         scope.launch {
-                            vm.add(playlistId, u, password.takeIf { it.isNotBlank() }, apiKey.trim().takeIf { it.isNotBlank() })
+                            vm.add(playlistId, u, password.takeIf { it.isNotBlank() }, apiKey.trim().takeIf { it.isNotBlank() }, role)
                                 .fold({ onClose() }, { busy = false; error = it.message ?: "Could not add profile" })
                         }
                     },
@@ -978,4 +981,69 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         },
         dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onClose) },
     )
+}
+
+/** One line under each role in Add Profile. */
+internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): String = when (r) {
+    com.aeriotv.android.core.profiles.ProfileRole.Admin -> "Adds and removes profiles, and changes roles and PINs."
+    com.aeriotv.android.core.profiles.ProfileRole.User -> "Watches with their own favorites, history, and settings."
+    com.aeriotv.android.core.profiles.ProfileRole.Child -> "Sees only its own content and basic settings. Leaving it needs an Admin PIN."
+}
+
+/**
+ * Add Profile "Role" choice (Admin, User, Child; default User). Picking Child
+ * with no Admin PIN asks the acting Admin to set one first, same copy as the
+ * row menu Role; cancelling keeps the previous choice.
+ */
+@Composable
+internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
+    var gate by remember { mutableStateOf(false) }
+    var explained by remember { mutableStateOf(false) }
+    Column {
+        Text("Role", style = MaterialTheme.typography.titleSmall)
+        com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r ->
+            var focused by remember { mutableStateOf(false) }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused }
+                    .settingsRowCard(focused)
+                    .clickable {
+                        if (r == com.aeriotv.android.core.profiles.ProfileRole.Child && !vm.adminHasPin(playlistId)) { explained = false; gate = true }
+                        else onSelect(r)
+                    }
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.RadioButton(
+                    selected = r == selected, onClick = null,
+                    colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+                )
+                Spacer(Modifier.size(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(r.label, style = MaterialTheme.typography.bodyLarge)
+                    Text(roleDescription(r), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    if (gate) {
+        val admin = vm.activeProfile(playlistId)
+        if (admin == null) {
+            LaunchedEffect(Unit) { gate = false }
+        } else if (!explained) {
+            com.aeriotv.android.ui.settings.SettingsAlertDialog(
+                onDismissRequest = { gate = false },
+                title = { Text("Admin PIN Required") },
+                text = { Text("A Child profile needs an Admin PIN to leave it. Set a PIN for ${admin.displayName} first.") },
+                confirmButton = { SettingsDialogTextButton(label = "Set PIN", onClick = { explained = true }) },
+                dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = { gate = false }) },
+            )
+        } else {
+            SetPinFlow(playlistId, admin, vm) { _ ->
+                gate = false
+                if (vm.adminHasPin(playlistId)) onSelect(com.aeriotv.android.core.profiles.ProfileRole.Child)
+            }
+        }
+    }
 }

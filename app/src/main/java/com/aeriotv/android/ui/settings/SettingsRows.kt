@@ -1015,3 +1015,31 @@ fun Modifier.settingsTvFocusableRow(traceTitle: String = "info"): Modifier {
         .settingsRowCard(focused)
         .focusable()
 }
+
+/**
+ * AlertDialog with the app's themed dialog look (surface container, title on
+ * onBackground, body on onSurfaceVariant), matching the other Settings dialogs.
+ */
+@androidx.compose.runtime.Composable
+fun SettingsAlertDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @androidx.compose.runtime.Composable () -> Unit,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    dismissButton: (@androidx.compose.runtime.Composable () -> Unit)? = null,
+    title: (@androidx.compose.runtime.Composable () -> Unit)? = null,
+    text: (@androidx.compose.runtime.Composable () -> Unit)? = null,
+    properties: androidx.compose.ui.window.DialogProperties = androidx.compose.ui.window.DialogProperties(),
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = confirmButton,
+        modifier = modifier,
+        dismissButton = dismissButton,
+        title = title,
+        text = text,
+        properties = properties,
+        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+        titleContentColor = androidx.compose.material3.MaterialTheme.colorScheme.onBackground,
+        textContentColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}

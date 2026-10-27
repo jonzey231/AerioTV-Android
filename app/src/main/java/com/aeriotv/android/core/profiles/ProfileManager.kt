@@ -648,13 +648,13 @@ class ProfileManager @Inject constructor(
     }
 
     /** Manual add (non-admin base): [username] signs in with [password] or [apiKey]. */
-    suspend fun addProfileManual(playlistId: String, username: String, password: String?, apiKey: String?): Result<DispatcharrProfile> {
+    suspend fun addProfileManual(playlistId: String, username: String, password: String?, apiKey: String?, role: ProfileRole? = null): Result<DispatcharrProfile> {
         val name = username.trim()
         if (name.isEmpty()) return Result.failure(IllegalArgumentException("Enter a username."))
         if (store.forPlaylist(playlistId).any { it.username.equals(name, ignoreCase = true) }) {
             return Result.failure(IllegalStateException("$name already has a profile."))
         }
-        return addProfile(playlistId, DispatcharrUserSummary(id = 0, username = name), password, apiKey)
+        return addProfile(playlistId, DispatcharrUserSummary(id = 0, username = name), password, apiKey, role)
     }
 
     /**
@@ -662,7 +662,7 @@ class ProfileManager @Inject constructor(
      * names the user (username, level, id). A key for a user that already
      * has a profile here is rejected.
      */
-    suspend fun addProfileByApiKey(playlistId: String, apiKey: String): Result<DispatcharrProfile> {
+    suspend fun addProfileByApiKey(playlistId: String, apiKey: String, role: ProfileRole? = null): Result<DispatcharrProfile> {
         val key = apiKey.trim()
         if (key.isEmpty()) return Result.failure(IllegalArgumentException("Enter an API key."))
         val me = runCatching {
@@ -678,6 +678,7 @@ class ProfileManager @Inject constructor(
             DispatcharrUserSummary(id = me.id, username = me.username, userLevel = me.userLevel, isSuperuser = me.isSuperuser, isStaff = me.isStaff),
             null,
             key,
+            role,
         )
     }
 
@@ -709,7 +710,10 @@ class ProfileManager @Inject constructor(
         user: DispatcharrUserSummary,
         password: String?,
         apiKey: String?,
+        role: ProfileRole? = null,
     ): Result<DispatcharrProfile> = runCatching {
+        // Same rule as setRole: a Child needs an Admin PIN to leave it.
+        if (role == ProfileRole.Child) check(adminHasPin(playlistId)) { "Set a PIN on an Admin profile first." }
         // Local Admin role, not the server level: a profile is added by
         // signing in as that user, which never changes the server.
         check(syncAdding || canAdd(playlistId)) { "Only an Admin profile can add profiles." }
@@ -735,11 +739,11 @@ class ProfileManager @Inject constructor(
             displayName = user.username,
             username = me.username,
             password = password?.takeIf { it.isNotBlank() },
-        ).applyMe(me, key)
+        ).applyMe(me, key).let { if (role != null) it.copy(role = role) else it }
         store.upsert(profile)
         appPreferences.seedProfileSettings(id)
         if (!syncAdding) mutated(id, "add")
-        Log.i(TAG, "[PROFILE] added ${profile.username} on ${playlistId.take(8)} level=${ProfileLevel.of(profile.userLevel).label}")
+        Log.i(TAG, "[PROFILE] added ${profile.username} on ${playlistId.take(8)} level=${ProfileLevel.of(profile.userLevel).label} role=${profile.effectiveRole().label}")
         profile
     }
 

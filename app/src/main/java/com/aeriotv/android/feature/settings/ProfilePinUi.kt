@@ -431,13 +431,13 @@ fun SetPinFlow(
             },
             lockSeconds = { vm.pinLockSeconds(profile.id) },
         )
-        type == null -> AlertDialog(
+        type == null -> com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("PIN type") },
             text = {
                 Column {
                     PinType.entries.forEach { t ->
-                        ChoiceRow(label = t.label, onClick = { type = t })
+                        ChoiceRow(label = t.label, checked = type == t, radio = true, onClick = { type = t })
                     }
                 }
             },
@@ -486,7 +486,7 @@ fun RemovePinFlow(
 ) {
     val scope = rememberCoroutineScope()
     vm.pinRemovalBlock(playlistId, profile.id)?.let { reason ->
-        AlertDialog(
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("Remove PIN") },
             text = { Text(reason) },
@@ -534,6 +534,8 @@ internal fun ChoiceRow(
     checked: Boolean? = null,
     destructive: Boolean = false,
     modifier: Modifier = Modifier,
+    /** One-of-N choice: a radio button instead of a checkbox. */
+    radio: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     // D-pad OK fires only on a KeyUp whose KeyDown this row also saw. The
@@ -568,13 +570,16 @@ internal fun ChoiceRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (checked != null) {
-            Checkbox(checked = checked, onCheckedChange = null)
+            if (radio) androidx.compose.material3.RadioButton(
+                selected = checked, onClick = null,
+                colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
+            ) else Checkbox(checked = checked, onCheckedChange = null)
             Spacer(Modifier.size(8.dp))
         }
         Text(
             label,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            color = when { destructive -> MaterialTheme.colorScheme.error; checked == true -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.onSurface },
         )
     }
 }
@@ -600,7 +605,7 @@ fun ChannelProfilesDialog(
             { error = it.message ?: "Could not load channel profiles" },
         )
     }
-    AlertDialog(
+    com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = { onClose(null) },
         title = { Text("Channel Profiles") },
         text = {
