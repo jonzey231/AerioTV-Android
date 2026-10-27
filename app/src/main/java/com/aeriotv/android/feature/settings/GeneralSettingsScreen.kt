@@ -191,12 +191,14 @@ fun GeneralSettingsScreen(
                 SettingsSection(
                     header = "Refresh",
                     footer = if (backgroundRefreshEnabled) {
-                        (if (backgroundRefreshType == "time") {
-                            "Refresh daily at ${timeLabel(backgroundRefreshHour, backgroundRefreshMinute)}. "
+                        val schedule = if (backgroundRefreshType == "time") {
+                            "Refresh daily at ${timeLabel(backgroundRefreshHour, backgroundRefreshMinute)}."
                         } else {
-                            "Refresh every ${intervalLabel(backgroundRefreshIntervalMins)}. "
-                        }) +
-                            "Android runs background refreshes on Wi-Fi while the battery isn't low, and may delay them to preserve battery."
+                            "Refresh every ${intervalLabel(backgroundRefreshIntervalMins)}."
+                        }
+                        // TVs have no battery; Apple TV shows the schedule alone too.
+                        if (isTv) schedule
+                        else "$schedule Android runs background refreshes on Wi-Fi while the battery isn't low, and may delay them to preserve battery."
                     } else {
                         "Automatically refresh channel lists and guide data while the app is in the background."
                     },
