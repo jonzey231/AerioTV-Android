@@ -404,6 +404,7 @@ fun GuideGrid(
                             }
                         }
                         rightDownSeen = false
+                        android.util.Log.i("AerioFocus", "[GUIDE] step-Right up cell=r${state.focusRow} @${state.focusCellStartMs} end=${state.focusedCell()?.endMillis} viewport=${state.viewportStartMs}..${state.viewportStartMs + state.viewportDurationMs}")
                     }
                     true
                 }
@@ -437,6 +438,7 @@ fun GuideGrid(
                             }
                         }
                         leftDownSeen = false
+                        android.util.Log.i("AerioFocus", "[GUIDE] step-Left up cell=r${state.focusRow} @${state.focusCellStartMs} end=${state.focusedCell()?.endMillis} viewport=${state.viewportStartMs}..${state.viewportStartMs + state.viewportDurationMs}")
                     }
                     true
                 }

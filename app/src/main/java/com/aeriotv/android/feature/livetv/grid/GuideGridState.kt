@@ -248,10 +248,13 @@ class GuideGridState(
     }
 
     /**
-     * A short Right, tvOS rule: the timeline pans a step and the ring moves
-     * onto the NEXT cell (the tvOS focus engine steps while the grid pans),
-     * so a long live programme is left in one press instead of the ring
-     * sitting still while the grid slides under it.
+     * A short Right, locked rule (Logan 2026-09-10): the ring moves onto the
+     * NEXT cell in the row, and the timeline pans only as far as needed to
+     * keep that cell fully on screen (a cell longer than the viewport is
+     * aligned to its start). No next cell: pan a step and retarget.
+     * Before 2026-10-27 this panned a fixed step on every press, so a next
+     * cell starting just inside the edge was pushed off screen while it
+     * took focus (16:53 viewport -> 17:23, focus on the 17:00 cell).
      */
     fun stepRight(): Boolean {
         if (rows.isEmpty) return false
@@ -259,19 +262,20 @@ class GuideGridState(
         val cells = rows.cells(row)
         val idx = cells.indexOfFirst { it.startMillis == focusCellStartMs }
         val next = if (idx >= 0 && idx + 1 < cells.size) cells[idx + 1] else null
-        val nextStart = (viewportStartMs + panStepMs).coerceIn(minViewportStart(), maxViewportStart())
-        if (nextStart != viewportStartMs) {
-            viewportChangeAnimated = true
-            viewportStartMs = nextStart
+        if (next == null) return pan(+1)
+        focusRow = row
+        focusChannelId = rows.channel(row).id
+        focusCellStartMs = next.startMillis
+        val viewportEnd = viewportStartMs + viewportDurationMs
+        if (next.endMillis > viewportEnd) {
+            val target = minOf(next.startMillis, next.endMillis - viewportDurationMs)
+                .coerceAtLeast(viewportStartMs)
+                .coerceIn(minViewportStart(), maxViewportStart())
+            if (target != viewportStartMs) {
+                viewportChangeAnimated = true
+                viewportStartMs = target
+            }
         }
-        if (next != null && next.startMillis < viewportStartMs + viewportDurationMs) {
-            focusRow = row
-            focusChannelId = rows.channel(row).id
-            focusCellStartMs = next.startMillis
-            return true
-        }
-        if (nextStart == viewportStartMs && next == null) return false
-        land(row)
         return true
     }
 
