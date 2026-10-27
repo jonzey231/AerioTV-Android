@@ -54,8 +54,11 @@ enum class DsyncKey(
 }
 
 object DsyncLimits {
-    const val KEY_BYTES = 32 * 1024
-    const val TOTAL_BYTES = 128 * 1024
+    // Dispatcharr dev c1920131 (2026-10-18): one DB row per (user, key); caps
+    // raised from 32 KiB per key and 128 KiB per user. The server still answers
+    // 413 with value_too_large / total_too_large; trimming stays 413-driven.
+    const val KEY_BYTES = 128 * 1024
+    const val TOTAL_BYTES = 1024 * 1024
     const val FAVORITES = 1000
     const val RECENTS = 50
     const val PROGRESS = 300
@@ -574,7 +577,7 @@ object DsyncGate {
 
 /**
  * Section 8 trim order. Each step rewrites one key's `data`; the guards apply
- * steps in order until the key (32 KiB) or the user total (128 KiB) fits.
+ * steps in order until the key (128 KiB) or the user total (1 MiB) fits.
  */
 object DsyncTrim {
 
@@ -619,7 +622,7 @@ object DsyncTrim {
     fun stepsFor(key: DsyncKey): List<Step> = STEPS.filter { it.key == key }
 
     /**
-     * Fit one key under 32 KiB. [wrap] turns `data` into the full envelope.
+     * Fit one key under 128 KiB. [wrap] turns `data` into the full envelope.
      * Returns the fitted data, or null when every step ran and it still does
      * not fit (favorites, collections, groups, and profiles are never trimmed).
      */
@@ -634,7 +637,7 @@ object DsyncTrim {
     }
 
     /**
-     * Fit the user total under 128 KiB. [datas] are this device's keys,
+     * Fit the user total under 1 MiB. [datas] are this device's keys,
      * [otherBytes] the server sizes of keys not in [datas]. Steps run in the
      * global order across keys. Returns the trimmed map (changed keys only
      * differ) or null if it cannot fit.
