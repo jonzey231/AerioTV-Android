@@ -434,11 +434,19 @@ private val ABOUT_REFRESHING_ITEMS = listOf(
 
 /**
  * Informational row: same card, padding, and type as the other settings rows
- * (accent glyph, bold title, wrapped secondary body) but never focusable or
- * clickable, so D-pad focus passes straight over it.
+ * (accent glyph, bold title, wrapped secondary body). On TV it is a D-pad
+ * stop through [SettingsRowContainer] (same focus ring and bring-into-view as
+ * every other row, no-op select) so the section scrolls one row at a time and
+ * all four rows stay readable. On touch it stays a plain, non-clickable card.
  */
 @Composable
 private fun AboutRefreshingRow(item: AboutRefreshingItem) {
+    if (rememberIsTvDevice()) {
+        SettingsRowContainer(onClick = {}, traceTitle = item.title) {
+            AboutRefreshingRowContent(item)
+        }
+        return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -447,6 +455,13 @@ private fun AboutRefreshingRow(item: AboutRefreshingItem) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
+        AboutRefreshingRowContent(item)
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.AboutRefreshingRowContent(item: AboutRefreshingItem) {
+    run {
         Icon(
             imageVector = item.icon,
             contentDescription = null,
