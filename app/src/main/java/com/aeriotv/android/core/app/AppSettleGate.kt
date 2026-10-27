@@ -136,6 +136,16 @@ class AppSettleGate @Inject constructor() {
     }
 
     /**
+     * [awaitGuidePainted] without the launch hold, for a pure local READ
+     * (the VOD catalog restore from Room). Decision 2026-10-27: cached data
+     * repaints under the launch picker / PIN gate; only network work
+     * (sweeps, refills, enrichment, sync pulls) stays parked.
+     */
+    suspend fun awaitGuidePaintedForCachedRead() {
+        withTimeoutOrNull(GUIDE_PAINT_WAIT_MAX_MS) { guidePainted.first { it } }
+    }
+
+    /**
      * True while a background sweep may do a unit of work: foreground, and no
      * tune still waiting on its first frame. Delegates to [EpgSweepGate],
      * which the player screen and the scaffold already drive, so every

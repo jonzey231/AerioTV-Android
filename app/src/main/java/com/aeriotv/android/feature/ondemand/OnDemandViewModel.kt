@@ -541,6 +541,8 @@ class OnDemandViewModel @Inject constructor(
             _state.update { it.copy(moviesDenied = moviesDenied, seriesDenied = seriesDenied) }
             if (playlist == null || identity == null) {
                 launchRestoreDone.complete(Unit)
+                // Network sweep: parked behind the launch picker / PIN gate.
+                com.aeriotv.android.core.app.LaunchWorkHold.await("VOD first sweep")
                 refresh()
                 refreshSeries()
                 return@launch
@@ -553,6 +555,8 @@ class OnDemandViewModel @Inject constructor(
                 // Nothing stored: there is nothing to show instantly, so this
                 // one sweep stays on the launch path.
                 launchRestoreDone.complete(Unit)
+                // Network sweep: parked behind the launch picker / PIN gate.
+                com.aeriotv.android.core.app.LaunchWorkHold.await("VOD first sweep")
                 refresh()
                 refreshSeries()
                 return@launch
@@ -949,7 +953,9 @@ class OnDemandViewModel @Inject constructor(
             // waiting on it keeps round 2's finding and still puts the library
             // on screen many seconds earlier. [ensureLoaded] short-circuits
             // this entirely when the user opens the tab first.
-            settleGate.awaitGuidePainted()
+            // 2026-10-27: the Room restore does not wait for the launch hold;
+            // the network sweeps it may start still do (see startInitialLoads).
+            settleGate.awaitGuidePaintedForCachedRead()
             startInitialLoads()
         }
         // React to the active playlist changing (switch) or being deleted.
