@@ -109,6 +109,11 @@ class ProfileManager @Inject constructor(
         // Every switch lands on the Live TV root, so focus goes to the grid.
         ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
         ProfileSwitchFocus.onScrimReleased()
+        pendingVerify?.takeIf { it.gen == gen }?.let { pv ->
+            pendingVerify = null
+            Log.i(TAG, "[SWITCH] warm verify started after the scrim dropped")
+            scope.launch { pv.run() }
+        }
         val pp = pendingProbe?.takeIf { it.gen == gen } ?: return
         pendingProbe = null
         scope.launch {
@@ -122,6 +127,9 @@ class ProfileManager @Inject constructor(
 
     private data class PendingProbe(val playlistId: String, val gen: Long, val queuedAt: Long)
     @Volatile private var pendingProbe: PendingProbe? = null
+
+    private class PendingVerify(val gen: Long, val run: suspend () -> Unit)
+    @Volatile private var pendingVerify: PendingVerify? = null
 
     /** Header switcher "Manage Profiles": open Settings > this playlist. */
     private val manage = Channel<Unit>(Channel.CONFLATED)
@@ -973,8 +981,14 @@ class ProfileManager @Inject constructor(
                     finishSwitch(gen)
                 }
             }
+            // The sign-in and /me/ read run AFTER the scrim drops (finishSwitch),
+            // not beside the reload: launched here they finished before the
+            // cached paint in both directions (Streamer 2026-10-27 step4/step5),
+            // competing with it for the network and the Room writer. Nothing
+            // waits on the verification; it only sends a silent reload when
+            // the permissions changed.
+            pendingVerify = PendingVerify(gen) { verifyWarmSwitch(playlistId, target, from, base, row, gen) }
             reloads.send(Reload(playlistId, gen))
-            scope.launch { verifyWarmSwitch(playlistId, target, from, base, row, gen) }
             return
         }
         mutex.withLock {

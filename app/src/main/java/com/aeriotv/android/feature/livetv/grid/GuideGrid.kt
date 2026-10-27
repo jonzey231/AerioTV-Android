@@ -726,9 +726,21 @@ private fun TimeHeader(
                     if (isTv) drawLine(rule, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
                     val label = fmt.format(Date(t)).lowercase(Locale.getDefault())
                     // The edge sits at now (Logan 2026-10-08), so the first slot is
-                    // partial: only half-hour marks at or right of the edge get a label.
+                    // partial and its mark is left of the edge. It used to be culled
+                    // (x >= -1f only), which dropped the label of the column holding
+                    // now: restored to 1:12pm the header read "1:30pm" first while the
+                    // current program filled the 1:00pm column (Streamer 2026-10-27).
+                    // The partial slot's label is pinned to the edge instead, and only
+                    // skipped when the next mark is too close for both to fit.
+                    val y = (size.height - 16.sp.toPx()) / 2f
                     if (x >= -1f) {
-                        drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, (size.height - 16.sp.toPx()) / 2f), style = labelStyle, maxLines = 1)
+                        drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, y), style = labelStyle, maxLines = 1)
+                    } else {
+                        val w = textMeasurer.measure(label, style = labelStyle, maxLines = 1).size.width
+                        val nextX = (t + slot - vs) * pxPerMs
+                        if (nextX >= w + 12f) {
+                            drawText(textMeasurer, label, topLeft = Offset(6f, y), style = labelStyle, maxLines = 1)
+                        }
                     }
                     t += slot
                 }

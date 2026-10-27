@@ -946,6 +946,19 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
             val playlist = playlistRepository.activePlaylist() ?: return@launch
             val st = _state.value
+            // Never let an empty or held in-memory library overwrite a
+            // populated file: during a profile switch the halves are held
+            // (old rows on screen, counts and group names not yet restored),
+            // and a save then wrote zero group names and a zero probe
+            // baseline over the real metadata (Streamer 2026-10-27, step1).
+            // A denied half is still recorded, since the denial is the point.
+            val held = holdMoviesLibrary || holdSeriesLibrary
+            val empty = st.totalCount == 0 && st.seriesTotalCount == 0 &&
+                st.movieGroupNames.isEmpty() && st.seriesGroupNames.isEmpty()
+            if (held || (empty && !st.moviesDenied && !st.seriesDenied)) {
+                Log.i(TAG, "[VOD-CACHE] save skipped (library empty/held) held=$held empty=$empty")
+                return@launch
+            }
             // Metadata only: the titles live in the Room catalog (GH #109),
             // so a denied half's rows are never at risk from the other half's
             // save (the shelving this replaces existed only to protect them in

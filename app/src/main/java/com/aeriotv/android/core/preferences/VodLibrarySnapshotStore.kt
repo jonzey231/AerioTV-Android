@@ -154,7 +154,7 @@ class VodLibrarySnapshotStore @Inject constructor(
             val tmp = File(f.parentFile, f.name + ".tmp")
             tmp.outputStream().buffered(STREAM_BUFFER_BYTES).use { json.encodeToStream(snapshot, it) }
             if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
-            Log.i(TAG, "[VOD-CACHE] saved ${snapshot.movies.size} movies, ${snapshot.series.size} series (${f.length() / 1024} KB)")
+            Log.i(TAG, "[VOD-CACHE] saved metadata: ${snapshot.movieGroupNames.size} movie groups, ${snapshot.seriesGroupNames.size} series groups, legacy rows ${snapshot.movies.size}/${snapshot.series.size} (${f.length() / 1024} KB)")
         }.onFailure { Log.w(TAG, "snapshot save failed: ${it.message}") }
     }
 
