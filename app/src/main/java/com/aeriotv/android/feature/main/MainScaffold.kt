@@ -850,8 +850,23 @@ fun MainScaffold(
     // header's spinning indicator; the old "Syncing | Tap for Info" pill it
     // used to drive was removed (Logan 2026-09-14: it overlapped the sidebar
     // button on both shells).
-    val anyBackgroundWork = state.isLoading || state.isEpgLoading ||
-        onDemandState.isLoading || onDemandState.isLoadingSeries
+    //
+    // Silent background refresh (Logan 2026-10-27): a guide painted from
+    // cache (launch or profile switch) refreshes behind the paint without the
+    // indicator. The channel and guide flags are already only raised when
+    // there is nothing cached to paint or on an explicit Refresh; the On
+    // Demand sweeps raise theirs on every background pass, so they count only
+    // while their library has nothing to show yet.
+    val vodForegroundLoad = (onDemandState.isLoading && !onDemandState.hasMovies) ||
+        (onDemandState.isLoadingSeries && !onDemandState.hasSeries)
+    val anyBackgroundWork = state.isLoading || state.isEpgLoading || vodForegroundLoad
+    androidx.compose.runtime.LaunchedEffect(anyBackgroundWork) {
+        android.util.Log.i(
+            "AerioTV",
+            "[LOADING] header indicator=$anyBackgroundWork (channels=${state.isLoading} epg=${state.isEpgLoading} " +
+                "vodForeground=$vodForegroundLoad vodSweep=${onDemandState.isLoading || onDemandState.isLoadingSeries})",
+        )
+    }
 
     // Pre-warm (Logan 2026-09-11): a FIRST visit to a tab still cost 419-567 ms
     // key to frame on the Streamer, of which ~250 ms was the settle window and

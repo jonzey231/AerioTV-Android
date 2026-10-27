@@ -746,11 +746,12 @@ class PlaylistViewModel @Inject constructor(
             Log.i(TAG, "bootstrap: refreshing channels (hadCache=$hasChannelCache)")
             repository.refresh(saved).fold(
                 onSuccess = { channels ->
-                    Log.i(TAG, "bootstrap: refreshed ${channels.size} channels")
+                    val kept = sameChannelsForGuide(_state.value.channels, channels)
+                    Log.i(TAG, "bootstrap: refreshed ${channels.size} channels (unchanged=$kept)")
                     _state.update {
                         it.copy(
                             phase = Phase.ChannelsReady,
-                            channels = channels,
+                            channels = if (kept) it.channels else channels,
                             isLoading = false,
                             error = null,
                         )
@@ -1036,6 +1037,7 @@ class PlaylistViewModel @Inject constructor(
         playlist: PlaylistEntity,
         forceRefresh: Boolean = false,
         coldLaunch: Boolean = false,
+        keepCatalog: Boolean = false,
     ) {
         // One EPG load per playlist at a time, latest wins (Streamer
         // 2026-10-27: the bootstrap load parked on the launch hold and the
@@ -1053,7 +1055,7 @@ class PlaylistViewModel @Inject constructor(
         epgLoadJob = viewModelScope.launch {
             prior?.join()
             coroutineContext[kotlinx.coroutines.Job]?.let { trackPlaylistTask(playlist.id, "EPG load", it) }
-            doLoadEpg(playlist, force, coldLaunch)
+            doLoadEpg(playlist, force, coldLaunch, keepCatalog)
             // doLoadEpg rebuilds the catalog on every path that has rows; the
             // fallback covers a failed fetch over a history-only cache.
             if (_state.value.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog) {
@@ -1192,8 +1194,13 @@ class PlaylistViewModel @Inject constructor(
         playlist: PlaylistEntity,
         reason: String,
         preloadedRows: List<EPGProgramme>? = null,
+        /** Build for these channels instead of the published ones. */
+        channelsOverride: List<M3UChannel>? = null,
+        /** Applied in the SAME state update as the catalog, so channels and
+         *  catalog for a switch publish together (one guide row install). */
+        alsoApply: ((UiState) -> UiState)? = null,
     ) {
-        val channels = _state.value.channels
+        val channels = channelsOverride ?: _state.value.channels
         if (channels.isEmpty()) {
             // Used to return silently: a cached paint that ran before the
             // channels landed left the guide with no catalog (filler rows)
@@ -1216,7 +1223,9 @@ class PlaylistViewModel @Inject constructor(
         }
         epgWriteMutex.withLock {
             val retentionDays = resolveGuideDays(playlist.epgRetentionDays) ?: GUIDE_DAYS_ALL_MAX_BACK
-            _state.update { it.copy(epgByChannel = catalog, epgHistoryHours = retentionDays * 24) }
+            _state.update { st ->
+                (alsoApply?.invoke(st) ?: st).copy(epgByChannel = catalog, epgHistoryHours = retentionDays * 24)
+            }
         }
         Log.i(
             TAG,
@@ -1262,6 +1271,11 @@ class PlaylistViewModel @Inject constructor(
         /** GH #124: cold launch. Paint the cache, then refresh behind it even
          *  when the cache is inside its TTL (no coverage purge, unlike force). */
         coldLaunch: Boolean = false,
+        /** Same-server profile switch (2026-10-27): the in-memory catalog is
+         *  already on screen and belongs to this playlist, so skip the cache
+         *  read and paint; only the identity and freshness rules run, and any
+         *  fetch they ask for runs silently behind the painted guide. */
+        keepCatalog: Boolean = false,
     ): Result<Int>? {
         val sourceType = SourceType.entries.firstOrNull { it.name == playlist.sourceType }
             ?: SourceType.M3uUrl
@@ -1304,7 +1318,7 @@ class PlaylistViewModel @Inject constructor(
         val quickFromMs = maxOf(cacheFromMs, launchNowMs - QUICK_PAINT_BACK_MS)
         val quickToMs = minOf(cacheToMs, launchNowMs + QUICK_PAINT_AHEAD_MS)
         val readStartedAt = android.os.SystemClock.elapsedRealtime()
-        val cachedRead = runCatching {
+        val cachedRead = if (keepCatalog) null else runCatching {
             repository.loadCachedEpgTimed(playlist.id, quickFromMs, quickToMs)
         }.getOrNull()
         val cachedRaw = cachedRead?.programmes ?: emptyList()
@@ -1318,7 +1332,8 @@ class PlaylistViewModel @Inject constructor(
             bridgeChannelIds(cachedRaw, channelsForBridge)
         }
         val bridgeMs = android.os.SystemClock.elapsedRealtime() - bridgeStartedAt
-        val hasCache = cached.isNotEmpty()
+        val hasCache = cached.isNotEmpty() ||
+            (keepCatalog && (_state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog)?.isNotEmpty() == true)
         // Identity gate: a cache that does not match the current channel
         // identity is stale regardless of age. Rows are persisted under each
         // channel's canonical guideMatchKey, so when the current channels'
@@ -1395,7 +1410,9 @@ class PlaylistViewModel @Inject constructor(
             runCatching { repository.purgeEpgCache(playlist.id) }
                 .onFailure { Log.w(TAG, "identity purge failed", it) }
         }
-        if (hasCache && !identityStale) {
+        if (hasCache && !identityStale && keepCatalog) {
+            Log.i(TAG, "loadEpgIfConfigured: kept the in-memory catalog (same-server profile switch), no cache re-read")
+        } else if (hasCache && !identityStale) {
             Log.i(
                 TAG,
                 "loadEpgIfConfigured: painted ${cached.size} cached programmes " +
@@ -2541,6 +2558,26 @@ class PlaylistViewModel @Inject constructor(
     }
 
     /**
+     * True when a refreshed channel list is the same list the guide already
+     * shows: same ids in the same order and every field the guide reads
+     * equal. The snapshot cache drops [M3UChannel.rawAttributes] (write-only
+     * at parse time), so a plain data-class compare called every background
+     * refresh over a cached paint "changed" and reinstalled every guide row
+     * (rows-reuse miss channelsSame=false, Streamer 2026-10-27). Keeping the
+     * held instance on true lets the guide reuse its rows.
+     */
+    private fun sameChannelsForGuide(old: List<M3UChannel>, new: List<M3UChannel>): Boolean {
+        if (old === new) return true
+        if (old.size != new.size || old.isEmpty()) return false
+        for (i in old.indices) {
+            val a = old[i]
+            val b = new[i]
+            if (a != b && a != b.copy(rawAttributes = a.rawAttributes)) return false
+        }
+        return true
+    }
+
+    /**
      * Profiles fast switch (phase 2a): when the new profile has a channel
      * snapshot (ChannelSnapshotDao under playlistId@profileId), paint it,
      * release the scrim, then refresh channels in the background the way a
@@ -2577,7 +2614,7 @@ class PlaylistViewModel @Inject constructor(
         runCatching { exoHolder.stop() }
         val launchGroup = launchGroupFor(entity.id, groupNamesOf(cached))
         Log.i(TAG, "[SWITCH] profile launch group=$launchGroup")
-        _state.update {
+        val applySwitch: (UiState) -> UiState = {
             it.copy(
                 phase = Phase.ChannelsReady,
                 playlist = entity,
@@ -2587,8 +2624,25 @@ class PlaylistViewModel @Inject constructor(
                 error = null,
             )
         }
-        epgWriteMutex.withLock { _state.update { st -> st.copy(epgByChannel = emptyMap()) } }
-        loadEpgIfConfigured(entity)
+        // The guide's program catalog belongs to the playlist (server), not
+        // the profile (Streamer 2026-10-27: clearing and re-reading it left
+        // the guide blank for 2 s after the scrim dropped). Same playlist:
+        // keep the catalog and publish the new channels in ONE update; any
+        // channel the catalog has no entry for is filled by a background
+        // rebuild. Different playlist: build its catalog from Room BEFORE the
+        // scrim drops, published together with the channels.
+        val held = _state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog
+        val samePlaylist = _state.value.playlist?.id == entity.id && held != null && held.isNotEmpty()
+        if (samePlaylist) {
+            val missing = cached.count { held!!.index(it.guideChannelId()) == null }
+            epgWriteMutex.withLock { _state.update(applySwitch) }
+            Log.i(TAG, "[SWITCH] profile kept the guide catalog (same playlist, ${held!!.size} catalog channels, $missing new to it)")
+            if (missing > 0) viewModelScope.launch { rebuildGuideCatalog(entity, "profile-new-channels") }
+            loadEpgIfConfigured(entity, keepCatalog = true)
+        } else {
+            rebuildGuideCatalog(entity, "profile-switch", channelsOverride = cached, alsoApply = applySwitch)
+            loadEpgIfConfigured(entity, keepCatalog = true)
+        }
         profileManager.finishSwitch(r.gen)
         Log.i(TAG, "[SWITCH] profile scrim released from cache after ${System.currentTimeMillis() - t0}ms (${cached.size} cached channels); background refresh started")
         val token = com.aeriotv.android.core.profiles.ProfileScope.token.value
@@ -2596,8 +2650,15 @@ class PlaylistViewModel @Inject constructor(
             repository.switchActive(r.playlistId, probe = false, expectedScopeToken = token).fold(
                 onSuccess = { (fresh, channels) ->
                     if (com.aeriotv.android.core.profiles.ProfileScope.token.value != token) return@fold
-                    _state.update { it.copy(playlist = fresh, channels = channels, error = if (channels.isEmpty()) "No channels found." else null) }
-                    Log.i(TAG, "[SWITCH] profile background refresh landed (${channels.size} channels)")
+                    val kept = sameChannelsForGuide(_state.value.channels, channels)
+                    _state.update {
+                        it.copy(
+                            playlist = fresh,
+                            channels = if (kept) it.channels else channels,
+                            error = if (channels.isEmpty()) "No channels found." else null,
+                        )
+                    }
+                    Log.i(TAG, "[SWITCH] profile background refresh landed (${channels.size} channels, unchanged=$kept)")
                 },
                 onFailure = { t -> Log.w(TAG, "[SWITCH] profile background refresh failed; cached list kept: ${LogSanitizer.redact(t.message ?: "")}") },
             )
