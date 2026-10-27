@@ -2,6 +2,14 @@ package com.aeriotv.android.feature.settings
 
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import com.aeriotv.android.ui.scale.subtext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -263,14 +271,7 @@ fun GeneralSettingsScreen(
                 // what refreshes while the app is open, and what the background
                 // job does. Lives next to the Refresh controls it describes.
                 SettingsSection(header = "About Refreshing") {
-                    ABOUT_REFRESHING_PARAGRAPHS.forEach { paragraph ->
-                        Text(
-                            text = paragraph,
-                            style = com.aeriotv.android.ui.settings.settingsFootnoteStyle(),
-                            color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        )
-                    }
+                    ABOUT_REFRESHING_ITEMS.forEach { item -> AboutRefreshingRow(item) }
                 }
 
                 // MARK: Network
@@ -402,9 +403,69 @@ private fun intervalLabel(mins: Int): String {
     return if (h == 1) "1 hour" else "$h hours"
 }
 
-private val ABOUT_REFRESHING_PARAGRAPHS = listOf(
-    "Live TV. Channels and the guide open from your device's cache, then refresh quietly in the background each time the app opens and whenever you return and the data is more than 30 minutes old. The Background Refresh interval in General keeps them current while the app is closed.",
-    "Movies and TV Shows. Your library opens from the cache. It re-scans in the background on the Refresh Library schedule in Movies and TV Shows (every launch, daily, or weekly), or when the server reports a change.",
-    "DVR. Recordings open from the cache and update every 30 seconds while the app is open.",
-    "The spinner only appears when there is nothing cached yet or when you refresh by hand.",
+private class AboutRefreshingItem(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val title: String,
+    val body: String,
 )
+
+private val ABOUT_REFRESHING_ITEMS = listOf(
+    AboutRefreshingItem(
+        Icons.Filled.LiveTv,
+        "Live TV",
+        "Channels and the guide open from your device's cache, then refresh quietly in the background each time the app opens and whenever you return after the data is more than 30 minutes old. The Background Refresh interval above keeps them current while the app is closed.",
+    ),
+    AboutRefreshingItem(
+        Icons.Filled.Movie,
+        "Movies & TV Shows",
+        "Your library opens from the cache and re-scans in the background on the Refresh Library schedule in Movies & TV Shows (every launch, daily, or weekly), or when the server reports a change.",
+    ),
+    AboutRefreshingItem(
+        Icons.Filled.RadioButtonChecked,
+        "DVR",
+        "Recordings open from the cache and update every 30 seconds while the app is open.",
+    ),
+    AboutRefreshingItem(
+        Icons.Filled.Autorenew,
+        "Loading indicator",
+        "The spinner appears only when nothing is cached yet or when you refresh by hand.",
+    ),
+)
+
+/**
+ * Informational row: same card, padding, and type as the other settings rows
+ * (accent glyph, bold title, wrapped secondary body) but never focusable or
+ * clickable, so D-pad focus passes straight over it.
+ */
+@Composable
+private fun AboutRefreshingRow(item: AboutRefreshingItem) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .settingsRowCard(false)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = item.icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = item.title,
+                style = settingsRowTitleStyle(),
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = item.body,
+                style = com.aeriotv.android.ui.settings.settingsFootnoteStyle().subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
