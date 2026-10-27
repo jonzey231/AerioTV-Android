@@ -42,6 +42,10 @@ object LaunchWorkHold {
     /** True while either reason holds: network and settle work waits. */
     val held: StateFlow<Boolean> = _held.asStateFlow()
 
+    private val _pickerHold = MutableStateFlow(false)
+    /** True only for the picker reason (launch picker or launch PIN gate), never for an in-app PIN pad. */
+    val pickerHold: StateFlow<Boolean> = _pickerHold.asStateFlow()
+
     private val _pinPadOpen = MutableStateFlow(false)
     /** True while a PIN pad is on screen: cached work waits too. */
     val pinPadOpen: StateFlow<Boolean> = _pinPadOpen.asStateFlow()
@@ -95,6 +99,7 @@ object LaunchWorkHold {
             resumedAtMs = SystemClock.uptimeMillis()
         }
         _pinPadOpen.value = pinPads > 0
+        _pickerHold.value = pickerHeld
         _held.value = nowHeld
     }
 

@@ -182,12 +182,15 @@ class DispatcharrSyncManager @Inject constructor(
         }
         profileManager.get().onProfilesMutated = { pid, user, what -> onProfilesMutated(pid, user, what) }
         registerNetworkCallback()
+        watchBetweenSessions()
         scope.launch {
             combine(
                 prefs.syncProvider,
                 playlistDao.observeActive().map { rows -> rows.firstOrNull()?.takeIf { it.isDispatcharrDirectConnect() }?.id },
                 ProfileScope.token,
-                kotlinx.coroutines.flow.combine(profileManager.get().switching, com.aeriotv.android.core.app.LaunchWorkHold.held) { sw, held -> sw || held },
+                // The picker reason only: an in-app PIN pad (Set Admin PIN, Add Profile)
+                // used to end the session here, and edits made under the pad had no session.
+                kotlinx.coroutines.flow.combine(profileManager.get().switching, com.aeriotv.android.core.app.LaunchWorkHold.pickerHold) { sw, held -> sw || held },
             ) { provider, pid, token, switching ->
                 // A profile switch (or the TV launch picker) is in flight: hold until its sign-in and
                 // permissions are in place (the scrim drops), then start.
@@ -202,6 +205,7 @@ class DispatcharrSyncManager @Inject constructor(
                         Log.i(TAG, "[DSYNC] session end user=${old.profileKey.take(8)} (${if (t === HOLD) "switch" else "change"})")
                         runCatching { flush(old) }
                         synchronized(old.pending) { old.pending.values.forEach { it.cancel() }; old.pending.clear() }
+                        lastEnded = old
                     }
                     session = null
                     if (t === HOLD) return@collectLatest
@@ -219,6 +223,38 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     @Volatile private var lastTarget: Target? = null
+
+    /** The last session that ended; edits made before the next one starts are marked on its keys. */
+    @Volatile private var lastEnded: Session? = null
+
+    /**
+     * Local changes with no session (between sessions, offline start, a hold)
+     * used to be dropped: the per-session collectors skip their first value.
+     * Mark them dirty on the last session's persisted keys so the next session
+     * for the same playlist and profile sends them. A changed profile token
+     * (switch re-keys every flow) is never marked.
+     */
+    private fun watchBetweenSessions() {
+        DsyncKey.entries.filter { it != DsyncKey.Profiles }.forEach { key ->
+            scope.launch {
+                sourceFor(key).distinctUntilChanged().drop(1).collect {
+                    if (session != null) return@collect
+                    val old = lastEnded ?: return@collect
+                    if (profileManager.get().switching.value) return@collect
+                    if (ProfileScope.token.value != old.token) return@collect
+                    if (!isDirty(old, key)) Log.i(TAG, "[DSYNC] ${key.suffix} dirty; no session (kept for the next one)")
+                    setDirty(old, key, true)
+                }
+            }
+        }
+    }
+
+    private fun profilesPendingKey(playlistId: String) = "pdirty|$playlistId"
+    private fun profilesPushedKey(playlistId: String) = "ppushed|$playlistId"
+    private fun newestRowStamp(playlistId: String): Long {
+        val prefix = "prow|$playlistId|"
+        return state.all.entries.filter { it.key.startsWith(prefix) }.maxOfOrNull { (it.value as? Long) ?: 0L } ?: 0L
+    }
 
     private fun registerNetworkCallback() {
         val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return
@@ -260,7 +296,10 @@ class DispatcharrSyncManager @Inject constructor(
         // racing that removal must already see the removed stamp.
         val e = state.edit().putLong(rowKey(playlistId, username), now)
         if (what == "remove") e.putLong(removedKey(playlistId, username), now) else e.remove(removedKey(playlistId, username))
-        e.apply()
+        // Playlist-level pending mark: survives no session, a non-admin
+        // session, and process death; cleared only by a successful PUT.
+        e.putBoolean(profilesPendingKey(playlistId), true)
+        e.commit()
         if (what == "remove") Log.i(TAG, "[DSYNC] profiles: stamped removed ${removedKey(playlistId, username)}=$now read=${state.getLong(removedKey(playlistId, username), 0L)}")
         scope.launch {
             val s = session?.takeIf { it.playlistId == playlistId }
@@ -294,6 +333,13 @@ class DispatcharrSyncManager @Inject constructor(
         session = s
         s.bound = conn(s)
         _ui.value = Ui(active = true, lastSyncAt = state.getLong(k("last", s), 0L))
+        if (state.getBoolean(profilesPendingKey(s.playlistId), false)) {
+            Log.i(TAG, "[DSYNC] profiles: pending local change from between sessions, re-sending")
+            setDirty(s, DsyncKey.Profiles, true)
+        } else if (newestRowStamp(s.playlistId) > state.getLong(profilesPushedKey(s.playlistId), 0L)) {
+            Log.i(TAG, "[DSYNC] profiles: local roster newer than last push, re-sending")
+            setDirty(s, DsyncKey.Profiles, true)
+        }
         var who = profileStore.byId(profileKey)
         if (who != null && who.userId <= 0) {
             // Not read yet (a default profile never switched to): ask /me/ once.
@@ -793,6 +839,10 @@ class DispatcharrSyncManager @Inject constructor(
         if (session !== s || ProfileScope.token.value != s.token) return
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
             setDirty(s, key, false)
+            if (key == DsyncKey.Profiles) state.edit()
+                .remove(profilesPendingKey(s.playlistId))
+                .putLong(profilesPushedKey(s.playlistId), newestRowStamp(s.playlistId))
+                .apply()
             return
         }
         if (s.serverFull && b.wire !in s.serverBytes) {
@@ -808,6 +858,10 @@ class DispatcharrSyncManager @Inject constructor(
                 PutStatus.Ok -> {
                     s.resend -= key
                     setDirty(s, key, false)
+                    if (key == DsyncKey.Profiles) state.edit()
+                        .remove(profilesPendingKey(s.playlistId))
+                        .putLong(profilesPushedKey(s.playlistId), newestRowStamp(s.playlistId))
+                        .apply()
                     s.retries.remove(key)
                     s.tooLarge -= key
                 }
