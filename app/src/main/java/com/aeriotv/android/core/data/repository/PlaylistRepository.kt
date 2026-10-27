@@ -1435,7 +1435,15 @@ class PlaylistRepository @Inject constructor(
         runCatching { probeCapabilities(playlist.id, due, trigger) }
     }
 
-    suspend fun refresh(playlist: PlaylistEntity): Result<List<M3UChannel>> = runCatching {
+    suspend fun refresh(
+        playlist: PlaylistEntity,
+        /** The profile this refresh belongs to, captured when it starts (or
+         *  earlier by the caller). A different active profile at write time
+         *  drops the result with [com.aeriotv.android.core.profiles.ScopeMovedException]. */
+        binding: com.aeriotv.android.core.profiles.ScopeBinding =
+            com.aeriotv.android.core.profiles.ScopeBinding.capture(playlist.id),
+    ): Result<List<M3UChannel>> = runCatching {
+        binding.ensureCurrent("channel refresh")
         val sourceType = playlist.resolvedSourceType()
         val base = effectiveBaseUrl(playlist)
         // Dispatcharr branches go through the AuthBroker so a rotated api_key
@@ -1504,12 +1512,18 @@ class PlaylistRepository @Inject constructor(
             // re-coalesced) here.
             dispatcharrServerVersion = liveVersion ?: fresh.dispatcharrServerVersion,
         )
+        // Bound to the profile it started under: a switch while the fetch
+        // was in flight drops the result instead of writing it under the new
+        // profile's snapshot key.
+        binding.ensureCurrent("channel refresh")
         dao.update(refreshed)
         // Persist the freshly-fetched channels so the next cold launch repaints
         // the rail INSTANTLY from disk (Phase 130 channel snapshot cache).
         // Best-effort: a cache-write failure must NOT fail the refresh.
         try {
-            saveChannelsToCache(playlist.id, channels)
+            saveChannelsToCache(playlist.id, channels, binding)
+        } catch (t: com.aeriotv.android.core.profiles.ScopeMovedException) {
+            throw t
         } catch (t: Throwable) {
             android.util.Log.w("PlaylistRepository", "saveChannelsToCache failed (refresh)", t)
         }
@@ -1871,7 +1885,9 @@ class PlaylistRepository @Inject constructor(
      * feeds "what was just on" in the guide.
      */
     private suspend fun maxCatchupReachMs(playlistId: String): Long {
-        val days = runCatching { channelSnapshotDao.maxCatchupDays(playlistId) }
+        // Server-wide (every profile's snapshot): the EPG rows are shared, so
+        // one profile's narrower archive must not bound another's history.
+        val days = runCatching { channelSnapshotDao.maxCatchupDaysAllProfiles(playlistId) }
             .getOrNull() ?: 0
         return maxOf(1, minOf(days, GUIDE_DAYS_ALL_MAX_BACK)) * 86_400_000L
     }
@@ -1902,7 +1918,10 @@ class PlaylistRepository @Inject constructor(
     suspend fun pruneEpgBeyondCatchupReach(playlistId: String) = withContext(layeringDispatcher) {
         val now = System.currentTimeMillis()
         val dayMs = 86_400_000L
-        val snapshot = runCatching { channelSnapshotDao.forPlaylist(playlistId) }
+        // Every profile's snapshot of this playlist: the programme rows are
+        // the SERVER's, so a channel only one profile sees, or a wider archive
+        // on another profile, must keep its history (2026-10-27).
+        val snapshot = runCatching { channelSnapshotDao.forPlaylistAllProfiles(playlistId) }
             .getOrElse {
                 Log.w("PlaylistRepo", "[EPG] catch-up reach prune: channel snapshot unreadable", it)
                 return@withContext
@@ -1910,13 +1929,17 @@ class PlaylistRepository @Inject constructor(
         if (snapshot.isEmpty()) return@withContext
         // Bucket the guide keys by the retention that applies to them. The key
         // is the canonical guide channel id, which is what cached programmes
-        // carry after the ingest bridge rewrote their channelId.
-        val keysByDays = HashMap<Int, MutableList<String>>()
+        // carry after the ingest bridge rewrote their channelId. A key seen in
+        // several profiles takes the widest window any of them has.
+        val daysByKey = HashMap<String, Int>()
         for (row in snapshot) {
             val days = minOf(maxOf(row.catchupDays, 0), GUIDE_DAYS_ALL_MAX_BACK)
             val key = row.toChannel().guideChannelId().value
-            keysByDays.getOrPut(days) { mutableListOf() }.add(key)
+            val prior = daysByKey[key]
+            if (prior == null || days > prior) daysByKey[key] = days
         }
+        val keysByDays = HashMap<Int, MutableList<String>>()
+        for ((key, days) in daysByKey) keysByDays.getOrPut(days) { mutableListOf() }.add(key)
         var deleted = 0
         for ((days, keys) in keysByDays) {
             // days == 0 means no archive: keep only the last 24 h.
@@ -2974,6 +2997,24 @@ class PlaylistRepository @Inject constructor(
             .onFailure { Log.w("PlaylistRepo", "purgeEpgCache: coverage purge failed", it) }
     }
 
+    /**
+     * REKEYED identity verdict (2026-10-27): delete only the cached rows of
+     * the re-keyed channels (plus any raw-keyed legacy rows), never the whole
+     * server's guide and history. Coverage is dropped so the next walk
+     * refetches every day for the purged channels; the other channels' rows
+     * stay and keep painting. Returns the rows deleted.
+     */
+    suspend fun purgeEpgForChannels(playlistId: String, canonicalIds: Collection<String>): Int {
+        var deleted = 0
+        canonicalIds.toList().chunked(900).forEach { chunk ->
+            deleted += epgProgrammeDao.deleteForChannels(playlistId, chunk)
+        }
+        deleted += runCatching { epgProgrammeDao.deleteNonCanonical(playlistId) }.getOrDefault(0)
+        runCatching { epgChunkCoverageDao.deleteForPlaylist(playlistId) }
+            .onFailure { Log.w("PlaylistRepo", "purgeEpgForChannels: coverage purge failed", it) }
+        return deleted
+    }
+
     suspend fun saveEpgToCache(
         playlistId: String,
         programmes: List<EPGProgramme>,
@@ -3091,7 +3132,13 @@ class PlaylistRepository @Inject constructor(
     suspend fun newestChannelFetch(playlistId: String): Long? =
         channelSnapshotDao.newestFetchedAt(playlistId)
 
-    suspend fun saveChannelsToCache(playlistId: String, rawChannels: List<M3UChannel>) {
+    suspend fun saveChannelsToCache(
+        playlistId: String,
+        rawChannels: List<M3UChannel>,
+        /** Snapshot key and profile captured when the fetch started. */
+        binding: com.aeriotv.android.core.profiles.ScopeBinding =
+            com.aeriotv.android.core.profiles.ScopeBinding.capture(playlistId),
+    ) {
         val now = System.currentTimeMillis()
         // Drop exact-duplicate streams (same URL) before persisting so the cache
         // stays clean and reloads never feed a duplicate key to the url-keyed
@@ -3109,11 +3156,12 @@ class PlaylistRepository @Inject constructor(
         // autoGenerate with only a NON-unique index on playlistId, so REPLACE
         // never dedups, chunked inserts without it would duplicate every row.
         database.withTransaction {
-            channelSnapshotDao.deleteForPlaylist(playlistId)
+            binding.ensureCurrent("channel snapshot write")
+            channelSnapshotDao.deleteForPlaylistKey(binding.cacheKey)
             var position = 0
             for (chunk in channels.asSequence().chunked(CHANNEL_CACHE_CHUNK)) {
                 channelSnapshotDao.insertAll(
-                    chunk.map { ch -> ch.toCacheEntity(com.aeriotv.android.core.profiles.ProfileScope.cacheKey(playlistId), position++, now) },
+                    chunk.map { ch -> ch.toCacheEntity(binding.cacheKey, position++, now) },
                 )
             }
             // Stamp the displayed count from the list ACTUALLY PERSISTED, in the
@@ -3128,9 +3176,11 @@ class PlaylistRepository @Inject constructor(
             // Doing it here means the count cannot drift from the snapshot by
             // construction, for every write path (add, refresh, switch-active,
             // background refresh worker).
-            dao.updateChannelCount(playlistId, channels.size)
+            // The playlist row is the SERVER's (default profile's) row: another
+            // profile's count lives with its own snapshot, never on the row.
+            if (binding.isDefaultProfile) dao.updateChannelCount(playlistId, channels.size)
         }
-        stampSnapshot(playlistId)
+        stampSnapshot(playlistId, binding)
     }
 
     /**
@@ -3138,13 +3188,14 @@ class PlaylistRepository @Inject constructor(
      * assignment this snapshot was fetched with, so a fast profile switch can
      * tell a stale snapshot (other user, changed assignment) from a fresh one.
      */
-    private suspend fun stampSnapshot(playlistId: String) {
+    private suspend fun stampSnapshot(playlistId: String, binding: com.aeriotv.android.core.profiles.ScopeBinding) {
         runCatching {
+            if (!binding.isCurrent()) return
             val row = dao.byId(playlistId) ?: return
             if (!row.isDispatcharrDirectConnect()) return
             val uid = com.aeriotv.android.core.profiles.ProfileScope.activeUserIdLookup?.invoke(playlistId) ?: 0
             snapshotStamps.put(
-                com.aeriotv.android.core.profiles.ProfileScope.cacheKey(playlistId),
+                binding.cacheKey,
                 com.aeriotv.android.core.profiles.SnapshotStamp(uid, row.dispatcharrAccountProfileIds),
             )
         }
@@ -3418,6 +3469,22 @@ class PlaylistRepository @Inject constructor(
     suspend fun allOnce(): List<PlaylistEntity> = dao.allOnce()
 
     /**
+     * Cache-first switch (2026-10-27): the target row and its stored channel
+     * snapshot (current scope's key), or null when nothing is cached. With
+     * [makeActive] the row becomes the active one first (one local write, no
+     * network), so every reader agrees on the active playlist while the
+     * cached paint is up and [switchActive] refreshes behind it.
+     */
+    suspend fun cachedSwitchTarget(playlistId: String, makeActive: Boolean): Pair<PlaylistEntity, List<M3UChannel>>? {
+        if (dao.byId(playlistId) == null) return null
+        val cached = loadCachedChannels(playlistId)
+        if (cached.isEmpty()) return null
+        if (makeActive) dao.switchActive(playlistId)
+        val row = dao.byId(playlistId) ?: return null
+        return row to cached
+    }
+
+    /**
      * Make [playlistId] the active row and load its channels + EPG. Returns
      * the resolved entity + channel list, mirroring loadAndPersist's shape
      * so callers can drop a switch into the same state-update flow.
@@ -3430,6 +3497,10 @@ class PlaylistRepository @Inject constructor(
         expectedScopeToken: String? = null,
     ): Result<Pair<PlaylistEntity, List<M3UChannel>>> = runCatching {
         val t0 = System.currentTimeMillis()
+        val binding = com.aeriotv.android.core.profiles.ScopeBinding.capture(playlistId)
+        if (expectedScopeToken != null && binding.token != expectedScopeToken) {
+            throw com.aeriotv.android.core.profiles.ScopeMovedException("switch refresh")
+        }
         dao.switchActive(playlistId)
         // Capability probing is ACTIVE-PLAYLIST ONLY, so the row that just
         // became active is probed here: it may never have been probed at
@@ -3472,14 +3543,14 @@ class PlaylistRepository @Inject constructor(
                 entity.username, entity.password,
             )
         }
-        if (expectedScopeToken != null && com.aeriotv.android.core.profiles.ProfileScope.token.value != expectedScopeToken) {
-            throw IllegalStateException("profile changed during the background refresh")
-        }
+        binding.ensureCurrent("switch refresh")
         val updated = entity.copy(channelCount = channels.size, lastRefreshedAt = System.currentTimeMillis())
         dao.update(updated)
         // Cache the post-switch channel list (Phase 130 channel snapshot cache).
         try {
-            saveChannelsToCache(updated.id, channels)
+            saveChannelsToCache(updated.id, channels, binding)
+        } catch (t: com.aeriotv.android.core.profiles.ScopeMovedException) {
+            throw t
         } catch (t: Throwable) {
             android.util.Log.w("PlaylistRepository", "saveChannelsToCache failed (switchActive)", t)
         }

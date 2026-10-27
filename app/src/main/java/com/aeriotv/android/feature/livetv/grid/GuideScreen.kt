@@ -515,10 +515,17 @@ fun GuideScreen(
     // phone keeps building fresh rows.
     // Plain holder, not state: written by the rows calc, read by the install log.
     val windowRoll = remember { LongArray(1) }
-    val rows = remember(displayChannels, state.epgByChannel, windowStartMs, windowEndMs) {
+    val rows = remember(displayChannels, state.epgByChannel, windowStartMs, windowEndMs, state.guidePaintPending) {
         val held = grid.rows
         val roll = windowStartMs - held.windowStartMs
-        if (isTv && !held.isEmpty &&
+        if (state.guidePaintPending && state.epgByChannel !is GuideCatalog) {
+            // Cold launch over a warm cache: the cached catalog is a few
+            // hundred ms out. Installing the channel rows now (name cells
+            // only) cost a full install that the catalog then replaced
+            // (2026-10-27); hold what is there until it lands.
+            windowRoll[0] = 0L
+            held
+        } else if (isTv && !held.isEmpty &&
             held.catalog === (state.epgByChannel as? GuideCatalog) &&
             roll >= 0L && roll <= WINDOW_ROLL_REUSE_MAX_MS &&
             windowEndMs - held.windowEndMs == roll &&

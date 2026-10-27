@@ -66,6 +66,15 @@ interface ChannelSnapshotDao {
         setRadioKey(ProfileScope.cacheKey(playlistId), channelId, isRadio)
     suspend fun deleteForPlaylist(playlistId: String) = deleteForPlaylistKey(ProfileScope.cacheKey(playlistId))
 
+    /** Widest catch-up window across EVERY profile's snapshot of the
+     *  playlist (the EPG rows it bounds are shared by all profiles). */
+    @Query("SELECT MAX(catchupDays) FROM channel_snapshot WHERE playlistId = :playlistId OR playlistId LIKE :playlistId || '@%'")
+    suspend fun maxCatchupDaysAllProfiles(playlistId: String): Int?
+
+    /** Every profile's cached rows for the playlist (catch-up reach prune). */
+    @Query("SELECT * FROM channel_snapshot WHERE playlistId = :playlistId OR playlistId LIKE :playlistId || '@%'")
+    suspend fun forPlaylistAllProfiles(playlistId: String): List<ChannelSnapshotEntity>
+
     /** Playlist delete: the default snapshot and every profile's. */
     @Query("DELETE FROM channel_snapshot WHERE playlistId = :playlistId OR playlistId LIKE :playlistId || '@%'")
     suspend fun deleteAllProfilesForPlaylist(playlistId: String)

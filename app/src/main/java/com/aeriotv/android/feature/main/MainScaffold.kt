@@ -963,6 +963,9 @@ fun MainScaffold(
                 viewModel.repaintGuideIfShed("main-start")
                 if (sawFirstStart) {
                     viewModel.refreshEpgIfStale()
+                    // Channels too (none of the foreground paths refreshed
+                    // them): silent, behind the painted guide, past 30 min.
+                    viewModel.refreshChannelsIfStale()
                     viewModel.checkEpgSourcesForChanges()
                 } else {
                     sawFirstStart = true

@@ -120,14 +120,54 @@ object GuideIdentityHash {
     }
 
     /**
+     * Canonical guide ids of the loaded [channels] whose entry is RE-KEYED
+     * against the stamp: the canonical id was stamped before under a
+     * different guide key. Only these channels' cached rows can sit under the
+     * wrong key, so a REKEYED verdict purges just them (2026-10-27), not the
+     * whole server cache. Empty for a legacy stamp or another server.
+     */
+    fun rekeyedCanonicalIds(raw: String, server: String, channels: List<M3UChannel>): Set<String> {
+        val stamp = decode(raw) ?: return emptySet()
+        if (stamp.server != server) return emptySet()
+        val storedCanonical = stamp.entries.mapTo(HashSet()) { it.substringBefore(':') }
+        val out = HashSet<String>()
+        for (ch in channels) {
+            val canonical = ch.guideChannelId().value
+            val c = short(canonical)
+            val entry = c + ":" + short(canonical + "|" + GuideMatchMaps.normalize(ch.tvgID))
+            if (entry !in stamp.entries && c in storedCanonical) out.add(canonical)
+        }
+        return out
+    }
+
+    /** The identity stamp certifies rows ON DISK: only a fetch that returned
+     *  programmes AND saved them may write it. */
+    fun shouldStamp(programmeCount: Int, saved: Boolean): Boolean = saved && programmeCount > 0
+
+    /** Short hash of a canonical id, as it appears before ':' in an entry. */
+    fun canonicalHash(canonicalId: String): String = short(canonicalId)
+
+    /**
      * The stamp to write after a successful fetch. Same server: union with
      * what other profiles loaded (the fetch replaced rows only for the keys
      * it saw, other profiles' rows stay valid). Different server or legacy:
      * start over from [current].
      */
-    fun merged(raw: String, server: String, current: Set<String>, reset: Boolean): String {
+    fun merged(
+        raw: String,
+        server: String,
+        current: Set<String>,
+        reset: Boolean,
+        /** Canonical ids re-keyed by this fetch: their OLD entries are
+         *  dropped so a later key flip back is judged again. */
+        rekeyedCanonicalIds: Set<String> = emptySet(),
+    ): String {
         val stamp = decode(raw)
-        val base = if (!reset && stamp != null && stamp.server == server) stamp.entries else emptySet()
+        var base = if (!reset && stamp != null && stamp.server == server) stamp.entries else emptySet()
+        if (rekeyedCanonicalIds.isNotEmpty() && base.isNotEmpty()) {
+            val drop = rekeyedCanonicalIds.mapTo(HashSet()) { short(it) }
+            base = base.filterTo(HashSet()) { it.substringBefore(':') !in drop }
+        }
         return encode(Stamp(server, base + current))
     }
 }

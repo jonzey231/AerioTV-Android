@@ -18,15 +18,28 @@ import com.aeriotv.android.core.data.M3UChannel
 class GuideCatalog private constructor(
     private val indices: Map<String, GuideIndex>,
     private val lists: Map<String, List<EPGProgramme>>,
-    /** Fingerprint of the channel list this catalog was built for. */
-    val identityHash: String,
 ) : Map<String, List<EPGProgramme>> by lists {
 
     fun index(channelId: GuideChannelId): GuideIndex? = indices[channelId.value]
     fun index(channelKey: String): GuideIndex? = indices[channelKey]
 
+    /**
+     * True when [other] would render exactly the same guide: the same
+     * channel keys, every index and cell list the SAME instance (build reuses
+     * them from `previous` when equal). A rebuild that produced this is not
+     * published, so the guide does not reinstall its rows for nothing
+     * (2026-10-27: up to six installs per cold launch).
+     */
+    fun sameContentAs(other: GuideCatalog): Boolean {
+        if (other === this) return true
+        if (indices.size != other.indices.size || lists.size != other.lists.size) return false
+        for ((k, v) in indices) if (other.indices[k] !== v) return false
+        for ((k, v) in lists) if (other.lists[k] !== v) return false
+        return true
+    }
+
     companion object {
-        val EMPTY = GuideCatalog(emptyMap(), emptyMap(), "")
+        val EMPTY = GuideCatalog(emptyMap(), emptyMap())
 
         /**
          * Build for [channels] from cached [rows] (any source, any key shape:
@@ -83,9 +96,12 @@ class GuideCatalog private constructor(
                 }
                 val prev = previous?.lists?.get(id.value)
                 lists[id.value] = if (prev != null && prev == cells) prev else cells
-                indices[id.value] = index
+                // Same for the index the grid reads: equal cells keep the
+                // previous instance, so [sameContentAs] is a reference check.
+                val prevIndex = previous?.indices?.get(id.value)
+                indices[id.value] = if (prevIndex != null && prevIndex.cells == index.cells) prevIndex else index
             }
-            return GuideCatalog(indices, lists, GuideIdentityHash.of(channels))
+            return GuideCatalog(indices, lists)
         }
     }
 }

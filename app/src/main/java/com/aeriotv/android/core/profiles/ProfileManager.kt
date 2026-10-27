@@ -938,6 +938,45 @@ class ProfileManager @Inject constructor(
         var tMe = t0
         var path = "key"
         var tLock = t0
+        // Warm switch (2026-10-27): the target has a stored key and a stamped
+        // channel snapshot, so the guide can paint from cache at once. The
+        // scope is activated from the STORED profile and the reload is sent
+        // before any network; sign-in and /me/ run behind the painted guide
+        // (verifyWarmSwitch). Only a profile with no snapshot waits on them.
+        val targetKey = if (target.isDefault) playlistId else "$playlistId@${target.id}"
+        val storedKey = (if (target.isDefault) row.apiKey else target.apiKey)?.takeIf { it.isNotBlank() }
+        val warm = storedKey != null &&
+            snapshotStamps.get(targetKey) != null &&
+            runCatching { channelSnapshotDao.newestFetchedAtKey(targetKey) }.getOrNull() != null
+        if (warm) {
+            mutex.withLock {
+                tLock = System.currentTimeMillis()
+                if (target.isDefault) {
+                    ProfileScope.activate(null)
+                    store.setActiveProfileId(playlistId, null)
+                } else {
+                    ProfileScope.activate(target.toOverlay())
+                    store.setActiveProfileId(playlistId, target.id)
+                }
+                tokenStore.clear(playlistId)
+                CapabilityCorrections.clear(playlistId)
+                timeshift.stopAllRetained("profile switch")
+            }
+            refreshActiveRole(playlistId)
+            Log.i(TAG, "[PROFILE] switch ${from?.displayName ?: "?"} -> ${target.displayName} (warm: cache first, sign-in behind)")
+            pendingProbe = PendingProbe(playlistId, gen, System.currentTimeMillis())
+            Log.i(TAG, "[SWITCH] profile lock=${tLock - t0}ms gate=${System.currentTimeMillis() - t0}ms path=warm (auth and /me/ deferred)")
+            watchdog = scope.launch {
+                kotlinx.coroutines.delay(SWITCH_TIMEOUT_MS)
+                if (_switching.value && gen == switchGen.get()) {
+                    Log.w(TAG, "[PROFILE] reload did not report back in ${SWITCH_TIMEOUT_MS / 1000}s; releasing the UI")
+                    finishSwitch(gen)
+                }
+            }
+            reloads.send(Reload(playlistId, gen))
+            scope.launch { verifyWarmSwitch(playlistId, target, from, base, row, gen) }
+            return
+        }
         mutex.withLock {
             tLock = System.currentTimeMillis()
             if (target.isDefault) {
@@ -991,6 +1030,69 @@ class ProfileManager @Inject constructor(
         }
         logPermissions(playlistId, store.byId(target.id)?.username?.ifBlank { null } ?: row.username.orEmpty())
         reloads.send(Reload(playlistId, gen))
+    }
+
+    /**
+     * Behind a warm switch's cached paint: sign in as the target and read
+     * /me/ exactly as the cold path does before the reload. Fresh
+     * permissions are applied; a changed channel_profiles assignment or
+     * permission set asks for a silent channel refresh. A rejected login
+     * switches back to the previous profile; a network failure keeps the
+     * stored profile (its key is what every request uses anyway).
+     */
+    private suspend fun verifyWarmSwitch(
+        playlistId: String,
+        target: DispatcharrProfile,
+        from: DispatcharrProfile?,
+        base: String,
+        row: PlaylistEntity,
+        gen: Long,
+    ) {
+        val t0 = System.currentTimeMillis()
+        try {
+            var changed = false
+            mutex.withLock {
+                if (gen != switchGen.get()) return
+                if (target.isDefault) {
+                    val a = authenticate(playlistId, target.id, base, row.username.orEmpty(), row.password, row.apiKey)
+                    val me = a.me ?: client.fetchMe(base, a.key)
+                    if (gen != switchGen.get()) return
+                    if (me != null) {
+                        val before = playlistDao.rawById(playlistId)
+                        applyMeToDefaultRow(playlistId, target.id, me)
+                        val after = playlistDao.rawById(playlistId)
+                        changed = SnapshotStaleness.normalize(before?.dispatcharrAccountProfileIds.orEmpty()) !=
+                            SnapshotStaleness.normalize(after?.dispatcharrAccountProfileIds.orEmpty()) ||
+                            before?.dispatcharrCatchupEnabled != after?.dispatcharrCatchupEnabled
+                    }
+                } else {
+                    val a = authenticate(playlistId, target.id, base, target.username, target.password, target.apiKey)
+                    val me = a.me ?: client.fetchMe(base, a.key)
+                        ?: error("Could not read ${target.username} from the server.")
+                    if (gen != switchGen.get()) return
+                    val updated = target.applyMe(me, a.key)
+                    store.upsert(updated)
+                    if (ProfileScope.current() == target.id) ProfileScope.activate(updated.toOverlay())
+                    val o1 = target.toOverlay()
+                    val o2 = updated.toOverlay()
+                    changed = SnapshotStaleness.normalize(o1.accountProfileIds) != SnapshotStaleness.normalize(o2.accountProfileIds) ||
+                        o1.catchupEnabled != o2.catchupEnabled
+                }
+            }
+            refreshActiveRole(playlistId)
+            logPermissions(playlistId, store.byId(target.id)?.username?.ifBlank { null } ?: row.username.orEmpty())
+            Log.i(TAG, "[SWITCH] warm switch verified in ${System.currentTimeMillis() - t0}ms (permissions changed=$changed)")
+            if (changed && gen == switchGen.get()) reloads.send(Reload(playlistId, gen, fromSwitch = false))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: DispatcharrError.InvalidCredentials) {
+            Log.w(TAG, "[SWITCH] warm switch sign-in rejected for ${target.displayName}; returning to ${from?.displayName ?: "the previous profile"}")
+            if (gen == switchGen.get() && from != null && from.id != target.id) {
+                switchTo(playlistId, from.id, bypassPin = true)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "[SWITCH] warm switch verification failed (stored profile kept): ${t.message}")
+        }
     }
 
     /** [username] is the Dispatcharr username, never the display name. */
