@@ -417,7 +417,7 @@ class DvrViewModel @Inject constructor(
                 settleGate.awaitSweepWindow()
             }
             // Network: parked behind the launch picker / PIN gate / PIN pad.
-            com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "DVR first refresh", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK_NAME, "DVR first refresh", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
             refresh()
             refreshJob?.join()
             Log.i(TAG, "[DVR] background refresh: ${_state.value.recordings.size} recordings")

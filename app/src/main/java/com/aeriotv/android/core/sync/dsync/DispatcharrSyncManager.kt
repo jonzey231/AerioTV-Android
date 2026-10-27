@@ -212,7 +212,7 @@ class DispatcharrSyncManager @Inject constructor(
                     val prev = lastTarget
                     lastTarget = t
                     val why = if (prev != null && prev.playlistId == t.playlistId && prev.profileToken != t.profileToken) "profile" else "launch"
-                    com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "Dispatcharr Sync session", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
+                    com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK_NAME, "Dispatcharr Sync session", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
                     runSession(t, why)
                 }
         }

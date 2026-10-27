@@ -801,7 +801,7 @@ class PlaylistViewModel @Inject constructor(
                 // the refresh starts the moment the hold releases (Streamer
                 // 2026-10-27: 12 s from "launch work resumed" to this refresh).
                 if (com.aeriotv.android.core.app.LaunchWorkHold.heldThisLaunch) {
-                    com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "channel refresh", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
+                    com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK_NAME, "channel refresh", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
                 } else {
                     settleGate.awaitGuidePainted()
                 }
@@ -1699,7 +1699,7 @@ class PlaylistViewModel @Inject constructor(
         // spinner when there is nothing cached to display yet.
         // The cached paint above still shows; the network fetch waits for the
         // launch picker / PIN gate to close.
-        com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_EPG, "EPG fetch", "EPG fetch", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_EPG_MS)
+        com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_EPG, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_EPG_NAME, "EPG fetch", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_EPG_MS)
         Log.i(TAG, "loadEpgIfConfigured: fetching EPG for ${playlist.sourceType} (force=$forceRefresh, hadCache=$hasCache)")
         // A forced reload (Refresh on Edit Playlist, Refresh EPG Data, Refresh
         // Everything) means "get fresh guide data": forget which one-day grid
@@ -1755,9 +1755,20 @@ class PlaylistViewModel @Inject constructor(
                 // Same print as the last save, or every fetched row already in
                 // Room for the fetch's span (the live window slides with the
                 // clock, so the print alone rarely matches across launches).
-                val noOp = noOpEligible && fetchPrint.isNotEmpty() && (
-                    fetchPrint == lastPrint || fetchAlreadyCached(playlist.id, programmes)
-                )
+                // The saved print first (free); only on a mismatch the
+                // projection compare, which also yields the delta the save
+                // below writes instead of rewriting every row.
+                val printMatch = fetchPrint.isNotEmpty() && fetchPrint == lastPrint
+                if (noOpEligible && printMatch) Log.i(TAG, "EPG fetch vs saved fingerprint: match")
+                val delta = if (noOpEligible && fetchPrint.isNotEmpty() && !printMatch) {
+                    fetchDeltaAgainstCache(playlist.id, programmes)
+                } else null
+                val noOp = noOpEligible && fetchPrint.isNotEmpty() && (printMatch || delta?.isEmpty == true)
+                if (noOp && !printMatch) {
+                    // Remember the print so the next identical fetch stops at
+                    // the cheap check.
+                    runCatching { appPreferences.setEpgFetchFingerprint(playlist.id, fetchPrint) }
+                }
                 if (noOp) {
                     Log.i(TAG, "EPG fetch unchanged: ${programmes.size} programmes match the saved fetch; no save, no enrichment, no rebuild")
                     runCatching {
@@ -1817,8 +1828,18 @@ class PlaylistViewModel @Inject constructor(
                 // Rows go to Room first; the guide is then rebuilt from Room so
                 // fetch, cache paint, enrichment and history all install the
                 // same way (one deterministic build, no map surgery).
-                val saved = runCatching { repository.saveEpgToCache(playlist.id, programmes) }
-                    .onFailure { Log.w(TAG, "saveEpgToCache failed", it) }
+                // Item 4 (2026-10-27): a warm cache with a few new rows writes
+                // ONLY those rows (plus the superseded ones it deletes); the
+                // rows already stored keep their categories.
+                val useDelta = delta != null && !delta.isEmpty
+                val saved = if (useDelta) {
+                    runCatching { repository.applyEpgDelta(playlist.id, delta!!.deleteIds, delta.added) }
+                        .onSuccess { Log.i(TAG, "EPG delta saved: ${delta!!.added.size} new or changed rows written, ${delta.deleteIds.size} superseded removed, ${programmes.size - delta.added.size} kept as stored") }
+                        .onFailure { Log.w(TAG, "EPG delta save failed", it) }
+                } else {
+                    runCatching { repository.saveEpgToCache(playlist.id, programmes) }
+                        .onFailure { Log.w(TAG, "saveEpgToCache failed", it) }
+                }
                 if (saved.isSuccess) {
                     runCatching {
                         appPreferences.setEpgCacheEpochFor(playlist.id, EPG_CACHE_EPOCH)
@@ -1849,6 +1870,19 @@ class PlaylistViewModel @Inject constructor(
                 // Warm cache (the guide is already painted): fold the category
                 // enrichment into THIS install instead of a second one after
                 // it. No cache: install now, enrich behind it as before.
+                if (useDelta && saved.isSuccess) {
+                    // Enrich only the rows this fetch added; apply them to the
+                    // published catalog in place (like the category paint),
+                    // no rebuild and no rows-install.
+                    val enrichedAdds = enrichAndStoreCategories(playlist, delta!!.added)
+                    val adds = if (enrichedAdds.isEmpty()) delta.added else {
+                        val byKey = enrichedAdds.associateBy { "${it.channelId}|${it.startMillis}" }
+                        delta.added.map { byKey["${it.channelId}|${it.startMillis}"] ?: it }
+                    }
+                    if (!applyDeltaToCatalog(adds, delta.removedKeys)) rebuildGuideCatalog(playlist, "fetch delta")
+                    _state.update { it.copy(isEpgLoading = false) }
+                    return@fold Result.success(programmes.size)
+                }
                 val enrichInline = hasCache && !forceRefresh && saved.isSuccess
                 if (enrichInline) {
                     enrichAndStoreCategories(playlist, programmes)
@@ -1883,21 +1917,76 @@ class PlaylistViewModel @Inject constructor(
         )
     }
 
-    /** True when every fetched row (channel, start, end, title) is already
-     *  stored, so saving would write nothing new. One indexed window read. */
-    private suspend fun fetchAlreadyCached(playlistId: String, programmes: List<EPGProgramme>): Boolean =
-        withContext(Dispatchers.Default) {
-            val from = programmes.minOf { it.startMillis }
-            val to = programmes.maxOf { it.endMillis }
-            val cached = runCatching { repository.loadCachedEpg(playlistId, from, to) }.getOrNull()
-                ?: return@withContext false
-            if (cached.size < programmes.size) return@withContext false
-            val keys = HashSet<String>(cached.size * 2)
-            for (c in cached) keys.add("${c.channelId}|${c.startMillis}|${c.endMillis}|${c.title}")
-            val missing = programmes.count { !keys.contains("${it.channelId}|${it.startMillis}|${it.endMillis}|${it.title}") }
-            Log.i(TAG, "EPG fetch vs cache: ${programmes.size} fetched, ${cached.size} cached in span, $missing new")
-            missing == 0
+    /** Rows a fetch would add or change against the cache, and the cached
+     *  present / future rows it supersedes. */
+    private class EpgDelta(
+        val added: List<EPGProgramme>,
+        val deleteIds: List<Long>,
+        val removedKeys: Set<String>,
+    ) {
+        val isEmpty: Boolean get() = added.isEmpty() && deleteIds.isEmpty()
+    }
+
+    /**
+     * Fetch vs cache in one indexed projection read (id, channel, start, end,
+     * title) over the fetch's span, on the background serial lane, instead
+     * of materializing every cached entity. Superseded rows follow the merge
+     * rule: per fetched channel, a cached row starting inside that channel's
+     * fetched span and not before now, that the fetch no longer carries.
+     * Null when the read failed (the caller takes the full save path).
+     */
+    private suspend fun fetchDeltaAgainstCache(playlistId: String, programmes: List<EPGProgramme>): EpgDelta? =
+        runCatching {
+            com.aeriotv.android.core.app.BackgroundSweep.serial {
+                val from = programmes.minOf { it.startMillis }
+                val to = programmes.maxOf { it.endMillis }
+                val cached = repository.epgKeysInSpanBlocking(playlistId, from, to)
+                fun key(ch: String, s: Long, e: Long, t: String) = "$ch|$s|$e|${t.hashCode()}"
+                val cachedKeys = HashSet<String>(cached.size * 2)
+                for (c in cached) cachedKeys.add(key(c.channelId, c.startMillis, c.endMillis, c.title))
+                val fetchedKeys = HashSet<String>(programmes.size * 2)
+                val span = HashMap<String, LongArray>()
+                val added = ArrayList<EPGProgramme>()
+                for (p in programmes) {
+                    val k = key(p.channelId, p.startMillis, p.endMillis, p.title)
+                    fetchedKeys.add(k)
+                    if (k !in cachedKeys) added.add(p)
+                    val cur = span[p.channelId]
+                    if (cur == null) span[p.channelId] = longArrayOf(p.startMillis, p.endMillis)
+                    else { if (p.startMillis < cur[0]) cur[0] = p.startMillis; if (p.endMillis > cur[1]) cur[1] = p.endMillis }
+                }
+                val now = System.currentTimeMillis()
+                val deleteIds = ArrayList<Long>()
+                val removedKeys = HashSet<String>()
+                for (c in cached) {
+                    val sp = span[c.channelId] ?: continue
+                    if (c.startMillis < maxOf(now, sp[0]) || c.startMillis >= sp[1]) continue
+                    if (key(c.channelId, c.startMillis, c.endMillis, c.title) in fetchedKeys) continue
+                    deleteIds.add(c.id)
+                    removedKeys.add("${c.channelId}|${c.startMillis}")
+                }
+                Log.i(TAG, "EPG fetch vs cache: ${programmes.size} fetched, ${cached.size} cached in span, ${added.size} new")
+                EpgDelta(added, deleteIds, removedKeys)
+            }
+        }.onFailure { Log.w(TAG, "EPG fetch vs cache compare failed", it) }.getOrNull()
+
+    /** Publishes [added] / [removedKeys] into the on-screen catalog in place.
+     *  False when it cannot (no catalog, or a row outside it). */
+    private suspend fun applyDeltaToCatalog(added: List<EPGProgramme>, removedKeys: Set<String>): Boolean {
+        val current = _state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog ?: return false
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val patched = withContext(Dispatchers.Default) { current.withDelta(added, removedKeys) } ?: return false
+        if (patched === current) return true
+        var published = false
+        epgWriteMutex.withLock {
+            if (_state.value.epgByChannel !== current) return@withLock
+            _state.update { it.copy(epgByChannel = patched) }
+            published = true
         }
+        if (!published) return false
+        Log.i(TAG, "guide delta applied in place: ${added.size} rows, ${removedKeys.size} removed, no rebuild (${android.os.SystemClock.elapsedRealtime() - t0}ms)")
+        return true
+    }
 
     /** Order-independent fingerprint of a fetch (rows + channel set); category excluded. */
     private fun epgFetchFingerprint(programmes: List<EPGProgramme>, channels: List<M3UChannel>): String {
@@ -1936,7 +2025,7 @@ class PlaylistViewModel @Inject constructor(
         playlist: PlaylistEntity,
         programmes: List<EPGProgramme>,
     ): List<EPGProgramme> = withContext(Dispatchers.IO) {
-        com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "now-airing category enrichment", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
+        com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK_NAME, "now-airing category enrichment", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
         val enriched = runCatching {
             repository.enrichNowPlayingCategories(playlist, programmes)
         }.onFailure { Log.w(TAG, "category enrichment failed", it) }
@@ -1958,7 +2047,7 @@ class PlaylistViewModel @Inject constructor(
                 enriched
             }
         }
-        runCatching { repository.updateEpgRowsInCache(playlist.id, changedRows) }
+        runCatching { repository.updateEpgCategoriesInCache(playlist.id, changedRows) }
             .onFailure { Log.w(TAG, "enriched cache update failed", it) }
         Log.i(
             TAG,

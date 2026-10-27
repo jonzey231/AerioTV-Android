@@ -18,6 +18,10 @@ import com.aeriotv.android.core.data.M3UChannel
 class GuideCatalog private constructor(
     private val indices: Map<String, GuideIndex>,
     private val lists: Map<String, List<EPGProgramme>>,
+    /** The placeholder window this catalog was built for (0 = unknown). */
+    private val windowStartMs: Long = 0L,
+    private val windowEndMs: Long = 0L,
+    private val minGapMs: Long = 5 * 60_000L,
 ) : Map<String, List<EPGProgramme>> by lists {
 
     fun index(channelId: GuideChannelId): GuideIndex? = indices[channelId.value]
@@ -69,7 +73,41 @@ class GuideCatalog private constructor(
             val cells = patch(idx.cells)
             newIndices[k] = if (cells == null) idx else { changed = true; GuideIndex.build(idx.channelId, cells) }
         }
-        return if (changed) GuideCatalog(newIndices, newLists) else this
+        return if (changed) GuideCatalog(newIndices, newLists, windowStartMs, windowEndMs, minGapMs) else this
+    }
+
+    /**
+     * In-place delta (EPG fetch with a handful of new rows): a copy where
+     * each channel in [added] drops its real cells that overlap an added row
+     * or whose "channel|start" is in [removed], takes the added rows, and is
+     * re-indexed; every other channel keeps its instances, so only the
+     * touched rows recompose. No Room read, no full rebuild. Returns null
+     * when the delta cannot be applied in place (a row keyed outside the
+     * catalog, or an unknown window): the caller rebuilds instead.
+     */
+    fun withDelta(added: List<EPGProgramme>, removed: Set<String>): GuideCatalog? {
+        if (windowEndMs <= windowStartMs) return null
+        if (added.isEmpty() && removed.isEmpty()) return this
+        val addedByKey = added.groupBy { it.channelId }
+        val removedKeys = removed.mapTo(HashSet()) { it.substringBefore('|') }
+        val touched = addedByKey.keys + removedKeys
+        if (touched.any { it !in indices }) return null
+        val newIndices = HashMap(indices)
+        val newLists = HashMap(lists)
+        for (key in touched) {
+            val idx = indices[key] ?: return null
+            val adds = addedByKey[key].orEmpty()
+            val kept = idx.cells.filter { c ->
+                !c.isPlaceholder &&
+                    "${c.channelId}|${c.startMillis}" !in removed &&
+                    adds.none { a -> a.startMillis < c.endMillis && c.startMillis < a.endMillis }
+            }
+            val merged = GuideMerge.dedup((kept + adds).sortedWith(compareBy({ it.startMillis }, { it.endMillis })))
+            val index = GuideIndex.build(idx.channelId, merged)
+            newIndices[key] = index
+            newLists[key] = if (merged.isEmpty()) lists[key].orEmpty() else index.withHoles(windowStartMs, windowEndMs, minGapMs)
+        }
+        return GuideCatalog(newIndices, newLists, windowStartMs, windowEndMs, minGapMs)
     }
 
     companion object {
@@ -135,7 +173,7 @@ class GuideCatalog private constructor(
                 val prevIndex = previous?.indices?.get(id.value)
                 indices[id.value] = if (prevIndex != null && prevIndex.cells == index.cells) prevIndex else index
             }
-            return GuideCatalog(indices, lists)
+            return GuideCatalog(indices, lists, windowStartMs, windowEndMs, minGapMs)
         }
     }
 }

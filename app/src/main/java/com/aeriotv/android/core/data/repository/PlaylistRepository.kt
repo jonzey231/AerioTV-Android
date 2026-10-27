@@ -1929,7 +1929,7 @@ class PlaylistRepository @Inject constructor(
      * Runs on the background-priority EPG dispatcher; the future side of Guide
      * Days is untouched.
      */
-    suspend fun pruneEpgBeyondCatchupReach(playlistId: String) = withContext(layeringDispatcher) {
+    suspend fun pruneEpgBeyondCatchupReach(playlistId: String) = com.aeriotv.android.core.app.BackgroundSweep.serial {
         val now = System.currentTimeMillis()
         val dayMs = 86_400_000L
         // Every profile's snapshot of this playlist: the programme rows are
@@ -1938,9 +1938,9 @@ class PlaylistRepository @Inject constructor(
         val snapshot = runCatching { channelSnapshotDao.forPlaylistAllProfiles(playlistId) }
             .getOrElse {
                 Log.w("PlaylistRepo", "[EPG] catch-up reach prune: channel snapshot unreadable", it)
-                return@withContext
+                return@serial
             }
-        if (snapshot.isEmpty()) return@withContext
+        if (snapshot.isEmpty()) return@serial
         // Bucket the guide keys by the retention that applies to them. The key
         // is the canonical guide channel id, which is what cached programmes
         // carry after the ingest bridge rewrote their channelId. A key seen in
@@ -2176,7 +2176,11 @@ class PlaylistRepository @Inject constructor(
                 var refreshed = 0
                 for ((start, end) in chunks) {
                     awaitSweepWindow()
-                    val n = fetchGridChunk(playlist, base, start, end, authoritative = true)
+                    // One chunk at a time on the background serial lane, so
+                    // it never runs beside the VOD sweep or the EPG compare.
+                    val n = com.aeriotv.android.core.app.BackgroundSweep.serial {
+                        fetchGridChunk(playlist, base, start, end, authoritative = true)
+                    }
                     if (n == null) {
                         // A failed chunk stops the sweep exactly like the
                         // incremental walk stops: the fingerprint is NOT
@@ -3070,6 +3074,41 @@ class PlaylistRepository @Inject constructor(
                 playlistId,
                 now - retentionDays * 24L * 60L * 60L * 1000L,
             )
+        }
+    }
+
+    /** (id, channel, start, end, title) for the cached rows overlapping
+     *  [fromMs]..[toMs]; one indexed projection read on the caller's thread. */
+    fun epgKeysInSpanBlocking(playlistId: String, fromMs: Long, toMs: Long) =
+        epgProgrammeDao.keysInSpanBlocking(playlistId, fromMs, toMs)
+
+    /**
+     * Delta save for a warm cache: delete [deleteIds] (superseded present /
+     * future rows) and write only [programmes] (new or changed), in one
+     * transaction, on the background serial lane. Unchanged rows are not
+     * rewritten, so their categories stay.
+     */
+    suspend fun applyEpgDelta(playlistId: String, deleteIds: List<Long>, programmes: List<EPGProgramme>) {
+        if (deleteIds.isEmpty() && programmes.isEmpty()) return
+        val now = System.currentTimeMillis()
+        DeletedPlaylists.ensureAlive(playlistId, "EPG delta")
+        com.aeriotv.android.core.app.BackgroundSweep.serial {
+            val rows = programmes.mapNotNull { p ->
+                if (p.endMillis - p.startMillis < 30_000L) null else p.toCacheEntity(playlistId, now)
+            }
+            epgProgrammeDao.applyDeltaBlocking(deleteIds, rows)
+        }
+    }
+
+    /** Category backfill: one batched UPDATE transaction on the background
+     *  serial lane (was a REPLACE insert per row on Room's shared pool). */
+    suspend fun updateEpgCategoriesInCache(playlistId: String, programmes: List<EPGProgramme>): Int {
+        if (programmes.isEmpty()) return 0
+        val now = System.currentTimeMillis()
+        DeletedPlaylists.ensureAlive(playlistId, "EPG enrichment")
+        return com.aeriotv.android.core.app.BackgroundSweep.serial {
+            val rows = programmes.map { it.toCacheEntity(playlistId, now) }
+            epgProgrammeDao.updateCategoriesBlocking(playlistId, rows)
         }
     }
 

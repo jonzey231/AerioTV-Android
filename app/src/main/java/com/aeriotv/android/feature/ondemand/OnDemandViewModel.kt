@@ -573,7 +573,7 @@ class OnDemandViewModel @Inject constructor(
             if (playlist == null || identity == null) {
                 launchRestoreDone.complete(Unit)
                 // Network sweep: parked behind the launch picker / PIN gate.
-                com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, "VOD art pass and sweep", "VOD first sweep", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
+                com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD_NAME, "VOD first sweep", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
                 refresh()
                 refreshSeries()
                 return@launch
@@ -591,7 +591,7 @@ class OnDemandViewModel @Inject constructor(
                 // one sweep stays on the launch path.
                 launchRestoreDone.complete(Unit)
                 // Network sweep: parked behind the launch picker / PIN gate.
-                com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, "VOD art pass and sweep", "VOD first sweep", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
+                com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD_NAME, "VOD first sweep", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
                 refresh()
                 refreshSeries()
                 return@launch
@@ -670,7 +670,7 @@ class OnDemandViewModel @Inject constructor(
             // there is the one this restore served (review 2026-10-27). A
             // newer restore (a switch) supersedes this one; a pick the switch
             // collector did not see re-runs the restore once for it.
-            com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, "VOD art pass and sweep", "VOD art pass", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD_NAME, "VOD art pass", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
             if (generation != restoreGeneration) {
                 launchRestoreDone.complete(Unit)
                 return@launch
@@ -792,9 +792,11 @@ class OnDemandViewModel @Inject constructor(
         val hadMovieBaseline = moviesProbeCount > 0 || moviesProbeNewest.isNotBlank()
         val hadSeriesBaseline = seriesProbeCount > 0 || seriesProbeNewest.isNotBlank()
         val moviesChanged = movieProbe != null && hadMovieBaseline &&
-                (movieProbe.count != moviesProbeCount || movieProbe.newest != moviesProbeNewest)
+                (movieProbe.count != moviesProbeCount || movieProbe.newest != moviesProbeNewest) &&
+                !probeAlreadySwept(true, movieProbe)
         val seriesChanged = seriesProbe != null && hadSeriesBaseline &&
-                (seriesProbe.count != seriesProbeCount || seriesProbe.newest != seriesProbeNewest)
+                (seriesProbe.count != seriesProbeCount || seriesProbe.newest != seriesProbeNewest) &&
+                !probeAlreadySwept(false, seriesProbe)
         Log.i(
             TAG,
             "[VOD] change probe: movies ${moviesProbeCount}/${moviesProbeNewest} -> " +
@@ -807,6 +809,42 @@ class OnDemandViewModel @Inject constructor(
         // even when nothing is swept now.
         if (!moviesChanged && !seriesChanged) persistSnapshot()
         return moviesChanged to seriesChanged
+    }
+
+    /**
+     * True when the probe's "change" is already in the stored library: the
+     * catalog holds exactly the probe's count and the last completed sweep
+     * finished after the newest item was created. Heals a baseline a
+     * completed sweep never recorded (see [refreshProbeBaseline]).
+     */
+    private suspend fun probeAlreadySwept(isMovie: Boolean, probe: com.aeriotv.android.core.network.VODChangeProbe): Boolean {
+        val completedAt = if (isMovie) moviesCompletedAtMs else seriesCompletedAtMs
+        if (completedAt <= 0L) return false
+        val createdAt = runCatching { java.time.Instant.parse(probe.newest).toEpochMilli() }.getOrNull() ?: return false
+        if (createdAt >= completedAt) return false
+        val identity = catalogKeyFlow(isMovie).value ?: return false
+        val stored = runCatching { catalogStore.count(identity, kindOf(isMovie)) }.getOrNull() ?: return false
+        val swept = stored == probe.count
+        if (swept) Log.i(TAG, "[VOD] change probe: ${if (isMovie) "movies" else "series"} ${probe.count}/${probe.newest} already in the library (sweep completed after it); baseline updated")
+        return swept
+    }
+
+    /** Re-reads the [isMovie] change probe into the baseline (no gate). */
+    private suspend fun refreshProbeBaseline(isMovie: Boolean) {
+        val playlist = playlistRepository.activePlaylist() ?: return
+        val sourceType = playlist.sourceType.let { st -> SourceType.entries.firstOrNull { it.name == st } }
+        if (sourceType != SourceType.DispatcharrApiKey && sourceType != SourceType.DispatcharrUserPass) return
+        if (playlist.apiKey.isNullOrBlank()) return
+        val base = playlistRepository.effectiveBaseUrl(playlist)
+        val probe = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                if (isMovie) dispatcharrClient.getVODMoviesChangeProbe(base, key)
+                else dispatcharrClient.getVODSeriesChangeProbe(base, key)
+            }
+        }.onFailure { warnUnlessCancelled("VOD change probe (baseline) failed", it) }.getOrNull() ?: return
+        if (isMovie) { moviesProbeCount = probe.count; moviesProbeNewest = probe.newest }
+        else { seriesProbeCount = probe.count; seriesProbeNewest = probe.newest }
+        Log.i(TAG, "[VOD] change probe baseline after ${if (isMovie) "movies" else "series"} sweep: ${probe.count}/${probe.newest}")
     }
 
     /** True when the launch served the saved library and skipped the sweep. */
@@ -909,6 +947,10 @@ class OnDemandViewModel @Inject constructor(
      */
     suspend fun heroBackdropUrl(artKey: String, tmdbId: String?, title: String, isMovie: Boolean): String? {
         tmdbArtCache.backdropUrl(artKey)?.let { return it }
+        // Per item: a PIN pad or the picker stops the hero loop here, and the
+        // loop resumes only with stage 4 (Streamer 2026-10-27 14:37:57: 14
+        // TMDB details lookups ran under the pad, on the main thread).
+        com.aeriotv.android.core.app.LaunchWorkHold.checkpointVod("hero backdrops (TMDB details)")
         val details = resolveTmdbDetails(tmdbId, title, isMovie) ?: return null
         tmdbArtCache.merge(
             key = artKey,
@@ -1959,8 +2001,19 @@ class OnDemandViewModel @Inject constructor(
                         val url = dispatcharrClient.vodListUrl(base, isMovie, lane.nextQuery!!)
                         var failure: Throwable? = null
                         val fetched = try {
-                            fetchPageWithRetry("VOD $label lane='${lane.lane}'") {
-                                fetchAndStoreLanePage(playlist, identity, isMovie, plan.generation, lane.lane, url)
+                            if (background) {
+                                // One lane page at a time on the background
+                                // serial lane (never beside the EPG work),
+                                // with a yield after each page.
+                                com.aeriotv.android.core.app.BackgroundSweep.serial {
+                                    fetchPageWithRetry("VOD $label lane='${lane.lane}'") {
+                                        fetchAndStoreLanePage(playlist, identity, isMovie, plan.generation, lane.lane, url)
+                                    }
+                                }
+                            } else {
+                                fetchPageWithRetry("VOD $label lane='${lane.lane}'") {
+                                    fetchAndStoreLanePage(playlist, identity, isMovie, plan.generation, lane.lane, url)
+                                }
                             }
                         } catch (u: DispatcharrError.Unauthorized) {
                             failure = u
@@ -2077,6 +2130,12 @@ class OnDemandViewModel @Inject constructor(
             else it.copy(isLoadingSeries = false, seriesError = failure, seriesNextCursor = null, seriesGroupNames = groups.ifEmpty { it.seriesGroupNames })
         }
         catalogChanged(isMovie, force = true)
+        // A completed sweep stores what the server looks like NOW as the
+        // change-probe baseline. Streamer 2026-10-27: the 14:31:35 sweep
+        // finished with 28211 movies stored, but the baseline kept the 28210
+        // from before (cadence runs never probe), so every later launch
+        // logged gate=changed and re-walked all 544 lanes.
+        if (closed) refreshProbeBaseline(isMovie)
         if (closed) persistSnapshot(if (isMovie) MediaSweep.Movies else MediaSweep.Series) else persistSnapshot()
         if (written > 0 || closed) enrichArt(isMovie = isMovie)
     }

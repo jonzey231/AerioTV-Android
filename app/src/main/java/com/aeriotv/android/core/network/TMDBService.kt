@@ -380,7 +380,13 @@ class TMDBService @Inject constructor() {
      * crew ride along in one request. Cached per id; only a parsed 200 is
      * cached (same rule as the poster lookups).
      */
-    suspend fun detailsForId(tmdbId: String, isMovie: Boolean, rawKey: String): TmdbDetails? {
+    suspend fun detailsForId(tmdbId: String, isMovie: Boolean, rawKey: String): TmdbDetails? = withContext(Dispatchers.IO) {
+        detailsForIdOffMain(tmdbId, isMovie, rawKey)
+    }
+
+    /** Body of [detailsForId]; always entered on IO (Streamer 2026-10-27:
+     *  the request, the JSON parse and the log ran on the main thread). */
+    private suspend fun detailsForIdOffMain(tmdbId: String, isMovie: Boolean, rawKey: String): TmdbDetails? {
         val key = rawKey.trim()
         val id = tmdbId.trim()
         if (key.isEmpty() || id.isEmpty()) return null
@@ -398,11 +404,11 @@ class TMDBService @Inject constructor() {
      * Detail metadata when no tmdb_id is known: resolve an id via
      * [resolveIdForTitle], then fetch details by id.
      */
-    suspend fun detailsForTitle(title: String, isMovie: Boolean, rawKey: String): TmdbDetails? {
+    suspend fun detailsForTitle(title: String, isMovie: Boolean, rawKey: String): TmdbDetails? = withContext(Dispatchers.IO) {
         val key = rawKey.trim()
-        if (key.isEmpty()) return null
-        val id = resolveIdForTitle(title, isMovie, key) ?: return null
-        return detailsForId(id, isMovie, key)
+        if (key.isEmpty()) return@withContext null
+        val id = resolveIdForTitle(title, isMovie, key) ?: return@withContext null
+        detailsForIdOffMain(id, isMovie, key)
     }
 
     /**

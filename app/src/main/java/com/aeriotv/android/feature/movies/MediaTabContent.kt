@@ -465,7 +465,14 @@ fun MediaTabContent(
     val heroSeriesId = if (kind == MediaKind.TVShows && isTv) {
         (heroPages.firstOrNull()?.item ?: library.firstOrNull())?.seriesId
     } else null
-    LaunchedEffect(heroSeriesId) { heroSeriesId?.let { viewModel.loadEpisodes(it) } }
+    LaunchedEffect(heroSeriesId) {
+        heroSeriesId?.let {
+            // Launch job: waits out a PIN pad / picker and its resume stage
+            // (Streamer 2026-10-27: this fetched episodes under the pad).
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitVod("hero series episodes")
+            viewModel.loadEpisodes(it)
+        }
+    }
     val heroSeriesProgress by remember(heroSeriesId) {
         heroSeriesId?.let { watchVm.observeSeriesEpisodes(it.toString()) }
             ?: kotlinx.coroutines.flow.flowOf(emptyList())

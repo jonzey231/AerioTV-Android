@@ -3,6 +3,10 @@ package com.aeriotv.android.core.app
 import android.os.Process
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.util.concurrent.Executors
 
 /**
@@ -31,4 +35,29 @@ object BackgroundSweep {
         Executors.newSingleThreadExecutor { body ->
             Thread(body, "aerio-fg-sweep").apply { isDaemon = true }
         }.asCoroutineDispatcher()
+
+    /**
+     * Post-PIN I/O bound (Streamer 2026-10-27 14:39: Room's four
+     * arch_disk_io threads at 20 + 16 + 14 + 11 % on a four-core box while
+     * the EPG compare, prune, backfill, EPG sweep, and VOD sweep ran at
+     * once). Each of those units runs here: one at a time (a shared lock),
+     * on a THREAD_PRIORITY_BACKGROUND thread, with a yield after each, so
+     * input and the guide keep the cores.
+     */
+    private val serialLock = Mutex()
+
+    val serialDispatcher: CoroutineDispatcher =
+        Executors.newSingleThreadExecutor { body ->
+            Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                body.run()
+            }, "aerio-bg-serial").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+
+    suspend fun <T> serial(block: suspend () -> T): T =
+        serialLock.withLock {
+            val out = withContext(serialDispatcher) { block() }
+            yield()
+            out
+        }
 }

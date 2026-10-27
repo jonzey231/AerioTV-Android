@@ -156,6 +156,10 @@ class TmdbArtCache @Inject constructor(
             if (!appPreferences.programPostersTmdbEnabled.first()) return@launch
             val apiKey = appPreferences.tmdbApiKey.first()
             if (apiKey.isBlank()) return@launch
+            // The 50k-row cache load and the lookups are launch work: they
+            // wait for a PIN pad / picker and stage 4 (Streamer 2026-10-27
+            // 14:37:59: "loaded 53778 cached titles" under the pad).
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitVod("TMDB art cache load and art pass ($kind)")
             loadIfNeeded()
             val cutoff = System.currentTimeMillis() - MISS_TTL_MS
             val ordered = priority + items
@@ -175,6 +179,7 @@ class TmdbArtCache @Inject constructor(
             var resolved = 0
             for ((key, title) in todo) {
                 if (!isActive) return@launch
+                com.aeriotv.android.core.app.LaunchWorkHold.checkpointVod("TMDB art pass ($kind)")
                 val entry = tmdbService.lookupArt(title, isMovie, apiKey)
                 if (entry != null) {
                     store(key, entry)
@@ -208,6 +213,10 @@ class TmdbArtCache @Inject constructor(
             if (!appPreferences.programPostersTmdbEnabled.first()) return@launch
             val apiKey = appPreferences.tmdbApiKey.first()
             if (apiKey.isBlank()) return@launch
+            // The 50k-row cache load and the lookups are launch work: they
+            // wait for a PIN pad / picker and stage 4 (Streamer 2026-10-27
+            // 14:37:59: "loaded 53778 cached titles" under the pad).
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitVod("TMDB art cache load and art pass ($kind)")
             loadIfNeeded()
             val cutoff = System.currentTimeMillis() - MISS_TTL_MS
             var resolved = 0
@@ -222,6 +231,7 @@ class TmdbArtCache @Inject constructor(
                     if (!isActive) return@launch
                     // A duplicate title in a later page resolved meanwhile.
                     if (entries[key]?.let { it.poster.isNotEmpty() || it.at >= cutoff } == true) continue
+                    com.aeriotv.android.core.app.LaunchWorkHold.checkpointVod("TMDB art pass ($kind)")
                     val entry = tmdbService.lookupArt(title, isMovie, apiKey)
                     if (entry != null) {
                         store(key, entry)

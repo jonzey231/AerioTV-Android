@@ -23,6 +23,7 @@ import com.aeriotv.android.core.playback.AerioMediaPlaybackService
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
@@ -1419,7 +1420,14 @@ class MainActivity : ComponentActivity() {
                 trueBlack = trueBlack,
             ) {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    // Root key interceptor for the staged resume: every key
+                    // that reaches the Compose tree (D-pad focus moves
+                    // included) marks input as active. dispatchKeyEvent
+                    // below covers the activity window as well.
+                    modifier = Modifier.fillMaxSize().onPreviewKeyEvent {
+                        com.aeriotv.android.core.app.LaunchWorkHold.noteKey()
+                        false
+                    },
                     color = MaterialTheme.colorScheme.background
                 ) {
                     NotificationPermissionGate()
