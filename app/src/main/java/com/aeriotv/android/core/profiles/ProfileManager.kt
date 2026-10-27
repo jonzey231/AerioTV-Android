@@ -773,7 +773,9 @@ class ProfileManager @Inject constructor(
      * admin user list (no typing) and adopts the row; an existing profile
      * takes the row's display name, role, and PIN only when the row's
      * updatedAt is newer than [localUpdatedAt] for that username. Local
-     * profiles are never removed. [adopted] records the row stamp taken.
+     * profiles are never removed, and a row this device removed at or after
+     * its updatedAt ([removedAt]) is skipped, never re-created. [adopted]
+     * records the row stamp taken.
      * Returns how many profiles were added.
      */
     suspend fun mergeSyncedProfiles(
@@ -782,6 +784,7 @@ class ProfileManager @Inject constructor(
         users: List<DispatcharrUserSummary>,
         localUpdatedAt: (String) -> Long = { 0L },
         adopted: (String, Long) -> Unit = { _, _ -> },
+        removedAt: (String) -> Long = { 0L },
     ): Int {
         if (!RoleRules.canWriteProfilesKey(activeRole(playlistId))) return 0
         var added = 0
@@ -789,6 +792,13 @@ class ProfileManager @Inject constructor(
             var local = store.forPlaylist(playlistId).firstOrNull { it.username.equals(r.username, ignoreCase = true) }
             val isNew = local == null
             if (local == null) {
+                // Removed on this device after the row's last change: never
+                // re-create it; the next push drops the row from the server.
+                val gone = removedAt(r.username)
+                if (gone > 0L && gone >= r.updatedAt) {
+                    Log.i(TAG, "[DSYNC] profiles: skipped removed row for ${r.username}")
+                    return@forEach
+                }
                 val user = users.firstOrNull { it.id == r.userId }
                     ?: users.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
                 if (user == null || user.apiKey.isNullOrBlank()) {

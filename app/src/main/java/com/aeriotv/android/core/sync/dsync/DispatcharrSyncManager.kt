@@ -255,10 +255,13 @@ class DispatcharrSyncManager @Inject constructor(
     private fun onProfilesMutated(playlistId: String, username: String, what: String) {
         // Called from UI actions on the main thread: all disk work happens on IO.
         val now = System.currentTimeMillis() / 1000
+        // Stamp synchronously (apply() writes to disk in the background): the
+        // caller drops the local profile right after this returns, and a pull
+        // racing that removal must already see the removed stamp.
+        val e = state.edit().putLong(rowKey(playlistId, username), now)
+        if (what == "remove") e.putLong(removedKey(playlistId, username), now) else e.remove(removedKey(playlistId, username))
+        e.apply()
         scope.launch {
-            val e = state.edit().putLong(rowKey(playlistId, username), now)
-            if (what == "remove") e.putLong(removedKey(playlistId, username), now) else e.remove(removedKey(playlistId, username))
-            e.apply()
             val s = session?.takeIf { it.playlistId == playlistId }
             Log.i(TAG, "[DSYNC] profiles dirty ($what ${username})${if (s == null) "; no session" else ""}")
             if (s == null) return@launch
@@ -266,6 +269,19 @@ class DispatcharrSyncManager @Inject constructor(
             setDirty(s, DsyncKey.Profiles, true)
             schedule(s, DsyncKey.Profiles, DEBOUNCE_MS)
         }
+    }
+
+    /** A removed stamp is done once the server copy no longer carries that
+     *  username (our push dropped it): clear it so a later re-add by another
+     *  device is adopted normally. */
+    private fun clearSettledRemovals(playlistId: String, rows: List<ProfileRow>) {
+        val prefix = "pgone|$playlistId|"
+        val onServer = rows.map { it.username.lowercase() }.toSet()
+        val done = state.all.keys.filter { it.startsWith(prefix) && it.removePrefix(prefix) !in onServer }
+        if (done.isEmpty()) return
+        val e = state.edit()
+        done.forEach { e.remove(it); Log.i(TAG, "[DSYNC] profiles: removal of ${it.removePrefix(prefix)} settled on the server") }
+        e.apply()
     }
 
     private fun rowKey(playlistId: String, username: String) = "prow|$playlistId|${username.lowercase()}"
@@ -1371,7 +1387,9 @@ class DispatcharrSyncManager @Inject constructor(
                     s.playlistId, rows, adminUsers(s),
                     localUpdatedAt = { u -> state.getLong(rowKey(s.playlistId, u), 0L) },
                     adopted = { u, at -> if (at > 0) state.edit().putLong(rowKey(s.playlistId, u), at).apply() },
+                    removedAt = { u -> state.getLong(removedKey(s.playlistId, u), 0L) },
                 )
+                clearSettledRemovals(s.playlistId, rows)
             }
         }
         return ApplyResult.Applied
