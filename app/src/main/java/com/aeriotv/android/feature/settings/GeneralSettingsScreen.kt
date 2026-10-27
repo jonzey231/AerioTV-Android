@@ -251,7 +251,7 @@ fun GeneralSettingsScreen(
                                 selected = backgroundRefreshIntervalMins,
                                 onSelect = { viewModel.setBackgroundRefreshIntervalMins(it) },
                                 inlineTitle = true,
-                                footer = "How often AerioTV asks for fresh channel lists and guide data.",
+                                footer = "How often AerioTV refreshes channels and the guide while the app is closed. While it is open, they refresh on launch and whenever you return and the data is more than 30 minutes old.",
                             )
                         }
                     }

@@ -247,7 +247,7 @@ fun MoviesAndTvShowsSettingsScreen(
 
 /** Apple MoviesTVSettingsView.vodRefreshFootnote, word for word. */
 private const val VOD_REFRESH_FOOTNOTE =
-    "Live TV channels refresh on every launch. Movies and TV Shows open from the saved library and re-sweep the provider on this schedule. Pull down on either tab to refresh right away."
+    "How often the library re-scans in the background. Opening the app always shows the cached library first."
 
 // Apple's footers say iCloud Keychain; Android carries the key in the Sync
 // snapshot to the user's own Google Drive app data (AppPreferences sync
