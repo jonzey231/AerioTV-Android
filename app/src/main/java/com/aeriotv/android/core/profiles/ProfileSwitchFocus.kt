@@ -21,11 +21,13 @@ object ProfileSwitchFocus {
     private val _released = MutableStateFlow(0L)
     val released: StateFlow<Long> = _released
 
-    /** Bumped when a switch to a DIFFERENT profile completes: the app
-     *  returns to the Live TV root (tab, Settings pages, detail routes). */
+    /** Bumped when a switch to a DIFFERENT profile STARTS, right after the
+     *  scrim is up: the app returns to the Live TV root (tab, Settings pages,
+     *  detail routes) under the scrim, so nothing of the previous screen
+     *  shows when it drops. The guide resets to its launch state. */
     private val _switches = MutableStateFlow(0L)
     val switches: StateFlow<Long> = _switches
-    fun onSwitchCompleted() { _switches.value++ }
+    fun onSwitchStarted() { _switches.value++ }
 
     fun arm(t: Target) { target = t }
 

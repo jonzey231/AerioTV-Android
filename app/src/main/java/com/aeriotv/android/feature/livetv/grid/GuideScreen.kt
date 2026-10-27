@@ -670,6 +670,25 @@ fun GuideScreen(
     }
     val snapToNow: () -> Unit = { jumpTargetMs = null; pendingJumpScroll = false; grid.anchorToNow(System.currentTimeMillis()) }
 
+    // Profile switch (Logan 2026-10-27): the guide comes up exactly as at
+    // launch. The tick fires when the scrim goes up, before the reload, so
+    // the reset happens under the scrim: no focus or viewport carried over,
+    // no per-group viewports from the previous profile, viewport at now and
+    // the next rows install lands on row 0 of the new launch group.
+    val profileSwitchTick by com.aeriotv.android.core.profiles.ProfileSwitchFocus.switches.collectAsState()
+    val seenProfileSwitchTick = remember { longArrayOf(profileSwitchTick) }
+    LaunchedEffect(profileSwitchTick) {
+        if (profileSwitchTick == seenProfileSwitchTick[0]) return@LaunchedEffect
+        seenProfileSwitchTick[0] = profileSwitchTick
+        groupViewport.saved.clear()
+        // A sentinel, never a real token: the next install runs the group
+        // change path (focus on row 0, list scrolled to its top).
+        groupViewport.installedGroup = PROFILE_SWITCH_GROUP
+        snapToNow()
+        grid.resetForEntry(grid.viewportStartMs)
+        android.util.Log.i("AerioProfiles", "[PROFILE] guide reset for switch (viewport at now, focus row 0 on next install)")
+    }
+
     // The guide always opens and resumes at now (Logan 2026-10-10). The
     // composition (and the retained grid) survives the app being backgrounded
     // and the tab being hidden, so neither path went through resetForEntry:
@@ -2062,3 +2081,6 @@ internal class GuideGroupViewport {
 
 /** Matches GuideGrid's LANE_ROWS: focus deeper than this would move the restored first row. */
 private const val GROUP_RESTORE_LANE_ROWS = 6
+
+/** [GuideGroupViewport.installedGroup] after a profile switch; matches no group. */
+private const val PROFILE_SWITCH_GROUP = "\u0000profile-switch"

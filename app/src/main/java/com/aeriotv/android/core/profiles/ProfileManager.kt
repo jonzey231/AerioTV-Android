@@ -106,7 +106,6 @@ class ProfileManager @Inject constructor(
         watchdog = null
         _switching.value = false
         closePlayer.trySend(Unit)
-        ProfileSwitchFocus.onSwitchCompleted()
         // Every switch lands on the Live TV root, so focus goes to the grid.
         ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
         ProfileSwitchFocus.onScrimReleased()
@@ -915,6 +914,10 @@ class ProfileManager @Inject constructor(
         watchdog?.cancel()
         watchdog = null
         _switching.value = true
+        // Under the scrim, before any reload: land on the Live TV root now so
+        // the scrim drops onto the guide, never onto the previous tab.
+        closePlayer.trySend(Unit)
+        ProfileSwitchFocus.onSwitchStarted()
         try {
             // Off the main thread: prefs commits and the row write are disk I/O.
             kotlinx.coroutines.withContext(Dispatchers.IO) { switchToLocked(playlistId, profileId, gen) }

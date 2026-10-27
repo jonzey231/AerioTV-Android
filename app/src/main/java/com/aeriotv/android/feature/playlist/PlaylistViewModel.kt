@@ -845,14 +845,27 @@ class PlaylistViewModel @Inject constructor(
      * down to nothing.
      */
     private suspend fun restoreSelectedGroup(playlistId: String, knownGroups: Collection<String>) {
-        // GH #81: an explicit "Default Group" setting wins; with nothing set
-        // (empty) the last selected group is restored exactly as before.
-        val preferred = appPreferences.defaultGroupTokenOnce(playlistId)
-        val saved = appPreferences.liveGroupTokenOnce(playlistId)
-        val restored = com.aeriotv.android.feature.livetv.launchGroupToken(preferred, saved, knownGroups)
-            ?: ALL_GROUPS
+        val restored = launchGroupFor(playlistId, knownGroups)
         _state.update { if (it.selectedGroup == restored) it else it.copy(selectedGroup = restored) }
     }
+
+    /**
+     * The group Live TV opens on at launch for [playlistId] in the ACTIVE
+     * profile's scope (both prefs are profile-scoped keys): the explicit
+     * "Default Group" when it still exists, else the last used group, else
+     * All. A profile switch applies the same rule, in the same state update
+     * as the new channel list, so the guide never composes the new channels
+     * under the previous profile's group.
+     */
+    private suspend fun launchGroupFor(playlistId: String, knownGroups: Collection<String>): String {
+        val preferred = appPreferences.defaultGroupTokenOnce(playlistId)
+        val saved = appPreferences.liveGroupTokenOnce(playlistId)
+        return com.aeriotv.android.feature.livetv.launchGroupToken(preferred, saved, knownGroups)
+            ?: ALL_GROUPS
+    }
+
+    private fun groupNamesOf(channels: List<M3UChannel>): List<String> =
+        channels.asSequence().map { it.groupTitle }.filter { it.isNotBlank() }.distinct().toList()
 
     fun onSortModeChange(mode: SortMode) {
         _state.update { it.copy(sortMode = mode) }
@@ -2419,11 +2432,13 @@ class PlaylistViewModel @Inject constructor(
             _state.update { it.copy(isLoading = true, error = null) }
             repository.switchActive(playlistId, probe).fold(
                 onSuccess = { (entity, channels) ->
+                    val launchGroup = launchGroupFor(entity.id, groupNamesOf(channels))
                     _state.update {
                         it.copy(
                             phase = Phase.ChannelsReady,
                             playlist = entity,
                             channels = channels,
+                            selectedGroup = launchGroup,
                             isLoading = false,
                             error = if (channels.isEmpty()) "No channels found." else null,
                         )
@@ -2435,10 +2450,6 @@ class PlaylistViewModel @Inject constructor(
                     // would filter the guide down to nothing with no visible
                     // reason); synthetic tokens (Favorites, All, collections)
                     // always survive.
-                    restoreSelectedGroup(
-                        entity.id,
-                        channels.asSequence().map { ch -> ch.groupTitle }.filter { g -> g.isNotBlank() }.distinct().toList(),
-                    )
                     finish()
                     // A SWITCH NO LONGER PURGES ANYTHING (Logan 2026-09-16).
                     // This used to auto-run refreshEverything(), which purged
@@ -2506,19 +2517,18 @@ class PlaylistViewModel @Inject constructor(
         runCatching { miniPlayerSession.dismiss() }
         runCatching { exoWindowState.hide() }
         runCatching { exoHolder.stop() }
+        val launchGroup = launchGroupFor(entity.id, groupNamesOf(cached))
+        Log.i(TAG, "[SWITCH] profile launch group=$launchGroup")
         _state.update {
             it.copy(
                 phase = Phase.ChannelsReady,
                 playlist = entity,
                 channels = cached,
+                selectedGroup = launchGroup,
                 isLoading = false,
                 error = null,
             )
         }
-        restoreSelectedGroup(
-            entity.id,
-            cached.asSequence().map { ch -> ch.groupTitle }.filter { g -> g.isNotBlank() }.distinct().toList(),
-        )
         epgWriteMutex.withLock { _state.update { st -> st.copy(epgByChannel = emptyMap()) } }
         loadEpgIfConfigured(entity)
         profileManager.finishSwitch(r.gen)
