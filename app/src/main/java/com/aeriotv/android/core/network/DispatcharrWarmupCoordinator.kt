@@ -87,7 +87,7 @@ class DispatcharrWarmupCoordinator @Inject constructor(
             // Not needed to paint from cache: the login and the probe wait
             // behind the launch picker / PIN gate / PIN pad like the other
             // network work (Streamer 2026-10-27: both ran before the PIN).
-            com.aeriotv.android.core.app.LaunchWorkHold.await("Dispatcharr warmup and capability probe")
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "Dispatcharr warmup and capability probe", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
             warmupAll()
             // Per-user capabilities, every launch AND every return to the
             // foreground: an admin can grant or revoke DVR / VOD / catch-up

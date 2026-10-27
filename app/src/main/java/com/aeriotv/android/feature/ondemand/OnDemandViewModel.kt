@@ -573,7 +573,7 @@ class OnDemandViewModel @Inject constructor(
             if (playlist == null || identity == null) {
                 launchRestoreDone.complete(Unit)
                 // Network sweep: parked behind the launch picker / PIN gate.
-                com.aeriotv.android.core.app.LaunchWorkHold.await("VOD first sweep")
+                com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, "VOD art pass and sweep", "VOD first sweep", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
                 refresh()
                 refreshSeries()
                 return@launch
@@ -591,7 +591,7 @@ class OnDemandViewModel @Inject constructor(
                 // one sweep stays on the launch path.
                 launchRestoreDone.complete(Unit)
                 // Network sweep: parked behind the launch picker / PIN gate.
-                com.aeriotv.android.core.app.LaunchWorkHold.await("VOD first sweep")
+                com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, "VOD art pass and sweep", "VOD first sweep", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
                 refresh()
                 refreshSeries()
                 return@launch
@@ -670,7 +670,7 @@ class OnDemandViewModel @Inject constructor(
             // there is the one this restore served (review 2026-10-27). A
             // newer restore (a switch) supersedes this one; a pick the switch
             // collector did not see re-runs the restore once for it.
-            com.aeriotv.android.core.app.LaunchWorkHold.await("VOD art pass")
+            com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_VOD, "VOD art pass and sweep", "VOD art pass", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_VOD_MS)
             if (generation != restoreGeneration) {
                 launchRestoreDone.complete(Unit)
                 return@launch

@@ -233,6 +233,9 @@ fun TvActionCircleSurface(
             selected -> colors.primary
             else -> colors.onSurface.copy(alpha = 0.12f)
         },
+        // Same 150 ms as the focus scale, so the button focus left is back
+        // to idle with the scale (the default spring lagged behind it).
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 150),
         label = "tvActionCircleFill",
     )
     val glyph by animateColorAsState(
@@ -242,6 +245,9 @@ fun TvActionCircleSurface(
             accentGlyph -> colors.primary
             else -> colors.onSurface.copy(alpha = 0.85f)
         },
+        // Same 150 ms as the focus scale, so the button focus left is back
+        // to idle with the scale (the default spring lagged behind it).
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 150),
         label = "tvActionCircleGlyph",
     )
     Box(

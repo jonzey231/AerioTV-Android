@@ -131,7 +131,7 @@ class AppSettleGate @Inject constructor() {
     suspend fun awaitGuidePainted() {
         // Launch picker / PIN gate up: the cached restores this gates (VOD
         // catalog, channel refresh, catch-up prune) wait for it to close.
-        LaunchWorkHold.await("cached restores behind the guide paint")
+        LaunchWorkHold.awaitStage(LaunchWorkHold.STAGE_CACHED, "cached restores and settle", "cached restores behind the guide paint", 0L)
         withTimeoutOrNull(GUIDE_PAINT_WAIT_MAX_MS) { guidePainted.first { it } }
     }
 
@@ -165,7 +165,7 @@ class AppSettleGate @Inject constructor() {
         settleJob = scope.launch {
             _settled.value = false
             // The quiet period starts once the launch picker / PIN gate closes.
-            LaunchWorkHold.await("settle cycle")
+            LaunchWorkHold.awaitStage(LaunchWorkHold.STAGE_CACHED, "cached restores and settle", "settle cycle", 0L)
             val startedAt = SystemClock.elapsedRealtime()
             withTimeoutOrNull(GUIDE_WAIT_MAX_MS) { guideRendered.first { it } }
             val remaining = SETTLE_DELAY_MS - (SystemClock.elapsedRealtime() - startedAt)

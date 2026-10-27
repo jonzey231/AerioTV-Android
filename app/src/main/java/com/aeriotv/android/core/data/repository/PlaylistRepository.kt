@@ -1151,6 +1151,17 @@ class PlaylistRepository @Inject constructor(
         val pending = CompletableDeferred<Boolean>()
         val running = inFlightCapabilityProbes.putIfAbsent(playlistId, pending)
         if (running != null) return running.await()
+        // Back-to-back passes (Streamer 2026-10-27 14:25:42: "playlist refresh"
+        // at .068 and "cold launch" at .779, two probe OK and two PermsRefresh
+        // lines): a pass that SUCCEEDED within [PROBE_COALESCE_MS] already
+        // answered, so a later trigger reuses it instead of re-reading.
+        val okAt = lastCapabilityProbeOkAt[playlistId] ?: 0L
+        if (System.currentTimeMillis() - okAt < PROBE_COALESCE_MS) {
+            inFlightCapabilityProbes.remove(playlistId, pending)
+            pending.complete(true)
+            Log.i(TAG_PERMS, "probe coalesced trigger=$trigger (last pass ${System.currentTimeMillis() - okAt}ms ago)")
+            return true
+        }
         return try {
             val before = dao.byId(playlistId)
             val oldLevel = before?.permsLevelLabel() ?: "unknown"
@@ -1158,6 +1169,7 @@ class PlaylistRepository @Inject constructor(
                 (force || before.capabilitiesNeedProbe())
             if (willProbe) lastCapabilityProbeAt[playlistId] = System.currentTimeMillis()
             val result = probeCapabilitiesUncoalesced(playlistId, force)
+            if (willProbe && result) lastCapabilityProbeOkAt[playlistId] = System.currentTimeMillis()
             if (willProbe) {
                 val newLevel = dao.byId(playlistId)?.permsLevelLabel() ?: "unknown"
                 Log.i(
@@ -1384,6 +1396,8 @@ class PlaylistRepository @Inject constructor(
     /** When each playlist was last probed this process (throttles the
      *  foreground and gate-check triggers; nothing polls on its own). */
     private val lastCapabilityProbeAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val lastCapabilityProbeOkAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val PROBE_COALESCE_MS = 10_000L
 
     /** Milliseconds since [playlistId] was last probed this process. */
     fun msSinceCapabilityProbe(playlistId: String): Long =

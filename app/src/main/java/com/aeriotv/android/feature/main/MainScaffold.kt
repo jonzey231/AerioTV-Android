@@ -701,6 +701,9 @@ fun MainScaffold(
     val defaultTabPref by settingsVm.defaultTab.collectAsStateWithLifecycle(initialValue = "")
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.LiveTV) }
+    androidx.compose.runtime.LaunchedEffect(selectedTab) {
+        com.aeriotv.android.core.app.LiveTabVisibility.set(selectedTab == AppTab.LiveTV)
+    }
     var initialTabApplied by rememberSaveable { mutableStateOf(false) }
     // Which tabs are already composed and alive (see MainTabContent). Hoisted
     // here because the TV tab bar needs it too: switching to a tab that is

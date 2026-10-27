@@ -2143,6 +2143,13 @@ class AppPreferences @Inject constructor(
         store.edit { it[keyEpgIdentityHash(playlistId)] = hash }
     }
 
+    /** Fingerprint of the last EPG fetch saved to Room (no-op fetch detection). */
+    fun epgFetchFingerprint(playlistId: String): kotlinx.coroutines.flow.Flow<String> =
+        store.data.map { it[stringPreferencesKey("epg_fetch_fingerprint_$playlistId")] ?: "" }
+    suspend fun setEpgFetchFingerprint(playlistId: String, print: String) {
+        store.edit { it[stringPreferencesKey("epg_fetch_fingerprint_$playlistId")] = print }
+    }
+
     /**
      * ETag / Last-Modified from the last COMPLETE parse of an upstream EPG
      * feed, keyed by feed url (guide rebuild: unchanged feeds are not

@@ -38,6 +38,40 @@ class GuideCatalog private constructor(
         return true
     }
 
+    /**
+     * Paint-only category update (now-airing enrichment): a copy whose cells
+     * matching [byProgramId] (Dispatcharr program id) or [byAiring]
+     * ("start|end|title") carry the new category. Channels with no change
+     * keep their list and index instances, so only the touched rows
+     * recompose. No Room read, no rebuild. Returns this when nothing changed.
+     */
+    fun withCategories(byProgramId: Map<Int, String>, byAiring: Map<String, String>): GuideCatalog {
+        if (byProgramId.isEmpty() && byAiring.isEmpty()) return this
+        fun patch(cells: List<EPGProgramme>): List<EPGProgramme>? {
+            var out: ArrayList<EPGProgramme>? = null
+            for (i in cells.indices) {
+                val p = cells[i]
+                if (p.isPlaceholder) continue
+                val cat = p.dispatcharrProgramId?.let { byProgramId[it] }
+                    ?: byAiring["${p.startMillis}|${p.endMillis}|${p.title}"]
+                    ?: continue
+                if (cat == p.category) continue
+                if (out == null) out = ArrayList(cells)
+                out[i] = p.copy(category = cat)
+            }
+            return out
+        }
+        var changed = false
+        val newLists = HashMap<String, List<EPGProgramme>>(lists.size * 2)
+        val newIndices = HashMap<String, GuideIndex>(indices.size * 2)
+        for ((k, list) in lists) newLists[k] = patch(list)?.also { changed = true } ?: list
+        for ((k, idx) in indices) {
+            val cells = patch(idx.cells)
+            newIndices[k] = if (cells == null) idx else { changed = true; GuideIndex.build(idx.channelId, cells) }
+        }
+        return if (changed) GuideCatalog(newIndices, newLists) else this
+    }
+
     companion object {
         val EMPTY = GuideCatalog(emptyMap(), emptyMap())
 

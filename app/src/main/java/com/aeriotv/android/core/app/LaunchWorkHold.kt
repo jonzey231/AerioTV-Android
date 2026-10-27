@@ -1,6 +1,8 @@
 package com.aeriotv.android.core.app
 
+import android.os.SystemClock
 import android.util.Log
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -82,9 +84,67 @@ object LaunchWorkHold {
     }
 
     private fun publish() {
+        val wasHeld = _held.value
         _pinPadOpen.value = pinPads > 0
         _held.value = pickerHeld || pinPads > 0
+        if (wasHeld && !_held.value) {
+            resumedAtMs = SystemClock.uptimeMillis()
+            synchronized(stagesLogged) { stagesLogged.clear() }
+        }
     }
+
+    /** Uptime of the last held -> released flip (0 = never held). */
+    @Volatile private var resumedAtMs = 0L
+
+    /** Uptime of the last D-pad / key event (MainActivity.dispatchKeyEvent). */
+    @Volatile var lastKeyAtMs = 0L
+        private set
+
+    private val stagesLogged = HashSet<Int>()
+
+    /** Called for every key event so staged resumes can wait for input to go quiet. */
+    fun noteKey() {
+        lastKeyAtMs = SystemClock.uptimeMillis()
+    }
+
+    /**
+     * [await], then STAGGERED after a release (Streamer 2026-10-27 14:25:41:
+     * every held job resumed in the same millisecond the PIN pad closed and
+     * navigation lagged for ~15 s). Within [STAGE_WINDOW_MS] of the release
+     * the caller also waits until no key arrived for [idleMs] (measured from
+     * the release or the last key, whichever is later), capped at
+     * [STAGE_MAX_EXTRA_MS] past the idle target so constant input cannot park
+     * work forever. Stages: 1 cached restores and settle (no wait), 2 EPG
+     * fetch (1.5 s quiet), 3 warmup / probe / sync / channel refresh (3 s
+     * quiet), 4 VOD art pass and sweeps (5 s quiet). Without a hold this
+     * launch it is exactly [await].
+     */
+    suspend fun awaitStage(stage: Int, name: String, what: String, idleMs: Long) {
+        await(what)
+        val resumed = resumedAtMs
+        if (resumed == 0L || SystemClock.uptimeMillis() - resumed > STAGE_WINDOW_MS) return
+        val deadline = resumed + idleMs + STAGE_MAX_EXTRA_MS
+        while (true) {
+            val now = SystemClock.uptimeMillis()
+            val quietSince = maxOf(resumedAtMs, lastKeyAtMs)
+            val wait = minOf(quietSince + idleMs, deadline) - now
+            if (wait <= 0) break
+            delay(wait)
+            if (_held.value) await(what)
+        }
+        val first = synchronized(stagesLogged) { stagesLogged.add(stage) }
+        if (first) Log.i(TAG, "[PROFILE] resume stage $stage: $name")
+    }
+
+    const val STAGE_CACHED = 1
+    const val STAGE_EPG = 2
+    const val STAGE_NETWORK = 3
+    const val STAGE_VOD = 4
+    const val IDLE_EPG_MS = 1_500L
+    const val IDLE_NETWORK_MS = 3_000L
+    const val IDLE_VOD_MS = 5_000L
+    private const val STAGE_WINDOW_MS = 30_000L
+    private const val STAGE_MAX_EXTRA_MS = 12_000L
 
     /** Network / settle work: returns at once when not held; otherwise
      *  suspends until neither the picker nor a PIN pad holds it. */

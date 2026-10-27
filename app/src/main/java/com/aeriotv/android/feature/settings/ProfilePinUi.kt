@@ -299,6 +299,13 @@ private fun PadKey(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    // Focus trails on the TV pad (2026-10-27 "ghosting when moving around
+    // on the PIN sheet"): the default clickable indication drew a ripple
+    // focus/press state layer that faded out over the key focus just left,
+    // so every D-pad move left a fading disc behind. The key's own fill is
+    // the focus visual; no indication, no animation, and the old key snaps
+    // straight back to idle in the same frame the new one lights up.
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
     Box(
         modifier
@@ -309,7 +316,12 @@ private fun PadKey(
                 if (focused) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.surfaceVariant,
             )
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         val tint = when {

@@ -143,6 +143,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        com.aeriotv.android.core.app.LaunchWorkHold.noteKey()
         // Android#114: the Learn Button dialog takes the next learnable press.
         com.aeriotv.android.core.remote.LearnedButtons.onCapture?.let { capture ->
             if (com.aeriotv.android.core.remote.LearnedButtons.isLearnable(event.keyCode)) {

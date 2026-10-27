@@ -535,6 +535,78 @@ class PlaylistViewModel @Inject constructor(
                 rebuildGuideCatalog(playlist, "deferred")
             }
         }
+        // Live TV tab shown again: run the publish / category paint that
+        // landed while another tab was active.
+        viewModelScope.launch {
+            com.aeriotv.android.core.app.LiveTabVisibility.visible.collect { visible ->
+                if (!visible) return@collect
+                val patch = pendingCategoryPatch
+                pendingCategoryPatch = null
+                val rebuild = offTabRebuild
+                offTabRebuild = null
+                val playlist = _state.value.playlist
+                if (rebuild != null && playlist != null && playlist.id == rebuild.first) {
+                    rebuildGuideCatalog(playlist, "on tab return: ${rebuild.second}")
+                }
+                if (patch != null && playlist != null && playlist.id == patch.playlistId) {
+                    publishCategoryPatch(patch, "on tab return")
+                }
+            }
+        }
+    }
+
+    /** Catalog rebuild that landed while another tab was active (playlist id, reason). */
+    @Volatile private var offTabRebuild: Pair<String, String>? = null
+
+    /** Enrichment categories waiting for the Live TV tab to show. */
+    @Volatile private var pendingCategoryPatch: CategoryPatch? = null
+
+    private class CategoryPatch(
+        val playlistId: String,
+        val byProgramId: Map<Int, String>,
+        val byAiring: Map<String, String>,
+    ) {
+        fun plus(o: CategoryPatch) = CategoryPatch(playlistId, byProgramId + o.byProgramId, byAiring + o.byAiring)
+    }
+
+    /**
+     * Item 2 (Streamer 2026-10-27 14:25:51 -> :53): the enrichment backfill
+     * used to rebuild the whole catalog from Room (24224 rows, 2 s) and
+     * reinstall every guide row on main. It now paints the new categories
+     * into the published catalog in place, off main, and only while Live TV
+     * shows; otherwise it waits for the tab.
+     */
+    private suspend fun applyCategoryPatch(playlist: PlaylistEntity, changedRows: List<EPGProgramme>) {
+        if (changedRows.isEmpty()) return
+        val patch = withContext(Dispatchers.Default) {
+            val byId = HashMap<Int, String>()
+            val byAiring = HashMap<String, String>()
+            for (p in changedRows) {
+                if (p.category.isBlank()) continue
+                val id = p.dispatcharrProgramId
+                if (id != null) byId[id] = p.category else byAiring["${p.startMillis}|${p.endMillis}|${p.title}"] = p.category
+            }
+            CategoryPatch(playlist.id, byId, byAiring)
+        }
+        if (!com.aeriotv.android.core.app.LiveTabVisibility.visible.value) {
+            pendingCategoryPatch = pendingCategoryPatch?.takeIf { it.playlistId == playlist.id }?.plus(patch) ?: patch
+            Log.i(TAG, "EPG enriched: category paint deferred until Live TV shows (${changedRows.size} rows)")
+            return
+        }
+        publishCategoryPatch(patch, "enrich")
+    }
+
+    private suspend fun publishCategoryPatch(patch: CategoryPatch, reason: String) {
+        val current = _state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog ?: return
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val patched = withContext(Dispatchers.Default) { current.withCategories(patch.byProgramId, patch.byAiring) }
+        if (patched === current) return
+        epgWriteMutex.withLock {
+            // A rebuild that published meanwhile already read the enriched rows from Room.
+            if (_state.value.epgByChannel !== current) return@withLock
+            _state.update { it.copy(epgByChannel = patched) }
+        }
+        Log.i(TAG, "guide categories painted in place ($reason) in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
     }
 
     private fun observeMemoryPressure() {
@@ -729,7 +801,7 @@ class PlaylistViewModel @Inject constructor(
                 // the refresh starts the moment the hold releases (Streamer
                 // 2026-10-27: 12 s from "launch work resumed" to this refresh).
                 if (com.aeriotv.android.core.app.LaunchWorkHold.heldThisLaunch) {
-                    com.aeriotv.android.core.app.LaunchWorkHold.await("channel refresh")
+                    com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "channel refresh", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
                 } else {
                     settleGate.awaitGuidePainted()
                 }
@@ -1249,6 +1321,19 @@ class PlaylistViewModel @Inject constructor(
             Log.i(TAG, "guide catalog rebuild ($reason) deferred: no channels yet")
             return
         }
+        // Item 3: never publish a catalog (and so never reinstall the guide
+        // rows) while another tab is active. A plain rebuild over a catalog
+        // already on screen waits for the Live TV tab; launch paints,
+        // switches (alsoApply / channelsOverride) and quick paints still run.
+        val onScreen = _state.value.epgByChannel as? com.aeriotv.android.core.guide.GuideCatalog
+        if (!com.aeriotv.android.core.app.LiveTabVisibility.visible.value &&
+            preloadedRows == null && alsoApply == null && channelsOverride == null &&
+            onScreen != null && onScreen.isNotEmpty()
+        ) {
+            offTabRebuild = playlist.id to reason
+            Log.i(TAG, "guide catalog rebuild ($reason) deferred: Live TV not visible")
+            return
+        }
         val (fromMillis, toMillis) = guideWindow(playlist)
         val t0 = android.os.SystemClock.elapsedRealtime()
         val rows = preloadedRows
@@ -1614,7 +1699,7 @@ class PlaylistViewModel @Inject constructor(
         // spinner when there is nothing cached to display yet.
         // The cached paint above still shows; the network fetch waits for the
         // launch picker / PIN gate to close.
-        com.aeriotv.android.core.app.LaunchWorkHold.await("EPG fetch")
+        com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_EPG, "EPG fetch", "EPG fetch", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_EPG_MS)
         Log.i(TAG, "loadEpgIfConfigured: fetching EPG for ${playlist.sourceType} (force=$forceRefresh, hadCache=$hasCache)")
         // A forced reload (Refresh on Edit Playlist, Refresh EPG Data, Refresh
         // Everything) means "get fresh guide data": forget which one-day grid
@@ -1659,6 +1744,41 @@ class PlaylistViewModel @Inject constructor(
                         .filter { it.endMillis - it.startMillis >= 30_000L }
                 }
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes")
+                // Item 1: a fetch that returned exactly what the last saved
+                // fetch did (same rows, same channels) is a no-op. Streamer
+                // 2026-10-27 14:25:43 -> :53: it re-saved 7152 rows (wiping
+                // the cached categories), re-enriched 1430 of them, rebuilt a
+                // 24224-row catalog and reinstalled every guide row on main.
+                val fetchPrint = withContext(Dispatchers.Default) { epgFetchFingerprint(programmes, channelsNow) }
+                val lastPrint = runCatching { appPreferences.epgFetchFingerprint(playlist.id).first() }.getOrDefault("")
+                val noOpEligible = hasCache && !forceRefresh && !staleEpoch && !identityStale && !identityNeedsFetch
+                // Same print as the last save, or every fetched row already in
+                // Room for the fetch's span (the live window slides with the
+                // clock, so the print alone rarely matches across launches).
+                val noOp = noOpEligible && fetchPrint.isNotEmpty() && (
+                    fetchPrint == lastPrint || fetchAlreadyCached(playlist.id, programmes)
+                )
+                if (noOp) {
+                    Log.i(TAG, "EPG fetch unchanged: ${programmes.size} programmes match the saved fetch; no save, no enrichment, no rebuild")
+                    runCatching {
+                        val g = com.aeriotv.android.core.guide.GuideIdentityHash
+                        val server = g.serverFingerprint(playlist.sourceType, playlist.urlString)
+                        val prior = appPreferences.epgIdentityHash(playlist.id).first()
+                        appPreferences.setEpgIdentityHash(
+                            playlist.id,
+                            g.merged(
+                                prior, server, g.entries(channelsNow.distinctBy { it.url }),
+                                reset = false,
+                                rekeyedCanonicalIds = rekeyedIds,
+                            ),
+                        )
+                    }
+                    _state.update { it.copy(isEpgLoading = false) }
+                    // The quick launch paint still owes its full-window widen
+                    // (a cache read; deferred while another tab is active).
+                    widenQuickCatalog(playlist)
+                    return@fold Result.success(programmes.size)
+                }
                 // A fetch that yields ZERO programmes is a FAILED fetch, not an
                 // empty guide, and it must not be allowed to overwrite anything.
                 // Installing it wiped the 6,916 rows the cached paint had just
@@ -1703,6 +1823,9 @@ class PlaylistViewModel @Inject constructor(
                     runCatching {
                         appPreferences.setEpgCacheEpochFor(playlist.id, EPG_CACHE_EPOCH)
                     }
+                    runCatching { appPreferences.setEpgFetchFingerprint(playlist.id, fetchPrint) }
+                } else {
+                    runCatching { appPreferences.setEpgFetchFingerprint(playlist.id, "") }
                 }
                 // Stamp the cache with the identity it was built for (see
                 // identityStale) ONLY after a non-empty fetch was saved: a
@@ -1743,10 +1866,10 @@ class PlaylistViewModel @Inject constructor(
                 // IO, never Main: the enrichment fan-out and its Room reads
                 // ran on the main thread (Streamer 2026-10-26, tid == pid).
                 if (!enrichInline) viewModelScope.launch(Dispatchers.IO) {
-                    if (enrichAndStoreCategories(playlist, programmes)) {
-                        // Rebuild from Room after the targeted write. Main, as before.
-                        withContext(Dispatchers.Main) { rebuildGuideCatalog(playlist, "enrich") }
-                    }
+                    val changed = enrichAndStoreCategories(playlist, programmes)
+                    // Paint-only update of the published catalog (no rebuild,
+                    // no rows-install); Room already holds the rows.
+                    if (changed.isNotEmpty()) applyCategoryPatch(playlist, changed)
                 }
                 Result.success(programmes.size)
             },
@@ -1758,6 +1881,43 @@ class PlaylistViewModel @Inject constructor(
                 Result.failure(t)
             },
         )
+    }
+
+    /** True when every fetched row (channel, start, end, title) is already
+     *  stored, so saving would write nothing new. One indexed window read. */
+    private suspend fun fetchAlreadyCached(playlistId: String, programmes: List<EPGProgramme>): Boolean =
+        withContext(Dispatchers.Default) {
+            val from = programmes.minOf { it.startMillis }
+            val to = programmes.maxOf { it.endMillis }
+            val cached = runCatching { repository.loadCachedEpg(playlistId, from, to) }.getOrNull()
+                ?: return@withContext false
+            if (cached.size < programmes.size) return@withContext false
+            val keys = HashSet<String>(cached.size * 2)
+            for (c in cached) keys.add("${c.channelId}|${c.startMillis}|${c.endMillis}|${c.title}")
+            val missing = programmes.count { !keys.contains("${it.channelId}|${it.startMillis}|${it.endMillis}|${it.title}") }
+            Log.i(TAG, "EPG fetch vs cache: ${programmes.size} fetched, ${cached.size} cached in span, $missing new")
+            missing == 0
+        }
+
+    /** Order-independent fingerprint of a fetch (rows + channel set); category excluded. */
+    private fun epgFetchFingerprint(programmes: List<EPGProgramme>, channels: List<M3UChannel>): String {
+        if (programmes.isEmpty()) return ""
+        var sum = 0L
+        var xor = 0L
+        for (p in programmes) {
+            var h = p.channelId.hashCode().toLong()
+            h = h * 1_000_003L + p.startMillis
+            h = h * 1_000_003L + p.endMillis
+            h = h * 1_000_003L + p.title.hashCode()
+            h = h * 1_000_003L + p.description.hashCode()
+            h = h * 1_000_003L + (p.dispatcharrProgramId ?: 0)
+            h = h xor (h ushr 29)
+            sum += h
+            xor = xor xor (h * -7046029254386353131L)
+        }
+        var ch = 0L
+        for (c in channels) ch += c.guideChannelId().value.hashCode().toLong() * 31L + c.url.hashCode()
+        return "v1:${programmes.size}:${channels.size}:$sum:$xor:$ch"
     }
 
     /** The quick launch paint is on screen and no fetch rebuild is coming:
@@ -1775,8 +1935,8 @@ class PlaylistViewModel @Inject constructor(
     private suspend fun enrichAndStoreCategories(
         playlist: PlaylistEntity,
         programmes: List<EPGProgramme>,
-    ): Boolean = withContext(Dispatchers.IO) {
-        com.aeriotv.android.core.app.LaunchWorkHold.await("now-airing category enrichment")
+    ): List<EPGProgramme> = withContext(Dispatchers.IO) {
+        com.aeriotv.android.core.app.LaunchWorkHold.awaitStage(com.aeriotv.android.core.app.LaunchWorkHold.STAGE_NETWORK, "warmup, probe, sync, and channel refresh", "now-airing category enrichment", com.aeriotv.android.core.app.LaunchWorkHold.IDLE_NETWORK_MS)
         val enriched = runCatching {
             repository.enrichNowPlayingCategories(playlist, programmes)
         }.onFailure { Log.w(TAG, "category enrichment failed", it) }
@@ -1784,7 +1944,7 @@ class PlaylistViewModel @Inject constructor(
         // Only report a change when enrichment actually changed something;
         // short-circuits the rebuild when the source already had categories
         // baked in (XMLTV path).
-        if (enriched === programmes) return@withContext false
+        if (enriched === programmes) return@withContext emptyList()
         // Keep the cache enriched too so tints survive a relaunch, but write
         // ONLY the rows enrichment actually touched (E-6: handing the whole
         // feed back to saveEpgToCache re-wrote ~139k rows to change a category
@@ -1805,7 +1965,7 @@ class PlaylistViewModel @Inject constructor(
             "EPG enriched: categories backfilled for now-playing programmes " +
                 "(${changedRows.size} of ${enriched.size} rows written)",
         )
-        changedRows.isNotEmpty()
+        changedRows
     }
 
     /**
