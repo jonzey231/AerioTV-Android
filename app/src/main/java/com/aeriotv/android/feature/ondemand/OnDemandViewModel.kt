@@ -477,6 +477,7 @@ class OnDemandViewModel @Inject constructor(
                     .onFailure { warnUnlessCancelled("VOD library query failed", it) }
                     .getOrNull()
                 if (built != null) {
+                    Log.i(TAG, "[VOD-TAB] library published kind=${if (isMovie) "movies" else "series"} n=${built.items.size}")
                     if (isMovie) { lastMoviesSpec = spec; _moviesLibrary.value = built }
                     else { lastSeriesSpec = spec; _seriesLibrary.value = built }
                 }
@@ -2062,7 +2063,14 @@ class OnDemandViewModel @Inject constructor(
                         if (isMovie) VodResetBus.Kind.Movies else VodResetBus.Kind.Series,
                     )
                 }
-                if (!background && page.written > 0) {
+                // The tabs observe the library snapshot, which is published
+                // from cache at launch and when a sweep COMPLETES (below),
+                // never per page: each publish rebuilt and recomposed the
+                // whole Movies / TV Shows tab (Streamer 2026-10-27, 1 to 2.6 s
+                // frames switching tabs mid sweep). The one exception is an
+                // empty tab whose initial sweep is filling it: first rows at
+                // once, then at most one publish every 5 s.
+                if (!background && startedEmpty && page.written > 0) {
                     if (!firstPainted) {
                         firstPainted = true
                         if (startedEmpty) {
@@ -3489,6 +3497,10 @@ class OnDemandViewModel @Inject constructor(
             val seriesPlan = if (seriesCats.isNotEmpty()) catalogStore.beginSweep(identity, VodCatalogStore.KIND_SERIES, emptyList()) { "" } else null
             var movieFailures = 0
             var seriesFailures = 0
+            // Progressive publishes only fill an EMPTY tab; a populated one
+            // keeps its snapshot until the sweep completes.
+            val moviesStartedEmpty = _state.value.totalCount == 0
+            val seriesStartedEmpty = _state.value.seriesTotalCount == 0
             // At most XC_CATEGORY_CONCURRENCY categories in flight: launching
             // every category at once flooded the panel and the request gate.
             val fanOut = kotlinx.coroutines.sync.Semaphore(XC_CATEGORY_CONCURRENCY)
@@ -3504,7 +3516,7 @@ class OnDemandViewModel @Inject constructor(
                                     .getOrDefault(emptyList())
                                 runCatching { catalogStore.writeMovies(identity, gen, items.map { it.toMovie(movieCategoryNames) }) }
                                     .onFailure { movieFailures++; warnUnlessCancelled("XC movies category $cat store failed", it) }
-                                catalogChanged(isMovie = true, force = false)
+                                if (moviesStartedEmpty) catalogChanged(isMovie = true, force = false)
                             }
                             XcKind.SERIES -> {
                                 val gen = seriesPlan?.generation ?: return@launch
@@ -3513,7 +3525,7 @@ class OnDemandViewModel @Inject constructor(
                                     .getOrDefault(emptyList())
                                 runCatching { catalogStore.writeSeries(identity, gen, items.map { it.toSeries(seriesCategoryNames) }) }
                                     .onFailure { seriesFailures++; warnUnlessCancelled("XC series category $cat store failed", it) }
-                                catalogChanged(isMovie = false, force = false)
+                                if (seriesStartedEmpty) catalogChanged(isMovie = false, force = false)
                             }
                         } } finally { fanOut.release() }
                     }
@@ -3693,7 +3705,7 @@ class OnDemandViewModel @Inject constructor(
         const val UNFILTERED_LANE = ""
 
         /** Minimum gap between progressive grid rebuilds during a sweep. */
-        const val CATALOG_PUBLISH_THROTTLE_MS = 2_000L
+        const val CATALOG_PUBLISH_THROTTLE_MS = 5_000L
 
         /**
          * Catalog pages in flight while a library is on screen (Logan
