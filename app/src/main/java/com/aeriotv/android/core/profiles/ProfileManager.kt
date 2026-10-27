@@ -791,6 +791,7 @@ class ProfileManager @Inject constructor(
         rows.forEach { r ->
             var local = store.forPlaylist(playlistId).firstOrNull { it.username.equals(r.username, ignoreCase = true) }
             val isNew = local == null
+            Log.i(TAG, "[DSYNC] profiles: row ${r.username} updatedAt=${r.updatedAt} removedAt=${removedAt(r.username)} local=${if (isNew) "no" else "yes"}")
             if (local == null) {
                 // Removed on this device after the row's last change: never
                 // re-create it; the next push drops the row from the server.

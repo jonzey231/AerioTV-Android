@@ -261,6 +261,7 @@ class DispatcharrSyncManager @Inject constructor(
         val e = state.edit().putLong(rowKey(playlistId, username), now)
         if (what == "remove") e.putLong(removedKey(playlistId, username), now) else e.remove(removedKey(playlistId, username))
         e.apply()
+        if (what == "remove") Log.i(TAG, "[DSYNC] profiles: stamped removed ${removedKey(playlistId, username)}=$now read=${state.getLong(removedKey(playlistId, username), 0L)}")
         scope.launch {
             val s = session?.takeIf { it.playlistId == playlistId }
             Log.i(TAG, "[DSYNC] profiles dirty ($what ${username})${if (s == null) "; no session" else ""}")
@@ -1384,6 +1385,7 @@ class DispatcharrSyncManager @Inject constructor(
             DsyncKey.Profiles -> {
                 val rows = DsyncPayloads.decodeProfiles(d) ?: return ApplyResult.Malformed
                 if (!isAdmin(s)) return ApplyResult.Applied
+                Log.i(TAG, "[DSYNC] profiles: pull stamps ${state.all.keys.filter { it.startsWith("pgone|") }.joinToString { "$it=${state.getLong(it, 0L)}" }.ifEmpty { "none" }} session=${s.playlistId}")
                 profileManager.get().mergeSyncedProfiles(
                     s.playlistId, rows, adminUsers(s),
                     localUpdatedAt = { u -> state.getLong(rowKey(s.playlistId, u), 0L) },
