@@ -249,9 +249,9 @@ class GuideGridState(
 
     /**
      * A short Right, locked rule (Logan 2026-09-10): the ring moves onto the
-     * NEXT cell in the row, and the timeline pans only as far as needed to
-     * keep that cell fully on screen (a cell longer than the viewport is
-     * aligned to its start). No next cell: pan a step and retarget.
+     * NEXT cell in the row. The timeline stays put while that cell's start
+     * is on screen; a start at or past the right edge scrolls just enough
+     * to show its first half hour. No next cell: pan a step and retarget.
      * Before 2026-10-27 this panned a fixed step on every press, so a next
      * cell starting just inside the edge was pushed off screen while it
      * took focus (16:53 viewport -> 17:23, focus on the 17:00 cell).
@@ -266,10 +266,15 @@ class GuideGridState(
         focusRow = row
         focusChannelId = rows.channel(row).id
         focusCellStartMs = next.startMillis
+        // Owner 2026-10-27: a next cell whose start is already on screen
+        // never scrolls the grid (its text pins to the visible part);
+        // aligning its END to the edge jumped a whole page. Only a start at
+        // or past the right edge scrolls, by the minimum that shows its
+        // first half hour, and never more than one page.
         val viewportEnd = viewportStartMs + viewportDurationMs
-        if (next.endMillis > viewportEnd) {
-            val target = minOf(next.startMillis, next.endMillis - viewportDurationMs)
-                .coerceAtLeast(viewportStartMs)
+        if (next.startMillis >= viewportEnd) {
+            val target = (next.startMillis + panStepMs - viewportDurationMs)
+                .coerceIn(viewportStartMs, viewportStartMs + viewportDurationMs)
                 .coerceIn(minViewportStart(), maxViewportStart())
             if (target != viewportStartMs) {
                 viewportChangeAnimated = true
