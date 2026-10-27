@@ -257,6 +257,22 @@ fun GeneralSettingsScreen(
                     }
                 }
 
+                // MARK: About Refreshing
+                //
+                // The most common support question: what opens from the cache,
+                // what refreshes while the app is open, and what the background
+                // job does. Lives next to the Refresh controls it describes.
+                SettingsSection(header = "About Refreshing") {
+                    ABOUT_REFRESHING_PARAGRAPHS.forEach { paragraph ->
+                        Text(
+                            text = paragraph,
+                            style = com.aeriotv.android.ui.settings.settingsFootnoteStyle(),
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+
                 // MARK: Network
                 //
                 // tvOS Network (s_10) presents Request Timeout as a selection list
@@ -385,3 +401,10 @@ private fun intervalLabel(mins: Int): String {
     val h = mins / 60
     return if (h == 1) "1 hour" else "$h hours"
 }
+
+private val ABOUT_REFRESHING_PARAGRAPHS = listOf(
+    "Live TV. Channels and the guide open from your device's cache, then refresh quietly in the background each time the app opens and whenever you return and the data is more than 30 minutes old. The Background Refresh interval in General keeps them current while the app is closed.",
+    "Movies and TV Shows. Your library opens from the cache. It re-scans in the background on the Refresh Library schedule in Movies and TV Shows (every launch, daily, or weekly), or when the server reports a change.",
+    "DVR. Recordings open from the cache and update every 30 seconds while the app is open.",
+    "The spinner only appears when there is nothing cached yet or when you refresh by hand.",
+)
