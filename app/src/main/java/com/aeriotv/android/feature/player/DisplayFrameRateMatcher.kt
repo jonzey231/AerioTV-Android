@@ -81,6 +81,11 @@ object DisplayFrameRateMatcher {
      *  the seamless request cannot be honoured (2160p50 on a 60 Hz mode). */
     @Volatile var onRateRequested: ((Float) -> Unit)? = null
 
+    /** Fired on the main thread when the VOD player's attachment is torn
+     *  down, so MainActivity can drop a mode pin the VOD title requested
+     *  when no live playback needs it. */
+    @Volatile var onVodDetached: (() -> Unit)? = null
+
     /**
      * Start measuring [player]'s frame rate and request a refresh-rate match on
      * [surfaceView]'s Surface (framework arbitrates via the user's OS Match
@@ -170,6 +175,14 @@ object DisplayFrameRateMatcher {
         latestHandle = listener
         attachedPlayer = player
         return listener
+    }
+
+    /** Hand ownership back to an earlier attachment (the live window) after
+     *  a temporary one (VOD) detaches, so [attachedPlayer] / [latestHandle]
+     *  never keep pointing at a released player. */
+    fun restoreOwner(player: ExoPlayer?, handle: Any?) {
+        attachedPlayer = player
+        latestHandle = handle
     }
 
     /** Stop measuring and release our frame-rate preference (so the guide /

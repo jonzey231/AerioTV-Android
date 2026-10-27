@@ -1468,6 +1468,7 @@ fun VODPlayerScreen(
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setPlayer(player)
+                    VodFrameRateMatch.attach(this, player, tracer)
                 }
             },
             update = { view ->
@@ -1477,6 +1478,7 @@ fun VODPlayerScreen(
             onRelease = { view ->
                 // Releases (with the task #149 native catch-up revoke), or keeps
                 // the instance when it was handed to the phone mini.
+                VodFrameRateMatch.detach(view, tracer)
                 PhoneVodMini.releaseOrRetain(
                     exoPlayer, tracer, view, catchupOffsetMs,
                     isNativeCatchup, currentPlaybackUrl, onRevokeCatchup,

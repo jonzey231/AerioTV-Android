@@ -781,6 +781,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onRateRequested = null
+        com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onVodDetached = null
         // Explicit app exit (Back -> Exit dialog -> finish) must stop playback.
         // The ExoPlayer holder + media session are process-scoped singletons, so
         // without this they keep decoding audio after the activity is gone (the
@@ -947,7 +948,9 @@ class MainActivity : ComponentActivity() {
         // Android#134: gated by Match Frame Rate alone. The mode pick below
         // keeps the current physical size, so this never changes resolution.
         if (!matchFrameRateEnabled || !isTelevisionDevice()) return
-        val player = resMatchPlayer ?: return
+        // The player the matcher measured (VOD builds its own), else live.
+        val player = com.aeriotv.android.feature.player.DisplayFrameRateMatcher.attachedPlayer
+            ?: resMatchPlayer ?: return
         if (!player.playWhenReady) return
         val disp = currentDisplay() ?: return
         val current = disp.mode ?: return
@@ -1122,6 +1125,14 @@ class MainActivity : ComponentActivity() {
         // class; pick a same-size display mode at that rate when needed.
         com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onRateRequested = { rate ->
             runOnUiThread { onContentRateRequested(rate) }
+        }
+        com.aeriotv.android.feature.player.DisplayFrameRateMatcher.onVodDetached = {
+            // VOD left: drop its rate pin unless live playback is active.
+            val live = resMatchPlayer
+            if (live == null || !live.playWhenReady || live.mediaItemCount == 0) {
+                lastContentRate = 0f
+                restoreDisplayMode()
+            }
         }
         enableEdgeToEdge()
         // Remote Control initiative: keep the button map hot for
