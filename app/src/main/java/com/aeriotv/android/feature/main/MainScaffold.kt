@@ -709,6 +709,19 @@ fun MainScaffold(
             context.applicationContext, com.aeriotv.android.feature.settings.SetupEntryPoint::class.java,
         ).profileManager()
     }
+    // The one TV on offer (dock card AND Settings root banner): the first
+    // advertising TV not dismissed, hidden while its setup sheet is open.
+    // Phones and tablets, Admin or default profile.
+    val setupOfferPid = capsPlaylist?.id
+    val setupOfferTarget = if (isTvShell || setupOfferPid == null || !setupPm.canSetUpTv(setupOfferPid) || setupDockTarget != null) null
+        else setupTvs.firstOrNull { !com.aeriotv.android.feature.devicesetup.SetupDockDismissals.isDismissed(it) }
+    val setupOffer = setupOfferTarget?.let { t ->
+        com.aeriotv.android.feature.devicesetup.SetupTvOffer(
+            target = t,
+            onSetUp = { setupDockTarget = t },
+            onDismiss = { com.aeriotv.android.feature.devicesetup.SetupDockDismissals.dismiss(t) },
+        )
+    }
     // Poll pause state from the held ExoPlayer so the mini-player's
     // Pause/Play icon stays accurate when the notification action /
     // BT button toggles playback elsewhere.
@@ -1475,6 +1488,7 @@ fun MainScaffold(
         ) {
             androidx.compose.runtime.CompositionLocalProvider(
                 com.aeriotv.android.feature.livetv.LocalRetainedChannelIds provides retainedIds,
+                com.aeriotv.android.feature.devicesetup.LocalSetupTvOffer provides setupOffer,
             ) {
             MainTabContent(
                 selectedTab = selectedTab,
@@ -1641,8 +1655,13 @@ fun MainScaffold(
                 val showMvBg = mvBgState != null && !isTv
                 val radioOnDock = com.aeriotv.android.feature.player.RadioMode.state
                     .collectAsStateWithLifecycle().value != null && !isTv && !casting
+                val setupCard = setupOffer
                 val fabRow = when {
                     !phoneFab -> 0
+                    // Set up a TV card: the lowest row (the cast card's spot,
+                    // directly above the tab bar), so the button rides it the
+                    // way it rides Kept Live.
+                    setupCard != null -> 6
                     showKept -> 1
                     showMv -> 2
                     showMvBg -> 3
@@ -1662,26 +1681,26 @@ fun MainScaffold(
                     )
                 }
                 fun gapAfter(row: Int) = if (tabletNav) 12.dp else if (fabRow == row) 10.dp else 8.dp
-                // Set up a TV dock card: the first advertising TV not dismissed,
-                // hidden while its setup sheet is open. Admin or default profile.
-                val setupPid = capsPlaylist?.id
-                val setupCard = if (isTv || setupPid == null || !setupPm.canSetUpTv(setupPid) || setupDockTarget != null) null
-                    else setupTvs.firstOrNull { !com.aeriotv.android.feature.devicesetup.SetupDockDismissals.isDismissed(it) }
+                // Set up a TV dock card (setupOffer): the cast card's place,
+                // directly above the tab bar; the Control a TV button rides
+                // its row like the other dock cards.
                 @Composable
                 fun DockSetup() {
-                    val t = setupCard ?: return
+                    val o = setupCard ?: return
+                    if (isTv) return
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
                             com.aeriotv.android.feature.devicesetup.SetupTvDockCard(
-                                target = t,
+                                target = o.target,
                                 tablet = tabletNav,
-                                onSetUp = { setupDockTarget = t },
-                                onDismiss = { com.aeriotv.android.feature.devicesetup.SetupDockDismissals.dismiss(t) },
+                                onSetUp = o.onSetUp,
+                                onDismiss = o.onDismiss,
                                 modifier = Modifier.weight(1f),
                             )
+                            if (fabRow == 6) DockFab()
                         }
                     }
-                    Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
+                    Spacer(Modifier.height(gapAfter(6)))
                 }
                 @Composable
                 fun DockKept() {
@@ -1862,9 +1881,9 @@ fun MainScaffold(
                     }
                 }
                 if (tabletNav) {
-                    DockSetup(); DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockRadio(); DockCast()
+                    DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockRadio(); DockCast(); DockSetup()
                 } else {
-                    DockSetup(); DockRadio(); DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly()
+                    DockRadio(); DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly(); DockSetup()
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right

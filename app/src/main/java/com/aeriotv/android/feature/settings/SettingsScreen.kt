@@ -201,6 +201,7 @@ fun SettingsScreen(
     val isTv = rememberIsTvDevice()
     var qrLink by remember { mutableStateOf<TvQrLink?>(null) }
     var showWhatsNew by remember { mutableStateOf(false) }
+    val setupOffer = com.aeriotv.android.feature.devicesetup.LocalSetupTvOffer.current
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Apple TV draws no page title above the first section.
@@ -262,6 +263,18 @@ fun SettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing),
         ) {
+            // MARK: Set up a TV banner
+            //
+            // Phones and tablets: the TV the dock card offers (one shared
+            // discovery and gating in MainScaffold), surfaced at the top of
+            // the Settings root where people look for setup.
+            if (fullRoot && !isTv && setupOffer != null) item("setup-tv-banner") {
+                com.aeriotv.android.feature.devicesetup.SetupTvSettingsBanner(
+                    offer = setupOffer,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
             // MARK: Playlists
             if (content != SettingsRootContent.AboutOnly && !isChild) item("playlists") {
                 PlaylistsSection(

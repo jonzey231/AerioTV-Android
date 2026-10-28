@@ -291,7 +291,7 @@ private fun Offering(offer: SetupReceiver.Offer, onCancel: () -> Unit) {
             Text("Set up from your phone", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Open AerioTV on your phone, then Settings > Playlists > Set up a TV, or scan this code.",
+                "Open AerioTV on your phone, then Settings > Playlists > open your playlist > Set up a TV, or scan this code.",
                 style = MaterialTheme.typography.bodyLarge.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

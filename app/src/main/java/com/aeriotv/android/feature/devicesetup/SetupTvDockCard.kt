@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +33,8 @@ import com.aeriotv.android.feature.livetv.RetainedCardControlHeight
 import com.aeriotv.android.feature.livetv.RetainedCardVerticalPadding
 import com.aeriotv.android.feature.main.floatingNavChrome
 import com.aeriotv.android.feature.multiview.AccentTextControl
+import com.aeriotv.android.ui.settings.SettingsCardMetrics
+import com.aeriotv.android.ui.settings.settingsCardFill
 import com.aeriotv.android.ui.theme.textAccent
 
 /**
@@ -43,6 +46,75 @@ object SetupDockDismissals {
     fun idOf(t: SetupTarget) = t.name + "|" + SetupCrypto.b64(t.pk)
     fun isDismissed(t: SetupTarget) = idOf(t) in keys
     fun dismiss(t: SetupTarget) { if (!isDismissed(t)) keys.add(idOf(t)) }
+}
+
+/** Second line of the dock card and the Settings banner. */
+fun setupWaitingLine(t: SetupTarget) = "Waiting for setup, key ${t.fingerprint}"
+
+/**
+ * The TV the dock card is offering right now (null when none, when the
+ * profile cannot set up a TV, or while its setup sheet is open). MainScaffold
+ * computes it once from its one SetupDiscovery and provides it, so the dock
+ * card and the Settings root banner always show the same TV.
+ */
+class SetupTvOffer(
+    val target: SetupTarget,
+    val onSetUp: () -> Unit,
+    val onDismiss: () -> Unit,
+)
+
+val LocalSetupTvOffer = staticCompositionLocalOf<SetupTvOffer?> { null }
+
+/**
+ * Settings root banner for the TV in [LocalSetupTvOffer]: the dock card's
+ * content (TV name, waiting line with the key, Set up, dismiss) in a
+ * settings card at the very top of the list.
+ */
+@Composable
+fun SetupTvSettingsBanner(offer: SetupTvOffer, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(SettingsCardMetrics.cardCorner)
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .background(settingsCardFill())
+            .clickable(onClick = offer.onSetUp)
+            .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = offer.target.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = setupWaitingLine(offer.target),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.textAccent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(modifier = Modifier.heightIn(min = RetainedCardControlHeight), contentAlignment = Alignment.Center) {
+            AccentTextControl(label = "Set up", onClick = offer.onSetUp)
+        }
+        IconButton(onClick = offer.onDismiss) {
+            Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 /**
@@ -80,7 +152,7 @@ fun SetupTvDockCard(
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "${target.name} is waiting for setup",
+                text = target.name,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.SemiBold,
@@ -88,7 +160,7 @@ fun SetupTvDockCard(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "Check that the TV shows ${target.fingerprint}",
+                text = setupWaitingLine(target),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.textAccent,
                 maxLines = 1,
