@@ -159,8 +159,13 @@ data class WatchlistSnapshot(
 @Serializable
 data class PreferencesSnapshot(
     val envelope: SyncEnvelope,
-    /** key → value map encoded as strings (DataStore keys can be Bool/Int/Double/String; we string-encode for the wire). */
+    /** key → value map encoded as strings (DataStore keys can be Bool/Int/Double/String; we string-encode for the wire).
+     *  This is the `v` lane: values every device class reads. */
     val keys: Map<String, String>,
+    /** "TVs only" lane: written and read by TVs only. Absent in older files. */
+    val tv: Map<String, String> = emptyMap(),
+    /** "Phones and tablets only" lane. Absent in older files. */
+    val mobile: Map<String, String> = emptyMap(),
 )
 
 /**

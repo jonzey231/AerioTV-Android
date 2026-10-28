@@ -393,6 +393,37 @@ object DsyncPayloads {
         val obj = v as? JsonObject ?: return null
         return obj.mapNotNull { (k, e) -> (e as? JsonPrimitive)?.takeIf { it != JsonNull }?.let { k to it } }.toMap()
     }
+    /**
+     * `settings` lanes (4.9): `v` (all devices), `tv`, and `mobile`. Absent
+     * lanes decode as empty; a lane that is not an object is malformed.
+     */
+    fun decodeSettingsLanes(data: JsonObject): Map<String, Map<String, JsonPrimitive>>? {
+        val out = LinkedHashMap<String, Map<String, JsonPrimitive>>()
+        for (lane in SETTINGS_LANES) {
+            val e = data[lane] ?: continue
+            val obj = e as? JsonObject ?: return null
+            out[lane] = obj.mapNotNull { (k, x) -> (x as? JsonPrimitive)?.takeIf { it != JsonNull }?.let { k to it } }.toMap()
+        }
+        return out
+    }
+
+    /** Writes [lanes] over [base]'s lanes; every name not written round-trips untouched. */
+    fun encodeSettingsLanes(base: JsonObject?, lanes: Map<String, Map<String, JsonPrimitive>>): JsonObject {
+        var out = base ?: JsonObject(emptyMap())
+        for (lane in SETTINGS_LANES) {
+            val mine = lanes[lane].orEmpty()
+            val prev = base?.get(lane) as? JsonObject
+            if (mine.isEmpty() && prev == null) continue
+            val m = LinkedHashMap<String, JsonElement>()
+            prev?.forEach { (k, e) -> m[k] = e }
+            mine.forEach { (k, e) -> m[k] = e }
+            out = out.with(lane to JsonObject(m))
+        }
+        return out
+    }
+
+    val SETTINGS_LANES = listOf("v", "tv", "mobile")
+
     fun encodeSettings(base: JsonObject?, owned: Set<String>, values: Map<String, JsonPrimitive>): JsonObject {
         val prev = base?.get("v") as? JsonObject
         val m = LinkedHashMap<String, JsonElement>()

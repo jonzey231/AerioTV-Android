@@ -397,11 +397,14 @@ class DispatcharrSyncManager @Inject constructor(
     // ---- per-key enablement ----
 
     private suspend fun enabled(key: DsyncKey, s: Session): Boolean {
-        val cat = key.category
-        if (cat != null && !prefs.syncCategoryEnabledOnce(cat)) return false
+        // Per-item choices (Sync Categories): data keys follow their item's
+        // on/off; `settings` is gated per name by scope (lanes), so it is
+        // always considered and an all-Off device simply writes nothing.
+        if (key == DsyncKey.Settings) return true
+        val item = com.aeriotv.android.core.sync.SyncItemCatalog.itemForDsync(key.suffix)
+        val on = item == null || prefs.syncScopesOnce()[item.id] != com.aeriotv.android.core.sync.SyncScope.Off
+        if (!on) return false
         return when (key) {
-            DsyncKey.RemoteMap -> prefs.syncRemoteControlMapOnce()
-            DsyncKey.RadioDefault -> prefs.syncRadioModeByDefaultOnce()
             DsyncKey.Profiles -> isAdmin(s)
             else -> true
         }
@@ -981,8 +984,8 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncKey.HiddenTitles -> hiddenTitlesStore.observe(null)
         DsyncKey.HiddenGroups -> combine(prefs.hiddenGroups, prefs.hiddenMovieGroups, prefs.hiddenSeriesGroups) { a, b, c -> Triple(a, b, c) }
         DsyncKey.GroupOrder -> combine(prefs.groupOrder, prefs.groupSortMode) { a, b -> a to b }
-        DsyncKey.Settings -> if (playlistId != null) prefs.dsyncSettings(playlistId)
-        else combine(prefs.dsyncSettings(null), prefs.defaultGroupTokensAll) { a, b -> a to b }
+        DsyncKey.Settings -> if (playlistId != null) combine(prefs.dsyncSettings(playlistId), prefs.syncScopes) { a, b -> a to b }
+        else combine(prefs.dsyncSettings(null), prefs.defaultGroupTokensAll, prefs.syncScopes) { a, b, c -> Triple(a, b, c) }
         DsyncKey.RemoteMap -> prefs.remoteControlMap
         DsyncKey.RadioDefault -> prefs.radioModeByDefault
         DsyncKey.Collections -> prefs.channelCollections
@@ -1128,9 +1131,16 @@ class DispatcharrSyncManager @Inject constructor(
             DsyncPayloads.encodeGroupOrder(base, DsyncPayloads.GroupOrder(mode, prefs.groupOrder.first()))
         }
         DsyncKey.Settings -> {
-            val v = prefs.dsyncSettingsOnce(s.playlistId)
+            val v = prefs.dsyncSettingsOnce(s.playlistId, s.token)
             Log.i(TAG, "[DSYNC] settings: defaultGroup=${v["defaultGroup"]?.content ?: ""}")
-            DsyncPayloads.encodeSettings(base, SETTINGS_OWNED, v)
+            // Each name goes to the lane its item's scope picks on this device
+            // (v, or this device class's own lane); Off writes nothing.
+            val scopes = prefs.syncScopesOnce()
+            val lanes = com.aeriotv.android.core.sync.laneValues(
+                v.filterKeys { DsyncSettingsValidator.isOwned(it) }, { prefs.syncScopeForName(scopes, it) }, isTv,
+            )
+            Log.i(TAG, "[DSYNC] settings: lanes ${lanes.entries.joinToString { "${it.key}=${it.value.size}" }}")
+            DsyncPayloads.encodeSettingsLanes(base, lanes)
         }
         DsyncKey.RemoteMap -> {
             // Phones and tablets round-trip the TV map untouched: never write it.
@@ -1413,12 +1423,16 @@ class DispatcharrSyncManager @Inject constructor(
                 prefs.setGroupOrder(g.order)
             }
             DsyncKey.Settings -> {
-                val v = DsyncPayloads.decodeSettings(d) ?: return ApplyResult.Malformed
-                // Only owned names are validated; foreign names round-trip untouched.
-                val r = DsyncSettingsValidator.filter(v.filterKeys { it in SETTINGS_OWNED })
+                val lanes = DsyncPayloads.decodeSettingsLanes(d) ?: return ApplyResult.Malformed
+                // Each name is read from the one lane its scope picks here (no
+                // fallback across lanes); Off reads nothing. Only owned names
+                // are validated; foreign names round-trip untouched.
+                val scopes = prefs.syncScopesOnce()
+                val v = com.aeriotv.android.core.sync.pickFromLanes(lanes, emptyList(), { prefs.syncScopeForName(scopes, it) }, isTv)
+                val r = DsyncSettingsValidator.filter(v.filterKeys { DsyncSettingsValidator.isOwned(it) })
                 r.ignored.forEach { Log.i(TAG, "[DSYNC] settings: ignored $it") }
                 r.accepted["defaultGroup"]?.let { Log.i(TAG, "[DSYNC] settings: defaultGroup=${it.content}") }
-                prefs.applyDsyncSettings(r.accepted, s.playlistId)
+                prefs.applyDsyncSettings(r.accepted, s.playlistId, s.token)
             }
             DsyncKey.RemoteMap -> {
                 val tv = DsyncPayloads.decodeRemoteMap(d) ?: return ApplyResult.Malformed
@@ -1526,15 +1540,8 @@ class DispatcharrSyncManager @Inject constructor(
         val BACKOFF_MS = longArrayOf(30_000L, 120_000L, 600_000L)
         val RECONNECT_MS = longArrayOf(2_000L, 5_000L, 15_000L, 60_000L)
 
-        /** Schema 4.9 names with an Android key. */
-        val SETTINGS_OWNED: Set<String> = setOf(
-            "selectedTheme", "appearanceMode", "trueBlack", "defaultTab", "timeFormat",
-            "textScale", "subtextScale", "textContrast", "guideProgramInfoButton",
-            "programInfoButtonGuide", "programInfoButtonList", "showEpgBadgesTv", "showRemoteHints",
-            "guideGroupSelector", "guideSidebarLayout", "guideTuneInMini",
-            "playerInfoCard.showOnChannelChange", "phoneGroupSelector", "liveTvEdgeSwipeOpensSidebar",
-            "skipLoadingScreen", "appleTVChannelFlip", "defaultGroup",
-        )
+        /** Schema 4.9 names with an Android key (prefix families via DsyncSettingsValidator.isOwned). */
+        val SETTINGS_OWNED: Set<String> get() = DsyncSettingsValidator.NAMES
     }
 }
 

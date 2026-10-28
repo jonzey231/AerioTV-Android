@@ -19,6 +19,10 @@ import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.core.profiles.ProfileScope
 import com.aeriotv.android.core.security.CredentialCipher
 import com.aeriotv.android.core.sync.SyncCategory
+import com.aeriotv.android.core.sync.SyncItem
+import com.aeriotv.android.core.sync.SyncItemCatalog
+import com.aeriotv.android.core.sync.SyncScope
+import com.aeriotv.android.core.sync.dsync.DsyncSettingsValidator
 import com.aeriotv.android.ui.theme.AppTheme
 import com.aeriotv.android.ui.theme.AppearanceMode
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -1778,217 +1782,397 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_SYNC_LAST_PULL] = value }
     }
 
-    /**
-     * Snapshot the keys we sync via Drive, the user-facing UI bits, not
-     * device-local network/buffer settings. Returns a string-encoded map so
-     * the wire format stays type-agnostic for cross-platform compatibility.
-     */
-    suspend fun snapshotSyncablePreferences(): Map<String, String> {
-        val data = store.data.first()
-        val out = mutableMapOf<String, String>()
-        data[KEY_SELECTED_THEME.s()]?.let { out["selectedTheme"] = it }
-        data[KEY_TEXT_SCALE.s()]?.let { out["textScale"] = it.toString() }
-        data[KEY_SUBTEXT_SCALE.s()]?.let { out["subtextScale"] = it.toString() }
-        data[KEY_TEXT_CONTRAST.s()]?.let { out["textContrast"] = it.toString() }
-        // Appearance mode is the OPPOSITE of defaultLiveTVView: it MUST sync so
-        // the user's Dark/Light/System choice follows them to every device.
-        data[KEY_APPEARANCE_MODE.s()]?.let { out["appearanceMode"] = it }
-        data[KEY_APPEARANCE_TRUE_BLACK.s()]?.let { out["appearanceTrueBlack"] = it.toString() }
-        data[KEY_DEFAULT_TAB.s()]?.let { out["defaultTab"] = it }
-        data[KEY_TIME_FORMAT.s()]?.let { out["timeFormat"] = it }
-        // NOTE: defaultLiveTVView is intentionally NOT synced -- it is a per-device
-        // preference (the right default is form-factor specific: TV -> Guide,
-        // phone -> List). Syncing one global value made a phone's "list" clobber a
-        // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
-        data[KEY_SKIP_LOADING_SCREEN.s()]?.let { out["skipLoadingScreen"] = it.toString() }
-        data[KEY_APPLE_TV_CHANNEL_FLIP.s()]?.let { out["appleTVChannelFlip"] = it.toString() }
-        // Slice gate (see syncRemoteControlMap). Absent key reads as true, so
-        // existing installs are unchanged.
-        if (data[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
-            data[KEY_REMOTE_CONTROL_MAP]?.takeIf { it.isNotBlank() }?.let { out["remoteControlMap"] = it }
+    // ── Synced settings registry (docs/DispatcharrSyncSchema.md 4.9) ───────
+    //
+    // One table drives Dispatcharr Sync (`settings` lanes), the Drive
+    // preferences snapshot (string-encoded lanes), and the per-item scopes in
+    // Sync Categories. `name` is the Dispatcharr schema name (canonical);
+    // `drive` is the Drive wire name, which keeps the older spelling where
+    // Drive shipped one first (appearanceTrueBlack, playerShowChannelInfoCard,
+    // programPostersTmdbEnabled, skipBackSeconds, skipForwardSeconds,
+    // customCategoryColors.v1).
+
+    private enum class SKind { B, I, D, S }
+
+    private class Reg(val name: String, val keyName: String, val kind: SKind, val drive: String = name)
+
+    private val registry: List<Reg> by lazy {
+        fun r(n: String, k: Preferences.Key<*>, kind: SKind, drive: String = n) = Reg(n, k.name, kind, drive)
+        val b = SKind.B; val i = SKind.I; val d = SKind.D; val s = SKind.S
+        listOf(
+            r("selectedTheme", KEY_SELECTED_THEME, s),
+            r("appearanceMode", KEY_APPEARANCE_MODE, s),
+            r("trueBlack", KEY_APPEARANCE_TRUE_BLACK, b, drive = "appearanceTrueBlack"),
+            r("useCustomAccent", KEY_USE_CUSTOM_ACCENT, b),
+            r("customAccentHex", KEY_CUSTOM_ACCENT_HEX, s),
+            r("textScale", KEY_TEXT_SCALE, d),
+            r("subtextScale", KEY_SUBTEXT_SCALE, d),
+            r("textContrast", KEY_TEXT_CONTRAST, d),
+            r("timeFormat", KEY_TIME_FORMAT, s),
+            r("defaultTab", KEY_DEFAULT_TAB, s),
+            r("skipLoadingScreen", KEY_SKIP_LOADING_SCREEN, b),
+            r("autoResumeLastChannel", KEY_AUTO_RESUME_LAST_CHANNEL, b),
+            r("defaultLiveTvView", KEY_DEFAULT_LIVE_TV_VIEW, s),
+            r("guideLayout", KEY_LIVE_TV_LAYOUT, s),
+            r("guideGroupSelector", KEY_GUIDE_GROUP_SELECTOR, s),
+            r("phoneGroupSelector", KEY_PHONE_GROUP_SELECTOR, s),
+            r("guideSidebarLayout", KEY_GUIDE_SIDEBAR_LAYOUT, s),
+            r("liveTvEdgeSwipeOpensSidebar", KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR, b),
+            r("channelListShowLogos", KEY_SHOW_CHANNEL_LOGOS, b),
+            r("channelLogoSize", KEY_CHANNEL_LOGO_SIZE_TENTHS, i),
+            r("channelListShowNumbers", KEY_SHOW_CHANNEL_NUMBERS, b),
+            r("channelListShowNames", KEY_SHOW_CHANNEL_NAMES, b),
+            r("channelListShowProgramSubtitles", KEY_SHOW_PROGRAM_SUBTITLES, b),
+            r("showEpgBadgesTv", KEY_SHOW_EPG_BADGES_TV, b),
+            r("showEpgBadgesMobile", KEY_SHOW_EPG_BADGES_MOBILE, b),
+            r("hiddenEpgBadges", KEY_HIDDEN_EPG_BADGES, s),
+            r("guideProgramInfoButton", KEY_GUIDE_PROGRAM_INFO_BUTTON, s),
+            r("programInfoButtonGuide", KEY_PROGRAM_INFO_BUTTON_GUIDE, b),
+            r("programInfoButtonList", KEY_PROGRAM_INFO_BUTTON_LIST, b),
+            r("logoCornersList", KEY_ROUNDED_ARTWORK, b),
+            r("logoCornersGuide", KEY_ROUNDED_ARTWORK_GUIDE, b),
+            r("logoCornersGuideCells", KEY_ROUNDED_PROGRAM_CELLS, b),
+            r("displayScaleLiveTv", KEY_DISPLAY_SCALE_LIVE_TV, d),
+            r("displayScaleGuide", KEY_GUIDE_SCALE, d),
+            r("enableCategoryColors", KEY_CATEGORY_MASTER_ENABLE, b),
+            r("customCategories", KEY_CATEGORY_CUSTOM_JSON, s, drive = "customCategoryColors.v1"),
+            r("playerInfoCard.showOnChannelChange", KEY_PLAYER_SHOW_CHANNEL_INFO_CARD, b, drive = "playerShowChannelInfoCard"),
+            r("playerInfoCard.channelLogo", KEY_PLAYER_CARD_CHANNEL_LOGO, b),
+            r("playerInfoCard.channelName", KEY_PLAYER_CARD_CHANNEL_NAME, b),
+            r("playerInfoCard.programName", KEY_PLAYER_CARD_PROGRAM_NAME, b),
+            r("playerInfoCard.programTime", KEY_PLAYER_CARD_PROGRAM_TIME, b),
+            r("playerInfoCard.programSubtitle", KEY_PLAYER_CARD_PROGRAM_SUBTITLE, b),
+            r("playerInfoCard.programDescription", KEY_PLAYER_CARD_PROGRAM_DESCRIPTION, b),
+            r("liveRewindEnabled", KEY_LIVE_REWIND_ENABLED, b),
+            r("liveRewindDepthMinutes", KEY_LIVE_REWIND_DEPTH_MIN, i),
+            r("liveRewindKeepRecent", KEY_LIVE_REWIND_KEEP_RECENT, b),
+            r("liveRewindKeepCount", KEY_LIVE_REWIND_KEEP_COUNT, i),
+            r("liveRewindRetentionHours", KEY_LIVE_REWIND_RETENTION_HOURS, i),
+            r("liveRewindBudgetGb", KEY_LIVE_REWIND_BUDGET_GB, i),
+            r("skipBack", KEY_SKIP_BACK_SECONDS, i, drive = "skipBackSeconds"),
+            r("skipForward", KEY_SKIP_FORWARD_SECONDS, i, drive = "skipForwardSeconds"),
+            r("skipWithoutControls", KEY_SKIP_WITHOUT_CONTROLS, b),
+            r("autoRecoverFrozenStreams", KEY_AUTO_RECOVER_FROZEN_STREAMS, b),
+            r("appleTVChannelFlip", KEY_APPLE_TV_CHANNEL_FLIP, b),
+            r("edgeBrightnessGesture", KEY_PLAYER_BRIGHTNESS_GESTURE, b),
+            r("edgeVolumeGesture", KEY_PLAYER_VOLUME_GESTURE, b),
+            r("brightnessEdge", KEY_PLAYER_BRIGHTNESS_EDGE, s),
+            r("multiview.audioFocusStyle", KEY_MULTIVIEW_AUDIO_FOCUS_STYLE, s),
+            r("multiview.tilePadding", KEY_MULTIVIEW_TILE_PADDING, b),
+            r("multiview.tileCornersRounded", KEY_MULTIVIEW_TILE_CORNERS_ROUNDED, b),
+            r("multiview.showLogos", KEY_MULTIVIEW_SHOW_LOGOS, b),
+            r("multiview.logoPosition", KEY_MULTIVIEW_LOGO_POSITION, s),
+            r("multiview.logoSize", KEY_MULTIVIEW_LOGO_SIZE, i),
+            r("multiview.pickerShowSubtitles", KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES, b),
+            r("multiview.pickerShowDescriptions", KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS, b),
+            r("tmdbPostersEnabled", KEY_PROGRAM_POSTERS_TMDB_ENABLED, b, drive = "programPostersTmdbEnabled"),
+            r("vodLibraryRefreshHours", KEY_VOD_LIBRARY_REFRESH_HOURS, i),
+            r("displayScaleMovies", KEY_DISPLAY_SCALE_MOVIES, d),
+            r("moviesSortOrder", KEY_MOVIES_SORT_ORDER, s),
+            r("seriesSortOrder", KEY_SERIES_SORT_ORDER, s),
+            r("dvrPreRollMins", KEY_DVR_DEFAULT_PRE_ROLL, i),
+            r("dvrPostRollMins", KEY_DVR_DEFAULT_POST_ROLL, i),
+            r("dvrDefaultDestination", KEY_DVR_DEFAULT_DESTINATION, s),
+            r("dvrSortOrder", KEY_DVR_SORT_ORDER, s),
+            r("showRemoteHints", KEY_SHOW_REMOTE_HINTS, b),
+            r("guideTuneInMini", KEY_GUIDE_TUNE_IN_MINI, b),
+        ) + ProgramCategory.entries.flatMap { bucket ->
+            listOf(Reg(bucket.hexStorageKey, bucket.hexStorageKey, s), Reg(bucket.enabledStorageKey, bucket.enabledStorageKey, b))
         }
-        // Slice gate (see syncRadioModeByDefault). Absent reads as false: opt-in.
-        if (data[KEY_SYNC_RADIO_MODE_BY_DEFAULT] == true) {
-            data[KEY_RADIO_MODE_BY_DEFAULT]?.let { out["radioModeByDefault"] = it.toString() }
-        }
-        data[KEY_GUIDE_GROUP_SELECTOR.s()]?.let { out["guideGroupSelector"] = it }
-        data[KEY_GUIDE_SIDEBAR_LAYOUT.s()]?.let { out["guideSidebarLayout"] = it }
-        data[KEY_PHONE_GROUP_SELECTOR.s()]?.let { out["phoneGroupSelector"] = it }
-        data[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()]?.let { out["liveTvEdgeSwipeOpensSidebar"] = it.toString() }
-        data[KEY_GUIDE_TUNE_IN_MINI.s()]?.let { out["guideTuneInMini"] = it.toString() }
-        data[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()]?.let { out["guideProgramInfoButton"] = it }
-        data[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()]?.let { out["playerShowChannelInfoCard"] = it.toString() }
-        data[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()]?.let { out["programInfoButtonGuide"] = it.toString() }
-        data[KEY_PROGRAM_INFO_BUTTON_LIST.s()]?.let { out["programInfoButtonList"] = it.toString() }
-        data[KEY_SHOW_REMOTE_HINTS.s()]?.let { out["showRemoteHints"] = it.toString() }
-        // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
-        // phone's to other phones, independently. Each device reads its own.
-        data[KEY_SHOW_EPG_BADGES_TV.s()]?.let { out["showEpgBadgesTv"] = it.toString() }
-        data[KEY_SHOW_EPG_BADGES_MOBILE.s()]?.let { out["showEpgBadgesMobile"] = it.toString() }
-        data[KEY_AUTO_RESUME_LAST_CHANNEL.s()]?.let { out["autoResumeLastChannel"] = it.toString() }
-        // TMDB poster fallback: sync the toggle + the user's own key via Drive
-        // (their own Drive appData) so it carries across their devices, matching
-        // how playlist credentials sync.
-        data[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()]?.let { out["programPostersTmdbEnabled"] = it.toString() }
-        // Stored encrypted; the Drive snapshot carries the cleartext key so the
-        // user's other devices can use it (decrypt here, the receiver re-encrypts
-        // in applySyncedPreferences). A corrupt/undecryptable value is omitted.
-        data[KEY_TMDB_API_KEY]?.let { cipher.decrypt(it)?.let { clear -> out["tmdbApiKey"] = clear } }
-        data[KEY_CATEGORY_MASTER_ENABLE.s()]?.let { out["enableCategoryColors"] = it.toString() }
-        data[KEY_CATEGORY_CUSTOM_JSON.s()]?.let { out["customCategoryColors.v1"] = it }
-        // Audit task #52: broaden Drive sync to match iOS coverage. iOS
-        // syncs hidden groups, accent color choice, and the custom accent
-        // hex string as part of the Preferences snapshot. Network /
-        // device-local prefs (homeSsids, buffer size, DVR folder, network
-        // timeout) intentionally stay un-synced because they're device
-        // specific.
-        data[KEY_HIDDEN_GROUPS]?.let { out["hiddenGroups.v1"] = it }
-        data[KEY_GROUP_ORDER]?.let { out["groupOrder.v1"] = it }
-        data[KEY_GROUP_SORT_MODE]?.let { out["groupSortMode.v1"] = it }
-        data[KEY_USE_CUSTOM_ACCENT.s()]?.let { out["useCustomAccent"] = it.toString() }
-        data[KEY_CUSTOM_ACCENT_HEX.s()]?.let { out["customAccentHex"] = it }
-        // Skip Intervals: one global pair that follows the user everywhere.
-        data[KEY_SKIP_BACK_SECONDS.s()]?.let { out["skipBackSeconds"] = it.toString() }
-        data[KEY_SKIP_FORWARD_SECONDS.s()]?.let { out["skipForwardSeconds"] = it.toString() }
-        // GH #81 Default Group: Drive spans every playlist, so the per-playlist
-        // tokens travel as one JSON object {playlistId: token}.
-        val dgPrefix = ProfileScope.keyName("default_group_token_")
-        val dg = data.asMap().entries.mapNotNull { (k, v) ->
-            val t = v as? String ?: return@mapNotNull null
-            if (!k.name.startsWith(dgPrefix) || t.isBlank()) null
-            else k.name.removePrefix(dgPrefix) to kotlinx.serialization.json.JsonPrimitive(t)
-        }.toMap()
-        if (dg.isNotEmpty()) out["defaultGroup"] = kotlinx.serialization.json.JsonObject(dg).toString()
-        ProgramCategory.entries.forEach { bucket ->
-            data[stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey))]?.let { out[bucket.hexStorageKey] = it }
-            data[booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey))]?.let { out[bucket.enabledStorageKey] = it.toString() }
-        }
-        return out
     }
 
-    /** Reverse of [snapshotSyncablePreferences]. Best-effort decode. */
-    suspend fun applySyncedPreferences(keys: Map<String, String>, replace: Boolean = false) {
+    /** Per-playlist settings names and their key bases ("<base><playlistId>"). */
+    private val perPlaylist: List<Triple<String, String, SKind>> = listOf(
+        Triple("defaultGroup", "default_group_token_", SKind.S),
+        Triple("lastGroup", "live_group_token_", SKind.S),
+        Triple("recentGroupVisible", "recent_group_visible_", SKind.B),
+    )
+
+    private fun Reg.toWire(raw: Any?): kotlinx.serialization.json.JsonPrimitive? = when (raw) {
+        is Boolean -> kotlinx.serialization.json.JsonPrimitive(raw)
+        is Int -> kotlinx.serialization.json.JsonPrimitive(raw)
+        is Long -> kotlinx.serialization.json.JsonPrimitive(raw)
+        is Double -> kotlinx.serialization.json.JsonPrimitive(raw)
+        is Float -> kotlinx.serialization.json.JsonPrimitive(raw.toDouble())
+        // Stored newline-joined; the wire form is one comma-separated string.
+        is String -> kotlinx.serialization.json.JsonPrimitive(
+            if (name == "hiddenEpgBadges") raw.split('\n').filter { it.isNotBlank() }.joinToString(",") else raw,
+        )
+        else -> null
+    }
+
+    /** A validated wire value as the stored value; null = remove the key. */
+    private fun Reg.fromWire(v: kotlinx.serialization.json.JsonPrimitive): Any? = when (kind) {
+        SKind.B -> v.content.toBooleanStrictOrNull()
+        SKind.I -> v.content.toIntOrNull()
+        SKind.D -> v.content.toDoubleOrNull()?.let { x ->
+            when (name) {
+                "textScale", "subtextScale" -> snapTextScale(x.toFloat()).toDouble()
+                "textContrast" -> snapTextContrast(x.toFloat()).toDouble()
+                else -> x
+            }
+        }
+        SKind.S -> v.content.let { c ->
+            when {
+                name == "hiddenEpgBadges" -> c.split(',').map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n").ifEmpty { null }
+                name == "customAccentHex" || name.startsWith(DsyncSettingsValidator.COLOR_PREFIX) ->
+                    c.removePrefix("#").uppercase().ifEmpty { null }
+                else -> c
+            }
+        }
+    }
+
+    /** Drive's string encoding of a wire value, and back (typed by [Reg.kind]). */
+    private fun Reg.driveToWire(s: String): kotlinx.serialization.json.JsonPrimitive? = when (kind) {
+        SKind.B -> s.toBooleanStrictOrNull()?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+        SKind.I -> s.toIntOrNull()?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+        SKind.D -> s.toDoubleOrNull()?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+        SKind.S -> kotlinx.serialization.json.JsonPrimitive(s)
+    }
+
+    private fun putRaw(prefs: MutablePreferences, keyName: String, v: Any) {
+        @Suppress("UNCHECKED_CAST")
+        when (v) {
+            is Boolean -> prefs[booleanPreferencesKey(keyName)] = v
+            is Int -> prefs[intPreferencesKey(keyName)] = v
+            is Long -> prefs[longPreferencesKey(keyName)] = v
+            is Double -> prefs[doublePreferencesKey(keyName)] = v
+            is Float -> prefs[androidx.datastore.preferences.core.floatPreferencesKey(keyName)] = v
+            is String -> prefs[stringPreferencesKey(keyName)] = v
+            is Set<*> -> prefs[androidx.datastore.preferences.core.stringSetPreferencesKey(keyName)] = v as Set<String>
+        }
+    }
+
+    private fun removeRaw(prefs: MutablePreferences, keyName: String) {
+        prefs.asMap().keys.filter { it.name == keyName }.forEach { prefs.remove(it) }
+    }
+
+    // ── Per-item sync choices (Settings > Sync > Sync Categories) ─────────
+    //
+    // Device-local, never synced (and never profile scoped). See
+    // core/sync/SyncItems.kt for the lanes and the rules.
+
+    private val isTvDevice: Boolean by lazy {
+        context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK) ||
+            context.packageManager.hasSystemFeature("android.software.leanback_only")
+    }
+
+    private fun categoryOn(p: Preferences, c: SyncCategory): Boolean =
+        p[booleanPreferencesKey(c.enabledStorageKey())] ?: true
+
+    /** Data items: on or off (the old category flags stay the source where they exist). */
+    private fun itemOn(p: Preferences, item: SyncItem): Boolean {
+        item.category?.let { return categoryOn(p, it) }
+        return when (item.id) {
+            "remoteMap" -> p[KEY_SYNC_REMOTE_CONTROL_MAP] ?: true
+            "radioDefault" -> p[KEY_SYNC_RADIO_MODE_BY_DEFAULT] ?: false
+            else -> p[booleanPreferencesKey(item.toggleKey)] ?: when (item.id) {
+                // Before per-item choices these rode a category toggle.
+                "recents", "collections" -> categoryOn(p, SyncCategory.Favorites)
+                "hiddenTitles" -> categoryOn(p, SyncCategory.Watchlist)
+                "hiddenGroups", "groupOrder" -> categoryOn(p, SyncCategory.Preferences)
+                else -> true
+            }
+        }
+    }
+
+    /** Stored scope (raw), or the App Preferences flag when never chosen. */
+    private fun storedScope(p: Preferences, item: SyncItem): SyncScope =
+        SyncScope.fromWire(p[stringPreferencesKey(item.scopeKey)])
+            ?: if (categoryOn(p, SyncCategory.Preferences)) SyncScope.All else SyncScope.Off
+
+    /** The scope this device honors for [item]. */
+    private fun scopeOf(p: Preferences, item: SyncItem): SyncScope =
+        if (item.isData) (if (itemOn(p, item)) SyncScope.All else SyncScope.Off)
+        else storedScope(p, item).effective(isTvDevice)
+
+    private fun scopeOfName(p: Preferences, name: String): SyncScope =
+        SyncItemCatalog.itemForName(name)?.let { scopeOf(p, it) } ?: SyncScope.All
+
+    /** True on a TV (the device class for the `tv` lane). */
+    val syncDeviceIsTv: Boolean get() = isTvDevice
+
+    /** Every item's scope as this device honors it, by item id. */
+    val syncScopes: Flow<Map<String, SyncScope>> = store.data.map { p ->
+        SyncItemCatalog.allItems.associate { it.id to scopeOf(p, it) }
+    }
+    suspend fun syncScopesOnce(): Map<String, SyncScope> = syncScopes.first()
+    suspend fun syncItemOnOnce(id: String): Boolean = syncScopesOnce()[id] != SyncScope.Off
+
+    /** Scope of the item carrying settings name [name] (Dispatcharr Sync lanes). */
+    fun syncScopeForName(scopes: Map<String, SyncScope>, name: String): SyncScope =
+        SyncItemCatalog.itemForName(name)?.let { scopes[it.id] } ?: SyncScope.All
+
+    /**
+     * Sets [itemIds] to [scope]. The first write materializes every unset
+     * choice so later flips of the App Preferences flag (kept in step below,
+     * for older builds and the Drive file gate) never move an untouched item.
+     */
+    suspend fun setSyncScope(itemIds: Collection<String>, scope: SyncScope) {
+        store.edit { p ->
+            SyncItemCatalog.allItems.forEach { item ->
+                if (item.category != null || item.id == "remoteMap" || item.id == "radioDefault") return@forEach
+                if (item.isData) {
+                    if (p[booleanPreferencesKey(item.toggleKey)] == null) p[booleanPreferencesKey(item.toggleKey)] = itemOn(p, item)
+                } else if (p[stringPreferencesKey(item.scopeKey)] == null) {
+                    p[stringPreferencesKey(item.scopeKey)] = storedScope(p, item).wire
+                }
+            }
+            itemIds.mapNotNull(SyncItemCatalog::item).forEach { item ->
+                val on = scope != SyncScope.Off
+                when {
+                    item.category != null -> p[booleanPreferencesKey(item.category.enabledStorageKey())] = on
+                    item.id == "remoteMap" -> p[KEY_SYNC_REMOTE_CONTROL_MAP] = on
+                    item.id == "radioDefault" -> p[KEY_SYNC_RADIO_MODE_BY_DEFAULT] = on
+                    item.isData -> p[booleanPreferencesKey(item.toggleKey)] = on
+                    // A device offers only its own class lane; anything else reads as All devices.
+                    else -> p[stringPreferencesKey(item.scopeKey)] = scope.effective(isTvDevice).wire
+                }
+            }
+            val prefsRiders = setOf("recents", "collections", "hiddenGroups", "groupOrder", "remoteMap", "radioDefault")
+            val anyOn = SyncItemCatalog.allItems.any { item ->
+                (!item.isData && storedScope(p, item) != SyncScope.Off) || (item.id in prefsRiders && itemOn(p, item))
+            }
+            p[booleanPreferencesKey(SyncCategory.Preferences.enabledStorageKey())] = anyOn
+        }
+        android.util.Log.i("AppPreferences", "[SYNC] scope ${scope.wire} for ${itemIds.joinToString(",")}")
+    }
+
+    // ── Drive preferences snapshot (default profile, string lanes) ─────────
+
+    /** The Drive preferences file's lanes: `v` (all devices), `tv`, and `mobile`. */
+    data class DriveLanes(
+        val v: Map<String, String>,
+        val tv: Map<String, String> = emptyMap(),
+        val mobile: Map<String, String> = emptyMap(),
+    ) {
+        fun lane(name: String): Map<String, String> = when (name) {
+            SyncScope.LANE_TV -> tv
+            SyncScope.LANE_MOBILE -> mobile
+            else -> v
+        }
+    }
+
+    /** Drive data keys in `v`: wire name to (item id, stored key name). */
+    private val driveDataKeys: List<Triple<String, String, String>> by lazy {
+        listOf(
+            Triple("remoteControlMap", "remoteMap", KEY_REMOTE_CONTROL_MAP.name),
+            Triple("radioModeByDefault", "radioDefault", KEY_RADIO_MODE_BY_DEFAULT.name),
+            Triple("hiddenGroups.v1", "hiddenGroups", KEY_HIDDEN_GROUPS.name),
+            Triple("hiddenMovieGroups.v1", "hiddenGroups", KEY_HIDDEN_MOVIE_GROUPS.name),
+            Triple("hiddenSeriesGroups.v1", "hiddenGroups", KEY_HIDDEN_SERIES_GROUPS.name),
+            Triple("groupOrder.v1", "groupOrder", KEY_GROUP_ORDER.name),
+            Triple("groupSortMode.v1", "groupOrder", KEY_GROUP_SORT_MODE.name),
+            Triple("recents.v1", "recents", KEY_RECENT_CHANNEL_IDS.name),
+            Triple("channelCollections.v1", "collections", KEY_CHANNEL_COLLECTIONS.name),
+        )
+    }
+
+    private fun lanesCache(p: Preferences): DriveLanes {
+        val raw = p[KEY_DRIVE_PREFS_LANES] ?: return DriveLanes(emptyMap())
+        return runCatching {
+            val o = Json.parseToJsonElement(raw) as kotlinx.serialization.json.JsonObject
+            fun m(k: String) = (o[k] as? kotlinx.serialization.json.JsonObject)?.mapNotNull { (n, e) ->
+                (e as? kotlinx.serialization.json.JsonPrimitive)?.content?.let { n to it }
+            }?.toMap().orEmpty()
+            DriveLanes(m("v"), m("tv"), m("mobile"))
+        }.getOrDefault(DriveLanes(emptyMap()))
+    }
+
+    private fun encodeLanes(l: DriveLanes): String = kotlinx.serialization.json.JsonObject(
+        mapOf("v" to l.v, "tv" to l.tv, "mobile" to l.mobile).mapValues { (_, m) ->
+            kotlinx.serialization.json.JsonObject(m.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) })
+        },
+    ).toString()
+
+    /**
+     * Snapshot the keys we sync via Drive (default profile), split into lanes
+     * by each item's scope on this device. Device-local settings (buffer
+     * size, network timeout, display matching, DVR storage) never ride it,
+     * and the TMDB API key is no longer sent (it was cleartext).
+     *
+     * Drive replaces the whole file, so values this device does not write
+     * (items Off here, the other class's lane, other platforms' names) are
+     * carried from the last pulled copy, untouched.
+     */
+    suspend fun snapshotSyncablePreferences(): DriveLanes {
+        val p = store.data.first()
+        val m = p.asMap().mapKeys { it.key.name }
+        val mine = mapOf(SyncScope.LANE_ALL to LinkedHashMap<String, String>(), SyncScope.LANE_TV to LinkedHashMap(), SyncScope.LANE_MOBILE to LinkedHashMap())
+        val ownLane = HashMap<String, String?>()
+        registry.forEach { r ->
+            val lane = scopeOfName(p, r.name).lane(isTvDevice)
+            ownLane[r.drive] = lane
+            if (lane != null) r.toWire(m[r.keyName])?.let { mine.getValue(lane)[r.drive] = it.content }
+        }
+        driveDataKeys.forEach { (wire, itemId, keyName) ->
+            val on = SyncItemCatalog.item(itemId)?.let { itemOn(p, it) } ?: true
+            ownLane[wire] = if (on) SyncScope.LANE_ALL else null
+            if (on) (m[keyName] as? Any)?.let { v -> if (v.toString().isNotBlank()) mine.getValue(SyncScope.LANE_ALL)[wire] = v.toString() }
+        }
+        // Per-playlist group choices travel as one JSON object {playlistId: value}.
+        val groupOn = SyncItemCatalog.item("groupOrder")?.let { itemOn(p, it) } ?: true
+        perPlaylist.forEach { (name, base, _) ->
+            ownLane[name] = if (groupOn) SyncScope.LANE_ALL else null
+            if (!groupOn) return@forEach
+            val obj = m.entries.mapNotNull { (k, v) ->
+                if (!k.startsWith(base) || k.contains("@prof:")) return@mapNotNull null
+                val pid = k.removePrefix(base)
+                when (v) {
+                    is String -> if (v.isBlank()) null else pid to kotlinx.serialization.json.JsonPrimitive(v)
+                    is Boolean -> pid to kotlinx.serialization.json.JsonPrimitive(v)
+                    else -> null
+                }
+            }.toMap()
+            if (obj.isNotEmpty()) mine.getValue(SyncScope.LANE_ALL)[name] = kotlinx.serialization.json.JsonObject(obj).toString()
+        }
+        ownLane["tmdbApiKey"] = SyncScope.LANE_ALL // never carried forward
+        val cache = lanesCache(p)
+        fun merged(lane: String): Map<String, String> =
+            cache.lane(lane).filterKeys { ownLane.getOrDefault(it, "?") != lane && !(lane == SyncScope.LANE_ALL && it == "tmdbApiKey") } + mine.getValue(lane)
+        return DriveLanes(merged(SyncScope.LANE_ALL), merged(SyncScope.LANE_TV), merged(SyncScope.LANE_MOBILE))
+    }
+
+    /** Reverse of [snapshotSyncablePreferences] (default profile). Best-effort decode. */
+    suspend fun applySyncedPreferences(lanes: DriveLanes, replace: Boolean = false) {
         store.edit { prefs ->
+            prefs[KEY_DRIVE_PREFS_LANES] = encodeLanes(lanes)
             // Explicit Pull from Drive REPLACES (owner decision, Settings
-            // phase 3, iPhone parity): a synced preference this device has
-            // set but the snapshot does not carry goes back to its default.
-            if (replace) {
-                val syncedKeys: Map<String, Preferences.Key<*>> = buildMap {
-                    put("selectedTheme", KEY_SELECTED_THEME)
-                    put("textScale", KEY_TEXT_SCALE)
-                    put("subtextScale", KEY_SUBTEXT_SCALE)
-                    put("textContrast", KEY_TEXT_CONTRAST)
-                    put("appearanceMode", KEY_APPEARANCE_MODE)
-                    put("appearanceTrueBlack", KEY_APPEARANCE_TRUE_BLACK)
-                    put("defaultTab", KEY_DEFAULT_TAB)
-                    put("timeFormat", KEY_TIME_FORMAT)
-                    put("skipLoadingScreen", KEY_SKIP_LOADING_SCREEN)
-                    put("appleTVChannelFlip", KEY_APPLE_TV_CHANNEL_FLIP)
-                    if (prefs[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
-                        put("remoteControlMap", KEY_REMOTE_CONTROL_MAP)
+            // phase 3, iPhone parity): a synced preference this device reads
+            // but the snapshot does not carry goes back to its default.
+            registry.forEach { r ->
+                val lane = scopeOfName(prefs, r.name).lane(isTvDevice) ?: return@forEach
+                val s = lanes.lane(lane)[r.drive]
+                if (s == null) { if (replace) removeRaw(prefs, r.keyName); return@forEach }
+                val w = r.driveToWire(s)?.takeIf { DsyncSettingsValidator.accepts(r.name, it) } ?: return@forEach
+                val v = r.fromWire(w)
+                if (v == null) removeRaw(prefs, r.keyName) else putRaw(prefs, r.keyName, v)
+            }
+            driveDataKeys.forEach { (wire, itemId, keyName) ->
+                val on = SyncItemCatalog.item(itemId)?.let { itemOn(prefs, it) } ?: true
+                if (!on) return@forEach
+                val s = lanes.v[wire]
+                if (s == null) { if (replace) removeRaw(prefs, keyName); return@forEach }
+                if (wire == "radioModeByDefault") s.toBooleanStrictOrNull()?.let { prefs[KEY_RADIO_MODE_BY_DEFAULT] = it }
+                else prefs[stringPreferencesKey(keyName)] = s
+            }
+            // Read for one version so an older snapshot still restores the key;
+            // it is no longer written (it was cleartext). Re-encrypt at rest.
+            lanes.v["tmdbApiKey"]?.let { prefs[KEY_TMDB_API_KEY] = cipher.encrypt(it) ?: it }
+            if (SyncItemCatalog.item("groupOrder")?.let { itemOn(prefs, it) } != false) {
+                perPlaylist.forEach { (name, base, kind) ->
+                    val blob = lanes.v[name]
+                    if (blob == null) {
+                        if (replace) prefs.asMap().keys.filter { it.name.startsWith(base) && !it.name.contains("@prof:") }.forEach { prefs.remove(it) }
+                        return@forEach
                     }
-                    if (prefs[KEY_SYNC_RADIO_MODE_BY_DEFAULT] == true) {
-                        put("radioModeByDefault", KEY_RADIO_MODE_BY_DEFAULT)
+                    val obj = runCatching { Json.parseToJsonElement(blob) as? kotlinx.serialization.json.JsonObject }.getOrNull()
+                    obj?.forEach { (pid, e) ->
+                        val prim = e as? kotlinx.serialization.json.JsonPrimitive ?: return@forEach
+                        if (pid.isBlank() || !DsyncSettingsValidator.accepts(name, prim)) return@forEach
+                        if (kind == SKind.B) prim.content.toBooleanStrictOrNull()?.let { prefs[booleanPreferencesKey(base + pid)] = it }
+                        else if (prim.content.isBlank()) removeRaw(prefs, base + pid) else prefs[stringPreferencesKey(base + pid)] = prim.content
                     }
-                    put("guideGroupSelector", KEY_GUIDE_GROUP_SELECTOR)
-                    put("guideSidebarLayout", KEY_GUIDE_SIDEBAR_LAYOUT)
-                    put("phoneGroupSelector", KEY_PHONE_GROUP_SELECTOR)
-                    put("liveTvEdgeSwipeOpensSidebar", KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR)
-                    put("guideTuneInMini", KEY_GUIDE_TUNE_IN_MINI)
-                    put("guideProgramInfoButton", KEY_GUIDE_PROGRAM_INFO_BUTTON)
-                    put("playerShowChannelInfoCard", KEY_PLAYER_SHOW_CHANNEL_INFO_CARD)
-                    put("programInfoButtonGuide", KEY_PROGRAM_INFO_BUTTON_GUIDE)
-                    put("programInfoButtonList", KEY_PROGRAM_INFO_BUTTON_LIST)
-                    put("showRemoteHints", KEY_SHOW_REMOTE_HINTS)
-                    put("showEpgBadgesTv", KEY_SHOW_EPG_BADGES_TV)
-                    put("showEpgBadgesMobile", KEY_SHOW_EPG_BADGES_MOBILE)
-                    put("autoResumeLastChannel", KEY_AUTO_RESUME_LAST_CHANNEL)
-                    put("programPostersTmdbEnabled", KEY_PROGRAM_POSTERS_TMDB_ENABLED)
-                    put("tmdbApiKey", KEY_TMDB_API_KEY)
-                    put("enableCategoryColors", KEY_CATEGORY_MASTER_ENABLE)
-                    put("customCategoryColors.v1", KEY_CATEGORY_CUSTOM_JSON)
-                    put("hiddenGroups.v1", KEY_HIDDEN_GROUPS)
-                    put("groupOrder.v1", KEY_GROUP_ORDER)
-                    put("groupSortMode.v1", KEY_GROUP_SORT_MODE)
-                    put("useCustomAccent", KEY_USE_CUSTOM_ACCENT)
-                    put("customAccentHex", KEY_CUSTOM_ACCENT_HEX)
-                    put("skipBackSeconds", KEY_SKIP_BACK_SECONDS)
-                    put("skipForwardSeconds", KEY_SKIP_FORWARD_SECONDS)
-                    ProgramCategory.entries.forEach { bucket ->
-                        put(bucket.hexStorageKey, stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey)))
-                        put(bucket.enabledStorageKey, booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey)))
-                    }
-                }
-                syncedKeys.forEach { (name, key) -> if (name !in keys) prefs.remove(key) }
-                if ("defaultGroup" !in keys) {
-                    val dgPrefix = ProfileScope.keyName("default_group_token_")
-                    prefs.asMap().keys.filter { it.name.startsWith(dgPrefix) }.forEach { prefs.remove(it) }
-                }
-            }
-            keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME.s()] = it }
-            keys["textScale"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_SCALE.s()] = snapTextScale(it).toDouble() }
-            keys["subtextScale"]?.toFloatOrNull()?.let { prefs[KEY_SUBTEXT_SCALE.s()] = snapTextScale(it).toDouble() }
-            keys["textContrast"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_CONTRAST.s()] = snapTextContrast(it).toDouble() }
-            keys["appearanceMode"]?.let { prefs[KEY_APPEARANCE_MODE.s()] = it }
-            keys["appearanceTrueBlack"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPEARANCE_TRUE_BLACK.s()] = it }
-            keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB.s()] = it }
-            keys["timeFormat"]?.let { prefs[KEY_TIME_FORMAT.s()] = it }
-            // defaultLiveTVView is per-device now (see snapshotSyncablePreferences);
-            // ignore any legacy value carried in an older Drive snapshot so it can
-            // never re-clobber this device's form-factor default.
-            keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN.s()] = it }
-            keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP.s()] = it }
-            if (prefs[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
-                keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
-            }
-            if (prefs[KEY_SYNC_RADIO_MODE_BY_DEFAULT] == true) {
-                keys["radioModeByDefault"]?.toBooleanStrictOrNull()?.let { prefs[KEY_RADIO_MODE_BY_DEFAULT] = it }
-            }
-            keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR.s()] = it }
-            keys["guideSidebarLayout"]?.let { prefs[KEY_GUIDE_SIDEBAR_LAYOUT.s()] = it }
-            keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR.s()] = it }
-            keys["liveTvEdgeSwipeOpensSidebar"]?.toBooleanStrictOrNull()
-                ?.let { prefs[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()] = it }
-            keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI.s()] = it }
-            keys["guideProgramInfoButton"]?.takeIf { it in GuideProgramInfoButton.VALUES }
-                ?.let { prefs[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] = it }
-            keys["playerShowChannelInfoCard"]?.toBooleanStrictOrNull()
-                ?.let { prefs[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()] = it }
-            keys["programInfoButtonGuide"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()] = it }
-            keys["programInfoButtonList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_INFO_BUTTON_LIST.s()] = it }
-            keys["showRemoteHints"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_REMOTE_HINTS.s()] = it }
-            keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV.s()] = it }
-            keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE.s()] = it }
-            keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL.s()] = it }
-            keys["programPostersTmdbEnabled"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()] = it }
-            // Re-encrypt the incoming cleartext key for storage at rest.
-            keys["tmdbApiKey"]?.let { prefs[KEY_TMDB_API_KEY] = cipher.encrypt(it) ?: it }
-            keys["enableCategoryColors"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CATEGORY_MASTER_ENABLE.s()] = it }
-            keys["customCategoryColors.v1"]?.let { prefs[KEY_CATEGORY_CUSTOM_JSON.s()] = it }
-            // Audit task #52: receive the broadened keys.
-            keys["hiddenGroups.v1"]?.let { prefs[KEY_HIDDEN_GROUPS] = it }
-            keys["groupOrder.v1"]?.let { prefs[KEY_GROUP_ORDER] = it }
-            keys["groupSortMode.v1"]?.let { prefs[KEY_GROUP_SORT_MODE] = it }
-            keys["useCustomAccent"]?.toBooleanStrictOrNull()?.let { prefs[KEY_USE_CUSTOM_ACCENT.s()] = it }
-            keys["customAccentHex"]?.let { prefs[KEY_CUSTOM_ACCENT_HEX.s()] = it }
-            keys["skipBackSeconds"]?.toIntOrNull()
-                ?.takeIf { it in com.aeriotv.android.core.ui.SkipIntervals.CHOICES }
-                ?.let { prefs[KEY_SKIP_BACK_SECONDS.s()] = it }
-            keys["skipForwardSeconds"]?.toIntOrNull()
-                ?.takeIf { it in com.aeriotv.android.core.ui.SkipIntervals.CHOICES }
-                ?.let { prefs[KEY_SKIP_FORWARD_SECONDS.s()] = it }
-            keys["defaultGroup"]?.let { blob ->
-                val obj = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(blob) as? kotlinx.serialization.json.JsonObject }.getOrNull()
-                obj?.forEach { (pid, e) ->
-                    val t = (e as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: return@forEach
-                    if (pid.isBlank() || t.length > 200) return@forEach
-                    if (t.isBlank()) prefs.remove(keyDefaultGroupToken(pid)) else prefs[keyDefaultGroupToken(pid)] = t
-                }
-            }
-            ProgramCategory.entries.forEach { bucket ->
-                keys[bucket.hexStorageKey]?.let { prefs[stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey))] = it }
-                keys[bucket.enabledStorageKey]?.toBooleanStrictOrNull()?.let {
-                    prefs[booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey))] = it
                 }
             }
         }
@@ -2014,48 +2198,29 @@ class AppPreferences @Inject constructor(
     suspend fun syncRemoteControlMapOnce(): Boolean = syncRemoteControlMap.first()
     suspend fun syncRadioModeByDefaultOnce(): Boolean = syncRadioModeByDefault.first()
 
-    /** Schema 4.9 names this platform owns (Android column of the allowlist). */
-    private fun dsyncSettingsOf(p: Preferences, playlistId: String?): Map<String, kotlinx.serialization.json.JsonPrimitive> {
+    /** Schema 4.9 names this platform owns (Android column of the allowlist), in [token]'s scope. */
+    private fun dsyncSettingsOf(p: Preferences, playlistId: String?, token: String): Map<String, kotlinx.serialization.json.JsonPrimitive> {
         val out = LinkedHashMap<String, kotlinx.serialization.json.JsonPrimitive>()
-        fun put(name: String, v: Any?) {
-            when (v) {
-                is String -> out[name] = kotlinx.serialization.json.JsonPrimitive(v)
-                is Boolean -> out[name] = kotlinx.serialization.json.JsonPrimitive(v)
-                is Number -> out[name] = kotlinx.serialization.json.JsonPrimitive(v)
+        val m = p.asMap().mapKeys { it.key.name }
+        registry.forEach { r -> r.toWire(m[ProfileScope.keyName(r.keyName, token)])?.let { out[r.name] = it } }
+        // GH #81 Default Group (and the last-used group and the Recently
+        // Watched group flag) for the session's playlist; "" = none. Dsync
+        // data is already per profile and per playlist, so values go as is.
+        if (!playlistId.isNullOrBlank()) perPlaylist.forEach { (name, base, kind) ->
+            val raw = m[ProfileScope.keyName(base + playlistId, token)]
+            when (kind) {
+                SKind.B -> (raw as? Boolean)?.let { out[name] = kotlinx.serialization.json.JsonPrimitive(it) }
+                else -> out[name] = kotlinx.serialization.json.JsonPrimitive(raw as? String ?: "")
             }
         }
-        put("selectedTheme", p[KEY_SELECTED_THEME.s()])
-        put("appearanceMode", p[KEY_APPEARANCE_MODE.s()])
-        put("trueBlack", p[KEY_APPEARANCE_TRUE_BLACK.s()])
-        put("defaultTab", p[KEY_DEFAULT_TAB.s()])
-        put("timeFormat", p[KEY_TIME_FORMAT.s()])
-        put("textScale", p[KEY_TEXT_SCALE.s()])
-        put("subtextScale", p[KEY_SUBTEXT_SCALE.s()])
-        put("textContrast", p[KEY_TEXT_CONTRAST.s()])
-        put("guideProgramInfoButton", p[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()])
-        put("programInfoButtonGuide", p[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()])
-        put("programInfoButtonList", p[KEY_PROGRAM_INFO_BUTTON_LIST.s()])
-        put("showEpgBadgesTv", p[KEY_SHOW_EPG_BADGES_TV.s()])
-        put("showRemoteHints", p[KEY_SHOW_REMOTE_HINTS.s()])
-        put("guideGroupSelector", p[KEY_GUIDE_GROUP_SELECTOR.s()])
-        put("guideSidebarLayout", p[KEY_GUIDE_SIDEBAR_LAYOUT.s()])
-        put("guideTuneInMini", p[KEY_GUIDE_TUNE_IN_MINI.s()])
-        put("playerInfoCard.showOnChannelChange", p[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()])
-        put("phoneGroupSelector", p[KEY_PHONE_GROUP_SELECTOR.s()])
-        put("liveTvEdgeSwipeOpensSidebar", p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()])
-        put("skipLoadingScreen", p[KEY_SKIP_LOADING_SCREEN.s()])
-        put("appleTVChannelFlip", p[KEY_APPLE_TV_CHANNEL_FLIP.s()])
-        // GH #81 Default Group for the session's playlist; "" = none. Dsync data
-        // is already per profile and per playlist, so the token goes as is.
-        if (!playlistId.isNullOrBlank()) put("defaultGroup", p[keyDefaultGroupToken(playlistId)] ?: "")
         return out
     }
 
-    /** Current values of [DSYNC_SETTINGS_NAMES] in the active profile's scope. */
+    /** Current values of the owned settings names in the active profile's scope. */
     fun dsyncSettings(playlistId: String?): Flow<Map<String, kotlinx.serialization.json.JsonPrimitive>> =
-        scopedData.map { dsyncSettingsOf(it, playlistId) }
-    suspend fun dsyncSettingsOnce(playlistId: String?): Map<String, kotlinx.serialization.json.JsonPrimitive> =
-        dsyncSettingsOf(store.data.first(), playlistId)
+        scopedData.map { dsyncSettingsOf(it, playlistId, ProfileScope.current()) }
+    suspend fun dsyncSettingsOnce(playlistId: String?, token: String = ProfileScope.current()): Map<String, kotlinx.serialization.json.JsonPrimitive> =
+        dsyncSettingsOf(store.data.first(), playlistId, token)
 
     /** Every playlist's Default Group token in the active scope (Dsync change detection between sessions). */
     val defaultGroupTokensAll: Flow<Map<String, String>> = scopedData.map { p ->
@@ -2063,39 +2228,30 @@ class AppPreferences @Inject constructor(
         p.asMap().entries.filter { it.key.name.startsWith(marker) }.associate { it.key.name to (it.value as? String ?: "") }
     }
 
-    /** Apply a pulled `settings.v`. Names this platform does not own, and values of the wrong type, are ignored. */
-    suspend fun applyDsyncSettings(v: Map<String, kotlinx.serialization.json.JsonPrimitive>, playlistId: String?) {
-        fun str(n: String) = v[n]?.takeIf { it.isString }?.content
-        fun bool(n: String) = v[n]?.takeIf { !it.isString }?.content?.toBooleanStrictOrNull()
-            ?: v[n]?.takeIf { it.isString }?.content?.toBooleanStrictOrNull()
-        fun dbl(n: String) = v[n]?.takeIf { !it.isString }?.content?.toDoubleOrNull()
-        val guideSel = KEY_GUIDE_GROUP_SELECTOR.s()
-        val phoneSel = KEY_PHONE_GROUP_SELECTOR.s()
+    /**
+     * Apply pulled settings (already lane-picked and validated) to [token]'s
+     * scope only, so a pull for one profile never touches another. Names this
+     * platform does not own are ignored.
+     */
+    suspend fun applyDsyncSettings(
+        v: Map<String, kotlinx.serialization.json.JsonPrimitive>,
+        playlistId: String?,
+        token: String = ProfileScope.current(),
+    ) {
         store.edit { p ->
-            str("selectedTheme")?.takeIf { t -> AppTheme.entries.any { it.name == t } }?.let { p[KEY_SELECTED_THEME.s()] = it }
-            str("appearanceMode")?.let { p[KEY_APPEARANCE_MODE.s()] = it }
-            bool("trueBlack")?.let { p[KEY_APPEARANCE_TRUE_BLACK.s()] = it }
-            str("defaultTab")?.let { p[KEY_DEFAULT_TAB.s()] = it }
-            str("timeFormat")?.let { p[KEY_TIME_FORMAT.s()] = it }
-            dbl("textScale")?.let { p[KEY_TEXT_SCALE.s()] = snapTextScale(it.toFloat()).toDouble() }
-            dbl("subtextScale")?.let { p[KEY_SUBTEXT_SCALE.s()] = snapTextScale(it.toFloat()).toDouble() }
-            dbl("textContrast")?.let { p[KEY_TEXT_CONTRAST.s()] = snapTextContrast(it.toFloat()).toDouble() }
-            str("guideProgramInfoButton")?.takeIf { it in GuideProgramInfoButton.VALUES }?.let { p[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] = it }
-            bool("programInfoButtonGuide")?.let { p[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()] = it }
-            bool("programInfoButtonList")?.let { p[KEY_PROGRAM_INFO_BUTTON_LIST.s()] = it }
-            bool("showEpgBadgesTv")?.let { p[KEY_SHOW_EPG_BADGES_TV.s()] = it }
-            bool("showRemoteHints")?.let { p[KEY_SHOW_REMOTE_HINTS.s()] = it }
-            str("guideGroupSelector")?.let { p[guideSel] = it }
-            str("guideSidebarLayout")?.let { p[KEY_GUIDE_SIDEBAR_LAYOUT.s()] = it }
-            bool("guideTuneInMini")?.let { p[KEY_GUIDE_TUNE_IN_MINI.s()] = it }
-            bool("playerInfoCard.showOnChannelChange")?.let { p[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()] = it }
-            str("phoneGroupSelector")?.let { p[phoneSel] = it }
-            bool("liveTvEdgeSwipeOpensSidebar")?.let { p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()] = it }
-            bool("skipLoadingScreen")?.let { p[KEY_SKIP_LOADING_SCREEN.s()] = it }
-            bool("appleTVChannelFlip")?.let { p[KEY_APPLE_TV_CHANNEL_FLIP.s()] = it }
+            registry.forEach { r ->
+                val w = v[r.name] ?: return@forEach
+                if (r.name == "selectedTheme" && AppTheme.entries.none { it.name == w.content }) return@forEach
+                val key = ProfileScope.keyName(r.keyName, token)
+                val value = r.fromWire(w)
+                if (value == null) removeRaw(p, key) else putRaw(p, key, value)
+            }
             // An unknown group is stored as is; the launch path falls back when it is not in knownGroups.
-            if (!playlistId.isNullOrBlank()) str("defaultGroup")?.let { t ->
-                if (t.isBlank()) p.remove(keyDefaultGroupToken(playlistId)) else p[keyDefaultGroupToken(playlistId)] = t
+            if (!playlistId.isNullOrBlank()) perPlaylist.forEach { (name, base, kind) ->
+                val w = v[name] ?: return@forEach
+                val key = ProfileScope.keyName(base + playlistId, token)
+                if (kind == SKind.B) w.content.toBooleanStrictOrNull()?.let { p[booleanPreferencesKey(key)] = it }
+                else if (w.content.isBlank()) removeRaw(p, key) else p[stringPreferencesKey(key)] = w.content
             }
         }
     }
@@ -2715,6 +2871,8 @@ class AppPreferences @Inject constructor(
         val KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES = booleanPreferencesKey("multiview_picker_show_subtitles")
         val KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS = booleanPreferencesKey("multiview_picker_show_descriptions")
         val KEY_CHANNEL_COLLECTIONS = stringPreferencesKey("channel_collections")
+        /** Last pulled Drive preferences lanes, carried forward for values this device does not write. Device-local. */
+        val KEY_DRIVE_PREFS_LANES = stringPreferencesKey("drive_prefs_lanes_cache")
         /** Profile ids already seeded with the per-profile settings (2026-10-27 migration). */
         val KEY_PROFILE_SETTINGS_SEEDED = androidx.datastore.preferences.core.stringSetPreferencesKey("profile_settings_seeded_v2")
         val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")

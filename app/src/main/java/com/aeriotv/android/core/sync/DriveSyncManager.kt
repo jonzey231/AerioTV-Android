@@ -377,7 +377,9 @@ class DriveSyncManager @Inject constructor(
                     removedAt = e.removedAt,
                 )
             },
-            hidden = hiddenTitlesStore.allOnce().map { e ->
+            // Hidden Titles off in Sync Categories: send none (readers treat an
+            // empty list as "nothing to merge", so other devices keep theirs).
+            hidden = if (!appPreferences.syncItemOnOnce("hiddenTitles")) emptyList() else hiddenTitlesStore.allOnce().map { e ->
                 HiddenTitleSnapshotEntry(
                     vodId = e.key.substringAfter(':'),
                     vodType = if (e.key.startsWith("s:")) "series" else "movie",
@@ -408,7 +410,7 @@ class DriveSyncManager @Inject constructor(
         )
         // Absent in payloads written before hidden titles shipped, in which
         // case this is an empty list and the local rows are left alone.
-        hiddenTitlesStore.mergeRemote(
+        if (appPreferences.syncItemOnOnce("hiddenTitles")) hiddenTitlesStore.mergeRemote(
             snapshot.hidden.map { r ->
                 com.aeriotv.android.core.preferences.HiddenTitlesStore.Entry(
                     key = (if (r.vodType == "series") "s:" else "m:") + r.vodId,
@@ -481,8 +483,8 @@ class DriveSyncManager @Inject constructor(
         // Synced subset, theme, default tab, palette overrides, UI toggles.
         // Avoids syncing network/device-local settings (buffer size, custom
         // DVR folder, network timeout) which are sensible per-device.
-        val keys = appPreferences.snapshotSyncablePreferences()
-        return PreferencesSnapshot(envelope = envelope(), keys = keys)
+        val lanes = appPreferences.snapshotSyncablePreferences()
+        return PreferencesSnapshot(envelope = envelope(), keys = lanes.v, tv = lanes.tv, mobile = lanes.mobile)
     }
 
     private suspend fun buildCredentialsSnapshot(): CredentialsSnapshot {
@@ -677,7 +679,10 @@ class DriveSyncManager @Inject constructor(
     }
 
     private suspend fun applyPreferencesSnapshot(snapshot: PreferencesSnapshot, replace: Boolean = false) {
-        appPreferences.applySyncedPreferences(snapshot.keys, replace)
+        appPreferences.applySyncedPreferences(
+            com.aeriotv.android.core.preferences.AppPreferences.DriveLanes(snapshot.keys, snapshot.tv, snapshot.mobile),
+            replace,
+        )
     }
 
     private suspend fun applyCredentialsSnapshot(snapshot: CredentialsSnapshot) {
