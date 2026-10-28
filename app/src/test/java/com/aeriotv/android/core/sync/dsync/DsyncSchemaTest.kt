@@ -122,13 +122,13 @@ class DsyncSchemaTest {
         val salt = "b81e" + "0".repeat(28)
         val hash = DsyncPinHash.hash(salt, "UULR")
         val rows = listOf(
-            ProfileRow(1, "admin", "Logan", "none", "", "", role = "admin", avatar = com.aeriotv.android.core.profiles.AvatarSpec()),
-            ProfileRow(7, "test1", "Kids", "directions", hash, salt, role = "child", avatar = com.aeriotv.android.core.profiles.AvatarSpec("paw", "orange")),
+            ProfileRow(1, "admin", "Logan", "none", "", "", role = "admin", avatar = com.aeriotv.android.core.profiles.AvatarSpec(), order = 0),
+            ProfileRow(7, "test1", "Kids", "directions", hash, salt, role = "child", avatar = com.aeriotv.android.core.profiles.AvatarSpec("paw", "orange"), order = 1),
         )
         val dp = roundTrip(DsyncKey.Profiles, DsyncPayloads.encodeProfiles(null, rows))
         assertEquals(rows, DsyncPayloads.decodeProfiles(dp))
-        // Position 8: {} for the default, {"icon","color"} otherwise.
-        assertTrue(dp.toString().contains(""""admin",0,{}]"""))
+        // Position 8: {} for the default, {"icon","color"} otherwise; position 9 is order.
+        assertTrue(dp.toString().contains(""""admin",0,{},0]"""))
         assertTrue(dp.toString().contains("""{"icon":"paw","color":"orange"}"""))
         // An older writer without the role position: reader keeps its own ("").
         val old = obj("""{"rows":[[3,"x","X","none","",""]]}""")
@@ -206,11 +206,11 @@ class DsyncSchemaTest {
         assertEquals(40, (DsyncPayloads.progressRowJson(p)[9] as JsonPrimitive).content.length)
     }
 
-    private fun bigProgress(n: Int, finishedEvery: Int = 3): JsonObject =
+    private fun bigProgress(n: Int, finishedEvery: Int = 3, tailLen: Int = 40): JsonObject =
         DsyncPayloads.encodeProgress(
             null,
             (1..n).map { i ->
-                ProgressRow(1_000_000 + i, "e", 100L + i, 2640, now - i, i % finishedEvery == 0, 2_000_000 + i, 1, i % 20, "T".repeat(40), Tail(listOf(JsonPrimitive("x".repeat(40)))))
+                ProgressRow(1_000_000 + i, "e", 100L + i, 2640, now - i, i % finishedEvery == 0, 2_000_000 + i, 1, i % 20, "T".repeat(40), Tail(listOf(JsonPrimitive("x".repeat(tailLen)))))
             },
             now,
         )
@@ -228,7 +228,8 @@ class DsyncSchemaTest {
             labels,
         )
         // Step 1 alone is enough: finished rows go, unfinished stay.
-        val data = bigProgress(300)
+        // 128 KiB key cap (Dispatcharr c1920131): long tails push 300 rows past it.
+        val data = bigProgress(300, tailLen = 500)
         assertTrue(DsyncEnvelopeCodec.byteSize(wrap(DsyncKey.Progress, data)) > DsyncLimits.KEY_BYTES)
         val fitted = DsyncTrim.fitKey(DsyncKey.Progress, data, now) { wrap(DsyncKey.Progress, it) }!!
         val rows = DsyncPayloads.decodeProgress(fitted)!!
@@ -239,11 +240,11 @@ class DsyncSchemaTest {
 
     @Test fun keyGuard32KiBRunsStepsInOrderThenGivesUp() {
         // No finished rows: step 2 (down to 200) must run.
-        val data = bigProgress(300, finishedEvery = Int.MAX_VALUE)
+        val data = bigProgress(300, finishedEvery = Int.MAX_VALUE, tailLen = 500)
         val fitted = DsyncTrim.fitKey(DsyncKey.Progress, data, now) { wrap(DsyncKey.Progress, it) }!!
         assertTrue(DsyncPayloads.decodeProgress(fitted)!!.size <= 200)
         // Favorites are never trimmed: a value that cannot fit returns null.
-        val huge = JsonObject(mapOf("ids" to JsonArray((1..9000).map { JsonPrimitive(1_000_000 + it) })))
+        val huge = JsonObject(mapOf("ids" to JsonArray((1..20000).map { JsonPrimitive(1_000_000 + it) })))
         assertNull(DsyncTrim.fitKey(DsyncKey.Favorites, huge, now) { wrap(DsyncKey.Favorites, it) })
         // Under the limit: untouched.
         val small = DsyncPayloads.encodeFavorites(null, listOf(1, 2))
@@ -282,8 +283,9 @@ class DsyncSchemaTest {
     @Test fun profileAvatarWire() {
         // Absent (older writer) = null, the reader keeps its own avatar.
         assertNull(DsyncPayloads.decodeProfiles(obj("""{"rows":[[3,"x","X","none","","","user",5]]}"""))!![0].avatar)
-        // Unknown ids fall back per field; a trailing position after the avatar is kept.
-        val r = DsyncPayloads.decodeProfiles(obj("""{"rows":[[3,"x","X","none","","","user",5,{"icon":"dragon","color":"blue"},"next"]]}"""))!![0]
+        // Unknown ids fall back per field; position 9 is order, a trailing position after it is kept.
+        assertEquals(2, DsyncPayloads.decodeProfiles(obj("""{"rows":[[3,"x","X","none","","","user",5,{},2]]}"""))!![0].order)
+        val r = DsyncPayloads.decodeProfiles(obj("""{"rows":[[3,"x","X","none","","","user",5,{"icon":"dragon","color":"blue"},2,"next"]]}"""))!![0]
         assertEquals(com.aeriotv.android.core.profiles.AvatarSpec("initial", "blue"), r.avatar)
         assertEquals(1, r.tail.extra.size)
         assertEquals("""{"color":"blue"}""", DsyncPayloads.encodeAvatar(r.avatar).toString())

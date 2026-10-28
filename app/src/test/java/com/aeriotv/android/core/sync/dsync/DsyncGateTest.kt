@@ -51,9 +51,9 @@ class DsyncGateTest {
         // A row from an older writer without updatedAt (0) never replaces a stamped local row.
         assertFalse(DsyncGate.profileRowWins(localUpdatedAt = 2_000, remote = older.copy(updatedAt = 0)))
         assertTrue(DsyncGate.profileRowWins(localUpdatedAt = 2_000, remote = newer))
-        // updatedAt round-trips at position 7.
+        // updatedAt round-trips at position 7; an absent order (-1) is written as 0.
         val d = DsyncPayloads.encodeProfiles(null, listOf(newer))
-        assertEquals(listOf(newer.copy(avatar = com.aeriotv.android.core.profiles.AvatarSpec())), DsyncPayloads.decodeProfiles(d))
+        assertEquals(listOf(newer.copy(avatar = com.aeriotv.android.core.profiles.AvatarSpec(), order = 0)), DsyncPayloads.decodeProfiles(d))
     }
 }
 
