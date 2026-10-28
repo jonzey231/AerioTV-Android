@@ -298,7 +298,7 @@ class PlaylistRepository @Inject constructor(
          *  doesn't carry VOD so the field is ignored downstream for it. */
         val vodEnabled: Boolean = true,
         /** Days of already-aired EPG kept for catch-up browsing (task #135). */
-        val epgRetentionDays: Int = 7,
+        val epgRetentionDays: Int = com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL,
         /**
          * Per-playlist Dispatcharr User-Agent (Apple `customUserAgent`).
          * Blank = the app default. Null means "leave whatever the row has",

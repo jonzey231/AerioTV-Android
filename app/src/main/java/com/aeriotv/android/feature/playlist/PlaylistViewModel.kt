@@ -105,7 +105,7 @@ class PlaylistViewModel @Inject constructor(
         val dvrDestinationServer: Boolean = true,
         /** Catch-up guide-history retention draft for the add flow (task
          *  #135); threaded into SaveRequest.epgRetentionDays on submit. */
-        val epgRetentionDays: Int = 7,
+        val epgRetentionDays: Int = com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL,
         val playlist: PlaylistEntity? = null,
         /** Id of the row THIS add-draft created (null until its first successful
          *  Test Connection). Used as the loadAndPersist existingId so a re-test
@@ -405,7 +405,7 @@ class PlaylistViewModel @Inject constructor(
                 username = "",
                 password = "",
                 vodEnabled = true,
-                epgRetentionDays = 7,
+                epgRetentionDays = com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL,
                 draftPlaylistId = null,
                 availableProfiles = emptyList(),
                 isLoading = false,
@@ -2450,7 +2450,7 @@ class PlaylistViewModel @Inject constructor(
         password: String?,
         dispatcharrProfileId: Int?,
         vodEnabled: Boolean = true,
-        epgRetentionDays: Int = 7,
+        epgRetentionDays: Int = com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL,
         /**
          * Overrides the stored source type. Only Edit Playlist's Dispatcharr
          * Authentication toggle passes it: flipping between Username &

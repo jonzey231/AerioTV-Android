@@ -161,7 +161,7 @@ data class PlaylistEntity(
      * `DEFAULT 7` (same schema-validation rule as the columns above).
      */
     @ColumnInfo(defaultValue = "7")
-    val epgRetentionDays: Int = 7,
+    val epgRetentionDays: Int = GUIDE_DAYS_ALL,
 
     /**
      * Task #49 (iOS ServerConnection.dispatcharrAuthMode parity): which auth
