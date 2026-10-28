@@ -2261,6 +2261,8 @@ class PlaylistRepository @Inject constructor(
      *
      * [liveProgrammeCount] is the base grid's size, recorded on the live
      * window's coverage rows so they read as non-empty bookkeeping.
+     * Like the source-change sweep, missing-day requests wait while the app
+     * is backgrounded or a tune is waiting for its first frame.
      */
     private fun extendGridWindowInBackground(
         playlist: PlaylistEntity,
@@ -2339,6 +2341,7 @@ class PlaylistRepository @Inject constructor(
                         if (isCovered(chunkStart)) {
                             cached++
                         } else {
+                            awaitSweepWindow()
                             val n = fetchAndRecordChunk(playlist, base, chunkStart, cursor)
                             if (n == null) { stopped = true; break }
                             fetched++
@@ -2356,6 +2359,7 @@ class PlaylistRepository @Inject constructor(
                         if (isCovered(cursor)) {
                             cached++
                         } else {
+                            awaitSweepWindow()
                             val n = fetchAndRecordChunk(playlist, base, cursor, chunkEnd)
                             if (n == null) { stopped = true; break }
                             fetched++
@@ -2400,6 +2404,7 @@ class PlaylistRepository @Inject constructor(
                 var stopped = false
                 for ((start, end) in chunks) {
                     if (isCovered(start)) { cached++; continue }
+                    awaitSweepWindow()
                     val n = fetchAndRecordChunk(playlist, base, start, end)
                     if (n == null) { stopped = true; break }
                     fetched++
