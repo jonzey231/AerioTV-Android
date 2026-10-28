@@ -334,6 +334,12 @@ fun AerioTVNavHost(
             navHostContext.applicationContext, NavEntryPoint::class.java,
         ).castReceiver()
     }
+    // Set up a TV opened from a scanned aeriotv://setup link (docs/DeviceSetupHandoff.md).
+    var setupLink by remember { mutableStateOf<String?>(null) }
+    val dlIsTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    setupLink?.let { link ->
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = null, link = link, onDismiss = { setupLink = null })
+    }
     if (dlGraphEntry != null) {
         val dlVm: PlaylistViewModel = hiltViewModel(dlGraphEntry)
         val dlState by dlVm.state.collectAsStateWithLifecycle()
@@ -403,6 +409,11 @@ fun AerioTVNavHost(
                         runCatching { navController.popBackStack(Routes.MAIN, false) }
                     }
                     dlVm.requestSettingsPage(target.page)
+                    onDeepLinkConsumed()
+                }
+                is DeepLinkTarget.DeviceSetup -> {
+                    // A phone camera scanned a TV's setup QR code. TVs ignore it.
+                    if (!dlIsTv) setupLink = target.link
                     onDeepLinkConsumed()
                 }
                 is DeepLinkTarget.OpenMultiview -> {
@@ -968,6 +979,8 @@ fun AerioTVNavHost(
                         },
                     )
                 } else if (stepPid != null) {
+                    var setUpTvOpen by remember { mutableStateOf(false) }
+                    val onboardingIsTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
                     com.aeriotv.android.feature.onboarding.AddProfilesStepScreen(
                         playlistId = stepPid,
                         onDone = {
@@ -975,7 +988,14 @@ fun AerioTVNavHost(
                             profileStepFor = null
                             toMain()
                         },
+                        onSetUpTv = if (onboardingIsTv) null else ({ setUpTvOpen = true }),
                     )
+                    if (setUpTvOpen) {
+                        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(
+                            playlistId = stepPid,
+                            onDismiss = { setUpTvOpen = false },
+                        )
+                    }
                 } else if (syncStepFor != null) {
                     com.aeriotv.android.feature.onboarding.DispatcharrSyncStepScreen(
                         autoEnable = vm.enableDispatcharrSyncAfterConnect,

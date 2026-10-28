@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import com.aeriotv.android.ui.scale.AlertDialog
@@ -143,8 +144,18 @@ fun PlaylistsScreen(
         .collectAsStateWithLifecycle(initialValue = state.playlist?.id)
     val activeId = activeIdLive
     val isTv = rememberIsTvDevice()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
+    // Set up a TV (docs/DeviceSetupHandoff.md): phone and tablet only, Admin
+    // or default profile only (the payload carries other profiles' sign-ins).
+    var showSetUpTv by remember { mutableStateOf(false) }
+    val setupPm = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext, SetupEntryPoint::class.java,
+        ).profileManager()
+    }
+    val canSetUpTv = !isTv && activeId != null && setupPm.canSetUpTv(activeId)
     // TV-only long-press menu target (Delete / Cancel).
     var menuFor by remember { mutableStateOf<PlaylistEntity?>(null) }
     val tvGuard = rememberTvMenuGuard()
@@ -224,6 +235,30 @@ fun PlaylistsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (canSetUpTv) {
+                item(key = "set-up-tv") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                            .clickable { showSetUpTv = true }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Set up a TV", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Send the active playlist to AerioTV on a TV. Nothing to type on the TV.",
+                                style = MaterialTheme.typography.bodySmall.subtext(),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
             items(playlists, key = { it.id }) { pl ->
                     SwipeablePlaylistRow(
                         playlist = pl,
@@ -266,6 +301,10 @@ fun PlaylistsScreen(
             )
         }
         }
+    }
+
+    if (showSetUpTv) {
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = activeId, onDismiss = { showSetUpTv = false })
     }
 
     pendingDelete?.let { pl ->
@@ -444,3 +483,9 @@ private fun SwipeablePlaylistRow(
     }
 }
 
+
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+internal interface SetupEntryPoint {
+    fun profileManager(): com.aeriotv.android.core.profiles.ProfileManager
+}

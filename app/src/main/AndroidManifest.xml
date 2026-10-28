@@ -104,6 +104,8 @@
                 <data android:host="vod" />
                 <!-- Audit #47 Watch Next: resume VOD playback directly. -->
                 <data android:host="vodplay" />
+                <!-- Set up a TV: a TV's setup QR code scanned with the system camera (docs/DeviceSetupHandoff.md). -->
+                <data android:host="setup" />
                 <!--
                     Screenshot automation: aeriotv://settings/<page> opens the
                     Settings tab directly on one page (root, playlists, livetv,

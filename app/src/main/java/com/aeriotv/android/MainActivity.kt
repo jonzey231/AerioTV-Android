@@ -640,6 +640,10 @@ class MainActivity : ComponentActivity() {
         val data = intent?.data ?: return
         if (!data.scheme.equals("aeriotv", ignoreCase = true)) return
         val host = data.host?.lowercase() ?: return
+        if (host == "setup") {
+            deepLinkTarget.value = DeepLinkTarget.DeviceSetup(data.toString())
+            return
+        }
         val path = data.pathSegments?.firstOrNull()?.takeIf { it.isNotBlank() }
             // Screenshot deep link: a bare aeriotv://settings means the root.
             ?: (if (host == "settings") "root" else return)
