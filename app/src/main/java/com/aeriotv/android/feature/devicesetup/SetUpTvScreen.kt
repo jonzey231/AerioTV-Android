@@ -53,7 +53,6 @@ import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.profiles.ProfileManager
-import com.aeriotv.android.core.setup.SetupCrypto
 import com.aeriotv.android.core.setup.SetupDiscovery
 import com.aeriotv.android.core.setup.SetupProtocol
 import com.aeriotv.android.core.setup.SetupSender
@@ -105,7 +104,7 @@ class SetUpTvViewModel @Inject constructor(
             playlistId = id
             _source.value = id?.let { sender.source(it) }
             link?.let(SetupProtocol::parseLink)?.let { l ->
-                val t = SetupTarget(l.name.ifBlank { "TV" }, l.ip, l.port, l.pk, codeHash = SetupCrypto.codeHash(l.code), code = l.code)
+                val t = SetupTarget(l.name.ifBlank { "TV" }, l.ip, l.port, l.pk, code = l.code)
                 _step.value = Step.Choose(t, l.code)
             }
         }
@@ -124,11 +123,6 @@ class SetUpTvViewModel @Inject constructor(
     fun submitCode(t: SetupTarget, code: String) {
         val c = code.filter(Char::isDigit)
         if (c.length != 6) { _step.value = Step.Code(t, "Enter the 6-digit code shown on the TV."); return }
-        // The TXT hash lets the phone catch a typo without spending one of the TV's attempts.
-        if (t.codeHash != null && !SetupCrypto.constantTimeEquals(SetupCrypto.codeHash(c), t.codeHash)) {
-            _step.value = Step.Code(t, "That code does not match this TV. Check the code on the TV.")
-            return
-        }
         _step.value = Step.Choose(t, c)
     }
 
@@ -225,7 +219,7 @@ private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit) {
             Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(t.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
-                Text("Waiting for setup", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Check that the TV shows ${t.fingerprint}", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }

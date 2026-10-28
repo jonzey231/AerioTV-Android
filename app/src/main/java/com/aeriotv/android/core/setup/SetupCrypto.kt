@@ -131,10 +131,19 @@ object SetupCrypto {
     fun newCode(random: SecureRandom = SecureRandom()): String =
         random.nextInt(1_000_000).toString().padStart(6, '0')
 
-    /** TXT `code`: first 8 hex of SHA-256 over the 6 ASCII digits. */
-    fun codeHash(code: String): String =
-        MessageDigest.getInstance("SHA-256").digest(code.toByteArray(Charsets.US_ASCII))
-            .joinToString("") { "%02x".format(it) }.take(8)
+    /** 32 symbols with no 0/O or 1/I lookalikes. */
+    private const val FINGERPRINT_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+    /**
+     * 4-character key fingerprint the TV shows next to its code and the phone
+     * shows in its TV list: base32 of the first 20 bits of SHA-256(pk). The
+     * user compares the two to catch a LAN impostor advertising its own key.
+     */
+    fun keyFingerprint(pk: ByteArray): String {
+        val d = MessageDigest.getInstance("SHA-256").digest(pk)
+        val bits = ((d[0].toInt() and 0xff) shl 12) or ((d[1].toInt() and 0xff) shl 4) or ((d[2].toInt() and 0xff) ushr 4)
+        return (0 until 4).map { FINGERPRINT_ALPHABET[(bits ushr (15 - 5 * it)) and 0x1f] }.joinToString("")
+    }
 
     /**
      * AES-256 key both ends derive: HKDF-SHA256 over X25519(own priv, peer

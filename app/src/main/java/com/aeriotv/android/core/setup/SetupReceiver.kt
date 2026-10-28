@@ -38,7 +38,7 @@ class SetupReceiver(
     /** Called on the server's coroutine with a verified payload. */
     private val onPayload: (SetupProtocol.Payload) -> Unit,
 ) {
-    data class Offer(val code: String, val link: String, val deviceName: String, val ip: String, val port: Int)
+    data class Offer(val code: String, val link: String, val deviceName: String, val ip: String, val port: Int, val fingerprint: String)
 
     private val _offer = MutableStateFlow<Offer?>(null)
     val offer: StateFlow<Offer?> = _offer.asStateFlow()
@@ -92,7 +92,7 @@ class SetupReceiver(
     private fun publish() {
         val lan = ip ?: return
         val name = deviceName()
-        _offer.value = Offer(code, SetupProtocol.buildLink(lan, port, code, keys.publicKey, name), name, lan, port)
+        _offer.value = Offer(code, SetupProtocol.buildLink(lan, port, code, keys.publicKey, name), name, lan, port, SetupCrypto.keyFingerprint(keys.publicKey))
         register(name)
     }
 
@@ -144,7 +144,6 @@ class SetupReceiver(
             serviceType = SetupProtocol.SERVICE_TYPE
             setPort(port)
             runCatching { setAttribute(SetupProtocol.TXT_VERSION, SetupProtocol.VERSION.toString()) }
-            runCatching { setAttribute(SetupProtocol.TXT_CODE, SetupCrypto.codeHash(code)) }
             runCatching { setAttribute(SetupProtocol.TXT_NAME, name.take(60)) }
             runCatching { setAttribute(SetupProtocol.TXT_PK, SetupCrypto.b64(keys.publicKey)) }
         }

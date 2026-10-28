@@ -21,18 +21,18 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.ArrayDeque
 
-/** A TV offering setup: from NSD (code hash only) or from its QR code (code included). */
+/** A TV offering setup: from NSD (key only) or from its QR code (code included). */
 data class SetupTarget(
     val name: String,
     val host: String,
     val port: Int,
     val pk: ByteArray,
-    /** TXT `code` (first 8 hex of SHA-256 of the code); null when it came from a QR link. */
-    val codeHash: String?,
     /** The code itself, when it came from a QR link. */
     val code: String? = null,
 ) {
     val key: String get() = "$host:$port"
+    /** Matches the 4 characters the TV shows next to its code. */
+    val fingerprint: String get() = SetupCrypto.keyFingerprint(pk)
 }
 
 /**
@@ -106,7 +106,6 @@ class SetupDiscovery(private val context: Context) {
                         host = host,
                         port = info.port,
                         pk = pk,
-                        codeHash = attr(SetupProtocol.TXT_CODE),
                     )
                     _tvs.value = (_tvs.value.filterNot { it.name == t.name || it.key == t.key } + t).sortedBy { it.name.lowercase() }
                 }

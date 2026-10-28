@@ -17,7 +17,6 @@ object SetupProtocol {
     const val SERVICE_TYPE = "_aeriotv-setup._tcp"
     const val PATH = "/setup"
     const val TXT_VERSION = "v"
-    const val TXT_CODE = "code"
     const val TXT_NAME = "name"
     const val TXT_PK = "pk"
     const val WINDOW_MS = 10L * 60L * 1000L

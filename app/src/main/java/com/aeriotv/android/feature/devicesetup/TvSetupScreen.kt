@@ -303,6 +303,8 @@ private fun Offering(offer: SetupReceiver.Offer, onCancel: () -> Unit) {
                 color = MaterialTheme.colorScheme.primary,
             )
             Spacer(Modifier.height(4.dp))
+            Text("Key ${offer.fingerprint}", fontSize = 22.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(4.dp))
             Text(offer.deviceName, style = MaterialTheme.typography.bodyMedium.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
             OutlinedButton(
