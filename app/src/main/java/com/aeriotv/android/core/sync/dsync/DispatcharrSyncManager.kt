@@ -180,7 +180,7 @@ class DispatcharrSyncManager @Inject constructor(
                 }
             })
         }
-        profileManager.get().onProfilesMutated = { pid, user, what -> onProfilesMutated(pid, user, what) }
+        profileManager.get().onProfilesMutated = { pid, user, what, at -> onProfilesMutated(pid, user, what, at) }
         registerNetworkCallback()
         watchBetweenSessions()
         scope.launch {
@@ -288,9 +288,14 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     /** ProfileManager mutation hook: stamp the row and re-send `profiles` from an admin session. */
-    private fun onProfilesMutated(playlistId: String, username: String, what: String) {
+    /** Roster adds by row key, wall-clock ms: the push guard's 60 s window. */
+    private val rosterAdds = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun onProfilesMutated(playlistId: String, username: String, what: String, stampAt: Long = 0L) {
         // Called from UI actions on the main thread: all disk work happens on IO.
-        val now = System.currentTimeMillis() / 1000
+        // A roster add keeps the row's own stamp (stampAt); every real edit stamps now.
+        val now = if (stampAt > 0) stampAt else System.currentTimeMillis() / 1000
+        if (what == "roster-add") rosterAdds[rowKey(playlistId, username)] = System.currentTimeMillis()
         // Stamp synchronously (apply() writes to disk in the background): the
         // caller drops the local profile right after this returns, and a pull
         // racing that removal must already see the removed stamp.
@@ -1292,7 +1297,7 @@ class DispatcharrSyncManager @Inject constructor(
                 at = prev?.updatedAt?.takeIf { it > 0 } ?: (System.currentTimeMillis() / 1000)
                 state.edit().putLong(rowKey(s.playlistId, p.username), at).apply()
             }
-            ProfileRow(
+            val out = ProfileRow(
                 user.id, user.username, p.displayName, type, hash, salt,
                 role = p.effectiveRole().wire,
                 updatedAt = at,
@@ -1300,6 +1305,10 @@ class DispatcharrSyncManager @Inject constructor(
                 order = index,
                 tail = prev?.tail ?: Tail(),
             )
+            val fresh = (rosterAdds[rowKey(s.playlistId, p.username)] ?: 0L) > System.currentTimeMillis() - 60_000L
+            com.aeriotv.android.core.profiles.ProfileRoster.guardFreshRosterAdd(out, prev, fresh)?.also {
+                Log.i(TAG, "[DSYNC] profiles: row ${p.username} kept server name/avatar (fresh roster add)")
+            } ?: out
         }
         // Stale-device guard: a local row the server list lacks, with no
         // unsent local change, older than the server roster is not re-sent.

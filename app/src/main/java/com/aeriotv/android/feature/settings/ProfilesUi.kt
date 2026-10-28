@@ -927,8 +927,38 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     // list below keeps the rest.
     val suggestFlow = remember(playlistId) { vm.rosterSuggestions(playlistId) }
     val suggested by suggestFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-    val listed = users?.filter { u -> suggested.none { it.username.equals(u.username, ignoreCase = true) } }
-    LaunchedEffect(users?.isNotEmpty() == true) { if (users?.isNotEmpty() == true) focusFirst(firstUser) }
+    // Hide users that already have a profile on this device.
+    val localFlow = remember(playlistId) { vm.profiles(playlistId) }
+    val local by localFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val rest = users?.filter { u ->
+        suggested.none { it.username.equals(u.username, ignoreCase = true) } &&
+            local.none { it.username.equals(u.username, ignoreCase = true) }
+    }
+    var serverOpen by remember { mutableStateOf(false) }
+    val serverExpanded = serverOpen || suggested.isEmpty()
+    var query by remember { mutableStateOf("") }
+    val listed = rest?.let { r -> query.trim().let { q -> if (q.isEmpty()) r else r.filter { it.username.contains(q, ignoreCase = true) } } }
+    // Role per row (owner review 2026-10-27), default User.
+    val rowRoles = remember { androidx.compose.runtime.mutableStateMapOf<Int, com.aeriotv.android.core.profiles.ProfileRole>() }
+    fun roleOf(u: DispatcharrUserSummary) = rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
+    var childGateFor by remember { mutableStateOf<DispatcharrUserSummary?>(null) }
+    fun addUser(user: DispatcharrUserSummary) {
+        if (busy) return
+        if (roleOf(user) == com.aeriotv.android.core.profiles.ProfileRole.Child && !vm.adminHasPin(playlistId)) { childGateFor = user; return }
+        if (!user.apiKey.isNullOrBlank()) {
+            // Server gave us this user's key: add now, no prompt.
+            busy = true; error = null
+            scope.launch {
+                vm.add(playlistId, user, null, null, roleOf(user)).fold(
+                    { onClose() },
+                    { busy = false; picked = user; error = it.message ?: "Could not add profile" },
+                )
+            }
+        } else {
+            picked = user
+        }
+    }
+    LaunchedEffect(users?.isNotEmpty() == true, serverExpanded) { if (users?.isNotEmpty() == true && serverExpanded && suggested.isEmpty()) focusFirst(firstUser) }
     com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onClose,
         title = { Text("Add Profile") },
@@ -936,44 +966,44 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val u = picked
                 if (u == null) RosterSuggestions(playlistId, vm, users, enabled = !busy, onAdded = onClose)
-                RolePicker(playlistId, vm, role) { role = it }
+                if (u == null && suggested.isNotEmpty() && rest?.isNotEmpty() == true) {
+                    ExpandRow("Show other users on this server", serverOpen, enabled = !busy) {
+                        serverOpen = !serverOpen; if (!serverOpen) query = ""
+                    }
+                }
+                if (u == null && serverExpanded && rest?.isNotEmpty() == true) {
+                    ExpandableSearch(query, { query = it }, enabled = !busy)
+                }
                 if (u == null) {
                     when {
                         users == null && error == null -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        listed?.isEmpty() == true -> if (suggested.isEmpty()) Text("Every Dispatcharr user on this server already has a profile.")
+                        rest?.isEmpty() == true -> if (suggested.isEmpty()) Text("Every Dispatcharr user on this server already has a profile.")
+                        !serverExpanded -> {}
                         busy -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        listed?.isEmpty() == true -> Text("No users match.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         listed != null -> LazyColumn(Modifier.heightIn(max = 220.dp)) {
                             items(listed, key = { it.id }) { user ->
                                 var rowFocused by remember { mutableStateOf(false) }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Row(
                                     Modifier
-                                        .fillMaxWidth()
+                                        .weight(1f)
                                         .then(if (user.id == listed.firstOrNull()?.id) Modifier.focusRequester(firstUser) else Modifier)
                                         .onFocusChanged { rowFocused = it.isFocused }
                                         // Same focus ring as the Profiles rows.
                                         .settingsRowCard(rowFocused)
-                                        .clickable {
-                                            if (busy) return@clickable
-                                            if (!user.apiKey.isNullOrBlank()) {
-                                                // Server gave us this user's key: add now, no prompt.
-                                                busy = true; error = null
-                                                scope.launch {
-                                                    vm.add(playlistId, user, null, null, role).fold(
-                                                        { onClose() },
-                                                        { busy = false; picked = user; error = it.message ?: "Could not add profile" },
-                                                    )
-                                                }
-                                            } else {
-                                                picked = user
-                                            }
-                                        }
+                                        .clickable { addUser(user) }
                                         .padding(vertical = 10.dp, horizontal = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     ProfileAvatar(user.username, 28)
                                     Spacer(Modifier.size(10.dp))
-                                    Text(user.username, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    LevelBadge(ProfileLevel.of(if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(user.username, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        ServerUserCaption(user)
+                                    }
+                                }
+                                RoleChip(roleOf(user), enabled = !busy) { rowRoles[user.id] = it }
                                 }
                             }
                         }
@@ -1004,7 +1034,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                     onClick = {
                         busy = true; error = null
                         scope.launch {
-                            vm.add(playlistId, u, password.takeIf { it.isNotBlank() }, apiKey.trim().takeIf { it.isNotBlank() }, role)
+                            vm.add(playlistId, u, password.takeIf { it.isNotBlank() }, apiKey.trim().takeIf { it.isNotBlank() }, roleOf(u))
                                 .fold({ onClose() }, { busy = false; error = it.message ?: "Could not add profile" })
                         }
                     },
@@ -1013,6 +1043,9 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         },
         dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onClose) },
     )
+    childGateFor?.let { g ->
+        ChildNeedsAdminPin(playlistId, vm) { ok -> childGateFor = null; if (ok) addUser(g) }
+    }
 }
 
 /** One line under each role in Add Profile. */

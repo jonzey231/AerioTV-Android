@@ -127,6 +127,8 @@ private const val TAG = "AddProfilesStep"
 fun AddProfilesStepScreen(
     playlistId: String,
     onDone: () -> Unit,
+    /** Phone and tablet only: "Set up a TV with this playlist" (docs/DeviceSetupHandoff.md). */
+    onSetUpTv: (() -> Unit)? = null,
     vm: AddProfilesStepViewModel = hiltViewModel(),
 ) {
     var users by remember { mutableStateOf<List<DispatcharrUserSummary>?>(null) }
@@ -135,7 +137,12 @@ fun AddProfilesStepScreen(
     var error by remember { mutableStateOf<String?>(null) }
     // Users whose key was missing: prompt for a password or key, one at a time.
     val needsCredential = remember { mutableStateListOf<DispatcharrUserSummary>() }
-    var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
+    // Role per checked row (owner review 2026-10-27), default User.
+    val rowRoles = remember { androidx.compose.runtime.mutableStateMapOf<Int, com.aeriotv.android.core.profiles.ProfileRole>() }
+    fun roleOf(u: DispatcharrUserSummary) = rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
+    var childGate by remember { mutableStateOf(false) }
+    // Plain holder (not state): the Add action to run after the Child PIN gate.
+    val pendingAdd = remember { arrayOfNulls<() -> Unit>(1) }
     val profilesVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
     val scope = rememberCoroutineScope()
 
@@ -146,7 +153,8 @@ fun AddProfilesStepScreen(
     val suggestFlow = remember(playlistId) { vm.suggestions(playlistId) }
     val suggested by suggestFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val localFlow = remember(playlistId) { profilesVm.profiles(playlistId) }
-    val localCount = localFlow.collectAsStateWithLifecycle(initialValue = emptyList()).value.size
+    val localProfiles = localFlow.collectAsStateWithLifecycle(initialValue = emptyList()).value
+    val localCount = localProfiles.size
     LaunchedEffect(playlistId) {
         when (val step = vm.candidates(playlistId)) {
             AddProfilesStepViewModel.Step.Skip -> {
@@ -163,7 +171,7 @@ fun AddProfilesStepScreen(
         }
     }
     if (manual) {
-        ManualAddProfilesStep(playlistId, vm, onDone)
+        ManualAddProfilesStep(playlistId, vm, onDone, onSetUpTv)
         return
     }
 
@@ -177,10 +185,19 @@ fun AddProfilesStepScreen(
 
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
     var query by remember { mutableStateOf("") }
-    val shown = remember(list, query, suggested) {
+    // Suggestions are the headline; the server list sits behind "Show other
+    // users on this server" unless there are no suggestions.
+    var serverOpen by remember { mutableStateOf(false) }
+    val serverExpanded = serverOpen || suggested.isEmpty()
+    // Server users not suggested and not already a profile on this device.
+    val rest = remember(list, suggested, localProfiles) {
+        list.filter { u ->
+            suggested.none { it.username.equals(u.username, ignoreCase = true) } &&
+                localProfiles.none { it.username.equals(u.username, ignoreCase = true) }
+        }
+    }
+    val shown = remember(rest, query) {
         val q = query.trim()
-        // Roster users are listed under "From your other devices" instead.
-        val rest = list.filter { u -> suggested.none { it.username.equals(u.username, ignoreCase = true) } }
         if (q.isEmpty()) rest else rest.filter { it.username.contains(q, ignoreCase = true) }
     }
     // The user list is the primary content and takes the height; search only
@@ -204,35 +221,30 @@ fun AddProfilesStepScreen(
                     textAlign = TextAlign.Center,
                 )
     }
-    val search: @Composable () -> Unit = {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    placeholder = { Text("Search users") },
-                    modifier = Modifier.fillMaxWidth().dpadFocusRing(RoundedCornerShape(4.dp)),
-                )
-    }
-    val roleReq = remember { androidx.compose.ui.focus.FocusRequester() }
     val listScroll = rememberScrollState()
     val userList: @Composable (Modifier) -> Unit = { listModifier ->
                 Column(
                     modifier = listModifier.fillMaxWidth().verticalScroll(listScroll),
                     verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 0.dp),
                 ) {
-                    if (isTv) search()
                     com.aeriotv.android.feature.settings.RosterSuggestions(playlistId, profilesVm, list, enabled = !busy)
-                    if (suggested.isNotEmpty() && (shown.isNotEmpty() || isTv)) {
+                    if (suggested.isNotEmpty() && rest.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
-                        Text("Other Dispatcharr users", style = MaterialTheme.typography.titleSmall)
+                        com.aeriotv.android.feature.settings.ExpandRow(
+                            "Show other users on this server", serverOpen, enabled = !busy,
+                        ) { serverOpen = !serverOpen; if (!serverOpen) query = "" }
                     }
-                    shown.forEach { user ->
+                    if (serverExpanded && rest.isNotEmpty()) {
+                        com.aeriotv.android.feature.settings.ExpandableSearch(query, { query = it }, enabled = !busy)
+                    }
+                    if (serverExpanded) shown.forEach { user ->
                         val checked = user.id in selected
+                        // TV: the row and the role chip are two focus stops.
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .weight(1f)
                                 .heightIn(min = 56.dp)
-                                .then(if (isTv) Modifier.focusProperties { right = roleReq } else Modifier)
                                 .clip(RoundedCornerShape(12.dp))
                                 .dpadFocusRing(RoundedCornerShape(12.dp), washTint = MaterialTheme.colorScheme.primary)
                                 .toggleable(
@@ -246,16 +258,16 @@ fun AddProfilesStepScreen(
                         ) {
                             Checkbox(checked = checked, onCheckedChange = null)
                             Spacer(Modifier.size(12.dp))
-                            Text(user.username, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                            com.aeriotv.android.feature.settings.LevelBadge(
-                                com.aeriotv.android.core.profiles.ProfileLevel.of(
-                                    if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0,
-                                ),
-                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(user.username, style = MaterialTheme.typography.titleMedium)
+                                com.aeriotv.android.feature.settings.ServerUserCaption(user)
+                            }
+                        }
+                        if (checked) com.aeriotv.android.feature.settings.RoleChip(roleOf(user), enabled = !busy) { rowRoles[user.id] = it }
                         }
                     }
-                    val noneOnServer = list.none { u -> suggested.none { it.username.equals(u.username, ignoreCase = true) } }
-                    if (shown.isEmpty() && (isTv || suggested.isEmpty())) {
+                    val noneOnServer = rest.isEmpty()
+                    if (serverExpanded && shown.isEmpty() && (suggested.isEmpty() || !noneOnServer)) {
                         Text(
                             if (noneOnServer) "No other users on this server." else "No users match.",
                             style = MaterialTheme.typography.bodyMedium.subtext(),
@@ -269,8 +281,7 @@ fun AddProfilesStepScreen(
     }
     val controlsTail: @Composable () -> Unit = {
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                Button(
-                    onClick = {
+                val addSelected: () -> Unit = {
                         busy = true; error = null
                         scope.launch {
                             val failures = mutableListOf<String>()
@@ -278,7 +289,7 @@ fun AddProfilesStepScreen(
                                 if (u.apiKey.isNullOrBlank()) {
                                     needsCredential.add(u)
                                 } else {
-                                    vm.add(playlistId, u, null, null, role).onFailure { failures += u.username }
+                                    vm.add(playlistId, u, null, null, roleOf(u)).onFailure { failures += u.username }
                                 }
                             }
                             busy = false
@@ -289,8 +300,19 @@ fun AddProfilesStepScreen(
                                 onDone()
                             }
                         }
+                }
+                pendingAdd[0] = addSelected
+                Button(
+                    onClick = {
+                        when {
+                            selected.isEmpty() -> onDone()
+                            // A Child row needs an Admin PIN on this device first.
+                            list.any { it.id in selected && roleOf(it) == com.aeriotv.android.core.profiles.ProfileRole.Child } &&
+                                !profilesVm.adminHasPin(playlistId) -> childGate = true
+                            else -> addSelected()
+                        }
                     },
-                    enabled = !busy && selected.isNotEmpty(),
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
@@ -298,13 +320,20 @@ fun AddProfilesStepScreen(
                     ),
                 ) {
                     if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                    else Text("Add selected", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    else Text(if (selected.isNotEmpty()) "Add selected" else "Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
                     onClick = onDone,
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
                 ) { Text(if (localCount > 1) "Done" else "Skip", style = MaterialTheme.typography.titleMedium) }
+                if (onSetUpTv != null) {
+                    androidx.compose.material3.TextButton(
+                        onClick = onSetUpTv,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
+                }
                 Text(
                     "You can add or remove profiles later in Settings > Playlists.",
                     style = MaterialTheme.typography.bodySmall.subtext(),
@@ -314,8 +343,9 @@ fun AddProfilesStepScreen(
 
     }
     val controls: @Composable () -> Unit = {
-                com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
                 controlsTail()
+                // Extra bottom inset on phones so a toast does not cover the footer.
+                Spacer(Modifier.height(16.dp))
     }
     Box(
         modifier = Modifier
@@ -362,23 +392,12 @@ fun AddProfilesStepScreen(
                             )
                         }
                     }
-                    // Right: Role card with the actions directly under it.
+                    // Right: the actions.
                     Column(
                         modifier = Modifier.weight(0.42f).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                                .padding(12.dp)
-                                .focusRequester(roleReq)
-                                .focusGroup(),
-                        ) {
-                            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role, vertical = true) { role = it }
-                        }
                         controlsTail()
                     }
                 }
@@ -392,18 +411,23 @@ fun AddProfilesStepScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 header()
-                search()
                 userList(Modifier.weight(1f))
                 controls()
             }
         }
     }
 
+    if (childGate) {
+        com.aeriotv.android.feature.settings.ChildNeedsAdminPin(playlistId, profilesVm) { ok ->
+            childGate = false
+            if (ok) pendingAdd[0]?.invoke()
+        }
+    }
     needsCredential.firstOrNull()?.let { u ->
         CredentialDialog(
             user = u,
             onSubmit = { password, key ->
-                vm.add(playlistId, u, password, key, role).fold(
+                vm.add(playlistId, u, password, key, roleOf(u)).fold(
                     { needsCredential.remove(u); if (needsCredential.isEmpty() && error == null) onDone(); null },
                     { it.message ?: "Could not add profile" },
                 )
@@ -461,7 +485,7 @@ private fun CredentialDialog(
 
 /** Non-admin base: type each user's name and sign in as them once. */
 @Composable
-private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewModel, onDone: () -> Unit) {
+private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewModel, onDone: () -> Unit, onSetUpTv: (() -> Unit)?) {
     val added = remember { mutableStateListOf<String>() }
     var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
     val profilesVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
@@ -511,6 +535,12 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
                 onClick = onDone,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
             ) { Text(if (added.isEmpty()) "Skip" else "Done", style = MaterialTheme.typography.titleMedium) }
+            if (onSetUpTv != null) {
+                androidx.compose.material3.TextButton(
+                    onClick = onSetUpTv,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
+            }
             Text(
                 "You can add or remove profiles later in Settings > Playlists.",
                 style = MaterialTheme.typography.bodySmall.subtext(),

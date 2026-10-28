@@ -2,6 +2,10 @@ package com.aeriotv.android.feature.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.heightIn
@@ -41,6 +45,8 @@ import com.aeriotv.android.core.sync.dsync.ProfileRow
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import com.aeriotv.android.ui.settings.settingsRowCard
+import com.aeriotv.android.ui.settings.dpadFocusRing
+import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.launch
 
 /**
@@ -71,11 +77,15 @@ internal fun RosterSuggestions(
     // Rows added here leave the roster flow; keep them listed as "Added"
     // (not focusable) so the list does not jump under the D-pad.
     val added = remember { androidx.compose.runtime.mutableStateListOf<ProfileRow>() }
+    // Per-row role before Add, prefilled from the roster role.
+    val roles = remember { androidx.compose.runtime.mutableStateMapOf<String, ProfileRole>() }
+    fun roleFor(r: ProfileRow) = roles[r.username.lowercase()] ?: ProfileRole.fromWire(r.role) ?: ProfileRole.User
 
     if (rows.isEmpty() && added.isEmpty()) return
 
-    fun add(r: ProfileRow) {
+    fun add(row: ProfileRow) {
         if (busy != null || !enabled) return
+        val r = row.copy(role = roleFor(row).wire)
         error = null
         if (r.role == ProfileRole.Child.wire && !vm.adminHasPin(playlistId)) { childGate = r; return }
         val listed = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
@@ -96,9 +106,12 @@ internal fun RosterSuggestions(
             var focused by remember { mutableStateOf(false) }
             val isAdded = added.any { it.username.equals(r.username, ignoreCase = true) }
             val canAdd = enabled && busy == null && !isAdded
+            // TV: the row (Center adds) and the role chip are two focus
+            // stops, the chip to the right of the row.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier
-                    .fillMaxWidth()
+                    .weight(1f)
                     .heightIn(min = 56.dp)
                     .onFocusChanged { focused = it.isFocused }
                     .settingsRowCard(focused)
@@ -119,7 +132,8 @@ internal fun RosterSuggestions(
                     )
                 }
                 // Roster role (Admin, User, or Child), not the server level.
-                ProfileRole.fromWire(r.role)?.let { RoleBadge(it) }
+                if (isAdded) RoleBadge(roleFor(r))
+                else if (!isTv) RoleChip(roleFor(r), enabled = canAdd) { roles[r.username.lowercase()] = it }
                 Spacer(Modifier.size(8.dp))
                 when {
                     busy == r.username -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -153,6 +167,8 @@ internal fun RosterSuggestions(
                     }
                     else -> TextButton(onClick = { add(r) }, enabled = canAdd) { Text("Add") }
                 }
+            }
+            if (isTv && !isAdded) RoleChip(roleFor(r), enabled = canAdd) { roles[r.username.lowercase()] = it }
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -233,7 +249,7 @@ private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSub
 
 /** Same rule as the Role picker: a Child needs an Admin PIN on this device first. */
 @Composable
-private fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, onDone: (Boolean) -> Unit) {
+internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, onDone: (Boolean) -> Unit) {
     var explained by remember { mutableStateOf(false) }
     val admin = vm.activeProfile(playlistId)
     if (admin == null || admin.let { vm.roleOf(it.id) } != ProfileRole.Admin) {
@@ -379,5 +395,127 @@ internal fun DeviceAdminPinRow(playlistId: String, vm: ProfilesViewModel) {
     when (mode) {
         "set" -> DeviceAdminPinSetFlow(playlistId, vm) { err -> mode = null; status = err; tick++ }
         "remove" -> DeviceAdminPinRemoveFlow(playlistId, vm) { err -> mode = null; status = err; tick++ }
+    }
+}
+
+/**
+ * Per-row role chip (owner review 2026-10-27: role is per row, not one
+ * global choice). Tap or Center opens the themed radio sheet. Picking Child
+ * here only records it; the Admin PIN prompt runs at Add time.
+ */
+@Composable
+internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, onChange: (ProfileRole) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .padding(start = 6.dp)
+            .clip(shape)
+            .then(Modifier.dpadFocusRing(shape))
+            .clickable(enabled = enabled, role = androidx.compose.ui.semantics.Role.DropdownList) { open = true }
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(role.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        androidx.compose.material3.Icon(
+            androidx.compose.material.icons.Icons.Filled.ArrowDropDown,
+            contentDescription = "Change role",
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+    if (open) {
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("Role") },
+            text = {
+                Column {
+                    ProfileRole.entries.forEach { r ->
+                        ChoiceRow(label = r.label, checked = r == role, radio = true, onClick = { open = false; onChange(r) })
+                        Text(
+                            roleDescription(r),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 12.dp, bottom = 6.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = { open = false }) },
+        )
+    }
+}
+
+/**
+ * Server row subtitle: the server level (Admin or Standard) as a caption,
+ * not a pill, plus a key note when the list has no api key for the user.
+ */
+@Composable
+internal fun ServerUserCaption(user: DispatcharrUserSummary) {
+    val level = com.aeriotv.android.core.profiles.ProfileLevel.of(if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(level.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        if (user.apiKey.isNullOrBlank()) {
+            Spacer(Modifier.size(8.dp))
+            androidx.compose.material3.Icon(
+                androidx.compose.material.icons.Icons.Filled.Key,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.size(4.dp))
+            Text(
+                "Needs a password or API key",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Focusable button row that expands a section in place (TV: one focus stop). */
+@Composable
+internal fun ExpandRow(label: String, expanded: Boolean, enabled: Boolean = true, onToggle: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .settingsRowCard(focused)
+            .clickable(enabled = enabled, onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+        androidx.compose.material3.Icon(
+            if (expanded) androidx.compose.material.icons.Icons.Filled.ExpandLess else androidx.compose.material.icons.Icons.Filled.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+/** Collapsed "Search" row that expands into the field; collapsing clears the query. */
+@Composable
+internal fun ExpandableSearch(query: String, onQuery: (String) -> Unit, enabled: Boolean = true) {
+    var open by remember { mutableStateOf(query.isNotEmpty()) }
+    val fr = remember { androidx.compose.ui.focus.FocusRequester() }
+    ExpandRow("Search", open, enabled) { open = !open; if (!open) onQuery("") }
+    if (open) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQuery,
+            singleLine = true,
+            placeholder = { Text("Search users") },
+            modifier = Modifier.fillMaxWidth().focusRequester(fr),
+        )
+        androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
     }
 }

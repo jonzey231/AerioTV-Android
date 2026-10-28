@@ -774,6 +774,7 @@ class ProfileManager @Inject constructor(
         password: String?,
         apiKey: String?,
         role: ProfileRole? = null,
+        seed: com.aeriotv.android.core.sync.dsync.ProfileRow? = null,
     ): Result<DispatcharrProfile> = runCatching {
         // Same rule as setRole: a Child needs an Admin PIN to leave it.
         if (role == ProfileRole.Child) check(adminHasPin(playlistId)) { "Set a PIN on an Admin profile first." }
@@ -803,9 +804,21 @@ class ProfileManager @Inject constructor(
             username = me.username,
             password = password?.takeIf { it.isNotBlank() },
         ).applyMe(me, key).let { if (role != null) it.copy(role = role) else it }
+            // A roster add: name, role, avatar, order, and user id land in the
+            // FIRST store write, so the row never exists (or syncs) half built.
+            .let { if (seed != null) ProfileRoster.applyRow(it, seed) else it }
         store.upsert(profile)
         appPreferences.seedProfileSettings(id)
-        mutated(id, "add")
+        if (seed != null) {
+            PinRules.typeFromWire(seed.pinType)?.let { type ->
+                if (seed.pinHash.length == 64 && seed.pinSalt.length == 32) pinStore.importSynced(id, type, seed.pinHash, seed.pinSalt)
+            }
+            // Keep the row's own stamp: the server row stays authoritative
+            // for every field this device did not change.
+            mutated(id, "roster-add", seed.updatedAt)
+        } else {
+            mutated(id, "add")
+        }
         Log.i(TAG, "[PROFILE] added ${profile.username} on ${playlistId.take(8)} level=${ProfileLevel.of(profile.userLevel).label} role=${profile.effectiveRole().label}")
         profile
     }
@@ -818,11 +831,12 @@ class ProfileManager @Inject constructor(
      * role, PIN) reports here so the `profiles` key is stamped and re-sent.
      * Set by DispatcharrSyncManager.
      */
-    @Volatile var onProfilesMutated: ((playlistId: String, username: String, what: String) -> Unit)? = null
+    @Volatile var onProfilesMutated: ((playlistId: String, username: String, what: String, stampAt: Long) -> Unit)? = null
 
-    private fun mutated(profileId: String, what: String) {
+    /** [stampAt] > 0 stamps the row with that time (a roster add); 0 = now. */
+    private fun mutated(profileId: String, what: String, stampAt: Long = 0L) {
         val p = store.byId(profileId) ?: return
-        runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, what) }
+        runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, what, stampAt) }
     }
 
     fun profileIdFor(playlistId: String, username: String): String? =
@@ -863,7 +877,15 @@ class ProfileManager @Inject constructor(
             val id = local.id
             if (local.userId == 0 && r.userId > 0) store.update(id) { it.copy(userId = r.userId) }
             val mine = localUpdatedAt(local.username)
-            if (!com.aeriotv.android.core.sync.dsync.DsyncGate.profileRowWins(mine, r)) {
+            val repair = ProfileRoster.repair(local.displayName, local.avatar, mine, r)
+            if (repair == ProfileRoster.Repair.ResendLocal) {
+                Log.i(TAG, "[DSYNC] profiles: server row ${local.username} looks stripped; re-sending local")
+                mutated(id, "repair")
+                return@forEach
+            }
+            if (repair == ProfileRoster.Repair.ApplyServer) {
+                Log.i(TAG, "[DSYNC] profiles: local row ${local.username} is stripped; applying server name/avatar")
+            } else if (!com.aeriotv.android.core.sync.dsync.DsyncGate.profileRowWins(mine, r)) {
                 Log.i(TAG, "[DSYNC] profiles: keep local row for ${local.username} (local $mine >= server ${r.updatedAt})")
                 return@forEach
             }
@@ -933,11 +955,9 @@ class ProfileManager @Inject constructor(
         apiKey: String?,
     ): Result<DispatcharrProfile> {
         val role = ProfileRole.fromWire(row.role)
-        val added = addProfile(playlistId, user, password, apiKey, role).getOrElse { return Result.failure(it) }
-        store.update(added.id) { ProfileRoster.applyRow(it, row) }
-        PinRules.typeFromWire(row.pinType)?.let { type ->
-            if (row.pinHash.length == 64 && row.pinSalt.length == 32) pinStore.importSynced(added.id, type, row.pinHash, row.pinSalt)
-        }
+        // One step: the row's fields and PIN are applied inside addProfile
+        // before the sync hook fires (an applyRow after the add raced the push).
+        val added = addProfile(playlistId, user, password, apiKey, role, seed = row).getOrElse { return Result.failure(it) }
         refreshActiveRole()
         Log.i(TAG, "[DSYNC] profiles: added ${row.username} from the roster (explicit choice) role=${role?.label ?: "default"} order=${row.order}")
         return Result.success(store.byId(added.id) ?: added)
@@ -1109,7 +1129,7 @@ class ProfileManager @Inject constructor(
         runCatching { pinStore.remove(profileId) }
         runCatching { snapshotStamps.remove("${p.playlistId}@$profileId") }
         runCatching { vodCatalogStore.deleteForPlaylistUser(p.playlistId, p.username) }
-        if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove") }
+        if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove", 0L) }
         store.remove(profileId)
         Log.i(TAG, "[PROFILE] removed ${p.username} on ${p.playlistId.take(8)}; local state deleted${if (fromSync) " (synced removal)" else ""}")
     }
