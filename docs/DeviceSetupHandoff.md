@@ -16,7 +16,7 @@ it, its profiles, and the sync choice to the TV over the local network.
 | Side | Who | What it does |
 |------|-----|--------------|
 | Receiver | TV (Android TV, Apple TV) | Welcome > "Set up from your phone". Generates a code and key pair, listens, advertises, shows a QR code and the code, applies the payload. |
-| Sender | Phone or tablet (Android, iPhone, iPad) | Settings > Playlists > "Set up a TV" (Admin or default profile only), and "Set up a TV with this playlist" on the phone onboarding's Add Profiles step. |
+| Sender | Phone or tablet (Android, iPhone, iPad) | Settings > Playlists > "Set up a TV" (list and playlist detail; Admin or default profile only), a dock card above the tab bar while a TV is advertising ("<name> is waiting for setup", fingerprint, Set up, dismiss), and "Set up a TV with this playlist" on the phone onboarding's Add Profiles step. |
 
 ## Receiver session
 

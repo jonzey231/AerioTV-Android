@@ -48,6 +48,8 @@ class SetupDiscovery(private val context: Context) {
     private var lock: WifiManager.MulticastLock? = null
     private val queue = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
+    /** NSD instance name -> resolved target key, so a lost advert drops the right row. */
+    private val keysByService = HashMap<String, String>()
 
     @Synchronized
     fun start() {
@@ -65,7 +67,8 @@ class SetupDiscovery(private val context: Context) {
             override fun onDiscoveryStopped(serviceType: String) {}
             override fun onServiceFound(info: NsdServiceInfo) { enqueue(info) }
             override fun onServiceLost(info: NsdServiceInfo) {
-                _tvs.value = _tvs.value.filterNot { it.name == info.serviceName }
+                val k = synchronized(this@SetupDiscovery) { keysByService.remove(info.serviceName) }
+                _tvs.value = _tvs.value.filterNot { it.key == k || it.name == info.serviceName }
             }
         }
         listener = l
@@ -77,6 +80,8 @@ class SetupDiscovery(private val context: Context) {
         listener?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
         listener = null
         queue.clear()
+        keysByService.clear()
+        _tvs.value = emptyList()
         resolving = false
         lock?.let { runCatching { if (it.isHeld) it.release() } }
         lock = null
@@ -107,6 +112,7 @@ class SetupDiscovery(private val context: Context) {
                         port = info.port,
                         pk = pk,
                     )
+                    info.serviceName?.let { synchronized(this@SetupDiscovery) { keysByService[it] = t.key } }
                     _tvs.value = (_tvs.value.filterNot { it.name == t.name || it.key == t.key } + t).sortedBy { it.name.lowercase() }
                 }
                 done()

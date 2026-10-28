@@ -685,6 +685,30 @@ fun MainScaffold(
     }
     val companionDevices by companionDiscovery.devices.collectAsStateWithLifecycle()
     var showCompanionPicker by remember { mutableStateOf(false) }
+    // Set up a TV dock card (docs/DeviceSetupHandoff.md): phones and tablets
+    // browse _aeriotv-setup._tcp while the app is in the foreground only.
+    val setupDiscovery = remember { com.aeriotv.android.core.setup.SetupDiscovery(context.applicationContext) }
+    val setupLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    if (!isTvShell) {
+        androidx.compose.runtime.DisposableEffect(setupLifecycle) {
+            val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+                when (e) {
+                    androidx.lifecycle.Lifecycle.Event.ON_START -> setupDiscovery.start()
+                    androidx.lifecycle.Lifecycle.Event.ON_STOP -> setupDiscovery.stop()
+                    else -> {}
+                }
+            }
+            setupLifecycle.lifecycle.addObserver(obs)
+            onDispose { setupLifecycle.lifecycle.removeObserver(obs); setupDiscovery.stop() }
+        }
+    }
+    val setupTvs by setupDiscovery.tvs.collectAsStateWithLifecycle()
+    var setupDockTarget by remember { mutableStateOf<com.aeriotv.android.core.setup.SetupTarget?>(null) }
+    val setupPm = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext, com.aeriotv.android.feature.settings.SetupEntryPoint::class.java,
+        ).profileManager()
+    }
     // Poll pause state from the held ExoPlayer so the mini-player's
     // Pause/Play icon stays accurate when the notification action /
     // BT button toggles playback elsewhere.
@@ -1638,6 +1662,27 @@ fun MainScaffold(
                     )
                 }
                 fun gapAfter(row: Int) = if (tabletNav) 12.dp else if (fabRow == row) 10.dp else 8.dp
+                // Set up a TV dock card: the first advertising TV not dismissed,
+                // hidden while its setup sheet is open. Admin or default profile.
+                val setupPid = capsPlaylist?.id
+                val setupCard = if (isTv || setupPid == null || !setupPm.canSetUpTv(setupPid) || setupDockTarget != null) null
+                    else setupTvs.firstOrNull { !com.aeriotv.android.feature.devicesetup.SetupDockDismissals.isDismissed(it) }
+                @Composable
+                fun DockSetup() {
+                    val t = setupCard ?: return
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
+                            com.aeriotv.android.feature.devicesetup.SetupTvDockCard(
+                                target = t,
+                                tablet = tabletNav,
+                                onSetUp = { setupDockTarget = t },
+                                onDismiss = { com.aeriotv.android.feature.devicesetup.SetupDockDismissals.dismiss(t) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(if (tabletNav) 12.dp else 8.dp))
+                }
                 @Composable
                 fun DockKept() {
                     if (showKept) {
@@ -1817,9 +1862,9 @@ fun MainScaffold(
                     }
                 }
                 if (tabletNav) {
-                    DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockRadio(); DockCast()
+                    DockSetup(); DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockRadio(); DockCast()
                 } else {
-                    DockRadio(); DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly()
+                    DockSetup(); DockRadio(); DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly()
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right
@@ -1959,6 +2004,13 @@ fun MainScaffold(
     // as the player's cast button (Google Cast routes + AerioTV companion TVs
     // with inline pairing), replacing the old companion-only dialog that made
     // cast targets invisible outside the player.
+    setupDockTarget?.let { t ->
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(
+            playlistId = capsPlaylist?.id,
+            target = t,
+            onDismiss = { setupDockTarget = null },
+        )
+    }
     if (showCompanionPicker) {
         // Force a fresh query sweep the moment the picker opens: the Fold's
         // WiFi misses mid-browse announcements, so a long-running browse can

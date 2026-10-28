@@ -97,8 +97,10 @@ class SetUpTvViewModel @Inject constructor(
     val source: StateFlow<SetupSender.Source?> = _source.asStateFlow()
     private var playlistId: String? = null
 
-    fun load(pid: String?, link: String?) {
+    fun load(pid: String?, link: String?, target: SetupTarget? = null) {
         if (playlistId != null) return
+        // Opened from the dock card: that TV is preselected, the code is still required.
+        if (target != null) _step.value = Step.Code(target)
         viewModelScope.launch {
             val id = pid ?: repository.activePlaylist()?.id
             playlistId = id
@@ -147,15 +149,15 @@ class SetUpTvViewModel @Inject constructor(
 
 /** Full-screen "Set up a TV" flow. [playlistId] null = the active playlist; [link] = a scanned aeriotv://setup URL. */
 @Composable
-fun SetUpTvDialog(playlistId: String?, link: String? = null, onDismiss: () -> Unit) {
+fun SetUpTvDialog(playlistId: String?, link: String? = null, target: SetupTarget? = null, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        SetUpTvScreen(playlistId, link, onDismiss)
+        SetUpTvScreen(playlistId, link, onDismiss, target = target)
     }
 }
 
 @Composable
-fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, vm: SetUpTvViewModel = hiltViewModel()) {
-    LaunchedEffect(playlistId, link) { vm.load(playlistId, link) }
+fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, target: SetupTarget? = null, vm: SetUpTvViewModel = hiltViewModel()) {
+    LaunchedEffect(playlistId, link) { vm.load(playlistId, link, target) }
     DisposableEffect(Unit) { vm.discovery.start(); onDispose { vm.discovery.stop() } }
     val step by vm.step.collectAsStateWithLifecycle()
     val source by vm.source.collectAsStateWithLifecycle()
