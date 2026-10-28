@@ -26,6 +26,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
@@ -109,6 +111,9 @@ class ProfilesViewModel @Inject constructor(
     fun profiles(playlistId: String) = manager.profiles(playlistId)
     fun activeProfileId(playlistId: String) = manager.activeProfileId(playlistId)
     /** App-local Admin role: add and remove profiles (server level not needed). */
+    /** Set up a TV sender gate (docs/DeviceSetupHandoff.md). */
+    fun canSetUpTv(playlistId: String): Boolean = manager.canSetUpTv(playlistId)
+
     suspend fun isAdmin(playlistId: String) =
         com.aeriotv.android.core.profiles.RoleRules.canManageProfiles(manager.activeRole(playlistId)) &&
             manager.activeRole(playlistId) != null
@@ -474,17 +479,21 @@ fun ProfilesSection(playlistId: String) {
     val activeId by vm.activeProfileId(playlistId).collectAsStateWithLifecycle(initialValue = null)
     var isAdmin by remember { mutableStateOf(false) }
     var canChannelProfiles by remember { mutableStateOf(false) }
+    var canSetUpTv by remember { mutableStateOf(false) }
+    var showSetUpTv by remember { mutableStateOf(false) }
     LaunchedEffect(playlistId, activeId) {
         isAdmin = vm.isAdmin(playlistId)
+        canSetUpTv = vm.canSetUpTv(playlistId)
         canChannelProfiles = vm.canAssignChannelProfiles(playlistId)
     }
     val isTv = rememberIsTvDevice()
+    val showSetUpTvRow = canSetUpTv && !isTv
     val role by vm.activeRole.collectAsStateWithLifecycle()
     // Phase 2b: a Child has no Profiles section (Manage Profiles at the
     // bottom of Settings is its only way out).
     if (!com.aeriotv.android.core.profiles.RoleRules.canSeeSwitcher(role)) return
     // Nothing new for a single-profile non-admin; an Admin sees Add Profile.
-    if (profiles.size < 2 && !isAdmin) return
+    if (profiles.size < 2 && !isAdmin && !showSetUpTvRow) return
 
     var confirmSwitch by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var actionsFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
@@ -579,8 +588,32 @@ fun ProfilesSection(playlistId: String) {
                     Spacer(Modifier.size(12.dp))
                     Text("Add Profile", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 }
-                DeviceAdminPinRow(playlistId, vm)
             }
+            // Set up a TV: phone and tablet only, Admin or default profile.
+            // With one playlist Settings > Playlists opens this page directly.
+            if (showSetUpTvRow) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsRowCard(false)
+                        .clickable { showSetUpTv = true }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.size(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Set up a TV", color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text(
+                            "Send this playlist, your profiles, and sync to a TV on your network.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (isAdmin) DeviceAdminPinRow(playlistId, vm)
             if (busy) {
                 Row(Modifier.padding(16.dp)) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
             }
@@ -591,6 +624,10 @@ fun ProfilesSection(playlistId: String) {
         SettingsSectionFooter(
             "Each profile signs in as its own Dispatcharr user. Favorites, recordings, and watch history are kept per profile on this device.",
         )
+    }
+
+    if (showSetUpTv) {
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = playlistId, onDismiss = { showSetUpTv = false })
     }
 
     confirmSwitch?.let { p ->
