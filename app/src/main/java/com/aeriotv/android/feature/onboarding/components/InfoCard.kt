@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -41,6 +42,8 @@ fun SourceTypeCard(
     subtitle: String?,
     modifier: Modifier = Modifier,
     trailing: @Composable (() -> Unit)? = null,
+    /** TV welcome grid: smaller icon tile, tighter padding, one-line subtitle. */
+    compact: Boolean = false,
 ) {
     val cardBorder = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
     Row(
@@ -49,14 +52,14 @@ fun SourceTypeCard(
             .clip(RoundedCornerShape(16.dp))
             .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.40f))
-            .padding(horizontal = 14.dp, vertical = 14.dp),
+            .padding(horizontal = if (compact) 12.dp else 14.dp, vertical = if (compact) 9.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 14.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .size(if (compact) 34.dp else 44.dp)
+                .clip(RoundedCornerShape(if (compact) 8.dp else 10.dp))
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
@@ -64,6 +67,7 @@ fun SourceTypeCard(
                 imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
+                modifier = if (compact) Modifier.size(20.dp) else Modifier,
             )
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -72,15 +76,19 @@ fun SourceTypeCard(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.SemiBold,
+                maxLines = if (compact) 1 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
             )
             // Row-style cards (e.g. onboarding "Connect a Server") pass no
             // subtitle and render as a single title line + trailing affordance.
             if (subtitle != null) {
-                Spacer(Modifier.size(2.dp))
+                Spacer(Modifier.size(if (compact) 1.dp else 2.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall.subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = if (compact) 1 else Int.MAX_VALUE,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

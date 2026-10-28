@@ -40,6 +40,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -95,8 +99,9 @@ fun WelcomeScreen(
     // single column to mirror the tvOS welcome layout.
     val twoColumn = !isTv && config.screenWidthDp >= 720 && config.screenHeightDp < 720
 
-    if (twoColumn) WelcomeTwoColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr)
-    else WelcomeSingleColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr, onSetUpFromPhone.takeIf { isTv })
+    if (isTv) WelcomeTv(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr, onSetUpFromPhone)
+    else if (twoColumn) WelcomeTwoColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr)
+    else WelcomeSingleColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr)
 }
 
 @Composable
@@ -107,7 +112,6 @@ private fun WelcomeSingleColumn(
     googleSignInInProgress: Boolean,
     googleSignedInEmail: String?,
     onSyncViaDispatcharr: (() -> Unit)?,
-    onSetUpFromPhone: (() -> Unit)? = null,
 ) {
     Box(
         modifier = Modifier
@@ -136,10 +140,6 @@ private fun WelcomeSingleColumn(
             Spacer(Modifier.height(22.dp))
             SupportedTypesGroup(alignStart = false)
             Spacer(Modifier.height(22.dp))
-            if (onSetUpFromPhone != null) {
-                SetUpFromPhoneCard(onClick = onSetUpFromPhone)
-                Spacer(Modifier.height(12.dp))
-            }
             SyncCard(inProgress = googleSignInInProgress, signedInEmail = googleSignedInEmail, onClick = onSignInWithGoogle)
             if (onSignInWithGoogle != null) Spacer(Modifier.height(12.dp))
             if (onSyncViaDispatcharr != null) {
@@ -150,6 +150,111 @@ private fun WelcomeSingleColumn(
             Spacer(Modifier.height(4.dp))
             SkipRow(onSkip = onSkip)
         }
+    }
+}
+
+/**
+ * TV welcome (1920x1080 = 960dp x 540dp): everything fits without scrolling.
+ * Brand block, the source types on one row, then the cards as a compact 2x2
+ * grid with one-line subtitles, then Skip. D-pad order is left to right, top
+ * to bottom; the first card takes focus on entry.
+ */
+@Composable
+private fun WelcomeTv(
+    onConnectServer: () -> Unit,
+    onSkip: () -> Unit,
+    onSignInWithGoogle: (() -> Unit)?,
+    googleSignInInProgress: Boolean,
+    googleSignedInEmail: String?,
+    onSyncViaDispatcharr: (() -> Unit)?,
+    onSetUpFromPhone: (() -> Unit)?,
+) {
+    val firstFocus = remember { FocusRequester() }
+    val cards = buildList<@Composable (Modifier) -> Unit> {
+        if (onSetUpFromPhone != null) add { m ->
+            TvCard(m, Icons.Filled.PhoneAndroid, "Set up from your phone",
+                "Send your playlist, profiles, and sync from AerioTV on your phone.", onClick = onSetUpFromPhone)
+        }
+        if (onSignInWithGoogle != null) add { m ->
+            TvCard(m, Icons.Filled.CloudOff, "Sync via Google Account",
+                if (googleSignedInEmail != null) "Signed in as $googleSignedInEmail"
+                else "Mirror playlists, progress, reminders, and preferences across devices.",
+                enabled = !googleSignInInProgress, onClick = onSignInWithGoogle)
+        }
+        if (onSyncViaDispatcharr != null) add { m ->
+            TvCard(m, Icons.Filled.Key, "Sync via Dispatcharr",
+                "Keep favorites, progress, and preferences on your server.", onClick = onSyncViaDispatcharr)
+        }
+        add { m ->
+            TvCard(m, Icons.Outlined.Hub, "Connect a Server",
+                "Add a Dispatcharr, Xtream Codes, or M3U playlist.", onClick = onConnectServer)
+        }
+    }
+    LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        WelcomeAmbientOrbs(modifier = Modifier.fillMaxSize())
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .widthIn(max = 920.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            BrandBlock(compact = true)
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                SupportedTypeInline(Icons.Filled.Key, "Dispatcharr Direct Connect")
+                SupportedTypeInline(Icons.Filled.Tv, "Xtream Codes")
+                SupportedTypeInline(Icons.Filled.Description, "M3U + EPG")
+            }
+            Spacer(Modifier.height(22.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                cards.chunked(2).forEachIndexed { rowIndex, row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        row.forEachIndexed { i, card ->
+                            val m = Modifier.weight(1f)
+                            card(if (rowIndex == 0 && i == 0) m.focusRequester(firstFocus) else m)
+                        }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            SkipRow(onSkip = onSkip)
+        }
+    }
+}
+
+@Composable
+private fun TvCard(
+    modifier: Modifier,
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    SourceTypeCard(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        icon = icon,
+        title = title,
+        subtitle = subtitle,
+        compact = true,
+    )
+}
+
+@Composable
+private fun SupportedTypeInline(icon: ImageVector, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GradientIcon(imageVector = icon, brush = accentBrush(), modifier = Modifier.size(18.dp))
+        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
     }
 }
 
@@ -226,13 +331,13 @@ private fun WelcomeTwoColumnRow(
 }
 
 @Composable
-private fun BrandBlock(alignStart: Boolean = false) {
+private fun BrandBlock(alignStart: Boolean = false, compact: Boolean = false) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (alignStart) Alignment.Start else Alignment.CenterHorizontally,
     ) {
-        BrandLogo()
-        Spacer(Modifier.height(10.dp))
+        BrandLogo(compact = compact)
+        Spacer(Modifier.height(if (compact) 4.dp else 10.dp))
         Text(
             text = "AerioTV",
             style = MaterialTheme.typography.headlineMedium,
@@ -245,8 +350,8 @@ private fun BrandBlock(alignStart: Boolean = false) {
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.textAccent,
         )
-        Spacer(Modifier.height(2.dp))
-        Text(
+        if (!compact) Spacer(Modifier.height(2.dp))
+        if (!compact) Text(
             text = "Android TV · Phone · Tablet",
             style = MaterialTheme.typography.bodySmall.subtext(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -304,26 +409,6 @@ private fun SyncCard(inProgress: Boolean, signedInEmail: String?, onClick: (() -
     )
 }
 
-/** TV only: load this TV from a phone that already has the playlist (no typing on the remote). */
-@Composable
-private fun SetUpFromPhoneCard(onClick: () -> Unit) {
-    SourceTypeCard(
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick),
-        icon = Icons.Filled.PhoneAndroid,
-        title = "Set up from your phone",
-        subtitle = "Send your playlist, profiles, and sync settings from AerioTV on your phone. Nothing to type.",
-        trailing = {
-            Icon(
-                imageVector = Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-    )
-}
-
 /** Dispatcharr Sync entry: the Direct Connect form, then sync turns on by itself. */
 @Composable
 private fun DispatcharrSyncCard(onClick: () -> Unit) {
@@ -377,7 +462,7 @@ private fun SkipRow(onSkip: () -> Unit) {
 }
 
 @Composable
-private fun BrandLogo() {
+private fun BrandLogo(compact: Boolean = false) {
     // Mirrors iOS WelcomeView's `.shadow(color: aerioCyan @ 0.45, radius: 20, y: 8)`
     // under the logo. Compose's shadow modifier only renders elevation drop-shadows,
     // not colored glows, so we draw a soft radial gradient halo behind the logo
@@ -385,8 +470,8 @@ private fun BrandLogo() {
     val accent = MaterialTheme.colorScheme.primary
     // Sized to read as a hero logo while still letting the whole stacked page
     // fit a ~540dp-tall Android TV without scrolling.
-    val haloSize = 84.dp
-    val imageSize = 56.dp
+    val haloSize = if (compact) 68.dp else 84.dp
+    val imageSize = if (compact) 46.dp else 56.dp
     Box(
         modifier = Modifier.size(haloSize),
         contentAlignment = Alignment.Center,
