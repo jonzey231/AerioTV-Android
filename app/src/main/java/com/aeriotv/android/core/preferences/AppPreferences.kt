@@ -3,6 +3,7 @@ package com.aeriotv.android.core.preferences
 import android.content.Context
 import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
@@ -137,20 +138,53 @@ class AppPreferences @Inject constructor(
         return if (scoped == name) this else stringPreferencesKey(scoped) as Preferences.Key<T>
     }
 
-    /** A new profile starts with the default profile's view settings
-     *  (guide/list view, group selector style, sort mode, Radio Mode by
-     *  Default); its favorites, recents and the rest start empty. */
+    /**
+     * A new profile starts with the default profile's settings: every
+     * setting Dispatcharr Sync carries ([PROFILE_SETTING_KEYS] and the
+     * category color buckets), plus group sort mode and order and Radio Mode
+     * by Default. Its favorites, recents and the rest start empty.
+     */
     suspend fun seedProfileSettings(profileId: String) {
-        val bases = listOf(
-            KEY_DEFAULT_LIVE_TV_VIEW, KEY_LIVE_TV_LAYOUT, KEY_GUIDE_GROUP_SELECTOR,
-            KEY_PHONE_GROUP_SELECTOR, KEY_GROUP_SORT_MODE, KEY_GROUP_ORDER,
-        )
         store.edit { prefs ->
-            bases.forEach { k ->
-                prefs[k]?.let { prefs[stringPreferencesKey(ProfileScope.keyName(k.name, profileId))] = it }
-            }
-            prefs[KEY_RADIO_MODE_BY_DEFAULT]?.let {
-                prefs[booleanPreferencesKey(ProfileScope.keyName(KEY_RADIO_MODE_BY_DEFAULT.name, profileId))] = it
+            copyBareToProfile(prefs, profileId, overwrite = true)
+            prefs[KEY_PROFILE_SETTINGS_SEEDED] = (prefs[KEY_PROFILE_SETTINGS_SEEDED] ?: emptySet()) + profileId
+        }
+    }
+
+    /**
+     * One-time migration (2026-10-27, per-profile settings): the global value
+     * of each newly profile-scoped setting already IS the default profile's
+     * value (bare key); every existing non-default profile is seeded from it
+     * once, without overwriting a value the profile already has.
+     */
+    suspend fun seedExistingProfilesOnce(profileIds: Collection<String>) {
+        store.edit { prefs ->
+            val done = prefs[KEY_PROFILE_SETTINGS_SEEDED] ?: emptySet()
+            val todo = profileIds.filter { it.isNotBlank() && it !in done }
+            if (todo.isEmpty()) return@edit
+            todo.forEach { copyBareToProfile(prefs, it, overwrite = false) }
+            prefs[KEY_PROFILE_SETTINGS_SEEDED] = done + todo
+            android.util.Log.i("AppPreferences", "[PROFILE] settings seeded for ${todo.size} existing profile(s)")
+        }
+    }
+
+    private fun copyBareToProfile(prefs: MutablePreferences, profileId: String, overwrite: Boolean) {
+        val names = PROFILE_SETTING_KEYS.map { it.name }.toMutableSet()
+        names += listOf(KEY_GROUP_SORT_MODE.name, KEY_GROUP_ORDER.name, KEY_RADIO_MODE_BY_DEFAULT.name)
+        ProgramCategory.entries.forEach { names += it.hexStorageKey; names += it.enabledStorageKey }
+        val bare = prefs.asMap().filterKeys { it.name in names }
+        bare.forEach { (k, v) ->
+            val to = ProfileScope.keyName(k.name, profileId)
+            if (!overwrite && prefs.asMap().keys.any { it.name == to }) return@forEach
+            @Suppress("UNCHECKED_CAST")
+            when (v) {
+                is Boolean -> prefs[booleanPreferencesKey(to)] = v
+                is Int -> prefs[androidx.datastore.preferences.core.intPreferencesKey(to)] = v
+                is Long -> prefs[longPreferencesKey(to)] = v
+                is Double -> prefs[doublePreferencesKey(to)] = v
+                is Float -> prefs[androidx.datastore.preferences.core.floatPreferencesKey(to)] = v
+                is String -> prefs[stringPreferencesKey(to)] = v
+                is Set<*> -> prefs[androidx.datastore.preferences.core.stringSetPreferencesKey(to)] = v as Set<String>
             }
         }
     }
@@ -163,13 +197,13 @@ class AppPreferences @Inject constructor(
         }
     }
 
-    val selectedTheme: Flow<AppTheme> = store.data.map { prefs ->
-        val raw = prefs[KEY_SELECTED_THEME] ?: AppTheme.Aerio.name
+    val selectedTheme: Flow<AppTheme> = scopedData.map { prefs ->
+        val raw = prefs[KEY_SELECTED_THEME.s()] ?: AppTheme.Aerio.name
         AppTheme.entries.firstOrNull { it.name == raw } ?: AppTheme.Aerio
     }
 
     suspend fun setSelectedTheme(theme: AppTheme) {
-        store.edit { it[KEY_SELECTED_THEME] = theme.name }
+        store.edit { it[KEY_SELECTED_THEME.s()] = theme.name }
     }
 
     /**
@@ -181,12 +215,12 @@ class AppPreferences @Inject constructor(
      * follows the user across all of their devices, exactly like the custom
      * accent hex.
      */
-    val appearanceMode: Flow<AppearanceMode> = store.data.map { prefs ->
-        AppearanceMode.fromWire(prefs[KEY_APPEARANCE_MODE])
+    val appearanceMode: Flow<AppearanceMode> = scopedData.map { prefs ->
+        AppearanceMode.fromWire(prefs[KEY_APPEARANCE_MODE.s()])
     }
 
     suspend fun setAppearanceMode(mode: AppearanceMode) {
-        store.edit { it[KEY_APPEARANCE_MODE] = mode.wire }
+        store.edit { it[KEY_APPEARANCE_MODE.s()] = mode.wire }
     }
 
     /**
@@ -196,9 +230,9 @@ class AppPreferences @Inject constructor(
      * hex string (without leading '#'). Empty string falls back to the preset's
      * own accent.
      */
-    val useCustomAccent: Flow<Boolean> = store.data.map { it[KEY_USE_CUSTOM_ACCENT] ?: false }
+    val useCustomAccent: Flow<Boolean> = scopedData.map { it[KEY_USE_CUSTOM_ACCENT.s()] ?: false }
     suspend fun setUseCustomAccent(value: Boolean) {
-        store.edit { it[KEY_USE_CUSTOM_ACCENT] = value }
+        store.edit { it[KEY_USE_CUSTOM_ACCENT.s()] = value }
     }
 
     /**
@@ -206,9 +240,9 @@ class AppPreferences @Inject constructor(
      * each channel's logo so long channel names use the full row width.
      * Default ON.
      */
-    val showChannelLogos: Flow<Boolean> = store.data.map { it[KEY_SHOW_CHANNEL_LOGOS] ?: true }
+    val showChannelLogos: Flow<Boolean> = scopedData.map { it[KEY_SHOW_CHANNEL_LOGOS.s()] ?: true }
     suspend fun setShowChannelLogos(value: Boolean) {
-        store.edit { it[KEY_SHOW_CHANNEL_LOGOS] = value }
+        store.edit { it[KEY_SHOW_CHANNEL_LOGOS.s()] = value }
     }
 
     /**
@@ -221,13 +255,13 @@ class AppPreferences @Inject constructor(
      * read times ten, and the first write moves it to the tenths key and
      * drops the legacy one.
      */
-    val channelLogoSize: Flow<Int> = store.data.map {
-        (it[KEY_CHANNEL_LOGO_SIZE_TENTHS] ?: it[KEY_CHANNEL_LOGO_SIZE_LEGACY]?.times(10) ?: 100)
+    val channelLogoSize: Flow<Int> = scopedData.map {
+        (it[KEY_CHANNEL_LOGO_SIZE_TENTHS.s()] ?: it[KEY_CHANNEL_LOGO_SIZE_LEGACY]?.times(10) ?: 100)
             .coerceIn(25, 250)
     }
     suspend fun setChannelLogoSize(tenths: Int) {
         store.edit {
-            it[KEY_CHANNEL_LOGO_SIZE_TENTHS] = tenths.coerceIn(25, 250)
+            it[KEY_CHANNEL_LOGO_SIZE_TENTHS.s()] = tenths.coerceIn(25, 250)
             it.remove(KEY_CHANNEL_LOGO_SIZE_LEGACY)
         }
     }
@@ -236,9 +270,9 @@ class AppPreferences @Inject constructor(
      * GH #19 (`ui.showChannelNumbers` on iOS). When off, the Live TV list and
      * Guide hide the channel number column. Default ON.
      */
-    val showChannelNumbers: Flow<Boolean> = store.data.map { it[KEY_SHOW_CHANNEL_NUMBERS] ?: true }
+    val showChannelNumbers: Flow<Boolean> = scopedData.map { it[KEY_SHOW_CHANNEL_NUMBERS.s()] ?: true }
     suspend fun setShowChannelNumbers(value: Boolean) {
-        store.edit { it[KEY_SHOW_CHANNEL_NUMBERS] = value }
+        store.edit { it[KEY_SHOW_CHANNEL_NUMBERS.s()] = value }
     }
 
     /**
@@ -246,9 +280,9 @@ class AppPreferences @Inject constructor(
      * leaving logo and number, for users who recognise channels by logo and
      * want the rail as narrow-reading as possible. Default ON.
      */
-    val showChannelNames: Flow<Boolean> = store.data.map { it[KEY_SHOW_CHANNEL_NAMES] ?: true }
+    val showChannelNames: Flow<Boolean> = scopedData.map { it[KEY_SHOW_CHANNEL_NAMES.s()] ?: true }
     suspend fun setShowChannelNames(value: Boolean) {
-        store.edit { it[KEY_SHOW_CHANNEL_NAMES] = value }
+        store.edit { it[KEY_SHOW_CHANNEL_NAMES.s()] = value }
     }
 
     /**
@@ -258,9 +292,9 @@ class AppPreferences @Inject constructor(
      * the sub-title, so the two lines read as duplicates; turning this off
      * leaves title + description. Default ON.
      */
-    val showProgramSubtitles: Flow<Boolean> = store.data.map { it[KEY_SHOW_PROGRAM_SUBTITLES] ?: true }
+    val showProgramSubtitles: Flow<Boolean> = scopedData.map { it[KEY_SHOW_PROGRAM_SUBTITLES.s()] ?: true }
     suspend fun setShowProgramSubtitles(value: Boolean) {
-        store.edit { it[KEY_SHOW_PROGRAM_SUBTITLES] = value }
+        store.edit { it[KEY_SHOW_PROGRAM_SUBTITLES.s()] = value }
     }
 
     /**
@@ -274,9 +308,9 @@ class AppPreferences @Inject constructor(
      * key ("ui_rounded_artwork"), so whatever the user already chose carries
      * straight over into the List toggle and nobody's setting changes.
      */
-    val roundedArtwork: Flow<Boolean> = store.data.map { it[KEY_ROUNDED_ARTWORK] ?: true }
+    val roundedArtwork: Flow<Boolean> = scopedData.map { it[KEY_ROUNDED_ARTWORK.s()] ?: true }
     suspend fun setRoundedArtwork(value: Boolean) {
-        store.edit { it[KEY_ROUNDED_ARTWORK] = value }
+        store.edit { it[KEY_ROUNDED_ARTWORK.s()] = value }
     }
 
     /**
@@ -285,9 +319,9 @@ class AppPreferences @Inject constructor(
      * has always drawn square logos and that stays the out-of-box look.
      */
     val roundedArtworkGuide: Flow<Boolean> =
-        store.data.map { it[KEY_ROUNDED_ARTWORK_GUIDE] ?: false }
+        scopedData.map { it[KEY_ROUNDED_ARTWORK_GUIDE.s()] ?: false }
     suspend fun setRoundedArtworkGuide(value: Boolean) {
-        store.edit { it[KEY_ROUNDED_ARTWORK_GUIDE] = value }
+        store.edit { it[KEY_ROUNDED_ARTWORK_GUIDE.s()] = value }
     }
 
     /**
@@ -296,9 +330,9 @@ class AppPreferences @Inject constructor(
      * follow-up: rounded logos with flat cells). Default OFF.
      */
     val roundedProgramCells: Flow<Boolean> =
-        store.data.map { it[KEY_ROUNDED_PROGRAM_CELLS] ?: false }
+        scopedData.map { it[KEY_ROUNDED_PROGRAM_CELLS.s()] ?: false }
     suspend fun setRoundedProgramCells(value: Boolean) {
-        store.edit { it[KEY_ROUNDED_PROGRAM_CELLS] = value }
+        store.edit { it[KEY_ROUNDED_PROGRAM_CELLS.s()] = value }
     }
 
     /**
@@ -307,9 +341,9 @@ class AppPreferences @Inject constructor(
      * card / sheet surfaces near-black (#0A0A0A) for OLED screens. Default OFF.
      */
     val trueBlack: Flow<Boolean> =
-        store.data.map { it[KEY_APPEARANCE_TRUE_BLACK] ?: false }
+        scopedData.map { it[KEY_APPEARANCE_TRUE_BLACK.s()] ?: false }
     suspend fun setTrueBlack(value: Boolean) {
-        store.edit { it[KEY_APPEARANCE_TRUE_BLACK] = value }
+        store.edit { it[KEY_APPEARANCE_TRUE_BLACK.s()] = value }
     }
 
     /**
@@ -317,9 +351,9 @@ class AppPreferences @Inject constructor(
      * device's 24-hour setting), "12", or "24". Drive-synced as "timeFormat",
      * the same key Apple uses.
      */
-    val timeFormat: Flow<String> = store.data.map { it[KEY_TIME_FORMAT] ?: "system" }
+    val timeFormat: Flow<String> = scopedData.map { it[KEY_TIME_FORMAT.s()] ?: "system" }
     suspend fun setTimeFormat(value: String) {
-        store.edit { it[KEY_TIME_FORMAT] = value }
+        store.edit { it[KEY_TIME_FORMAT.s()] = value }
     }
 
     /**
@@ -330,8 +364,8 @@ class AppPreferences @Inject constructor(
      * follows their phones, independently. The UI reads/writes the key matching
      * the current device via [showEpgBadges] / [setShowEpgBadges].
      */
-    val showEpgBadgesTv: Flow<Boolean> = store.data.map { it[KEY_SHOW_EPG_BADGES_TV] ?: true }
-    val showEpgBadgesMobile: Flow<Boolean> = store.data.map { it[KEY_SHOW_EPG_BADGES_MOBILE] ?: true }
+    val showEpgBadgesTv: Flow<Boolean> = scopedData.map { it[KEY_SHOW_EPG_BADGES_TV.s()] ?: true }
+    val showEpgBadgesMobile: Flow<Boolean> = scopedData.map { it[KEY_SHOW_EPG_BADGES_MOBILE.s()] ?: true }
     fun showEpgBadges(isTv: Boolean): Flow<Boolean> = if (isTv) showEpgBadgesTv else showEpgBadgesMobile
 
     /**
@@ -341,17 +375,17 @@ class AppPreferences @Inject constructor(
      * default (empty set) shows everything and future badge kinds are
      * visible until explicitly hidden.
      */
-    val hiddenEpgBadges: Flow<Set<String>> = store.data.map { prefs ->
-        (prefs[KEY_HIDDEN_EPG_BADGES] ?: "").split('\n')
+    val hiddenEpgBadges: Flow<Set<String>> = scopedData.map { prefs ->
+        (prefs[KEY_HIDDEN_EPG_BADGES.s()] ?: "").split('\n')
             .mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
     }
     suspend fun setBadgeHidden(label: String, hidden: Boolean) {
         store.edit { prefs ->
-            val cur = (prefs[KEY_HIDDEN_EPG_BADGES] ?: "").split('\n')
+            val cur = (prefs[KEY_HIDDEN_EPG_BADGES.s()] ?: "").split('\n')
                 .mapNotNull { it.trim().takeIf(String::isNotBlank) }.toMutableSet()
             if (hidden) cur.add(label) else cur.remove(label)
-            if (cur.isEmpty()) prefs.remove(KEY_HIDDEN_EPG_BADGES)
-            else prefs[KEY_HIDDEN_EPG_BADGES] = cur.joinToString("\n")
+            if (cur.isEmpty()) prefs.remove(KEY_HIDDEN_EPG_BADGES.s())
+            else prefs[KEY_HIDDEN_EPG_BADGES.s()] = cur.joinToString("\n")
         }
     }
     suspend fun setShowEpgBadges(isTv: Boolean, value: Boolean) {
@@ -365,29 +399,29 @@ class AppPreferences @Inject constructor(
      * (aspect ignored). Maps to Media3 AspectRatioFrameLayout
      * RESIZE_MODE_FIT / RESIZE_MODE_ZOOM / RESIZE_MODE_FILL.
      */
-    val videoScaleMode: Flow<String> = store.data.map { it[KEY_VIDEO_SCALE_MODE] ?: "fit" }
+    val videoScaleMode: Flow<String> = scopedData.map { it[KEY_VIDEO_SCALE_MODE] ?: "fit" }
     suspend fun setVideoScaleMode(value: String) {
         store.edit { it[KEY_VIDEO_SCALE_MODE] = value }
     }
 
-    val customAccentHex: Flow<String> = store.data.map { it[KEY_CUSTOM_ACCENT_HEX] ?: "" }
+    val customAccentHex: Flow<String> = scopedData.map { it[KEY_CUSTOM_ACCENT_HEX.s()] ?: "" }
     suspend fun setCustomAccentHex(value: String) {
         store.edit { prefs ->
             val clean = value.trim().removePrefix("#").uppercase().take(6)
-            if (clean.isBlank()) prefs.remove(KEY_CUSTOM_ACCENT_HEX)
-            else prefs[KEY_CUSTOM_ACCENT_HEX] = clean
+            if (clean.isBlank()) prefs.remove(KEY_CUSTOM_ACCENT_HEX.s())
+            else prefs[KEY_CUSTOM_ACCENT_HEX.s()] = clean
         }
     }
 
     /** iOS `displayScaleMovies` parity. 0.85 .. 1.5. Default 1.0. */
-    val displayScaleMovies: Flow<Float> = store.data.map {
+    val displayScaleMovies: Flow<Float> = scopedData.map {
         // Logan 2026-09-18: the range is 85% .. 150% on every platform. Values
         // stored while the old 85-175% segments existed are clamped on read so
         // an upgraded device never renders above the shared maximum.
-        (it[KEY_DISPLAY_SCALE_MOVIES] ?: 1.0).toFloat().coerceIn(0.85f, 1.5f)
+        (it[KEY_DISPLAY_SCALE_MOVIES.s()] ?: 1.0).toFloat().coerceIn(0.85f, 1.5f)
     }
     suspend fun setDisplayScaleMovies(value: Float) {
-        store.edit { it[KEY_DISPLAY_SCALE_MOVIES] = value.toDouble() }
+        store.edit { it[KEY_DISPLAY_SCALE_MOVIES.s()] = value.toDouble() }
     }
 
     /**
@@ -397,11 +431,11 @@ class AppPreferences @Inject constructor(
      * [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX], snapped to 5% stops. Default 1.0.
      * Synced via Drive so the reading size follows the user.
      */
-    val textScale: Flow<Float> = store.data.map {
-        snapTextScale((it[KEY_TEXT_SCALE] ?: 1.0).toFloat())
+    val textScale: Flow<Float> = scopedData.map {
+        snapTextScale((it[KEY_TEXT_SCALE.s()] ?: 1.0).toFloat())
     }
     suspend fun setTextScale(value: Float) {
-        store.edit { it[KEY_TEXT_SCALE] = snapTextScale(value).toDouble() }
+        store.edit { it[KEY_TEXT_SCALE.s()] = snapTextScale(value).toDouble() }
     }
 
     /**
@@ -409,11 +443,11 @@ class AppPreferences @Inject constructor(
      * secondary copy (descriptions, subtitles, metadata, captions) on top of
      * [textScale]. Same 85%..150% range and 5% stops. Default 1.0. Synced.
      */
-    val subtextScale: Flow<Float> = store.data.map {
-        snapTextScale((it[KEY_SUBTEXT_SCALE] ?: 1.0).toFloat())
+    val subtextScale: Flow<Float> = scopedData.map {
+        snapTextScale((it[KEY_SUBTEXT_SCALE.s()] ?: 1.0).toFloat())
     }
     suspend fun setSubtextScale(value: Float) {
-        store.edit { it[KEY_SUBTEXT_SCALE] = snapTextScale(value).toDouble() }
+        store.edit { it[KEY_SUBTEXT_SCALE.s()] = snapTextScale(value).toDouble() }
     }
 
     /**
@@ -421,11 +455,11 @@ class AppPreferences @Inject constructor(
      * accent-tinted text as designed, 1.0 = plain white (dark) / black (light)
      * text. 10% stops. Default 0.0. Synced.
      */
-    val textContrast: Flow<Float> = store.data.map {
-        snapTextContrast((it[KEY_TEXT_CONTRAST] ?: 0.0).toFloat())
+    val textContrast: Flow<Float> = scopedData.map {
+        snapTextContrast((it[KEY_TEXT_CONTRAST.s()] ?: 0.0).toFloat())
     }
     suspend fun setTextContrast(value: Float) {
-        store.edit { it[KEY_TEXT_CONTRAST] = snapTextContrast(value).toDouble() }
+        store.edit { it[KEY_TEXT_CONTRAST.s()] = snapTextContrast(value).toDouble() }
     }
 
     /**
@@ -436,11 +470,11 @@ class AppPreferences @Inject constructor(
      * at the read point, so an upgraded device never renders above the shared
      * maximum even though its preference file still holds 1.75.
      */
-    val displayScaleLiveTV: Flow<Float> = store.data.map {
-        (it[KEY_DISPLAY_SCALE_LIVE_TV] ?: 1.0).toFloat().coerceIn(0.85f, 1.5f)
+    val displayScaleLiveTV: Flow<Float> = scopedData.map {
+        (it[KEY_DISPLAY_SCALE_LIVE_TV.s()] ?: 1.0).toFloat().coerceIn(0.85f, 1.5f)
     }
     suspend fun setDisplayScaleLiveTV(value: Float) {
-        store.edit { it[KEY_DISPLAY_SCALE_LIVE_TV] = value.toDouble() }
+        store.edit { it[KEY_DISPLAY_SCALE_LIVE_TV.s()] = value.toDouble() }
     }
 
     /**
@@ -450,12 +484,12 @@ class AppPreferences @Inject constructor(
      * pinch gesture (on gesture end) and the discrete zoom selector in the
      * guide top bar.
      */
-    val guideScale: Flow<Float> = store.data.map {
-        (it[KEY_GUIDE_SCALE] ?: 1.0).toFloat().coerceIn(GUIDE_SCALE_MIN, GUIDE_SCALE_MAX)
+    val guideScale: Flow<Float> = scopedData.map {
+        (it[KEY_GUIDE_SCALE.s()] ?: 1.0).toFloat().coerceIn(GUIDE_SCALE_MIN, GUIDE_SCALE_MAX)
     }
     suspend fun setGuideScale(value: Float) {
         store.edit {
-            it[KEY_GUIDE_SCALE] = value.coerceIn(GUIDE_SCALE_MIN, GUIDE_SCALE_MAX).toDouble()
+            it[KEY_GUIDE_SCALE.s()] = value.coerceIn(GUIDE_SCALE_MIN, GUIDE_SCALE_MAX).toDouble()
         }
     }
 
@@ -488,9 +522,9 @@ class AppPreferences @Inject constructor(
      * iOS `appBehaviorsSkipLoadingScreen` parity. When true, Bootstrap navigates
      * to MainScaffold immediately and lets data hydrate in the background.
      */
-    val skipLoadingScreen: Flow<Boolean> = store.data.map { it[KEY_SKIP_LOADING_SCREEN] ?: false }
+    val skipLoadingScreen: Flow<Boolean> = scopedData.map { it[KEY_SKIP_LOADING_SCREEN.s()] ?: false }
     suspend fun setSkipLoadingScreen(value: Boolean) {
-        store.edit { it[KEY_SKIP_LOADING_SCREEN] = value }
+        store.edit { it[KEY_SKIP_LOADING_SCREEN.s()] = value }
     }
 
     /**
@@ -501,7 +535,7 @@ class AppPreferences @Inject constructor(
      * forces landscape. Device-local (not in the sync snapshot) - rotation
      * is a per-device preference and TVs ignore it entirely.
      */
-    val autoRotate: Flow<Boolean> = store.data.map { it[KEY_AUTO_ROTATE] ?: true }
+    val autoRotate: Flow<Boolean> = scopedData.map { it[KEY_AUTO_ROTATE] ?: true }
     suspend fun setAutoRotate(value: Boolean) {
         store.edit { it[KEY_AUTO_ROTATE] = value }
     }
@@ -511,9 +545,9 @@ class AppPreferences @Inject constructor(
      * swipe-flip (PlayerScreen.kt) and the future Apple TV-style D-pad nav.
      * Defaults to true so the v1.0 ship matches iOS's default.
      */
-    val appleTVChannelFlip: Flow<Boolean> = store.data.map { it[KEY_APPLE_TV_CHANNEL_FLIP] ?: true }
+    val appleTVChannelFlip: Flow<Boolean> = scopedData.map { it[KEY_APPLE_TV_CHANNEL_FLIP.s()] ?: true }
     suspend fun setAppleTVChannelFlip(value: Boolean) {
-        store.edit { it[KEY_APPLE_TV_CHANNEL_FLIP] = value }
+        store.edit { it[KEY_APPLE_TV_CHANNEL_FLIP.s()] = value }
     }
 
     /**
@@ -527,15 +561,15 @@ class AppPreferences @Inject constructor(
      * brightness and volume are per-device, and a TV has neither gesture.
      */
     val playerBrightnessGesture: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_BRIGHTNESS_GESTURE] ?: false }
+        scopedData.map { it[KEY_PLAYER_BRIGHTNESS_GESTURE.s()] ?: false }
     suspend fun setPlayerBrightnessGesture(value: Boolean) {
-        store.edit { it[KEY_PLAYER_BRIGHTNESS_GESTURE] = value }
+        store.edit { it[KEY_PLAYER_BRIGHTNESS_GESTURE.s()] = value }
     }
 
     val playerVolumeGesture: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_VOLUME_GESTURE] ?: false }
+        scopedData.map { it[KEY_PLAYER_VOLUME_GESTURE.s()] ?: false }
     suspend fun setPlayerVolumeGesture(value: Boolean) {
-        store.edit { it[KEY_PLAYER_VOLUME_GESTURE] = value }
+        store.edit { it[KEY_PLAYER_VOLUME_GESTURE.s()] = value }
     }
 
     /**
@@ -543,9 +577,9 @@ class AppPreferences @Inject constructor(
      * [PLAYER_EDGE_RIGHT]. Volume always takes the other edge.
      */
     val playerBrightnessEdge: Flow<String> =
-        store.data.map { it[KEY_PLAYER_BRIGHTNESS_EDGE] ?: PLAYER_EDGE_LEFT }
+        scopedData.map { it[KEY_PLAYER_BRIGHTNESS_EDGE.s()] ?: PLAYER_EDGE_LEFT }
     suspend fun setPlayerBrightnessEdge(value: String) {
-        store.edit { it[KEY_PLAYER_BRIGHTNESS_EDGE] = value }
+        store.edit { it[KEY_PLAYER_BRIGHTNESS_EDGE.s()] = value }
     }
 
     /**
@@ -554,7 +588,7 @@ class AppPreferences @Inject constructor(
      * shared cross-platform schema; decode via RemoteControlMap.fromJson
      * (tolerant of unknown slots/actions). Empty/absent = defaults.
      */
-    val remoteControlMap: Flow<String> = store.data.map { it[KEY_REMOTE_CONTROL_MAP] ?: "" }
+    val remoteControlMap: Flow<String> = scopedData.map { it[KEY_REMOTE_CONTROL_MAP] ?: "" }
     suspend fun setRemoteControlMap(json: String) {
         store.edit { it[KEY_REMOTE_CONTROL_MAP] = json }
     }
@@ -562,7 +596,7 @@ class AppPreferences @Inject constructor(
     /** Android#114: buttons taught with Learn Button (LearnedButtons JSON).
      *  Device-local and never synced: key codes belong to this box's remote. */
     val learnedRemoteButtons: Flow<Map<Int, com.aeriotv.android.core.remote.LearnedButton>> =
-        store.data.map { com.aeriotv.android.core.remote.LearnedButtons.fromJson(it[KEY_REMOTE_LEARNED_BUTTONS]) }
+        scopedData.map { com.aeriotv.android.core.remote.LearnedButtons.fromJson(it[KEY_REMOTE_LEARNED_BUTTONS]) }
     suspend fun setLearnedRemoteButtons(buttons: Collection<com.aeriotv.android.core.remote.LearnedButton>) {
         store.edit { it[KEY_REMOTE_LEARNED_BUTTONS] = com.aeriotv.android.core.remote.LearnedButtons.toJson(buttons) }
     }
@@ -583,7 +617,7 @@ class AppPreferences @Inject constructor(
      * stops publishing its map AND stops accepting one.
      */
     val syncRemoteControlMap: Flow<Boolean> =
-        store.data.map { it[KEY_SYNC_REMOTE_CONTROL_MAP] ?: true }
+        scopedData.map { it[KEY_SYNC_REMOTE_CONTROL_MAP] ?: true }
     suspend fun setSyncRemoteControlMap(value: Boolean) {
         store.edit { it[KEY_SYNC_REMOTE_CONTROL_MAP] = value }
     }
@@ -607,7 +641,7 @@ class AppPreferences @Inject constructor(
      * Never synced itself; gates both push and pull.
      */
     val syncRadioModeByDefault: Flow<Boolean> =
-        store.data.map { it[KEY_SYNC_RADIO_MODE_BY_DEFAULT] ?: false }
+        scopedData.map { it[KEY_SYNC_RADIO_MODE_BY_DEFAULT] ?: false }
     suspend fun setSyncRadioModeByDefault(value: Boolean) {
         store.edit { it[KEY_SYNC_RADIO_MODE_BY_DEFAULT] = value }
     }
@@ -619,9 +653,9 @@ class AppPreferences @Inject constructor(
      * Remote Control. Synced (Apple uses the name `showRemoteHints`).
      */
     val showRemoteHints: Flow<Boolean> =
-        store.data.map { it[KEY_SHOW_REMOTE_HINTS] ?: true }
+        scopedData.map { it[KEY_SHOW_REMOTE_HINTS.s()] ?: true }
     suspend fun setShowRemoteHints(value: Boolean) {
-        store.edit { it[KEY_SHOW_REMOTE_HINTS] = value }
+        store.edit { it[KEY_SHOW_REMOTE_HINTS.s()] = value }
     }
 
     /**
@@ -653,9 +687,9 @@ class AppPreferences @Inject constructor(
      * beside the pane so no program is covered. Synced with the selector.
      */
     val guideSidebarLayout: Flow<String> =
-        store.data.map { it[KEY_GUIDE_SIDEBAR_LAYOUT] ?: "overlay" }
+        scopedData.map { it[KEY_GUIDE_SIDEBAR_LAYOUT.s()] ?: "overlay" }
     suspend fun setGuideSidebarLayout(mode: String) {
-        store.edit { it[KEY_GUIDE_SIDEBAR_LAYOUT] = mode }
+        store.edit { it[KEY_GUIDE_SIDEBAR_LAYOUT.s()] = mode }
     }
 
     /**
@@ -677,9 +711,9 @@ class AppPreferences @Inject constructor(
      * left/right group-change swipes are off. Default false.
      */
     val liveTvEdgeSwipeOpensSidebar: Flow<Boolean> =
-        store.data.map { it[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR] ?: false }
+        scopedData.map { it[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()] ?: false }
     suspend fun setLiveTvEdgeSwipeOpensSidebar(enabled: Boolean) {
-        store.edit { it[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR] = enabled }
+        store.edit { it[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()] = enabled }
     }
 
     /**
@@ -689,9 +723,9 @@ class AppPreferences @Inject constructor(
      * the original straight-to-fullscreen behavior.
      */
     val guideTuneInMini: Flow<Boolean> =
-        store.data.map { it[KEY_GUIDE_TUNE_IN_MINI] ?: false }
+        scopedData.map { it[KEY_GUIDE_TUNE_IN_MINI.s()] ?: false }
     suspend fun setGuideTuneInMini(value: Boolean) {
-        store.edit { it[KEY_GUIDE_TUNE_IN_MINI] = value }
+        store.edit { it[KEY_GUIDE_TUNE_IN_MINI.s()] = value }
     }
 
     /**
@@ -702,7 +736,7 @@ class AppPreferences @Inject constructor(
      * display hardware differs per box, so this never syncs.
      */
     val startupRefreshRate: Flow<String> =
-        store.data.map { it[KEY_STARTUP_REFRESH_RATE] ?: "off" }
+        scopedData.map { it[KEY_STARTUP_REFRESH_RATE] ?: "off" }
     suspend fun setStartupRefreshRate(value: String) {
         store.edit { it[KEY_STARTUP_REFRESH_RATE] = value }
     }
@@ -714,17 +748,17 @@ class AppPreferences @Inject constructor(
      * "vodLibraryRefreshHours".
      */
     /** Movies / TV Shows library sort (Apple parity: moviesSortOrder / seriesSortOrder). */
-    val moviesSortOrder: Flow<String> = store.data.map { it[KEY_MOVIES_SORT_ORDER] ?: "titleAZ" }
-    suspend fun setMoviesSortOrder(value: String) { store.edit { it[KEY_MOVIES_SORT_ORDER] = value } }
-    val seriesSortOrder: Flow<String> = store.data.map { it[KEY_SERIES_SORT_ORDER] ?: "titleAZ" }
-    suspend fun setSeriesSortOrder(value: String) { store.edit { it[KEY_SERIES_SORT_ORDER] = value } }
-    val dvrSortOrder: Flow<String> = store.data.map { it[KEY_DVR_SORT_ORDER] ?: "title" }
-    suspend fun setDvrSortOrder(value: String) { store.edit { it[KEY_DVR_SORT_ORDER] = value } }
+    val moviesSortOrder: Flow<String> = scopedData.map { it[KEY_MOVIES_SORT_ORDER.s()] ?: "titleAZ" }
+    suspend fun setMoviesSortOrder(value: String) { store.edit { it[KEY_MOVIES_SORT_ORDER.s()] = value } }
+    val seriesSortOrder: Flow<String> = scopedData.map { it[KEY_SERIES_SORT_ORDER.s()] ?: "titleAZ" }
+    suspend fun setSeriesSortOrder(value: String) { store.edit { it[KEY_SERIES_SORT_ORDER.s()] = value } }
+    val dvrSortOrder: Flow<String> = scopedData.map { it[KEY_DVR_SORT_ORDER.s()] ?: "title" }
+    suspend fun setDvrSortOrder(value: String) { store.edit { it[KEY_DVR_SORT_ORDER.s()] = value } }
 
     val vodLibraryRefreshHours: Flow<Int> =
-        store.data.map { it[KEY_VOD_LIBRARY_REFRESH_HOURS] ?: 24 }
+        scopedData.map { it[KEY_VOD_LIBRARY_REFRESH_HOURS.s()] ?: 24 }
     suspend fun setVodLibraryRefreshHours(hours: Int) {
-        store.edit { it[KEY_VOD_LIBRARY_REFRESH_HOURS] = hours }
+        store.edit { it[KEY_VOD_LIBRARY_REFRESH_HOURS.s()] = hours }
     }
 
     /**
@@ -735,7 +769,7 @@ class AppPreferences @Inject constructor(
      * which is why this is default OFF. Device-local.
      */
     val matchContentResolution: Flow<Boolean> =
-        store.data.map { it[KEY_MATCH_CONTENT_RESOLUTION] ?: false }
+        scopedData.map { it[KEY_MATCH_CONTENT_RESOLUTION] ?: false }
     suspend fun setMatchContentResolution(value: Boolean) {
         store.edit { it[KEY_MATCH_CONTENT_RESOLUTION] = value }
     }
@@ -748,7 +782,7 @@ class AppPreferences @Inject constructor(
      * toggle and existing users keep exactly what they had. Device-local.
      */
     val matchFrameRate: Flow<Boolean> =
-        store.data.map { it[KEY_MATCH_FRAME_RATE] ?: it[KEY_MATCH_CONTENT_RESOLUTION] ?: false }
+        scopedData.map { it[KEY_MATCH_FRAME_RATE] ?: it[KEY_MATCH_CONTENT_RESOLUTION] ?: false }
     suspend fun setMatchFrameRate(value: Boolean) {
         store.edit { it[KEY_MATCH_FRAME_RATE] = value }
     }
@@ -760,10 +794,10 @@ class AppPreferences @Inject constructor(
      * keep operating the chrome exactly as before the mapping layer.
      */
     val effectiveRemoteControlMap: Flow<com.aeriotv.android.core.remote.RemoteControlMap> =
-        store.data.map { data ->
+        scopedData.map { data ->
             val raw = data[KEY_REMOTE_CONTROL_MAP] ?: ""
             val map = com.aeriotv.android.core.remote.RemoteControlMap.fromJson(raw)
-            if (raw.isBlank() && data[KEY_APPLE_TV_CHANNEL_FLIP] == false) {
+            if (raw.isBlank() && data[KEY_APPLE_TV_CHANNEL_FLIP.s()] == false) {
                 map.copy(
                     player = map.player +
                         mapOf(
@@ -788,12 +822,12 @@ class AppPreferences @Inject constructor(
      * synced. Read per-tune by AerioExoPlayerHolder.
      */
     val autoRecoverFrozenStreams: Flow<Boolean> =
-        store.data.map { it[KEY_AUTO_RECOVER_FROZEN_STREAMS] ?: true }
+        scopedData.map { it[KEY_AUTO_RECOVER_FROZEN_STREAMS.s()] ?: true }
     suspend fun setAutoRecoverFrozenStreams(value: Boolean) {
-        store.edit { it[KEY_AUTO_RECOVER_FROZEN_STREAMS] = value }
+        store.edit { it[KEY_AUTO_RECOVER_FROZEN_STREAMS.s()] = value }
     }
     suspend fun autoRecoverFrozenStreamsOnce(): Boolean =
-        store.data.first()[KEY_AUTO_RECOVER_FROZEN_STREAMS] ?: true
+        store.data.first()[KEY_AUTO_RECOVER_FROZEN_STREAMS.s()] ?: true
 
     /**
      * Player Info Card (App Behaviors, Apple-app parity): which elements the
@@ -808,9 +842,9 @@ class AppPreferences @Inject constructor(
      * player controls. Default on; synced like the Apple key.
      */
     val playerShowChannelInfoCard: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] ?: true }
+        scopedData.map { it[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()] ?: true }
     suspend fun setPlayerShowChannelInfoCard(value: Boolean) {
-        store.edit { it[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] = value }
+        store.edit { it[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()] = value }
     }
 
     /**
@@ -819,61 +853,61 @@ class AppPreferences @Inject constructor(
      * tablet guide cells only. Synced like the Apple key.
      */
     val guideProgramInfoButton: Flow<String> =
-        store.data.map { it[KEY_GUIDE_PROGRAM_INFO_BUTTON] ?: GuideProgramInfoButton.OFF }
+        scopedData.map { it[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] ?: GuideProgramInfoButton.OFF }
     suspend fun setGuideProgramInfoButton(value: String) {
-        store.edit { it[KEY_GUIDE_PROGRAM_INFO_BUTTON] = value }
+        store.edit { it[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] = value }
     }
 
     /** Program Info Button > Guide View (Apple parity 2026-10-13). Unset
      *  follows the old single setting: on unless that was Off. */
-    val programInfoButtonGuide: Flow<Boolean> = store.data.map {
-        it[KEY_PROGRAM_INFO_BUTTON_GUIDE]
-            ?: ((it[KEY_GUIDE_PROGRAM_INFO_BUTTON] ?: GuideProgramInfoButton.OFF) != GuideProgramInfoButton.OFF)
+    val programInfoButtonGuide: Flow<Boolean> = scopedData.map {
+        it[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()]
+            ?: ((it[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] ?: GuideProgramInfoButton.OFF) != GuideProgramInfoButton.OFF)
     }
     suspend fun setProgramInfoButtonGuide(value: Boolean) {
-        store.edit { it[KEY_PROGRAM_INFO_BUTTON_GUIDE] = value }
+        store.edit { it[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()] = value }
     }
 
     /** Program Info Button > List View: the same button on channel list rows. Default off. */
-    val programInfoButtonList: Flow<Boolean> = store.data.map { it[KEY_PROGRAM_INFO_BUTTON_LIST] ?: false }
+    val programInfoButtonList: Flow<Boolean> = scopedData.map { it[KEY_PROGRAM_INFO_BUTTON_LIST.s()] ?: false }
     suspend fun setProgramInfoButtonList(value: Boolean) {
-        store.edit { it[KEY_PROGRAM_INFO_BUTTON_LIST] = value }
+        store.edit { it[KEY_PROGRAM_INFO_BUTTON_LIST.s()] = value }
     }
 
     val playerCardShowChannelLogo: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_CARD_CHANNEL_LOGO] ?: true }
+        scopedData.map { it[KEY_PLAYER_CARD_CHANNEL_LOGO.s()] ?: true }
     suspend fun setPlayerCardShowChannelLogo(value: Boolean) {
-        store.edit { it[KEY_PLAYER_CARD_CHANNEL_LOGO] = value }
+        store.edit { it[KEY_PLAYER_CARD_CHANNEL_LOGO.s()] = value }
     }
 
     val playerCardShowChannelName: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_CARD_CHANNEL_NAME] ?: true }
+        scopedData.map { it[KEY_PLAYER_CARD_CHANNEL_NAME.s()] ?: true }
     suspend fun setPlayerCardShowChannelName(value: Boolean) {
-        store.edit { it[KEY_PLAYER_CARD_CHANNEL_NAME] = value }
+        store.edit { it[KEY_PLAYER_CARD_CHANNEL_NAME.s()] = value }
     }
 
     val playerCardShowProgramName: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_CARD_PROGRAM_NAME] ?: true }
+        scopedData.map { it[KEY_PLAYER_CARD_PROGRAM_NAME.s()] ?: true }
     suspend fun setPlayerCardShowProgramName(value: Boolean) {
-        store.edit { it[KEY_PLAYER_CARD_PROGRAM_NAME] = value }
+        store.edit { it[KEY_PLAYER_CARD_PROGRAM_NAME.s()] = value }
     }
 
     val playerCardShowProgramTime: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_CARD_PROGRAM_TIME] ?: true }
+        scopedData.map { it[KEY_PLAYER_CARD_PROGRAM_TIME.s()] ?: true }
     suspend fun setPlayerCardShowProgramTime(value: Boolean) {
-        store.edit { it[KEY_PLAYER_CARD_PROGRAM_TIME] = value }
+        store.edit { it[KEY_PLAYER_CARD_PROGRAM_TIME.s()] = value }
     }
 
     val playerCardShowProgramSubtitle: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_CARD_PROGRAM_SUBTITLE] ?: true }
+        scopedData.map { it[KEY_PLAYER_CARD_PROGRAM_SUBTITLE.s()] ?: true }
     suspend fun setPlayerCardShowProgramSubtitle(value: Boolean) {
-        store.edit { it[KEY_PLAYER_CARD_PROGRAM_SUBTITLE] = value }
+        store.edit { it[KEY_PLAYER_CARD_PROGRAM_SUBTITLE.s()] = value }
     }
 
     val playerCardShowProgramDescription: Flow<Boolean> =
-        store.data.map { it[KEY_PLAYER_CARD_PROGRAM_DESCRIPTION] ?: true }
+        scopedData.map { it[KEY_PLAYER_CARD_PROGRAM_DESCRIPTION.s()] ?: true }
     suspend fun setPlayerCardShowProgramDescription(value: Boolean) {
-        store.edit { it[KEY_PLAYER_CARD_PROGRAM_DESCRIPTION] = value }
+        store.edit { it[KEY_PLAYER_CARD_PROGRAM_DESCRIPTION.s()] = value }
     }
 
     /**
@@ -887,9 +921,9 @@ class AppPreferences @Inject constructor(
      * holistic job of task #53.)
      */
     val programPostersTmdbEnabled: Flow<Boolean> =
-        store.data.map { it[KEY_PROGRAM_POSTERS_TMDB_ENABLED] ?: false }
+        scopedData.map { it[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()] ?: false }
     suspend fun setProgramPostersTmdbEnabled(value: Boolean) {
-        store.edit { it[KEY_PROGRAM_POSTERS_TMDB_ENABLED] = value }
+        store.edit { it[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()] = value }
     }
 
     /**
@@ -901,7 +935,7 @@ class AppPreferences @Inject constructor(
      * deliberately NOT part of the sync snapshot.
      */
     val audioPassthroughEnabled: Flow<Boolean> =
-        store.data.map { it[KEY_AUDIO_PASSTHROUGH] ?: false }
+        scopedData.map { it[KEY_AUDIO_PASSTHROUGH] ?: false }
     suspend fun setAudioPassthroughEnabled(value: Boolean) {
         store.edit { it[KEY_AUDIO_PASSTHROUGH] = value }
     }
@@ -911,7 +945,7 @@ class AppPreferences @Inject constructor(
      * Encrypted at rest (audit task #53): stored ciphertext, decrypted on read.
      * Legacy plaintext values written by older builds pass through unchanged.
      */
-    val tmdbApiKey: Flow<String> = store.data.map { cipher.decrypt(it[KEY_TMDB_API_KEY]) ?: "" }
+    val tmdbApiKey: Flow<String> = scopedData.map { cipher.decrypt(it[KEY_TMDB_API_KEY]) ?: "" }
     suspend fun setTmdbApiKey(value: String) {
         store.edit { prefs ->
             val trimmed = value.trim()
@@ -927,7 +961,7 @@ class AppPreferences @Inject constructor(
      * persist log lines to disk. Defaults off so a stock install never
      * burns storage on logs the user didn't ask for.
      */
-    val debugLoggingEnabled: Flow<Boolean> = store.data.map { it[KEY_DEBUG_LOGGING_ENABLED] ?: false }
+    val debugLoggingEnabled: Flow<Boolean> = scopedData.map { it[KEY_DEBUG_LOGGING_ENABLED] ?: false }
     suspend fun setDebugLoggingEnabled(value: Boolean) {
         store.edit { it[KEY_DEBUG_LOGGING_ENABLED] = value }
     }
@@ -938,7 +972,7 @@ class AppPreferences @Inject constructor(
      * presents it, else the H.264 profile below. Per device, never synced.
      */
     /** Developer: request Dispatcharr HLS output for live channels (test). Per device, never synced. */
-    val developerForceHls: Flow<Boolean> = store.data.map { it[KEY_DEVELOPER_FORCE_HLS] ?: false }
+    val developerForceHls: Flow<Boolean> = scopedData.map { it[KEY_DEVELOPER_FORCE_HLS] ?: false }
     suspend fun setDeveloperForceHls(value: Boolean) {
         store.edit { it[KEY_DEVELOPER_FORCE_HLS] = value }
     }
@@ -946,12 +980,12 @@ class AppPreferences @Inject constructor(
     /** Dispatcharr hosts (lowercase host:port) whose plain live URL answered
      *  with an HLS playlist (proxy output set to HLS). Learned by ForceHls so
      *  the next tune goes straight to the HLS session path. Per device, never synced. */
-    val serverHlsHosts: Flow<Set<String>> = store.data.map { it[KEY_SERVER_HLS_HOSTS] ?: emptySet() }
+    val serverHlsHosts: Flow<Set<String>> = scopedData.map { it[KEY_SERVER_HLS_HOSTS] ?: emptySet() }
     suspend fun setServerHlsHosts(value: Set<String>) {
         store.edit { it[KEY_SERVER_HLS_HOSTS] = value }
     }
 
-    val castForceHevcTranscode: Flow<Boolean> = store.data.map { it[KEY_CAST_FORCE_HEVC_TRANSCODE] ?: false }
+    val castForceHevcTranscode: Flow<Boolean> = scopedData.map { it[KEY_CAST_FORCE_HEVC_TRANSCODE] ?: false }
     suspend fun setCastForceHevcTranscode(value: Boolean) {
         store.edit { it[KEY_CAST_FORCE_HEVC_TRANSCODE] = value }
     }
@@ -961,7 +995,7 @@ class AppPreferences @Inject constructor(
      * the receiver cannot present the source or HEVC, "720p60" (default) or
      * "1080p30". Per device, never synced.
      */
-    val castTranscodeDownProfile: Flow<String> = store.data.map { it[KEY_CAST_TRANSCODE_DOWN_PROFILE] ?: "720p60" }
+    val castTranscodeDownProfile: Flow<String> = scopedData.map { it[KEY_CAST_TRANSCODE_DOWN_PROFILE] ?: "720p60" }
     suspend fun setCastTranscodeDownProfile(value: String) {
         store.edit { it[KEY_CAST_TRANSCODE_DOWN_PROFILE] = value }
     }
@@ -971,9 +1005,9 @@ class AppPreferences @Inject constructor(
      * has no mini-player surface yet). Stored anyway so a future port can
      * flip it on without losing the user's prior choice.
      */
-    val autoResumeLastChannel: Flow<Boolean> = store.data.map { it[KEY_AUTO_RESUME_LAST_CHANNEL] ?: false }
+    val autoResumeLastChannel: Flow<Boolean> = scopedData.map { it[KEY_AUTO_RESUME_LAST_CHANNEL.s()] ?: false }
     suspend fun setAutoResumeLastChannel(value: Boolean) {
-        store.edit { it[KEY_AUTO_RESUME_LAST_CHANNEL] = value }
+        store.edit { it[KEY_AUTO_RESUME_LAST_CHANNEL.s()] = value }
     }
 
     /**
@@ -981,7 +1015,7 @@ class AppPreferences @Inject constructor(
      * and read once by AerioTVNavHost on cold boot. Empty string means
      * "nothing to resume" (first launch / after Settings -> Change playlist).
      */
-    val lastWatchedChannelId: Flow<String> = store.data.map { it[KEY_LAST_WATCHED_CHANNEL_ID] ?: "" }
+    val lastWatchedChannelId: Flow<String> = scopedData.map { it[KEY_LAST_WATCHED_CHANNEL_ID] ?: "" }
     suspend fun setLastWatchedChannelId(value: String) {
         store.edit { prefs ->
             if (value.isBlank()) prefs.remove(KEY_LAST_WATCHED_CHANNEL_ID)
@@ -997,7 +1031,7 @@ class AppPreferences @Inject constructor(
      * silently and don't show the sheet (the onboarding flow is the more
      * relevant first-launch surface).
      */
-    val lastSeenWhatsNewVersion: Flow<String> = store.data.map {
+    val lastSeenWhatsNewVersion: Flow<String> = scopedData.map {
         it[KEY_LAST_SEEN_WHATSNEW_VERSION] ?: ""
     }
     suspend fun setLastSeenWhatsNewVersion(value: String) {
@@ -1201,7 +1235,7 @@ class AppPreferences @Inject constructor(
      * TVShowsView.swift:27). Surfaced via ManageGroupsSheet from the On
      * Demand tab and consumed inside OnDemandViewModel to filter the lists.
      */
-    val hiddenDvrChannels: Flow<Set<String>> = store.data.map { prefs ->
+    val hiddenDvrChannels: Flow<Set<String>> = scopedData.map { prefs ->
         val raw = prefs[KEY_HIDDEN_DVR_CHANNELS] ?: ""
         if (raw.isBlank()) emptySet()
         else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }.toSet()
@@ -1231,10 +1265,10 @@ class AppPreferences @Inject constructor(
      * category visibility state but is per playlist, like the hidden titles
      * themselves, and is UNCHECKED until the user turns it on.
      */
-    val hiddenCategoryShownMovies: Flow<Set<String>> = store.data.map { prefs ->
+    val hiddenCategoryShownMovies: Flow<Set<String>> = scopedData.map { prefs ->
         decodeLines(prefs[KEY_HIDDEN_CATEGORY_SHOWN_MOVIES])
     }
-    val hiddenCategoryShownSeries: Flow<Set<String>> = store.data.map { prefs ->
+    val hiddenCategoryShownSeries: Flow<Set<String>> = scopedData.map { prefs ->
         decodeLines(prefs[KEY_HIDDEN_CATEGORY_SHOWN_SERIES])
     }
 
@@ -1267,7 +1301,7 @@ class AppPreferences @Inject constructor(
         }
     }
     suspend fun autoResumeLastChannelOnce(): Boolean =
-        store.data.first()[KEY_AUTO_RESUME_LAST_CHANNEL] ?: false
+        store.data.first()[KEY_AUTO_RESUME_LAST_CHANNEL.s()] ?: false
     suspend fun lastWatchedChannelIdOnce(): String =
         store.data.first()[KEY_LAST_WATCHED_CHANNEL_ID].orEmpty()
 
@@ -1276,21 +1310,21 @@ class AppPreferences @Inject constructor(
      * "follow iOS default" (Live TV). MainScaffold reads this once on the
      * first composition after bootstrap completes.
      */
-    val defaultTab: Flow<String> = store.data.map { it[KEY_DEFAULT_TAB] ?: "" }
+    val defaultTab: Flow<String> = scopedData.map { it[KEY_DEFAULT_TAB.s()] ?: "" }
     suspend fun setDefaultTab(value: String) {
-        store.edit { it[KEY_DEFAULT_TAB] = value }
+        store.edit { it[KEY_DEFAULT_TAB.s()] = value }
     }
 
     // ── Network ──────────────────────────────────────────────────────────
 
     /** iOS `networkTimeout` parity. Seconds. 5-60 step 5. Default 15 (iOS). */
-    val networkTimeoutSecs: Flow<Double> = store.data.map { it[KEY_NETWORK_TIMEOUT] ?: 15.0 }
+    val networkTimeoutSecs: Flow<Double> = scopedData.map { it[KEY_NETWORK_TIMEOUT] ?: 15.0 }
     suspend fun setNetworkTimeoutSecs(value: Double) {
         store.edit { it[KEY_NETWORK_TIMEOUT] = value }
     }
 
     /** iOS `maxRetries` parity. 0-10. Default 3 (iOS). */
-    val maxRetries: Flow<Int> = store.data.map { it[KEY_MAX_RETRIES] ?: 3 }
+    val maxRetries: Flow<Int> = scopedData.map { it[KEY_MAX_RETRIES] ?: 3 }
     suspend fun setMaxRetries(value: Int) {
         store.edit { it[KEY_MAX_RETRIES] = value }
     }
@@ -1300,7 +1334,7 @@ class AppPreferences @Inject constructor(
      * "xlarge" matching the cache-time tiers in MPVPlayerView. PlayerScreen
      * passes the resolved milliseconds into MPV at init time.
      */
-    val streamBufferSize: Flow<String> = store.data.map { it[KEY_STREAM_BUFFER_SIZE] ?: "default" }
+    val streamBufferSize: Flow<String> = scopedData.map { it[KEY_STREAM_BUFFER_SIZE] ?: "default" }
     suspend fun setStreamBufferSize(value: String) {
         store.edit { it[KEY_STREAM_BUFFER_SIZE] = value }
     }
@@ -1312,7 +1346,7 @@ class AppPreferences @Inject constructor(
      * nothing writes this key any more. Kept readable only so a future
      * migration can inspect what a user had chosen.
      */
-    val epgWindowHours: Flow<Int> = store.data.map { it[KEY_EPG_WINDOW_HOURS] ?: 24 }
+    val epgWindowHours: Flow<Int> = scopedData.map { it[KEY_EPG_WINDOW_HOURS] ?: 24 }
 
     /**
      * Generation stamp for the on-disk EPG cache. Bump
@@ -1326,7 +1360,7 @@ class AppPreferences @Inject constructor(
      * ("does the cache reach past now?") was tried first and proved unusable:
      * one channel with forward data satisfied it while hundreds had none.
      */
-    val epgCacheEpoch: Flow<Int> = store.data.map { it[KEY_EPG_CACHE_EPOCH] ?: 0 }
+    val epgCacheEpoch: Flow<Int> = scopedData.map { it[KEY_EPG_CACHE_EPOCH] ?: 0 }
     suspend fun setEpgCacheEpoch(value: Int) {
         store.edit { it[KEY_EPG_CACHE_EPOCH] = value }
     }
@@ -1354,11 +1388,11 @@ class AppPreferences @Inject constructor(
      * / "grayPersistent" / "themeFading". Controls how the multiview grid
      * indicates which tile owns audio.
      */
-    val multiviewAudioFocusStyle: Flow<String> = store.data.map {
-        it[KEY_MULTIVIEW_AUDIO_FOCUS_STYLE] ?: "centerIcon"
+    val multiviewAudioFocusStyle: Flow<String> = scopedData.map {
+        it[KEY_MULTIVIEW_AUDIO_FOCUS_STYLE.s()] ?: "centerIcon"
     }
     suspend fun setMultiviewAudioFocusStyle(value: String) {
-        store.edit { it[KEY_MULTIVIEW_AUDIO_FOCUS_STYLE] = value }
+        store.edit { it[KEY_MULTIVIEW_AUDIO_FOCUS_STYLE.s()] = value }
     }
 
     /**
@@ -1366,43 +1400,43 @@ class AppPreferences @Inject constructor(
      * (iOS 56fe163ad flipped the default to 8pt gutters); users who set it
      * explicitly keep their choice.
      */
-    val multiviewTilePadding: Flow<Boolean> = store.data.map {
-        it[KEY_MULTIVIEW_TILE_PADDING] ?: true
+    val multiviewTilePadding: Flow<Boolean> = scopedData.map {
+        it[KEY_MULTIVIEW_TILE_PADDING.s()] ?: true
     }
     suspend fun setMultiviewTilePadding(value: Boolean) {
-        store.edit { it[KEY_MULTIVIEW_TILE_PADDING] = value }
+        store.edit { it[KEY_MULTIVIEW_TILE_PADDING.s()] = value }
     }
 
     /** iOS `multiviewTileCornersRounded` parity. Rounds tile corners. */
-    val multiviewTileCornersRounded: Flow<Boolean> = store.data.map {
-        it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED] ?: false
+    val multiviewTileCornersRounded: Flow<Boolean> = scopedData.map {
+        it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED.s()] ?: false
     }
     suspend fun setMultiviewTileCornersRounded(value: Boolean) {
-        store.edit { it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED] = value }
+        store.edit { it[KEY_MULTIVIEW_TILE_CORNERS_ROUNDED.s()] = value }
     }
 
     /** Discord request: draw each tile's channel logo on the tile. Default off. */
-    val multiviewShowLogos: Flow<Boolean> = store.data.map {
-        it[KEY_MULTIVIEW_SHOW_LOGOS] ?: false
+    val multiviewShowLogos: Flow<Boolean> = scopedData.map {
+        it[KEY_MULTIVIEW_SHOW_LOGOS.s()] ?: false
     }
     suspend fun setMultiviewShowLogos(value: Boolean) {
-        store.edit { it[KEY_MULTIVIEW_SHOW_LOGOS] = value }
+        store.edit { it[KEY_MULTIVIEW_SHOW_LOGOS.s()] = value }
     }
 
     /** Logo corner: top_left (default), top_right, bottom_left, bottom_right. */
-    val multiviewLogoPosition: Flow<String> = store.data.map {
-        it[KEY_MULTIVIEW_LOGO_POSITION] ?: "top_left"
+    val multiviewLogoPosition: Flow<String> = scopedData.map {
+        it[KEY_MULTIVIEW_LOGO_POSITION.s()] ?: "top_left"
     }
     suspend fun setMultiviewLogoPosition(value: String) {
-        store.edit { it[KEY_MULTIVIEW_LOGO_POSITION] = value }
+        store.edit { it[KEY_MULTIVIEW_LOGO_POSITION.s()] = value }
     }
 
     /** Logo height as a percent of the video picture height, 5 to 25 in steps of 5. Default 10. */
-    val multiviewLogoSize: Flow<Int> = store.data.map {
-        (it[KEY_MULTIVIEW_LOGO_SIZE] ?: 10).coerceIn(5, 25)
+    val multiviewLogoSize: Flow<Int> = scopedData.map {
+        (it[KEY_MULTIVIEW_LOGO_SIZE.s()] ?: 10).coerceIn(5, 25)
     }
     suspend fun setMultiviewLogoSize(value: Int) {
-        store.edit { it[KEY_MULTIVIEW_LOGO_SIZE] = value.coerceIn(5, 25) }
+        store.edit { it[KEY_MULTIVIEW_LOGO_SIZE.s()] = value.coerceIn(5, 25) }
     }
 
     /**
@@ -1410,7 +1444,7 @@ class AppPreferences @Inject constructor(
      * "Don't Show Again" button on the soft-limit performance warning;
      * device-local, never reset (no Settings toggle on iOS either).
      */
-    val multiviewPerfWarningSuppressed: Flow<Boolean> = store.data.map {
+    val multiviewPerfWarningSuppressed: Flow<Boolean> = scopedData.map {
         it[KEY_MULTIVIEW_PERF_WARNING_SUPPRESSED] ?: false
     }
     suspend fun setMultiviewPerfWarningSuppressed(value: Boolean) {
@@ -1421,17 +1455,17 @@ class AppPreferences @Inject constructor(
      *  the airing program's subtitle (Teamarr carries "Team 1 vs Team 2"
      *  there). Remembered across launches; default off. */
     val multiviewPickerShowSubtitles: Flow<Boolean> =
-        store.data.map { it[KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES] ?: false }
+        scopedData.map { it[KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES.s()] ?: false }
     suspend fun setMultiviewPickerShowSubtitles(value: Boolean) {
-        store.edit { it[KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES] = value }
+        store.edit { it[KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES.s()] = value }
     }
 
     /** Add to Multiview picker "Show Descriptions" pill: each channel row adds
      *  the program description (two lines max). Default off. */
     val multiviewPickerShowDescriptions: Flow<Boolean> =
-        store.data.map { it[KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS] ?: false }
+        scopedData.map { it[KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS.s()] ?: false }
     suspend fun setMultiviewPickerShowDescriptions(value: Boolean) {
-        store.edit { it[KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS] = value }
+        store.edit { it[KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS.s()] = value }
     }
 
     /**
@@ -1440,7 +1474,7 @@ class AppPreferences @Inject constructor(
      * menu; persisted so the choice survives a relaunch. Unknown values fall
      * back to "auto".
      */
-    val multiviewLayoutMode: Flow<String> = store.data.map {
+    val multiviewLayoutMode: Flow<String> = scopedData.map {
         it[KEY_MULTIVIEW_LAYOUT_MODE] ?: "auto"
     }
     suspend fun setMultiviewLayoutMode(value: String) {
@@ -1520,15 +1554,15 @@ class AppPreferences @Inject constructor(
     // Flow so consumers can collectAsState once per screen and call
     // CategoryPaletteState.tintFor inline without observing 23 separate keys.
 
-    val categoryPalette: Flow<CategoryPaletteState> = store.data.map { prefs ->
-        val master = prefs[KEY_CATEGORY_MASTER_ENABLE] ?: true
+    val categoryPalette: Flow<CategoryPaletteState> = scopedData.map { prefs ->
+        val master = prefs[KEY_CATEGORY_MASTER_ENABLE.s()] ?: true
         val overrides = ProgramCategory.entries.mapNotNull { bucket ->
-            prefs[stringPreferencesKey(bucket.hexStorageKey)]?.let { bucket.storageSuffix to it }
+            prefs[stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey))]?.let { bucket.storageSuffix to it }
         }.toMap()
         val enabledFlags = ProgramCategory.entries.mapNotNull { bucket ->
-            prefs[booleanPreferencesKey(bucket.enabledStorageKey)]?.let { bucket.storageSuffix to it }
+            prefs[booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey))]?.let { bucket.storageSuffix to it }
         }.toMap()
-        val customRaw = prefs[KEY_CATEGORY_CUSTOM_JSON]
+        val customRaw = prefs[KEY_CATEGORY_CUSTOM_JSON.s()]
         val custom: List<CustomCategoryEntry> = if (customRaw.isNullOrBlank()) {
             emptyList()
         } else {
@@ -1544,25 +1578,25 @@ class AppPreferences @Inject constructor(
     }
 
     suspend fun setCategoryColorsEnabled(value: Boolean) {
-        store.edit { it[KEY_CATEGORY_MASTER_ENABLE] = value }
+        store.edit { it[KEY_CATEGORY_MASTER_ENABLE.s()] = value }
     }
 
     suspend fun setCategoryBucketHex(bucket: ProgramCategory, hex: String?) {
         store.edit { prefs ->
-            val key = stringPreferencesKey(bucket.hexStorageKey)
+            val key = stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey))
             if (hex.isNullOrBlank()) prefs.remove(key)
             else prefs[key] = hex.uppercase().removePrefix("#").take(6)
         }
     }
 
     suspend fun setCategoryBucketEnabled(bucket: ProgramCategory, enabled: Boolean) {
-        store.edit { it[booleanPreferencesKey(bucket.enabledStorageKey)] = enabled }
+        store.edit { it[booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey))] = enabled }
     }
 
     suspend fun resetCategoryPalette() {
         store.edit { prefs ->
             ProgramCategory.entries.forEach { bucket ->
-                prefs.remove(stringPreferencesKey(bucket.hexStorageKey))
+                prefs.remove(stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey)))
             }
         }
     }
@@ -1570,9 +1604,9 @@ class AppPreferences @Inject constructor(
     suspend fun setCustomCategories(list: List<CustomCategoryEntry>) {
         store.edit { prefs ->
             if (list.isEmpty()) {
-                prefs.remove(KEY_CATEGORY_CUSTOM_JSON)
+                prefs.remove(KEY_CATEGORY_CUSTOM_JSON.s())
             } else {
-                prefs[KEY_CATEGORY_CUSTOM_JSON] = Json.encodeToString(list)
+                prefs[KEY_CATEGORY_CUSTOM_JSON.s()] = Json.encodeToString(list)
             }
         }
     }
@@ -1583,7 +1617,7 @@ class AppPreferences @Inject constructor(
     // snapshots get pushed/pulled on each manual sync. Last push/pull
     // timestamps drive the UI's "Last synced 5 min ago" caption.
 
-    val syncMasterEnabled: Flow<Boolean> = store.data.map { it[KEY_SYNC_MASTER] ?: false }
+    val syncMasterEnabled: Flow<Boolean> = scopedData.map { it[KEY_SYNC_MASTER] ?: false }
     suspend fun setSyncMasterEnabled(value: Boolean) {
         store.edit { it[KEY_SYNC_MASTER] = value }
     }
@@ -1595,7 +1629,7 @@ class AppPreferences @Inject constructor(
      * users on a metered/restricted connection can switch it off.
      */
     val backgroundRefreshEnabled: Flow<Boolean> =
-        store.data.map { it[KEY_BG_REFRESH_ENABLED] ?: true }
+        scopedData.map { it[KEY_BG_REFRESH_ENABLED] ?: true }
     suspend fun setBackgroundRefreshEnabled(value: Boolean) {
         store.edit { it[KEY_BG_REFRESH_ENABLED] = value }
     }
@@ -1612,7 +1646,7 @@ class AppPreferences @Inject constructor(
      * WorkManager accepts hours.
      */
     val backgroundRefreshIntervalMins: Flow<Int> =
-        store.data.map { it[KEY_BG_REFRESH_INTERVAL_MINS] ?: 360 }
+        scopedData.map { it[KEY_BG_REFRESH_INTERVAL_MINS] ?: 360 }
     suspend fun setBackgroundRefreshIntervalMins(value: Int) {
         // Clamp to the valid range so the UI selector can't ship a value
         // that WorkManager will reject (Periodic Work requires >= 15min;
@@ -1627,16 +1661,16 @@ class AppPreferences @Inject constructor(
      * Same stored strings as Apple so the two apps read one vocabulary.
      */
     val backgroundRefreshType: Flow<String> =
-        store.data.map { it[KEY_BG_REFRESH_TYPE] ?: "interval" }
+        scopedData.map { it[KEY_BG_REFRESH_TYPE] ?: "interval" }
     suspend fun setBackgroundRefreshType(value: String) {
         store.edit { it[KEY_BG_REFRESH_TYPE] = if (value == "time") "time" else "interval" }
     }
 
     /** Apple `bgRefreshHour` / `bgRefreshMinute`; default 08:00 as Apple. */
     val backgroundRefreshHour: Flow<Int> =
-        store.data.map { it[KEY_BG_REFRESH_HOUR] ?: 8 }
+        scopedData.map { it[KEY_BG_REFRESH_HOUR] ?: 8 }
     val backgroundRefreshMinute: Flow<Int> =
-        store.data.map { it[KEY_BG_REFRESH_MINUTE] ?: 0 }
+        scopedData.map { it[KEY_BG_REFRESH_MINUTE] ?: 0 }
     suspend fun setBackgroundRefreshTime(hour: Int, minute: Int) {
         store.edit {
             it[KEY_BG_REFRESH_HOUR] = hour.coerceIn(0, 23)
@@ -1644,14 +1678,14 @@ class AppPreferences @Inject constructor(
         }
     }
 
-    fun syncCategoryEnabled(category: SyncCategory): Flow<Boolean> = store.data.map { prefs ->
+    fun syncCategoryEnabled(category: SyncCategory): Flow<Boolean> = scopedData.map { prefs ->
         prefs[booleanPreferencesKey(category.enabledStorageKey())] ?: true
     }
     suspend fun setSyncCategoryEnabled(category: SyncCategory, value: Boolean) {
         store.edit { it[booleanPreferencesKey(category.enabledStorageKey())] = value }
     }
 
-    val syncAccountEmail: Flow<String> = store.data.map { it[KEY_SYNC_ACCOUNT_EMAIL] ?: "" }
+    val syncAccountEmail: Flow<String> = scopedData.map { it[KEY_SYNC_ACCOUNT_EMAIL] ?: "" }
     /** One-shot read of the saved sync account email. Blank when the user has
      * never signed in to Drive, used to gate silent re-authorization. */
     suspend fun syncAccountEmailOnce(): String = syncAccountEmail.first()
@@ -1696,7 +1730,7 @@ class AppPreferences @Inject constructor(
         }
     }
 
-    val syncLastPushAt: Flow<Long> = store.data.map { it[KEY_SYNC_LAST_PUSH] ?: 0L }
+    val syncLastPushAt: Flow<Long> = scopedData.map { it[KEY_SYNC_LAST_PUSH] ?: 0L }
     suspend fun setSyncLastPushAt(value: Long) {
         store.edit { it[KEY_SYNC_LAST_PUSH] = value }
     }
@@ -1721,12 +1755,12 @@ class AppPreferences @Inject constructor(
      * re-typing; this flag gates a single up-front notice of that trust model.
      */
     val credentialsSyncDisclosed: Flow<Boolean> =
-        store.data.map { it[KEY_CREDENTIALS_SYNC_DISCLOSED] ?: false }
+        scopedData.map { it[KEY_CREDENTIALS_SYNC_DISCLOSED] ?: false }
     suspend fun setCredentialsSyncDisclosed(value: Boolean) {
         store.edit { it[KEY_CREDENTIALS_SYNC_DISCLOSED] = value }
     }
 
-    val syncLastPullAt: Flow<Long> = store.data.map { it[KEY_SYNC_LAST_PULL] ?: 0L }
+    val syncLastPullAt: Flow<Long> = scopedData.map { it[KEY_SYNC_LAST_PULL] ?: 0L }
 
     /**
      * True once THIS INSTALL has completed at least one Drive pull. Gates
@@ -1736,7 +1770,7 @@ class AppPreferences @Inject constructor(
      * overwritten with a blank app"). Device-local, never synced.
      */
     val syncInitialPullDone: Flow<Boolean> =
-        store.data.map { it[KEY_SYNC_INITIAL_PULL_DONE] ?: false }
+        scopedData.map { it[KEY_SYNC_INITIAL_PULL_DONE] ?: false }
     suspend fun setSyncInitialPullDone(value: Boolean) {
         store.edit { it[KEY_SYNC_INITIAL_PULL_DONE] = value }
     }
@@ -1752,22 +1786,22 @@ class AppPreferences @Inject constructor(
     suspend fun snapshotSyncablePreferences(): Map<String, String> {
         val data = store.data.first()
         val out = mutableMapOf<String, String>()
-        data[KEY_SELECTED_THEME]?.let { out["selectedTheme"] = it }
-        data[KEY_TEXT_SCALE]?.let { out["textScale"] = it.toString() }
-        data[KEY_SUBTEXT_SCALE]?.let { out["subtextScale"] = it.toString() }
-        data[KEY_TEXT_CONTRAST]?.let { out["textContrast"] = it.toString() }
+        data[KEY_SELECTED_THEME.s()]?.let { out["selectedTheme"] = it }
+        data[KEY_TEXT_SCALE.s()]?.let { out["textScale"] = it.toString() }
+        data[KEY_SUBTEXT_SCALE.s()]?.let { out["subtextScale"] = it.toString() }
+        data[KEY_TEXT_CONTRAST.s()]?.let { out["textContrast"] = it.toString() }
         // Appearance mode is the OPPOSITE of defaultLiveTVView: it MUST sync so
         // the user's Dark/Light/System choice follows them to every device.
-        data[KEY_APPEARANCE_MODE]?.let { out["appearanceMode"] = it }
-        data[KEY_APPEARANCE_TRUE_BLACK]?.let { out["appearanceTrueBlack"] = it.toString() }
-        data[KEY_DEFAULT_TAB]?.let { out["defaultTab"] = it }
-        data[KEY_TIME_FORMAT]?.let { out["timeFormat"] = it }
+        data[KEY_APPEARANCE_MODE.s()]?.let { out["appearanceMode"] = it }
+        data[KEY_APPEARANCE_TRUE_BLACK.s()]?.let { out["appearanceTrueBlack"] = it.toString() }
+        data[KEY_DEFAULT_TAB.s()]?.let { out["defaultTab"] = it }
+        data[KEY_TIME_FORMAT.s()]?.let { out["timeFormat"] = it }
         // NOTE: defaultLiveTVView is intentionally NOT synced -- it is a per-device
         // preference (the right default is form-factor specific: TV -> Guide,
         // phone -> List). Syncing one global value made a phone's "list" clobber a
         // TV's "guide" across devices. iOS keeps it per-device (@AppStorage) too.
-        data[KEY_SKIP_LOADING_SCREEN]?.let { out["skipLoadingScreen"] = it.toString() }
-        data[KEY_APPLE_TV_CHANNEL_FLIP]?.let { out["appleTVChannelFlip"] = it.toString() }
+        data[KEY_SKIP_LOADING_SCREEN.s()]?.let { out["skipLoadingScreen"] = it.toString() }
+        data[KEY_APPLE_TV_CHANNEL_FLIP.s()]?.let { out["appleTVChannelFlip"] = it.toString() }
         // Slice gate (see syncRemoteControlMap). Absent key reads as true, so
         // existing installs are unchanged.
         if (data[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
@@ -1777,31 +1811,31 @@ class AppPreferences @Inject constructor(
         if (data[KEY_SYNC_RADIO_MODE_BY_DEFAULT] == true) {
             data[KEY_RADIO_MODE_BY_DEFAULT]?.let { out["radioModeByDefault"] = it.toString() }
         }
-        data[KEY_GUIDE_GROUP_SELECTOR]?.let { out["guideGroupSelector"] = it }
-        data[KEY_GUIDE_SIDEBAR_LAYOUT]?.let { out["guideSidebarLayout"] = it }
-        data[KEY_PHONE_GROUP_SELECTOR]?.let { out["phoneGroupSelector"] = it }
-        data[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR]?.let { out["liveTvEdgeSwipeOpensSidebar"] = it.toString() }
-        data[KEY_GUIDE_TUNE_IN_MINI]?.let { out["guideTuneInMini"] = it.toString() }
-        data[KEY_GUIDE_PROGRAM_INFO_BUTTON]?.let { out["guideProgramInfoButton"] = it }
-        data[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD]?.let { out["playerShowChannelInfoCard"] = it.toString() }
-        data[KEY_PROGRAM_INFO_BUTTON_GUIDE]?.let { out["programInfoButtonGuide"] = it.toString() }
-        data[KEY_PROGRAM_INFO_BUTTON_LIST]?.let { out["programInfoButtonList"] = it.toString() }
-        data[KEY_SHOW_REMOTE_HINTS]?.let { out["showRemoteHints"] = it.toString() }
+        data[KEY_GUIDE_GROUP_SELECTOR.s()]?.let { out["guideGroupSelector"] = it }
+        data[KEY_GUIDE_SIDEBAR_LAYOUT.s()]?.let { out["guideSidebarLayout"] = it }
+        data[KEY_PHONE_GROUP_SELECTOR.s()]?.let { out["phoneGroupSelector"] = it }
+        data[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()]?.let { out["liveTvEdgeSwipeOpensSidebar"] = it.toString() }
+        data[KEY_GUIDE_TUNE_IN_MINI.s()]?.let { out["guideTuneInMini"] = it.toString() }
+        data[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()]?.let { out["guideProgramInfoButton"] = it }
+        data[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()]?.let { out["playerShowChannelInfoCard"] = it.toString() }
+        data[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()]?.let { out["programInfoButtonGuide"] = it.toString() }
+        data[KEY_PROGRAM_INFO_BUTTON_LIST.s()]?.let { out["programInfoButtonList"] = it.toString() }
+        data[KEY_SHOW_REMOTE_HINTS.s()]?.let { out["showRemoteHints"] = it.toString() }
         // Per-device-type: both sync so a TV's choice mirrors to other TVs and a
         // phone's to other phones, independently. Each device reads its own.
-        data[KEY_SHOW_EPG_BADGES_TV]?.let { out["showEpgBadgesTv"] = it.toString() }
-        data[KEY_SHOW_EPG_BADGES_MOBILE]?.let { out["showEpgBadgesMobile"] = it.toString() }
-        data[KEY_AUTO_RESUME_LAST_CHANNEL]?.let { out["autoResumeLastChannel"] = it.toString() }
+        data[KEY_SHOW_EPG_BADGES_TV.s()]?.let { out["showEpgBadgesTv"] = it.toString() }
+        data[KEY_SHOW_EPG_BADGES_MOBILE.s()]?.let { out["showEpgBadgesMobile"] = it.toString() }
+        data[KEY_AUTO_RESUME_LAST_CHANNEL.s()]?.let { out["autoResumeLastChannel"] = it.toString() }
         // TMDB poster fallback: sync the toggle + the user's own key via Drive
         // (their own Drive appData) so it carries across their devices, matching
         // how playlist credentials sync.
-        data[KEY_PROGRAM_POSTERS_TMDB_ENABLED]?.let { out["programPostersTmdbEnabled"] = it.toString() }
+        data[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()]?.let { out["programPostersTmdbEnabled"] = it.toString() }
         // Stored encrypted; the Drive snapshot carries the cleartext key so the
         // user's other devices can use it (decrypt here, the receiver re-encrypts
         // in applySyncedPreferences). A corrupt/undecryptable value is omitted.
         data[KEY_TMDB_API_KEY]?.let { cipher.decrypt(it)?.let { clear -> out["tmdbApiKey"] = clear } }
-        data[KEY_CATEGORY_MASTER_ENABLE]?.let { out["enableCategoryColors"] = it.toString() }
-        data[KEY_CATEGORY_CUSTOM_JSON]?.let { out["customCategoryColors.v1"] = it }
+        data[KEY_CATEGORY_MASTER_ENABLE.s()]?.let { out["enableCategoryColors"] = it.toString() }
+        data[KEY_CATEGORY_CUSTOM_JSON.s()]?.let { out["customCategoryColors.v1"] = it }
         // Audit task #52: broaden Drive sync to match iOS coverage. iOS
         // syncs hidden groups, accent color choice, and the custom accent
         // hex string as part of the Preferences snapshot. Network /
@@ -1811,11 +1845,11 @@ class AppPreferences @Inject constructor(
         data[KEY_HIDDEN_GROUPS]?.let { out["hiddenGroups.v1"] = it }
         data[KEY_GROUP_ORDER]?.let { out["groupOrder.v1"] = it }
         data[KEY_GROUP_SORT_MODE]?.let { out["groupSortMode.v1"] = it }
-        data[KEY_USE_CUSTOM_ACCENT]?.let { out["useCustomAccent"] = it.toString() }
-        data[KEY_CUSTOM_ACCENT_HEX]?.let { out["customAccentHex"] = it }
+        data[KEY_USE_CUSTOM_ACCENT.s()]?.let { out["useCustomAccent"] = it.toString() }
+        data[KEY_CUSTOM_ACCENT_HEX.s()]?.let { out["customAccentHex"] = it }
         // Skip Intervals: one global pair that follows the user everywhere.
-        data[KEY_SKIP_BACK_SECONDS]?.let { out["skipBackSeconds"] = it.toString() }
-        data[KEY_SKIP_FORWARD_SECONDS]?.let { out["skipForwardSeconds"] = it.toString() }
+        data[KEY_SKIP_BACK_SECONDS.s()]?.let { out["skipBackSeconds"] = it.toString() }
+        data[KEY_SKIP_FORWARD_SECONDS.s()]?.let { out["skipForwardSeconds"] = it.toString() }
         // GH #81 Default Group: Drive spans every playlist, so the per-playlist
         // tokens travel as one JSON object {playlistId: token}.
         val dgPrefix = ProfileScope.keyName("default_group_token_")
@@ -1826,8 +1860,8 @@ class AppPreferences @Inject constructor(
         }.toMap()
         if (dg.isNotEmpty()) out["defaultGroup"] = kotlinx.serialization.json.JsonObject(dg).toString()
         ProgramCategory.entries.forEach { bucket ->
-            data[stringPreferencesKey(bucket.hexStorageKey)]?.let { out[bucket.hexStorageKey] = it }
-            data[booleanPreferencesKey(bucket.enabledStorageKey)]?.let { out[bucket.enabledStorageKey] = it.toString() }
+            data[stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey))]?.let { out[bucket.hexStorageKey] = it }
+            data[booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey))]?.let { out[bucket.enabledStorageKey] = it.toString() }
         }
         return out
     }
@@ -1881,8 +1915,8 @@ class AppPreferences @Inject constructor(
                     put("skipBackSeconds", KEY_SKIP_BACK_SECONDS)
                     put("skipForwardSeconds", KEY_SKIP_FORWARD_SECONDS)
                     ProgramCategory.entries.forEach { bucket ->
-                        put(bucket.hexStorageKey, stringPreferencesKey(bucket.hexStorageKey))
-                        put(bucket.enabledStorageKey, booleanPreferencesKey(bucket.enabledStorageKey))
+                        put(bucket.hexStorageKey, stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey)))
+                        put(bucket.enabledStorageKey, booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey)))
                     }
                 }
                 syncedKeys.forEach { (name, key) -> if (name !in keys) prefs.remove(key) }
@@ -1891,58 +1925,58 @@ class AppPreferences @Inject constructor(
                     prefs.asMap().keys.filter { it.name.startsWith(dgPrefix) }.forEach { prefs.remove(it) }
                 }
             }
-            keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME] = it }
-            keys["textScale"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_SCALE] = snapTextScale(it).toDouble() }
-            keys["subtextScale"]?.toFloatOrNull()?.let { prefs[KEY_SUBTEXT_SCALE] = snapTextScale(it).toDouble() }
-            keys["textContrast"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_CONTRAST] = snapTextContrast(it).toDouble() }
-            keys["appearanceMode"]?.let { prefs[KEY_APPEARANCE_MODE] = it }
-            keys["appearanceTrueBlack"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPEARANCE_TRUE_BLACK] = it }
-            keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB] = it }
-            keys["timeFormat"]?.let { prefs[KEY_TIME_FORMAT] = it }
+            keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME.s()] = it }
+            keys["textScale"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_SCALE.s()] = snapTextScale(it).toDouble() }
+            keys["subtextScale"]?.toFloatOrNull()?.let { prefs[KEY_SUBTEXT_SCALE.s()] = snapTextScale(it).toDouble() }
+            keys["textContrast"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_CONTRAST.s()] = snapTextContrast(it).toDouble() }
+            keys["appearanceMode"]?.let { prefs[KEY_APPEARANCE_MODE.s()] = it }
+            keys["appearanceTrueBlack"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPEARANCE_TRUE_BLACK.s()] = it }
+            keys["defaultTab"]?.let { prefs[KEY_DEFAULT_TAB.s()] = it }
+            keys["timeFormat"]?.let { prefs[KEY_TIME_FORMAT.s()] = it }
             // defaultLiveTVView is per-device now (see snapshotSyncablePreferences);
             // ignore any legacy value carried in an older Drive snapshot so it can
             // never re-clobber this device's form-factor default.
-            keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN] = it }
-            keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP] = it }
+            keys["skipLoadingScreen"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SKIP_LOADING_SCREEN.s()] = it }
+            keys["appleTVChannelFlip"]?.toBooleanStrictOrNull()?.let { prefs[KEY_APPLE_TV_CHANNEL_FLIP.s()] = it }
             if (prefs[KEY_SYNC_REMOTE_CONTROL_MAP] != false) {
                 keys["remoteControlMap"]?.let { prefs[KEY_REMOTE_CONTROL_MAP] = it }
             }
             if (prefs[KEY_SYNC_RADIO_MODE_BY_DEFAULT] == true) {
                 keys["radioModeByDefault"]?.toBooleanStrictOrNull()?.let { prefs[KEY_RADIO_MODE_BY_DEFAULT] = it }
             }
-            keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR] = it }
-            keys["guideSidebarLayout"]?.let { prefs[KEY_GUIDE_SIDEBAR_LAYOUT] = it }
-            keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR] = it }
+            keys["guideGroupSelector"]?.let { prefs[KEY_GUIDE_GROUP_SELECTOR.s()] = it }
+            keys["guideSidebarLayout"]?.let { prefs[KEY_GUIDE_SIDEBAR_LAYOUT.s()] = it }
+            keys["phoneGroupSelector"]?.let { prefs[KEY_PHONE_GROUP_SELECTOR.s()] = it }
             keys["liveTvEdgeSwipeOpensSidebar"]?.toBooleanStrictOrNull()
-                ?.let { prefs[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR] = it }
-            keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI] = it }
+                ?.let { prefs[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()] = it }
+            keys["guideTuneInMini"]?.toBooleanStrictOrNull()?.let { prefs[KEY_GUIDE_TUNE_IN_MINI.s()] = it }
             keys["guideProgramInfoButton"]?.takeIf { it in GuideProgramInfoButton.VALUES }
-                ?.let { prefs[KEY_GUIDE_PROGRAM_INFO_BUTTON] = it }
+                ?.let { prefs[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] = it }
             keys["playerShowChannelInfoCard"]?.toBooleanStrictOrNull()
-                ?.let { prefs[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] = it }
-            keys["programInfoButtonGuide"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_INFO_BUTTON_GUIDE] = it }
-            keys["programInfoButtonList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_INFO_BUTTON_LIST] = it }
-            keys["showRemoteHints"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_REMOTE_HINTS] = it }
-            keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV] = it }
-            keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE] = it }
-            keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL] = it }
-            keys["programPostersTmdbEnabled"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_POSTERS_TMDB_ENABLED] = it }
+                ?.let { prefs[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()] = it }
+            keys["programInfoButtonGuide"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()] = it }
+            keys["programInfoButtonList"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_INFO_BUTTON_LIST.s()] = it }
+            keys["showRemoteHints"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_REMOTE_HINTS.s()] = it }
+            keys["showEpgBadgesTv"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_TV.s()] = it }
+            keys["showEpgBadgesMobile"]?.toBooleanStrictOrNull()?.let { prefs[KEY_SHOW_EPG_BADGES_MOBILE.s()] = it }
+            keys["autoResumeLastChannel"]?.toBooleanStrictOrNull()?.let { prefs[KEY_AUTO_RESUME_LAST_CHANNEL.s()] = it }
+            keys["programPostersTmdbEnabled"]?.toBooleanStrictOrNull()?.let { prefs[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()] = it }
             // Re-encrypt the incoming cleartext key for storage at rest.
             keys["tmdbApiKey"]?.let { prefs[KEY_TMDB_API_KEY] = cipher.encrypt(it) ?: it }
-            keys["enableCategoryColors"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CATEGORY_MASTER_ENABLE] = it }
-            keys["customCategoryColors.v1"]?.let { prefs[KEY_CATEGORY_CUSTOM_JSON] = it }
+            keys["enableCategoryColors"]?.toBooleanStrictOrNull()?.let { prefs[KEY_CATEGORY_MASTER_ENABLE.s()] = it }
+            keys["customCategoryColors.v1"]?.let { prefs[KEY_CATEGORY_CUSTOM_JSON.s()] = it }
             // Audit task #52: receive the broadened keys.
             keys["hiddenGroups.v1"]?.let { prefs[KEY_HIDDEN_GROUPS] = it }
             keys["groupOrder.v1"]?.let { prefs[KEY_GROUP_ORDER] = it }
             keys["groupSortMode.v1"]?.let { prefs[KEY_GROUP_SORT_MODE] = it }
-            keys["useCustomAccent"]?.toBooleanStrictOrNull()?.let { prefs[KEY_USE_CUSTOM_ACCENT] = it }
-            keys["customAccentHex"]?.let { prefs[KEY_CUSTOM_ACCENT_HEX] = it }
+            keys["useCustomAccent"]?.toBooleanStrictOrNull()?.let { prefs[KEY_USE_CUSTOM_ACCENT.s()] = it }
+            keys["customAccentHex"]?.let { prefs[KEY_CUSTOM_ACCENT_HEX.s()] = it }
             keys["skipBackSeconds"]?.toIntOrNull()
                 ?.takeIf { it in com.aeriotv.android.core.ui.SkipIntervals.CHOICES }
-                ?.let { prefs[KEY_SKIP_BACK_SECONDS] = it }
+                ?.let { prefs[KEY_SKIP_BACK_SECONDS.s()] = it }
             keys["skipForwardSeconds"]?.toIntOrNull()
                 ?.takeIf { it in com.aeriotv.android.core.ui.SkipIntervals.CHOICES }
-                ?.let { prefs[KEY_SKIP_FORWARD_SECONDS] = it }
+                ?.let { prefs[KEY_SKIP_FORWARD_SECONDS.s()] = it }
             keys["defaultGroup"]?.let { blob ->
                 val obj = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(blob) as? kotlinx.serialization.json.JsonObject }.getOrNull()
                 obj?.forEach { (pid, e) ->
@@ -1952,9 +1986,9 @@ class AppPreferences @Inject constructor(
                 }
             }
             ProgramCategory.entries.forEach { bucket ->
-                keys[bucket.hexStorageKey]?.let { prefs[stringPreferencesKey(bucket.hexStorageKey)] = it }
+                keys[bucket.hexStorageKey]?.let { prefs[stringPreferencesKey(ProfileScope.keyName(bucket.hexStorageKey))] = it }
                 keys[bucket.enabledStorageKey]?.toBooleanStrictOrNull()?.let {
-                    prefs[booleanPreferencesKey(bucket.enabledStorageKey)] = it
+                    prefs[booleanPreferencesKey(ProfileScope.keyName(bucket.enabledStorageKey))] = it
                 }
             }
         }
@@ -1967,7 +2001,7 @@ class AppPreferences @Inject constructor(
      * follows the Drive master toggle so existing Drive users stay on Drive.
      * Device-local, never synced.
      */
-    val syncProvider: Flow<String> = store.data.map { p ->
+    val syncProvider: Flow<String> = scopedData.map { p ->
         p[KEY_SYNC_PROVIDER] ?: if (p[KEY_SYNC_MASTER] == true) "drive" else "off"
     }
     suspend fun syncProviderOnce(): String = syncProvider.first()
@@ -1990,27 +2024,27 @@ class AppPreferences @Inject constructor(
                 is Number -> out[name] = kotlinx.serialization.json.JsonPrimitive(v)
             }
         }
-        put("selectedTheme", p[KEY_SELECTED_THEME])
-        put("appearanceMode", p[KEY_APPEARANCE_MODE])
-        put("trueBlack", p[KEY_APPEARANCE_TRUE_BLACK])
-        put("defaultTab", p[KEY_DEFAULT_TAB])
-        put("timeFormat", p[KEY_TIME_FORMAT])
-        put("textScale", p[KEY_TEXT_SCALE])
-        put("subtextScale", p[KEY_SUBTEXT_SCALE])
-        put("textContrast", p[KEY_TEXT_CONTRAST])
-        put("guideProgramInfoButton", p[KEY_GUIDE_PROGRAM_INFO_BUTTON])
-        put("programInfoButtonGuide", p[KEY_PROGRAM_INFO_BUTTON_GUIDE])
-        put("programInfoButtonList", p[KEY_PROGRAM_INFO_BUTTON_LIST])
-        put("showEpgBadgesTv", p[KEY_SHOW_EPG_BADGES_TV])
-        put("showRemoteHints", p[KEY_SHOW_REMOTE_HINTS])
+        put("selectedTheme", p[KEY_SELECTED_THEME.s()])
+        put("appearanceMode", p[KEY_APPEARANCE_MODE.s()])
+        put("trueBlack", p[KEY_APPEARANCE_TRUE_BLACK.s()])
+        put("defaultTab", p[KEY_DEFAULT_TAB.s()])
+        put("timeFormat", p[KEY_TIME_FORMAT.s()])
+        put("textScale", p[KEY_TEXT_SCALE.s()])
+        put("subtextScale", p[KEY_SUBTEXT_SCALE.s()])
+        put("textContrast", p[KEY_TEXT_CONTRAST.s()])
+        put("guideProgramInfoButton", p[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()])
+        put("programInfoButtonGuide", p[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()])
+        put("programInfoButtonList", p[KEY_PROGRAM_INFO_BUTTON_LIST.s()])
+        put("showEpgBadgesTv", p[KEY_SHOW_EPG_BADGES_TV.s()])
+        put("showRemoteHints", p[KEY_SHOW_REMOTE_HINTS.s()])
         put("guideGroupSelector", p[KEY_GUIDE_GROUP_SELECTOR.s()])
-        put("guideSidebarLayout", p[KEY_GUIDE_SIDEBAR_LAYOUT])
-        put("guideTuneInMini", p[KEY_GUIDE_TUNE_IN_MINI])
-        put("playerInfoCard.showOnChannelChange", p[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD])
+        put("guideSidebarLayout", p[KEY_GUIDE_SIDEBAR_LAYOUT.s()])
+        put("guideTuneInMini", p[KEY_GUIDE_TUNE_IN_MINI.s()])
+        put("playerInfoCard.showOnChannelChange", p[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()])
         put("phoneGroupSelector", p[KEY_PHONE_GROUP_SELECTOR.s()])
-        put("liveTvEdgeSwipeOpensSidebar", p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR])
-        put("skipLoadingScreen", p[KEY_SKIP_LOADING_SCREEN])
-        put("appleTVChannelFlip", p[KEY_APPLE_TV_CHANNEL_FLIP])
+        put("liveTvEdgeSwipeOpensSidebar", p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()])
+        put("skipLoadingScreen", p[KEY_SKIP_LOADING_SCREEN.s()])
+        put("appleTVChannelFlip", p[KEY_APPLE_TV_CHANNEL_FLIP.s()])
         // GH #81 Default Group for the session's playlist; "" = none. Dsync data
         // is already per profile and per playlist, so the token goes as is.
         if (!playlistId.isNullOrBlank()) put("defaultGroup", p[keyDefaultGroupToken(playlistId)] ?: "")
@@ -2038,27 +2072,27 @@ class AppPreferences @Inject constructor(
         val guideSel = KEY_GUIDE_GROUP_SELECTOR.s()
         val phoneSel = KEY_PHONE_GROUP_SELECTOR.s()
         store.edit { p ->
-            str("selectedTheme")?.takeIf { t -> AppTheme.entries.any { it.name == t } }?.let { p[KEY_SELECTED_THEME] = it }
-            str("appearanceMode")?.let { p[KEY_APPEARANCE_MODE] = it }
-            bool("trueBlack")?.let { p[KEY_APPEARANCE_TRUE_BLACK] = it }
-            str("defaultTab")?.let { p[KEY_DEFAULT_TAB] = it }
-            str("timeFormat")?.let { p[KEY_TIME_FORMAT] = it }
-            dbl("textScale")?.let { p[KEY_TEXT_SCALE] = snapTextScale(it.toFloat()).toDouble() }
-            dbl("subtextScale")?.let { p[KEY_SUBTEXT_SCALE] = snapTextScale(it.toFloat()).toDouble() }
-            dbl("textContrast")?.let { p[KEY_TEXT_CONTRAST] = snapTextContrast(it.toFloat()).toDouble() }
-            str("guideProgramInfoButton")?.takeIf { it in GuideProgramInfoButton.VALUES }?.let { p[KEY_GUIDE_PROGRAM_INFO_BUTTON] = it }
-            bool("programInfoButtonGuide")?.let { p[KEY_PROGRAM_INFO_BUTTON_GUIDE] = it }
-            bool("programInfoButtonList")?.let { p[KEY_PROGRAM_INFO_BUTTON_LIST] = it }
-            bool("showEpgBadgesTv")?.let { p[KEY_SHOW_EPG_BADGES_TV] = it }
-            bool("showRemoteHints")?.let { p[KEY_SHOW_REMOTE_HINTS] = it }
+            str("selectedTheme")?.takeIf { t -> AppTheme.entries.any { it.name == t } }?.let { p[KEY_SELECTED_THEME.s()] = it }
+            str("appearanceMode")?.let { p[KEY_APPEARANCE_MODE.s()] = it }
+            bool("trueBlack")?.let { p[KEY_APPEARANCE_TRUE_BLACK.s()] = it }
+            str("defaultTab")?.let { p[KEY_DEFAULT_TAB.s()] = it }
+            str("timeFormat")?.let { p[KEY_TIME_FORMAT.s()] = it }
+            dbl("textScale")?.let { p[KEY_TEXT_SCALE.s()] = snapTextScale(it.toFloat()).toDouble() }
+            dbl("subtextScale")?.let { p[KEY_SUBTEXT_SCALE.s()] = snapTextScale(it.toFloat()).toDouble() }
+            dbl("textContrast")?.let { p[KEY_TEXT_CONTRAST.s()] = snapTextContrast(it.toFloat()).toDouble() }
+            str("guideProgramInfoButton")?.takeIf { it in GuideProgramInfoButton.VALUES }?.let { p[KEY_GUIDE_PROGRAM_INFO_BUTTON.s()] = it }
+            bool("programInfoButtonGuide")?.let { p[KEY_PROGRAM_INFO_BUTTON_GUIDE.s()] = it }
+            bool("programInfoButtonList")?.let { p[KEY_PROGRAM_INFO_BUTTON_LIST.s()] = it }
+            bool("showEpgBadgesTv")?.let { p[KEY_SHOW_EPG_BADGES_TV.s()] = it }
+            bool("showRemoteHints")?.let { p[KEY_SHOW_REMOTE_HINTS.s()] = it }
             str("guideGroupSelector")?.let { p[guideSel] = it }
-            str("guideSidebarLayout")?.let { p[KEY_GUIDE_SIDEBAR_LAYOUT] = it }
-            bool("guideTuneInMini")?.let { p[KEY_GUIDE_TUNE_IN_MINI] = it }
-            bool("playerInfoCard.showOnChannelChange")?.let { p[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD] = it }
+            str("guideSidebarLayout")?.let { p[KEY_GUIDE_SIDEBAR_LAYOUT.s()] = it }
+            bool("guideTuneInMini")?.let { p[KEY_GUIDE_TUNE_IN_MINI.s()] = it }
+            bool("playerInfoCard.showOnChannelChange")?.let { p[KEY_PLAYER_SHOW_CHANNEL_INFO_CARD.s()] = it }
             str("phoneGroupSelector")?.let { p[phoneSel] = it }
-            bool("liveTvEdgeSwipeOpensSidebar")?.let { p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR] = it }
-            bool("skipLoadingScreen")?.let { p[KEY_SKIP_LOADING_SCREEN] = it }
-            bool("appleTVChannelFlip")?.let { p[KEY_APPLE_TV_CHANNEL_FLIP] = it }
+            bool("liveTvEdgeSwipeOpensSidebar")?.let { p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR.s()] = it }
+            bool("skipLoadingScreen")?.let { p[KEY_SKIP_LOADING_SCREEN.s()] = it }
+            bool("appleTVChannelFlip")?.let { p[KEY_APPLE_TV_CHANNEL_FLIP.s()] = it }
             // An unknown group is stored as is; the launch path falls back when it is not in knownGroups.
             if (!playlistId.isNullOrBlank()) str("defaultGroup")?.let { t ->
                 if (t.isBlank()) p.remove(keyDefaultGroupToken(playlistId)) else p[keyDefaultGroupToken(playlistId)] = t
@@ -2088,7 +2122,7 @@ class AppPreferences @Inject constructor(
     // these belong in snapshotSyncablePreferences (per-device state).
 
     /** uptime-independent wall clock of the last automatic update check. */
-    val updateLastCheckAt: Flow<Long> = store.data.map { it[KEY_UPDATE_LAST_CHECK_AT] ?: 0L }
+    val updateLastCheckAt: Flow<Long> = scopedData.map { it[KEY_UPDATE_LAST_CHECK_AT] ?: 0L }
     suspend fun setUpdateLastCheckAt(value: Long) {
         store.edit { it[KEY_UPDATE_LAST_CHECK_AT] = value }
     }
@@ -2096,7 +2130,7 @@ class AppPreferences @Inject constructor(
 
     /** versionName the user chose "Later" on; the launch prompt skips it.
      *  Manual checks in Settings ignore the skip. */
-    val updateSkippedVersion: Flow<String> = store.data.map { it[KEY_UPDATE_SKIPPED_VERSION] ?: "" }
+    val updateSkippedVersion: Flow<String> = scopedData.map { it[KEY_UPDATE_SKIPPED_VERSION] ?: "" }
     suspend fun setUpdateSkippedVersion(value: String) {
         store.edit { prefs ->
             if (value.isBlank()) prefs.remove(KEY_UPDATE_SKIPPED_VERSION)
@@ -2110,7 +2144,7 @@ class AppPreferences @Inject constructor(
      *  BEFORE the unknown-sources Settings trip and BEFORE the install-session
      *  commit, because both can kill this process; the next launch resumes from
      *  it. Blank = nothing pending. */
-    val updatePendingJson: Flow<String> = store.data.map { it[KEY_UPDATE_PENDING] ?: "" }
+    val updatePendingJson: Flow<String> = scopedData.map { it[KEY_UPDATE_PENDING] ?: "" }
     suspend fun setUpdatePendingJson(value: String) {
         store.edit { prefs ->
             if (value.isBlank()) prefs.remove(KEY_UPDATE_PENDING)
@@ -2135,16 +2169,16 @@ class AppPreferences @Inject constructor(
     /** Live Rewind (task #143): master enable. Off until the user
      *  accepts the onboarding/update prompt (P2) or flips the toggle. */
     val liveRewindEnabled: kotlinx.coroutines.flow.Flow<Boolean> =
-        store.data.map { it[KEY_LIVE_REWIND_ENABLED] ?: false }
+        scopedData.map { it[KEY_LIVE_REWIND_ENABLED.s()] ?: false }
     suspend fun setLiveRewindEnabled(value: Boolean) {
-        store.edit { it[KEY_LIVE_REWIND_ENABLED] = value }
+        store.edit { it[KEY_LIVE_REWIND_ENABLED.s()] = value }
     }
 
     /** Live Rewind: rewind depth in minutes (15/30/60/120, default 30). */
     val liveRewindDepthMinutes: kotlinx.coroutines.flow.Flow<Int> =
-        store.data.map { it[KEY_LIVE_REWIND_DEPTH_MIN] ?: 30 }
+        scopedData.map { it[KEY_LIVE_REWIND_DEPTH_MIN.s()] ?: 30 }
     suspend fun setLiveRewindDepthMinutes(value: Int) {
-        store.edit { it[KEY_LIVE_REWIND_DEPTH_MIN] = value }
+        store.edit { it[KEY_LIVE_REWIND_DEPTH_MIN.s()] = value }
     }
 
     /** Keep Recent Channels Live (iOS parity): flipped-away channels keep
@@ -2152,9 +2186,9 @@ class AppPreferences @Inject constructor(
      *  time away. Off by default: each kept channel is an extra
      *  simultaneous provider connection. */
     val liveRewindKeepRecent: kotlinx.coroutines.flow.Flow<Boolean> =
-        store.data.map { it[KEY_LIVE_REWIND_KEEP_RECENT] ?: false }
+        scopedData.map { it[KEY_LIVE_REWIND_KEEP_RECENT.s()] ?: false }
     suspend fun setLiveRewindKeepRecent(value: Boolean) {
-        store.edit { it[KEY_LIVE_REWIND_KEEP_RECENT] = value }
+        store.edit { it[KEY_LIVE_REWIND_KEEP_RECENT.s()] = value }
     }
 
     /**
@@ -2165,7 +2199,7 @@ class AppPreferences @Inject constructor(
      * seek re-tunes), never to the guide or saved positions.
      */
     fun catchupTimeOffsetMinutes(playlistId: String): kotlinx.coroutines.flow.Flow<Int> =
-        store.data.map { (it[keyCatchupTimeOffset(playlistId)] ?: 0).coerceIn(-180, 180) }
+        scopedData.map { (it[keyCatchupTimeOffset(playlistId)] ?: 0).coerceIn(-180, 180) }
     suspend fun setCatchupTimeOffsetMinutes(playlistId: String, minutes: Int) {
         store.edit { it[keyCatchupTimeOffset(playlistId)] = minutes.coerceIn(-180, 180) }
     }
@@ -2174,14 +2208,14 @@ class AppPreferences @Inject constructor(
      *  (GuideIdentityHash) the playlist's EPG cache was last built for. Empty
      *  when never stamped. */
     fun epgIdentityHash(playlistId: String): kotlinx.coroutines.flow.Flow<String> =
-        store.data.map { it[keyEpgIdentityHash(playlistId)] ?: "" }
+        scopedData.map { it[keyEpgIdentityHash(playlistId)] ?: "" }
     suspend fun setEpgIdentityHash(playlistId: String, hash: String) {
         store.edit { it[keyEpgIdentityHash(playlistId)] = hash }
     }
 
     /** Fingerprint of the last EPG fetch saved to Room (no-op fetch detection). */
     fun epgFetchFingerprint(playlistId: String): kotlinx.coroutines.flow.Flow<String> =
-        store.data.map { it[stringPreferencesKey("epg_fetch_fingerprint_$playlistId")] ?: "" }
+        scopedData.map { it[stringPreferencesKey("epg_fetch_fingerprint_$playlistId")] ?: "" }
     suspend fun setEpgFetchFingerprint(playlistId: String, print: String) {
         store.edit { it[stringPreferencesKey("epg_fetch_fingerprint_$playlistId")] = print }
     }
@@ -2192,7 +2226,7 @@ class AppPreferences @Inject constructor(
      * re-downloaded or re-parsed). Either half may be null.
      */
     fun feedValidators(url: String): kotlinx.coroutines.flow.Flow<Pair<String?, String?>> =
-        store.data.map { p ->
+        scopedData.map { p ->
             val raw = p[keyFeedValidators(url)] ?: return@map null to null
             val i = raw.indexOf('\n')
             if (i < 0) raw.ifEmpty { null } to null
@@ -2205,25 +2239,25 @@ class AppPreferences @Inject constructor(
     /** Skip Intervals (Logan 2026-09-14): seconds a skip-back control moves
      *  (5/10/15/30/60, default 10). Synced; mirrored into
      *  [com.aeriotv.android.core.ui.SkipIntervals] by the Application. */
-    val skipBackSeconds: Flow<Int> = store.data.map {
+    val skipBackSeconds: Flow<Int> = scopedData.map {
         com.aeriotv.android.core.ui.SkipIntervals.sanitize(
-            it[KEY_SKIP_BACK_SECONDS],
+            it[KEY_SKIP_BACK_SECONDS.s()],
             com.aeriotv.android.core.ui.SkipIntervals.DEFAULT_BACK_SECONDS,
         )
     }
     suspend fun setSkipBackSeconds(value: Int) {
-        store.edit { it[KEY_SKIP_BACK_SECONDS] = value }
+        store.edit { it[KEY_SKIP_BACK_SECONDS.s()] = value }
     }
 
     /** Skip Intervals: seconds a skip-forward control moves (default 30). */
-    val skipForwardSeconds: Flow<Int> = store.data.map {
+    val skipForwardSeconds: Flow<Int> = scopedData.map {
         com.aeriotv.android.core.ui.SkipIntervals.sanitize(
-            it[KEY_SKIP_FORWARD_SECONDS],
+            it[KEY_SKIP_FORWARD_SECONDS.s()],
             com.aeriotv.android.core.ui.SkipIntervals.DEFAULT_FORWARD_SECONDS,
         )
     }
     suspend fun setSkipForwardSeconds(value: Int) {
-        store.edit { it[KEY_SKIP_FORWARD_SECONDS] = value }
+        store.edit { it[KEY_SKIP_FORWARD_SECONDS.s()] = value }
     }
 
     /**
@@ -2233,22 +2267,22 @@ class AppPreferences @Inject constructor(
      * Device-local.
      */
     val skipWithoutControls: Flow<Boolean> =
-        store.data.map { it[KEY_SKIP_WITHOUT_CONTROLS] ?: false }
+        scopedData.map { it[KEY_SKIP_WITHOUT_CONTROLS.s()] ?: false }
     suspend fun setSkipWithoutControls(value: Boolean) {
-        store.edit { it[KEY_SKIP_WITHOUT_CONTROLS] = value }
+        store.edit { it[KEY_SKIP_WITHOUT_CONTROLS.s()] = value }
     }
 
     /** How many recent channels stay live (1-5, default 2). */
     val liveRewindKeepCount: kotlinx.coroutines.flow.Flow<Int> =
-        store.data.map { (it[KEY_LIVE_REWIND_KEEP_COUNT] ?: 2).coerceIn(1, 5) }
+        scopedData.map { (it[KEY_LIVE_REWIND_KEEP_COUNT.s()] ?: 2).coerceIn(1, 5) }
     suspend fun setLiveRewindKeepCount(value: Int) {
-        store.edit { it[KEY_LIVE_REWIND_KEEP_COUNT] = value.coerceIn(1, 5) }
+        store.edit { it[KEY_LIVE_REWIND_KEEP_COUNT.s()] = value.coerceIn(1, 5) }
     }
 
     /** Live Rewind P2: the one-time feature prompt has been answered
      *  (either way). Never shown again once set. */
     val liveRewindPromptSeen: kotlinx.coroutines.flow.Flow<Boolean> =
-        store.data.map { it[KEY_LIVE_REWIND_PROMPT_SEEN] ?: false }
+        scopedData.map { it[KEY_LIVE_REWIND_PROMPT_SEEN] ?: false }
     suspend fun setLiveRewindPromptSeen(value: Boolean) {
         store.edit { it[KEY_LIVE_REWIND_PROMPT_SEEN] = value }
     }
@@ -2256,21 +2290,21 @@ class AppPreferences @Inject constructor(
     /** Live Rewind P2: retention for buffered video from past sessions,
      *  in hours (1/6/12/24/72/168 presets or custom, default 24). */
     val liveRewindRetentionHours: kotlinx.coroutines.flow.Flow<Int> =
-        store.data.map { it[KEY_LIVE_REWIND_RETENTION_HOURS] ?: 24 }
+        scopedData.map { it[KEY_LIVE_REWIND_RETENTION_HOURS.s()] ?: 24 }
     suspend fun setLiveRewindRetentionHours(value: Int) {
-        store.edit { it[KEY_LIVE_REWIND_RETENTION_HOURS] = value.coerceIn(1, 24 * 30) }
+        store.edit { it[KEY_LIVE_REWIND_RETENTION_HOURS.s()] = value.coerceIn(1, 24 * 30) }
     }
 
     /** Live Rewind P2: total on-disk budget across sessions, in GB
      *  (default 10). Oldest segments are evicted first when exceeded. */
     val liveRewindBudgetGB: kotlinx.coroutines.flow.Flow<Int> =
-        store.data.map { it[KEY_LIVE_REWIND_BUDGET_GB] ?: 10 }
+        scopedData.map { it[KEY_LIVE_REWIND_BUDGET_GB.s()] ?: 10 }
     suspend fun setLiveRewindBudgetGB(value: Int) {
-        store.edit { it[KEY_LIVE_REWIND_BUDGET_GB] = value.coerceIn(1, 500) }
+        store.edit { it[KEY_LIVE_REWIND_BUDGET_GB.s()] = value.coerceIn(1, 500) }
     }
 
     /** iOS `dvrMaxLocalStorageMB` parity. Default 10 GB. */
-    val dvrMaxLocalStorageMB: Flow<Int> = store.data.map { it[KEY_DVR_MAX_LOCAL_STORAGE_MB] ?: 10_240 }
+    val dvrMaxLocalStorageMB: Flow<Int> = scopedData.map { it[KEY_DVR_MAX_LOCAL_STORAGE_MB] ?: 10_240 }
     suspend fun setDvrMaxLocalStorageMB(value: Int) {
         store.edit { it[KEY_DVR_MAX_LOCAL_STORAGE_MB] = value }
     }
@@ -2282,20 +2316,20 @@ class AppPreferences @Inject constructor(
      *  Device-local like the other DVR settings (the capability gate in the
      *  sheet still forces local for non-admin accounts regardless). */
     val dvrDefaultDestination: Flow<String> =
-        store.data.map { it[KEY_DVR_DEFAULT_DESTINATION] ?: "server" }
+        scopedData.map { it[KEY_DVR_DEFAULT_DESTINATION.s()] ?: "server" }
     suspend fun setDvrDefaultDestination(value: String) {
-        store.edit { it[KEY_DVR_DEFAULT_DESTINATION] = value }
+        store.edit { it[KEY_DVR_DEFAULT_DESTINATION.s()] = value }
     }
 
-    val dvrDefaultPreRollMins: Flow<Int> = store.data.map { it[KEY_DVR_DEFAULT_PRE_ROLL] ?: 0 }
+    val dvrDefaultPreRollMins: Flow<Int> = scopedData.map { it[KEY_DVR_DEFAULT_PRE_ROLL.s()] ?: 0 }
     suspend fun setDvrDefaultPreRollMins(value: Int) {
-        store.edit { it[KEY_DVR_DEFAULT_PRE_ROLL] = value }
+        store.edit { it[KEY_DVR_DEFAULT_PRE_ROLL.s()] = value }
     }
 
     /** iOS `dvrDefaultPostRollMins` parity. */
-    val dvrDefaultPostRollMins: Flow<Int> = store.data.map { it[KEY_DVR_DEFAULT_POST_ROLL] ?: 0 }
+    val dvrDefaultPostRollMins: Flow<Int> = scopedData.map { it[KEY_DVR_DEFAULT_POST_ROLL.s()] ?: 0 }
     suspend fun setDvrDefaultPostRollMins(value: Int) {
-        store.edit { it[KEY_DVR_DEFAULT_POST_ROLL] = value }
+        store.edit { it[KEY_DVR_DEFAULT_POST_ROLL.s()] = value }
     }
 
     /**
@@ -2304,7 +2338,7 @@ class AppPreferences @Inject constructor(
      * user picked via ACTION_OPEN_DOCUMENT_TREE; we hold persistable RW
      * permission for it for the lifetime of the install.
      */
-    val dvrCustomFolderUri: Flow<String> = store.data.map { it[KEY_DVR_CUSTOM_FOLDER_URI] ?: "" }
+    val dvrCustomFolderUri: Flow<String> = scopedData.map { it[KEY_DVR_CUSTOM_FOLDER_URI] ?: "" }
     suspend fun setDvrCustomFolderUri(value: String) {
         store.edit { prefs ->
             if (value.isBlank()) prefs.remove(KEY_DVR_CUSTOM_FOLDER_URI)
@@ -2331,7 +2365,7 @@ class AppPreferences @Inject constructor(
      * Device-local; deliberately NOT part of the Drive sync snapshot (it is
      * a per-install cache, the recordings themselves are server state).
      */
-    val recordingCategories: Flow<Map<String, String>> = store.data.map { prefs ->
+    val recordingCategories: Flow<Map<String, String>> = scopedData.map { prefs ->
         decodeRecordingCategories(prefs[KEY_DVR_RECORDING_CATEGORIES])
     }
 
@@ -2412,7 +2446,7 @@ class AppPreferences @Inject constructor(
      * learned from this device's network and provider path.
      */
     val liveStartBufferMs: Flow<Map<String, LearnedStartBuffer>> =
-        store.data.map { decodeLearnedStartBuffers(it) }
+        scopedData.map { decodeLearnedStartBuffers(it) }
 
     /** One-shot read for the player holder's in-memory cache. */
     suspend fun liveStartBuffersOnce(): Map<String, LearnedStartBuffer> =
@@ -2483,7 +2517,7 @@ class AppPreferences @Inject constructor(
      * recording start via [dvrKeepAwakeOnce].
      */
     val dvrKeepAwakeDuringRecording: Flow<Boolean> =
-        store.data.map { it[KEY_DVR_KEEP_AWAKE] ?: true }
+        scopedData.map { it[KEY_DVR_KEEP_AWAKE] ?: true }
     suspend fun setDvrKeepAwakeDuringRecording(value: Boolean) {
         store.edit { it[KEY_DVR_KEEP_AWAKE] = value }
     }
@@ -2681,6 +2715,8 @@ class AppPreferences @Inject constructor(
         val KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES = booleanPreferencesKey("multiview_picker_show_subtitles")
         val KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS = booleanPreferencesKey("multiview_picker_show_descriptions")
         val KEY_CHANNEL_COLLECTIONS = stringPreferencesKey("channel_collections")
+        /** Profile ids already seeded with the per-profile settings (2026-10-27 migration). */
+        val KEY_PROFILE_SETTINGS_SEEDED = androidx.datastore.preferences.core.stringSetPreferencesKey("profile_settings_seeded_v2")
         val KEY_DVR_MAX_LOCAL_STORAGE_MB = intPreferencesKey("dvr_max_local_storage_mb")
         val KEY_DVR_DEFAULT_PRE_ROLL = intPreferencesKey("dvr_default_pre_roll_mins")
         val KEY_DVR_DEFAULT_POST_ROLL = intPreferencesKey("dvr_default_post_roll_mins")
@@ -2726,6 +2762,85 @@ class AppPreferences @Inject constructor(
         val KEY_BG_REFRESH_TYPE = stringPreferencesKey("background_refresh_type")
         val KEY_BG_REFRESH_HOUR = intPreferencesKey("background_refresh_hour")
         val KEY_BG_REFRESH_MINUTE = intPreferencesKey("background_refresh_minute")
+        /** Settings that are profile scoped (".s()") and carried by Dispatcharr Sync and Drive. */
+        val PROFILE_SETTING_KEYS: List<Preferences.Key<*>> by lazy { listOf(
+            KEY_SELECTED_THEME,
+            KEY_APPEARANCE_MODE,
+            KEY_APPEARANCE_TRUE_BLACK,
+            KEY_USE_CUSTOM_ACCENT,
+            KEY_CUSTOM_ACCENT_HEX,
+            KEY_TEXT_SCALE,
+            KEY_SUBTEXT_SCALE,
+            KEY_TEXT_CONTRAST,
+            KEY_TIME_FORMAT,
+            KEY_DEFAULT_TAB,
+            KEY_SKIP_LOADING_SCREEN,
+            KEY_AUTO_RESUME_LAST_CHANNEL,
+            KEY_DEFAULT_LIVE_TV_VIEW,
+            KEY_LIVE_TV_LAYOUT,
+            KEY_GUIDE_GROUP_SELECTOR,
+            KEY_PHONE_GROUP_SELECTOR,
+            KEY_GUIDE_SIDEBAR_LAYOUT,
+            KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR,
+            KEY_SHOW_CHANNEL_LOGOS,
+            KEY_CHANNEL_LOGO_SIZE_TENTHS,
+            KEY_SHOW_CHANNEL_NUMBERS,
+            KEY_SHOW_CHANNEL_NAMES,
+            KEY_SHOW_PROGRAM_SUBTITLES,
+            KEY_SHOW_EPG_BADGES_TV,
+            KEY_SHOW_EPG_BADGES_MOBILE,
+            KEY_HIDDEN_EPG_BADGES,
+            KEY_GUIDE_PROGRAM_INFO_BUTTON,
+            KEY_PROGRAM_INFO_BUTTON_GUIDE,
+            KEY_PROGRAM_INFO_BUTTON_LIST,
+            KEY_ROUNDED_ARTWORK,
+            KEY_ROUNDED_ARTWORK_GUIDE,
+            KEY_ROUNDED_PROGRAM_CELLS,
+            KEY_DISPLAY_SCALE_LIVE_TV,
+            KEY_GUIDE_SCALE,
+            KEY_CATEGORY_MASTER_ENABLE,
+            KEY_CATEGORY_CUSTOM_JSON,
+            KEY_PLAYER_SHOW_CHANNEL_INFO_CARD,
+            KEY_PLAYER_CARD_CHANNEL_LOGO,
+            KEY_PLAYER_CARD_CHANNEL_NAME,
+            KEY_PLAYER_CARD_PROGRAM_NAME,
+            KEY_PLAYER_CARD_PROGRAM_TIME,
+            KEY_PLAYER_CARD_PROGRAM_SUBTITLE,
+            KEY_PLAYER_CARD_PROGRAM_DESCRIPTION,
+            KEY_LIVE_REWIND_ENABLED,
+            KEY_LIVE_REWIND_DEPTH_MIN,
+            KEY_LIVE_REWIND_KEEP_RECENT,
+            KEY_LIVE_REWIND_KEEP_COUNT,
+            KEY_LIVE_REWIND_RETENTION_HOURS,
+            KEY_LIVE_REWIND_BUDGET_GB,
+            KEY_SKIP_BACK_SECONDS,
+            KEY_SKIP_FORWARD_SECONDS,
+            KEY_SKIP_WITHOUT_CONTROLS,
+            KEY_AUTO_RECOVER_FROZEN_STREAMS,
+            KEY_APPLE_TV_CHANNEL_FLIP,
+            KEY_PLAYER_BRIGHTNESS_GESTURE,
+            KEY_PLAYER_VOLUME_GESTURE,
+            KEY_PLAYER_BRIGHTNESS_EDGE,
+            KEY_MULTIVIEW_AUDIO_FOCUS_STYLE,
+            KEY_MULTIVIEW_TILE_PADDING,
+            KEY_MULTIVIEW_TILE_CORNERS_ROUNDED,
+            KEY_MULTIVIEW_SHOW_LOGOS,
+            KEY_MULTIVIEW_LOGO_POSITION,
+            KEY_MULTIVIEW_LOGO_SIZE,
+            KEY_MULTIVIEW_PICKER_SHOW_SUBTITLES,
+            KEY_MULTIVIEW_PICKER_SHOW_DESCRIPTIONS,
+            KEY_PROGRAM_POSTERS_TMDB_ENABLED,
+            KEY_VOD_LIBRARY_REFRESH_HOURS,
+            KEY_DISPLAY_SCALE_MOVIES,
+            KEY_MOVIES_SORT_ORDER,
+            KEY_SERIES_SORT_ORDER,
+            KEY_DVR_DEFAULT_PRE_ROLL,
+            KEY_DVR_DEFAULT_POST_ROLL,
+            KEY_DVR_DEFAULT_DESTINATION,
+            KEY_DVR_SORT_ORDER,
+            KEY_SHOW_REMOTE_HINTS,
+            KEY_GUIDE_TUNE_IN_MINI,
+        ) }
     }
 }
 

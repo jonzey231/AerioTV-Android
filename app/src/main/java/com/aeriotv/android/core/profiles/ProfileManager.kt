@@ -531,6 +531,9 @@ class ProfileManager @Inject constructor(
         scope.launch {
             runCatching { playlistDao.rawAll().forEach { ensureDefaultProfile(it); promoteBaseProfile(it.id) } }
                 .onFailure { Log.w(TAG, "[PROFILE] migration pass failed", it) }
+            // Per-profile settings (2026-10-27): seed existing profiles once from the global values.
+            runCatching { appPreferences.seedExistingProfilesOnce(store.profiles.value.filterNot { it.isDefault }.map { it.id }) }
+                .onFailure { Log.w(TAG, "[PROFILE] settings seed pass failed", it) }
             playlistDao.observeActive()
                 .map { it.firstOrNull()?.id }
                 .distinctUntilChanged()
