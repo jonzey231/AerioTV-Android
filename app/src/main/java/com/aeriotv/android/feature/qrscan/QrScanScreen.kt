@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Button
@@ -64,6 +65,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.aeriotv.android.core.qr.CodeFileImport
+import com.aeriotv.android.core.qr.CodeTextImport
 import com.aeriotv.android.core.qr.QrImageImport
 import com.aeriotv.android.core.qr.QrLuminanceDecoder
 import com.aeriotv.android.core.qr.ScannedCode
@@ -87,9 +90,12 @@ fun openSetupLink(context: Context, link: String) {
 }
 
 /**
- * "Scan QR code" and "Choose from Photos" for a form (phones and tablets; on
- * TV it draws nothing, TVs have no camera). [accept] returns an error message
- * for a result this form cannot use, or null; accepted results go to [onResult].
+ * "Scan QR code", "Choose from Photos", and "Import file" for a form (phones
+ * and tablets; on TV it draws nothing, TVs have no camera). Import file opens
+ * the system document picker for the same code saved as a file (the
+ * `user_api_key` JSON, or a text file holding a setup link). [accept] returns
+ * an error message for a result this form cannot use, or null; accepted
+ * results go to [onResult].
  */
 @Composable
 fun QrScanActions(
@@ -119,6 +125,17 @@ fun QrScanActions(
             if (error == null) currentOnResult(r)
         }
     }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true; error = null
+        scope.launch {
+            val r = CodeFileImport.read(context, uri)
+            busy = false
+            if (r is ScannedCode.Result.Invalid) { error = CodeTextImport.FILE_INVALID_MESSAGE; return@launch }
+            error = currentAccept(r)
+            if (error == null) currentOnResult(r)
+        }
+    }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
@@ -140,6 +157,15 @@ fun QrScanActions(
                 Spacer(Modifier.size(8.dp))
                 Text("Choose from Photos")
             }
+        }
+        OutlinedButton(
+            onClick = { error = null; filePicker.launch(CodeTextImport.PICKER_MIME_TYPES) },
+            enabled = enabled && !busy,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Outlined.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.size(8.dp))
+            Text("Import file")
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
@@ -212,6 +238,19 @@ fun QrScanScreen(
         }
     }
 
+    // The same code saved as a file: parse it here and hand on the canonical
+    // text (the JSON or the link) so [validate] and [onResult] read it as a scan.
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true; error = null
+        scope.launch {
+            val r = CodeFileImport.read(context, uri)
+            busy = false
+            val text = CodeTextImport.canonicalText(r)
+            if (text == null) error = CodeTextImport.FILE_INVALID_MESSAGE else deliver(text)
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (granted && !noCamera) {
             CameraPreview(onText = { deliver(it) }, onNoCamera = { noCamera = true })
@@ -263,6 +302,15 @@ fun QrScanScreen(
                     else Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.size(8.dp))
                     Text("Choose from Photos")
+                }
+                Button(
+                    onClick = { error = null; filePicker.launch(CodeTextImport.PICKER_MIME_TYPES) },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp),
+                ) {
+                    Icon(Icons.Outlined.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text("Import file")
                 }
                 OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) {
                     Text("Cancel", color = Color.White)

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
@@ -428,6 +429,12 @@ private fun DispatcharrFields(
             }
         },
     )
+    ClipboardCodeChip(
+        enabled = !state.isLoading,
+        currentApiKey = state.apiKey,
+        onUserKey = onUserKey,
+        onSetupLink = { com.aeriotv.android.feature.qrscan.openSetupLink(context, it) },
+    )
     scannedUser?.let {
         Text(
             text = "Signed in as $it",
@@ -616,6 +623,66 @@ private fun M3uFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewM
     InfoBanner(
         text = "Paste your M3U playlist URL. Works with Dispatcharr's /output/m3u, any IPTV " +
                 "provider, or a direct .m3u file link.",
+    )
+}
+
+/**
+ * "Paste from clipboard" (phones and tablets): when the form opens and the
+ * clipboard holds a Dispatcharr user code (the `user_api_key` JSON) or an
+ * AerioTV setup link, one tap applies it like a scan. The clipboard is read
+ * once, after the window has focus (Android only answers a focused app;
+ * Android 13+ shows its own paste notice). Plain text only; nothing about the
+ * clip is logged.
+ */
+@Composable
+private fun ClipboardCodeChip(
+    enabled: Boolean,
+    currentApiKey: String,
+    onUserKey: (com.aeriotv.android.core.qr.ScannedCode.Result.UserKey) -> Unit,
+    onSetupLink: (String) -> Unit,
+) {
+    if (rememberIsTvDevice()) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val focused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+    var checked by remember { mutableStateOf(false) }
+    var code by remember { mutableStateOf<com.aeriotv.android.core.qr.ScannedCode.Result?>(null) }
+    androidx.compose.runtime.LaunchedEffect(focused) {
+        if (!focused || checked) return@LaunchedEffect
+        checked = true
+        val cm = context.getSystemService(android.content.ClipboardManager::class.java) ?: return@LaunchedEffect
+        val r = runCatching {
+            val desc = cm.primaryClipDescription
+            if (desc == null || !(desc.hasMimeType("text/*") || desc.hasMimeType("application/json"))) {
+                null
+            } else {
+                val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
+                if (text == null || text.length > com.aeriotv.android.core.qr.CodeTextImport.MAX_BYTES) null
+                else com.aeriotv.android.core.qr.CodeTextImport.parse(text)
+            }
+        }.getOrNull()
+        code = r?.takeIf { it !is com.aeriotv.android.core.qr.ScannedCode.Result.Invalid }
+    }
+    val c = code ?: return
+    // Already applied (the key in the form is this one): nothing to offer.
+    if (c is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey && c.apiKey == currentApiKey.trim()) return
+    androidx.compose.material3.AssistChip(
+        onClick = {
+            code = null
+            when (c) {
+                is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> onUserKey(c)
+                is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink -> onSetupLink(c.link)
+                com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> Unit
+            }
+        },
+        enabled = enabled,
+        label = { Text("Paste from clipboard") },
+        leadingIcon = {
+            Icon(
+                Icons.Outlined.ContentPaste,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+        },
     )
 }
 

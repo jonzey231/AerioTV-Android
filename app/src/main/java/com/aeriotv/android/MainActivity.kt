@@ -629,7 +629,7 @@ class MainActivity : ComponentActivity() {
         // instead of recreating the activity. Capture the URI for the
         // Compose tree.
         captureDeepLinkFrom(intent)
-        captureSharedQrImage(intent)
+        captureSharedCode(intent)
     }
 
     /** TVs have no use for the "share a QR image to AerioTV" target; keep it out of their share sheet. */
@@ -645,32 +645,62 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * A QR code image shared to AerioTV (phones and tablets): decode it with the
-     * same reader as Choose from Photos, then route it like an in-app scan. A
-     * setup code opens Set up a TV; a Dispatcharr user code opens the
-     * Dispatcharr connect form prefilled (QrImportBus). The key is never logged.
+     * A Dispatcharr user code or AerioTV setup code shared to AerioTV (phones
+     * and tablets): a QR code image (same reader as Choose from Photos), text
+     * (EXTRA_TEXT), or a JSON or text file (EXTRA_STREAM, same reader as Import
+     * file). Routed like an in-app scan: a setup code opens Set up a TV; a
+     * Dispatcharr user code opens the Dispatcharr connect form prefilled
+     * (QrImportBus). The key and the shared text are never logged.
      */
-    private fun captureSharedQrImage(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_SEND) return
-        if (intent.type?.startsWith("image/") != true || isTelevisionDevice()) return
-        val uri: android.net.Uri = (if (Build.VERSION.SDK_INT >= 33) {
+    private fun captureSharedCode(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND || isTelevisionDevice()) return
+        val type = intent.type ?: return
+        val isImage = type.startsWith("image/")
+        val isText = type.startsWith("text/") || type == "application/json"
+        if (!isImage && !isText) return
+        val uri: android.net.Uri? = if (Build.VERSION.SDK_INT >= 33) {
             intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java)
         } else {
             @Suppress("DEPRECATION") intent.getParcelableExtra(Intent.EXTRA_STREAM)
-        }) ?: return
+        }
+        val sharedText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+        if (uri == null && (isImage || sharedText.isNullOrBlank())) return
         lifecycleScope.launch {
-            val text = com.aeriotv.android.core.qr.QrImageImport.decode(this@MainActivity, uri)
-            val result = com.aeriotv.android.core.qr.ScannedCode.parse(text)
             when {
-                text == null -> toast(com.aeriotv.android.core.qr.ScannedCode.NO_QR_IN_IMAGE)
-                result is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
-                    deepLinkTarget.value = DeepLinkTarget.DeviceSetup(result.link)
-                result is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {
-                    com.aeriotv.android.core.qr.QrImportBus.offer(result)
-                    deepLinkTarget.value = DeepLinkTarget.ImportUserKey
+                isImage -> {
+                    val text = com.aeriotv.android.core.qr.QrImageImport.decode(this@MainActivity, uri!!)
+                    if (text == null) toast(com.aeriotv.android.core.qr.ScannedCode.NO_QR_IN_IMAGE)
+                    else routeImportedCode(com.aeriotv.android.core.qr.ScannedCode.parse(text), com.aeriotv.android.core.qr.ScannedCode.INVALID_MESSAGE)
                 }
-                else -> toast(com.aeriotv.android.core.qr.ScannedCode.INVALID_MESSAGE)
+                // Text wins over a stream: a share with both carries the code in the text.
+                !sharedText.isNullOrBlank() -> {
+                    val r = com.aeriotv.android.core.qr.CodeTextImport.parse(sharedText)
+                    if (r !is com.aeriotv.android.core.qr.ScannedCode.Result.Invalid || uri == null) {
+                        routeImportedCode(r, com.aeriotv.android.core.qr.ScannedCode.INVALID_MESSAGE)
+                    } else {
+                        routeImportedCode(
+                            com.aeriotv.android.core.qr.CodeFileImport.read(this@MainActivity, uri),
+                            com.aeriotv.android.core.qr.CodeTextImport.FILE_INVALID_MESSAGE,
+                        )
+                    }
+                }
+                else -> routeImportedCode(
+                    com.aeriotv.android.core.qr.CodeFileImport.read(this@MainActivity, uri!!),
+                    com.aeriotv.android.core.qr.CodeTextImport.FILE_INVALID_MESSAGE,
+                )
             }
+        }
+    }
+
+    private fun routeImportedCode(result: com.aeriotv.android.core.qr.ScannedCode.Result, invalidMessage: String) {
+        when (result) {
+            is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
+                deepLinkTarget.value = DeepLinkTarget.DeviceSetup(result.link)
+            is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {
+                com.aeriotv.android.core.qr.QrImportBus.offer(result)
+                deepLinkTarget.value = DeepLinkTarget.ImportUserKey
+            }
+            com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> toast(invalidMessage)
         }
     }
 
@@ -1430,8 +1460,8 @@ class MainActivity : ComponentActivity() {
         // via a top-level effect, navigates, then clears it.
         if (!castLaunch) captureDeepLinkFrom(intent)
         syncQrShareTarget()
-        // A recreation re-delivers the launching intent; import a shared image once.
-        if (savedInstanceState == null) captureSharedQrImage(intent)
+        // A recreation re-delivers the launching intent; import a shared code once.
+        if (savedInstanceState == null) captureSharedCode(intent)
         setContent {
             val theme by appPreferences.selectedTheme.collectAsState(initial = AppTheme.Aerio)
             // DEFAULT MUST be Dark: the initial (pre-first-emission) value AND
