@@ -732,9 +732,14 @@ class PlaylistViewModel @Inject constructor(
             // A pad that opened during the read: hold the paint until it closes.
             com.aeriotv.android.core.app.LaunchWorkHold.awaitPinPad("cached channel paint")
             val hasChannelCache = cachedChannels.isNotEmpty()
+            // Cold start lands on the active profile's Default Group (or All),
+            // never the group the last session was left on (Logan 2026-10-28).
+            // Resolved before the first paint so it ships with the channels.
+            val launchGroup = landingGroupFor(saved.id, groupNamesOf(cachedChannels), Landing.Launch)
             _state.update {
                 it.copy(
                     playlist = saved,
+                    selectedGroup = launchGroup,
                     // Task #136: the guide's back-scroll span is known from the
                     // playlist row itself, so publish it BEFORE the guide first
                     // composes. Keeping windowStart stable from the start
@@ -761,13 +766,6 @@ class PlaylistViewModel @Inject constructor(
                         it.epgByChannel !is com.aeriotv.android.core.guide.GuideCatalog,
                 )
             }
-            // GH #81: bring back the group this playlist was left on (Favorites
-            // included) before the guide first composes, so the launch paint is
-            // already on the user's default group.
-            restoreSelectedGroup(
-                saved.id,
-                cachedChannels.asSequence().map { it.groupTitle }.filter { it.isNotBlank() }.distinct().toList(),
-            )
             if (hasChannelCache) {
                 Log.i(TAG, "bootstrap: painted ${cachedChannels.size} cached channels")
                 AppLaunchTrace.noteChannels()
@@ -935,47 +933,34 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
-    /**
-     * GH #81: restore the saved Live TV group for [playlistId]. Called once the
-     * playlist is active (bootstrap and playlist switch). [knownGroups] is the
-     * live group-name list when it is already known, so a group that no longer
-     * exists in this playlist falls back to All instead of filtering the guide
-     * down to nothing.
-     */
-    private suspend fun restoreSelectedGroup(playlistId: String, knownGroups: Collection<String>) {
-        val restored = launchGroupFor(playlistId, knownGroups)
-        _state.update { if (it.selectedGroup == restored) it else it.copy(selectedGroup = restored) }
-    }
+    /** Who asked for a landing group; only changes the log line. */
+    private enum class Landing(val label: String) { Launch("launch"), ProfileSwitch("switch"), PlaylistSwitch("playlist") }
 
     /**
-     * The group Live TV opens on at launch for [playlistId] in the ACTIVE
-     * profile's scope (both prefs are profile-scoped keys): the explicit
-     * "Default Group" when it still exists, else the last used group, else
-     * All. A profile switch uses [launchGroupForSwitch] instead (Default
-     * Group or All, never the last used group), in the same state update as
-     * the new channel list, so the guide never composes the new channels
-     * under the previous profile's group.
+     * The group the guide LANDS on for [playlistId] in the ACTIVE profile's
+     * scope (Logan 2026-10-28): the profile's Default Group when set and
+     * still present in [knownGroups], else All. Used by every landing: cold
+     * start (bootstrap, so the launch picker keeping the active profile and
+     * the Default Landing Tab opening Live TV both see it), a profile switch
+     * (the launch picker choosing another profile runs the same switch) and a
+     * playlist activation. The last used group is never consulted here; it
+     * is stored by [onGroupSelected] and only survives in memory within a
+     * session (tab changes and player returns keep [UiState.selectedGroup]).
+     * The result goes into the SAME state update as the channel list, so the
+     * grid, the preview banner (driven by the grid's focused row) and the TV
+     * sidebar (seeded from [UiState.selectedGroup]) never compose on a
+     * different group.
      */
-    private suspend fun launchGroupFor(playlistId: String, knownGroups: Collection<String>): String {
+    private suspend fun landingGroupFor(
+        playlistId: String,
+        knownGroups: Collection<String>,
+        landing: Landing,
+    ): String {
         val preferred = appPreferences.defaultGroupTokenOnce(playlistId)
-        val saved = appPreferences.liveGroupTokenOnce(playlistId)
-        return com.aeriotv.android.feature.livetv.launchGroupToken(preferred, saved, knownGroups)
+        val group = com.aeriotv.android.feature.livetv.landingGroupToken(preferred, knownGroups)
             ?: ALL_GROUPS
-    }
-
-    /**
-     * The group the guide lands on after a PROFILE switch (the TV launch
-     * picker choosing another profile included, it runs the same switch):
-     * the new profile's Default Group for [playlistId] when set and still
-     * present, else All. The last used group is never consulted here (Logan
-     * 2026-10-28); [launchGroupFor] keeps it for an ordinary relaunch.
-     */
-    private suspend fun launchGroupForSwitch(playlistId: String, knownGroups: Collection<String>): String {
-        val preferred = appPreferences.defaultGroupTokenOnce(playlistId)
-        val landing = com.aeriotv.android.feature.livetv.switchLandingGroupToken(preferred, knownGroups)
-            ?: ALL_GROUPS
-        Log.i(TAG, "[PROFILE] switch landing group=$landing (default=${if (preferred.isBlank()) "unset" else "set"})")
-        return landing
+        Log.i(TAG, "[PROFILE] ${landing.label} landing group=$group (default=${if (preferred.isBlank()) "unset" else "set"})")
+        return group
     }
 
     private fun groupNamesOf(channels: List<M3UChannel>): List<String> =
@@ -2957,8 +2942,7 @@ class PlaylistViewModel @Inject constructor(
                 ?.takeIf { (row, _) -> !snapshotIsOtherUser(row) }
             if (cachedTarget != null) {
                 val (row, cached) = cachedTarget
-                val launchGroup = if (profileSwitch) launchGroupForSwitch(row.id, groupNamesOf(cached))
-                    else launchGroupFor(row.id, groupNamesOf(cached))
+                val launchGroup = landingGroupFor(row.id, groupNamesOf(cached), if (profileSwitch) Landing.ProfileSwitch else Landing.PlaylistSwitch)
                 val applyCached: (UiState) -> UiState = {
                     it.copy(
                         phase = Phase.ChannelsReady,
@@ -2997,8 +2981,7 @@ class PlaylistViewModel @Inject constructor(
                         publishRefreshedChannels(entity, channels, "switch fetch")
                         return@fold
                     }
-                    val launchGroup = if (profileSwitch) launchGroupForSwitch(entity.id, groupNamesOf(channels))
-                        else launchGroupFor(entity.id, groupNamesOf(channels))
+                    val launchGroup = landingGroupFor(entity.id, groupNamesOf(channels), if (profileSwitch) Landing.ProfileSwitch else Landing.PlaylistSwitch)
                     val applyFetched: (UiState) -> UiState = {
                         it.copy(
                             phase = Phase.ChannelsReady,
@@ -3170,7 +3153,7 @@ class PlaylistViewModel @Inject constructor(
         runCatching { miniPlayerSession.dismiss() }
         runCatching { exoWindowState.hide() }
         runCatching { exoHolder.stop() }
-        val launchGroup = launchGroupForSwitch(entity.id, groupNamesOf(cached))
+        val launchGroup = landingGroupFor(entity.id, groupNamesOf(cached), Landing.ProfileSwitch)
         Log.i(TAG, "[SWITCH] profile launch group=$launchGroup")
         val applySwitch: (UiState) -> UiState = {
             it.copy(

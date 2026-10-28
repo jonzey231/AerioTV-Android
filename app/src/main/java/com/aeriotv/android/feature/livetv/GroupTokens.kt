@@ -90,35 +90,19 @@ fun groupDisplayName(
 }
 
 /**
- * GH #81: which group Live TV opens on for a playlist.
+ * GH #81: which group Live TV LANDS on for a playlist (Logan 2026-10-28):
+ * every cold start (launch picker or not, the picker keeping the active
+ * profile included), every profile switch and every playlist activation opens
+ * on the active profile's "Default Group" when it still resolves against
+ * [knownGroupNames], else null (the caller's All Channels fallback).
  *
- * [defaultToken] is the user's "Default Group" setting, [lastUsedToken] the
- * group the playlist was left on. Both are validated against [knownGroupNames]
- * exactly like [restoredGroupToken] does, so a default pointing at a group the
- * provider dropped degrades to the last used group (and then to the caller's
- * own All Channels fallback) instead of filtering the guide down to nothing.
- *
- * With no default set the last selected group is restored (Logan 2026-09-14).
- * That is internal behavior with no user-facing name: the Default Group picker
- * shows All Channels as the selection until the user picks something.
- * Returns null when neither resolves.
+ * The last used group is deliberately NOT consulted: pick News, close the
+ * app, reopen, and the guide is on the Default Group (All when unset), not on
+ * News. The last used token is still stored per profile (and synced as
+ * lastGroup); it only matters inside a session, where the selection is held
+ * in memory across tab changes and player returns.
  */
-fun launchGroupToken(
-    defaultToken: String?,
-    lastUsedToken: String?,
-    knownGroupNames: Collection<String>,
-): String? = restoredGroupToken(defaultToken, knownGroupNames)
-    ?: restoredGroupToken(lastUsedToken, knownGroupNames)
-
-/**
- * Which group the guide lands on after a PROFILE SWITCH (Logan 2026-10-28):
- * the new profile's "Default Group" for the playlist when it still resolves,
- * else null (the caller's All Channels fallback). The last used group is
- * deliberately NOT consulted: open Logan, pick News, switch to Jordan, switch
- * back to Logan, and the guide is on Logan's default (All when unset), not on
- * News. An ordinary relaunch within one profile still uses [launchGroupToken].
- */
-fun switchLandingGroupToken(
+fun landingGroupToken(
     defaultToken: String?,
     knownGroupNames: Collection<String>,
 ): String? = restoredGroupToken(defaultToken, knownGroupNames)

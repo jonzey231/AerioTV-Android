@@ -1176,6 +1176,10 @@ class AppPreferences @Inject constructor(
      * active playlist's live groups.
      *
      * Empty string = nothing saved yet (open on All).
+     *
+     * Logan 2026-10-28: no landing reads this any more. Cold start, profile
+     * switch and playlist activation all open on the Default Group (or All);
+     * the token is still written per profile and synced as lastGroup.
      */
     fun liveGroupToken(playlistId: String): Flow<String> =
         scopedData.map { it[keyLiveGroupToken(playlistId)] ?: "" }

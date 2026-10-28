@@ -98,19 +98,13 @@ class GroupTokensTest {
     // ---- GH #81: default group resolution ---------------------------------
 
     @Test
-    fun defaultGroupWinsOverTheLastUsedGroup() {
-        assertEquals("News", launchGroupToken("News", "Sports", groups))
+    fun landingUsesTheDefaultGroupWhenSet() {
+        assertEquals("News", landingGroupToken("News", groups))
     }
 
     @Test
-    fun theLastUsedGroupAppliesWhenNoDefaultIsSet() {
-        assertEquals("Sports", launchGroupToken("", "Sports", groups))
-        assertEquals("Sports", launchGroupToken(null, "Sports", groups))
-    }
-
-    @Test
-    fun staleDefaultFallsBackToTheLastUsedGroup() {
-        assertEquals("Sports", launchGroupToken("Gone", "Sports", groups))
+    fun staleDefaultFallsBackToAll() {
+        assertNull(landingGroupToken("Gone", groups))
     }
 
     /**
@@ -122,7 +116,7 @@ class GroupTokensTest {
     fun recentlyWatchedIsADefaultGroupLikeAnyOther() {
         assertEquals(
             PlaylistViewModel.RECENT_GROUP,
-            launchGroupToken(PlaylistViewModel.RECENT_GROUP, "Sports", groups),
+            landingGroupToken(PlaylistViewModel.RECENT_GROUP, groups),
         )
         assertEquals(
             PlaylistViewModel.RECENT_GROUP,
@@ -172,16 +166,16 @@ class GroupTokensTest {
     }
 
     @Test
-    fun nothingResolvesWhenBothTokensAreStaleOrEmpty() {
-        assertNull(launchGroupToken("Gone", "AlsoGone", groups))
-        assertNull(launchGroupToken("", "", groups))
+    fun nothingResolvesWhenTheDefaultIsStaleOrEmpty() {
+        assertNull(landingGroupToken("Gone", groups))
+        assertNull(landingGroupToken("", groups))
     }
 
     @Test
     fun favoritesIsAValidDefaultGroup() {
         assertEquals(
             PlaylistViewModel.FAVORITES_GROUP,
-            launchGroupToken(PlaylistViewModel.FAVORITES_GROUP, "Sports", groups),
+            landingGroupToken(PlaylistViewModel.FAVORITES_GROUP, groups),
         )
     }
 
@@ -195,27 +189,28 @@ class GroupTokensTest {
         assertEquals(all, fallbackGroupToken(emptyList()))
     }
 
-    // Profile switch landing (Logan 2026-10-28): Default Group or All, never last used.
+    // Landing (Logan 2026-10-28): cold start, profile switch and playlist
+    // activation all land on the Default Group or All, never the last used group.
 
     @Test
-    fun switchLandsOnTheDefaultGroupWhenSet() {
-        assertEquals("Sports", switchLandingGroupToken("Sports", groups))
+    fun landingOnTheDefaultGroupIncludesSyntheticTokens() {
+        assertEquals("Sports", landingGroupToken("Sports", groups))
         assertEquals(
             PlaylistViewModel.FAVORITES_GROUP,
-            switchLandingGroupToken(PlaylistViewModel.FAVORITES_GROUP, groups),
+            landingGroupToken(PlaylistViewModel.FAVORITES_GROUP, groups),
         )
     }
 
     @Test
-    fun switchWithNoDefaultFallsBackToAllNotTheLastUsedGroup() {
-        // launchGroupToken would restore the last used "News"; a switch must not.
-        assertEquals("News", launchGroupToken("", "News", groups))
-        assertNull(switchLandingGroupToken("", groups))
-        assertNull(switchLandingGroupToken(null, groups))
+    fun landingWithNoDefaultIsAllNotTheLastUsedGroup() {
+        // The resolver takes no last used token at all: an unset default is
+        // null (All), whatever group the profile was left on.
+        assertNull(landingGroupToken("", groups))
+        assertNull(landingGroupToken(null, groups))
     }
 
     @Test
-    fun switchWithADefaultTheProviderDroppedFallsBackToAll() {
-        assertNull(switchLandingGroupToken("Gone", groups))
+    fun landingWithADefaultTheProviderDroppedIsAll() {
+        assertNull(landingGroupToken("Gone", groups))
     }
 }
