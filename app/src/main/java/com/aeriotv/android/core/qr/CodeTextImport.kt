@@ -6,10 +6,9 @@ import java.io.InputStream
 
 /**
  * The Dispatcharr user code or AerioTV setup code arriving as text instead of
- * an image: a picked file (Import file), text or a file shared to AerioTV, or
- * the clipboard. Same payloads as [ScannedCode]: the `user_api_key` JSON, or
- * an `aeriotv://setup?...` link, which in a text file or a shared message may
- * sit among other words.
+ * an image: a picked file (Import file). Same payloads as [ScannedCode]: the
+ * `user_api_key` JSON, or an `aeriotv://setup?...` link, which in a text file
+ * may sit among other words.
  *
  * Pure JVM so the unit tests cover it. Never log the text: it holds the key.
  */

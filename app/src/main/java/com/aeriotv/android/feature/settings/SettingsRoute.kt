@@ -200,8 +200,6 @@ fun settingsRouteForDeepLinkPage(
     "manage-profiles" -> SettingsRoute.ManageProfiles
     "playlist-detail" -> activePlaylistId?.let { SettingsRoute.PlaylistDetail(it) }
     "edit-playlist" -> activePlaylistId?.let { SettingsRoute.EditPlaylist(it) }
-    // A Dispatcharr user QR image shared to AerioTV (QrImportBus holds the code).
-    "add-dispatcharr" -> SettingsRoute.AddPlaylist(AddPlaylistWizardStep.Configure(com.aeriotv.android.core.data.SourceType.DispatcharrApiKey))
     else -> null
 }
 

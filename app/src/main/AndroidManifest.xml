@@ -153,27 +153,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-            A Dispatcharr user code or an AerioTV setup code shared TO AerioTV, as a
-            QR code image, as text, or as a JSON or text file, opens the same import
-            flow as Choose from Photos and Import file. An alias so MainActivity
-            disables it on TVs, where the share sheet has no use. The name predates
-            the text types; it stays so the TV disable keeps matching.
-        -->
-        <activity-alias
-            android:name=".QrImageShareTarget"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:targetActivity=".MainActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="image/*" />
-                <data android:mimeType="text/plain" />
-                <data android:mimeType="application/json" />
-            </intent-filter>
-        </activity-alias>
-
         <service
             android:name=".feature.dvr.LocalRecordingService"
             android:exported="false"

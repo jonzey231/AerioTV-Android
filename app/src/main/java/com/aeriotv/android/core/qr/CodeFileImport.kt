@@ -7,7 +7,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Reads a Dispatcharr user code or AerioTV setup code from a document the
- * user picked (Import file) or shared to AerioTV. At most
+ * user picked (Import file). At most
  * [CodeTextImport.MAX_BYTES]; nothing is copied or kept.
  */
 object CodeFileImport {

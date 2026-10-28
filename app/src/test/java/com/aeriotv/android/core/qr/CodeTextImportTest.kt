@@ -32,12 +32,12 @@ class CodeTextImportTest {
         assertEquals(ScannedCode.Result.SetupLink(setupLink), CodeTextImport.parse(stream("$setupLink\n")))
     }
 
-    @Test fun setupLinkInsideSharedMessageParses() {
+    @Test fun setupLinkAmongOtherTextParses() {
         val msg = "Open this on your phone: $setupLink. Thanks!"
         assertEquals(ScannedCode.Result.SetupLink(setupLink), CodeTextImport.parse(msg))
     }
 
-    @Test fun jsonInsideSharedMessageParses() {
+    @Test fun jsonAmongOtherTextParses() {
         val r = CodeTextImport.parse("Here is your code:\n$json\nSee you.") as ScannedCode.Result.UserKey
         assertEquals("k3y-ABC", r.apiKey)
     }

@@ -11,8 +11,8 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
- * Reads a QR code out of an image the user picked (system photo picker) or
- * shared to AerioTV. Downscales to at most 1600 px on the long side, then runs
+ * Reads a QR code out of an image the user picked (system photo picker).
+ * Downscales to at most 1600 px on the long side, then runs
  * the [QrLuminanceDecoder.decodeStill] passes. Returns the decoded text, or
  * null when no QR code was found or the image could not be read.
  */

@@ -67,6 +67,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aeriotv.android.core.qr.CodeFileImport
 import com.aeriotv.android.core.qr.CodeTextImport
+import com.aeriotv.android.core.qr.ImportSourceCleanup
 import com.aeriotv.android.core.qr.QrImageImport
 import com.aeriotv.android.core.qr.QrLuminanceDecoder
 import com.aeriotv.android.core.qr.ScannedCode
@@ -122,7 +123,10 @@ fun QrScanActions(
             if (text == null) { error = ScannedCode.NO_QR_IN_IMAGE; return@launch }
             val r = ScannedCode.parse(text)
             error = currentAccept(r)
-            if (error == null) currentOnResult(r)
+            if (error == null) {
+                ImportSourceCleanup.offer(ImportSourceCleanup.photoSource(context, uri))
+                currentOnResult(r)
+            }
         }
     }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -133,7 +137,10 @@ fun QrScanActions(
             busy = false
             if (r is ScannedCode.Result.Invalid) { error = CodeTextImport.FILE_INVALID_MESSAGE; return@launch }
             error = currentAccept(r)
-            if (error == null) currentOnResult(r)
+            if (error == null) {
+                ImportSourceCleanup.offer(ImportSourceCleanup.documentSource(context, uri))
+                currentOnResult(r)
+            }
         }
     }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -220,11 +227,16 @@ fun QrScanScreen(
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it; asked = true }
     LaunchedEffect(Unit) { if (!granted) permission.launch(Manifest.permission.CAMERA) }
 
-    fun deliver(text: String) {
+    // [source] is the picked image or file behind an import; it is offered
+    // for deletion only when the code is accepted (camera scans pass null).
+    fun deliver(text: String, source: ImportSourceCleanup.Source? = null) {
         if (done.get()) return
         val problem = currentValidate(text)
         if (problem == null) {
-            if (done.compareAndSet(false, true)) currentOnResult(text)
+            if (done.compareAndSet(false, true)) {
+                ImportSourceCleanup.offer(source)
+                currentOnResult(text)
+            }
         } else error = problem
     }
 
@@ -234,7 +246,8 @@ fun QrScanScreen(
         scope.launch {
             val text = QrImageImport.decode(context, uri)
             busy = false
-            if (text == null) error = ScannedCode.NO_QR_IN_IMAGE else deliver(text)
+            if (text == null) error = ScannedCode.NO_QR_IN_IMAGE
+            else deliver(text, ImportSourceCleanup.photoSource(context, uri))
         }
     }
 
@@ -247,7 +260,8 @@ fun QrScanScreen(
             val r = CodeFileImport.read(context, uri)
             busy = false
             val text = CodeTextImport.canonicalText(r)
-            if (text == null) error = CodeTextImport.FILE_INVALID_MESSAGE else deliver(text)
+            if (text == null) error = CodeTextImport.FILE_INVALID_MESSAGE
+            else deliver(text, ImportSourceCleanup.documentSource(context, uri))
         }
     }
 

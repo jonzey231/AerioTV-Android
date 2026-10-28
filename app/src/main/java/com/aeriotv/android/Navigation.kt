@@ -411,23 +411,6 @@ fun AerioTVNavHost(
                     dlVm.requestSettingsPage(target.page)
                     onDeepLinkConsumed()
                 }
-                is DeepLinkTarget.ImportUserKey -> {
-                    // A Dispatcharr user QR image was shared to AerioTV. With a
-                    // playlist: Settings > Add Playlist > Dispatcharr. Still in
-                    // onboarding: the Dispatcharr connect step. The form takes
-                    // the code from QrImportBus. TVs never get here (no share target).
-                    val route = navController.currentDestination?.route
-                    if (route == null || route == Routes.BOOTSTRAP) return@LaunchedEffect
-                    if (dlIsTv) {
-                        com.aeriotv.android.core.qr.QrImportBus.take()
-                    } else if (runCatching { navController.getBackStackEntry(Routes.MAIN) }.isSuccess) {
-                        if (route != Routes.MAIN) runCatching { navController.popBackStack(Routes.MAIN, false) }
-                        dlVm.requestSettingsPage("add-dispatcharr")
-                    } else if (route != Routes.CONFIGURE) {
-                        navController.navigate(Routes.configure(SourceType.DispatcharrApiKey)) { launchSingleTop = true }
-                    }
-                    onDeepLinkConsumed()
-                }
                 is DeepLinkTarget.DeviceSetup -> {
                     // A phone camera scanned a TV's setup QR code. TVs ignore it.
                     if (!dlIsTv) setupLink = target.link
