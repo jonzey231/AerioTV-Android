@@ -139,10 +139,14 @@ class SetupReceiver(
                     ?.createMulticastLock("aeriotv-setup")?.apply { setReferenceCounted(false); acquire() }
             }.getOrNull()
         }
+        // Capture before apply: inside the builder `port` is NsdServiceInfo's
+        // own (still 0) port, which made registerService throw "The port is
+        // missing" and the TV never advertised (Streamer, 2026-10-27 23:45).
+        val listenPort = this.port
         val info = NsdServiceInfo().apply {
             serviceName = name
             serviceType = SetupProtocol.SERVICE_TYPE
-            setPort(port)
+            setPort(listenPort)
             runCatching { setAttribute(SetupProtocol.TXT_VERSION, SetupProtocol.VERSION.toString()) }
             runCatching { setAttribute(SetupProtocol.TXT_NAME, name.take(60)) }
             runCatching { setAttribute(SetupProtocol.TXT_PK, SetupCrypto.b64(keys.publicKey)) }
